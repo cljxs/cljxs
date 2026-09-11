@@ -1,0 +1,13 @@
+[Unit]
+Description=Wake Belfort at US market open and close
+
+[Timer]
+# Twice per trading day. 09:35 lets the opening auction settle; 15:55 runs
+# just before the close. Each wake costs money - keep it at two.
+OnCalendar=Mon..Fri 09:35 America/New_York
+OnCalendar=Mon..Fri 15:55 America/New_York
+Persistent=false
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

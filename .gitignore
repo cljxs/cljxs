@@ -5,3 +5,19 @@ tasks/*.db-shm
 *.log
 __pycache__/
 *.pyc
+
+# Belfort runtime state - never tracked, so `git pull` can't clobber a live
+# portfolio, and fetched market data doesn't go stale in the repo.
+agents/belfort/data/*
+!agents/belfort/data/.gitkeep
+agents/belfort/reports/*
+!agents/belfort/reports/.gitkeep
+agents/belfort/state/portfolio.json
+agents/belfort/MEMORY.md
+agents/*/AGENTS.md
+agents/*/SOUL.md
+agents/*/TOOLS.md
+agents/*/IDENTITY.md
+agents/*/USER.md
+agents/*/HEARTBEAT.md
+agents/*/BOOTSTRAP.md
