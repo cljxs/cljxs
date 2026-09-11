@@ -1,7 +1,9 @@
 'use strict';
 
+const path = require('path');
 const express = require('express');
 const { openDb, readLimits, writeLimits, logEvent } = require('./db');
+const dashboardData = require('./dashboard-data');
 
 const PORT = Number(process.env.PORT || 3001);
 // Bind to loopback by default, matching the OpenClaw gateway's posture.
@@ -241,6 +243,24 @@ app.post('/tasks/:id/reject', (req, res) => {
   if (!task) return;
   logEvent(db, task.id, 'rejected', reason || 'no reason given');
   res.json(task);
+});
+
+// ---------------------------------------------------------------------------
+// Command Deck dashboard. Read-only: it renders agent state but never writes
+// to anything under agents/.
+// ---------------------------------------------------------------------------
+
+app.get('/api/dashboard', (req, res) => {
+  try {
+    res.json(dashboardData.build());
+  } catch (err) {
+    console.error('[dashboard]', err);
+    res.status(500).json({ error: 'dashboard aggregation failed', detail: String(err.message) });
+  }
+});
+
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
 });
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'mission-control-api' }));

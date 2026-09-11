@@ -21,3 +21,6 @@ agents/*/IDENTITY.md
 agents/*/USER.md
 agents/*/HEARTBEAT.md
 agents/*/BOOTSTRAP.md
+
+# dashboard-owned value history (not an agent file)
+tasks/dashboard-snapshots.json

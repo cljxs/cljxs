@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Command Deck</title>
+<style>
+  :root{
+    --bg:#0a0c13; --card:#12151f; --line:rgba(255,255,255,.06);
+    --line2:rgba(255,255,255,.10);
+    --ink:#e8ecf5; --mute:#8791a8; --dim:#5b6478;
+    --up:#34d399; --down:#fb7185; --warn:#fbbf24;
+    --c1:#22d3ee; --c2:#a78bfa; --c3:#f472b6;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Inter,Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    padding-bottom:48px;
+  }
+  .num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+  a{color:inherit}
+
+  /* top bar */
+  .topbar{
+    position:sticky;top:0;z-index:20;
+    display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+    padding:14px 22px;
+    background:rgba(10,12,19,.86);backdrop-filter:blur(12px);
+    border-bottom:1px solid var(--line);
+  }
+  .brand{display:flex;align-items:center;gap:10px;font-weight:640;letter-spacing:-.01em;font-size:15px}
+  .mark{width:22px;height:22px;border-radius:7px;background:linear-gradient(135deg,var(--c1),var(--c2) 55%,var(--c3))}
+  .live{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--mute)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--up);box-shadow:0 0 0 0 rgba(52,211,153,.6);animation:pulse 2.4s infinite}
+  .dot.warn{background:var(--warn);animation:none}
+  .dot.off{background:var(--dim);animation:none}
+  @keyframes pulse{70%{box-shadow:0 0 0 7px rgba(52,211,153,0)}100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}}
+  .spacer{flex:1}
+  .chip{
+    font-size:12px;color:var(--mute);padding:5px 11px;border:1px solid var(--line);
+    border-radius:999px;background:rgba(255,255,255,.02);white-space:nowrap;
+  }
+
+  .wrap{max-width:1360px;margin:0 auto;padding:22px}
+
+  /* cards */
+  .card{
+    background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:18px;transition:border-color .18s ease, transform .18s ease;
+  }
+  .card:hover{border-color:var(--line2)}
+  .card h3{
+    margin:0 0 14px;font-size:12px;font-weight:600;letter-spacing:.07em;
+    text-transform:uppercase;color:var(--mute);
+  }
+
+  /* kpis */
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:16px}
+  .kpi .label{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute)}
+  .kpi .val{font-size:29px;font-weight:640;letter-spacing:-.025em;margin:7px 0 3px;line-height:1.15}
+  .kpi .sub{font-size:12.5px;color:var(--dim)}
+  .delta{font-size:12.5px;font-weight:560}
+  .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--dim)}
+
+  /* layout */
+  .body{display:grid;grid-template-columns:1.45fr 1fr;gap:16px;align-items:start}
+  .col{display:flex;flex-direction:column;gap:16px}
+
+  /* agents */
+  .agent{
+    display:flex;gap:12px;padding:13px 0;border-bottom:1px solid var(--line);
+  }
+  .agent:last-child{border-bottom:0;padding-bottom:0}
+  .agent:first-of-type{padding-top:0}
+  .astat{width:8px;height:8px;border-radius:50%;margin-top:6px;flex:0 0 8px}
+  .s-active{background:var(--up)} .s-idle{background:var(--c1)}
+  .s-stale{background:var(--warn)} .s-waiting{background:var(--dim)}
+  .aname{font-weight:600;letter-spacing:-.01em;text-transform:capitalize}
+  .ameta{font-size:12px;color:var(--dim);margin-top:2px}
+  .aline{font-size:12.5px;color:var(--mute);margin-top:6px;line-height:1.45}
+  .tag{
+    font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--mute);
+    border:1px solid var(--line2);border-radius:5px;padding:1px 6px;margin-left:8px;vertical-align:2px;
+  }
+
+  /* tables */
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{
+    text-align:right;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--dim);font-weight:600;padding:0 0 9px;border-bottom:1px solid var(--line);
+  }
+  th:first-child,td:first-child{text-align:left}
+  td{padding:10px 0;border-bottom:1px solid var(--line);text-align:right}
+  tr:last-child td{border-bottom:0}
+  .sym{font-weight:600}
+
+  /* spend bars */
+  .bar{display:flex;align-items:center;gap:11px;padding:8px 0}
+  .bar .nm{width:86px;font-size:13px;text-transform:capitalize;flex:0 0 86px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .track{flex:1;height:7px;background:rgba(255,255,255,.05);border-radius:999px;overflow:hidden}
+  .fill{height:100%;border-radius:999px;background:linear-gradient(90deg,var(--c1),var(--c2));transition:width .5s ease}
+  .bar .vl{width:72px;text-align:right;font-size:12.5px;color:var(--mute)}
+
+  .empty{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:28px 16px;text-align:center;color:var(--dim);font-size:13px;gap:5px;
+  }
+  .empty .big{font-size:22px;opacity:.4}
+  .note{font-size:11.5px;color:var(--dim);margin-top:12px;line-height:1.5}
+  .foot{text-align:center;color:var(--dim);font-size:11.5px;padding:24px 0 0}
+
+  @media(max-width:1080px){
+    .body{grid-template-columns:1fr}
+    .kpis{grid-template-columns:repeat(2,1fr)}
+  }
+  @media(max-width:560px){
+    .kpis{grid-template-columns:1fr}
+    .wrap{padding:14px}
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand"><div class="mark"></div>Command Deck</div>
+  <div class="live"><span class="dot" id="livedot"></span><span id="livetext">connecting…</span></div>
+  <div class="spacer"></div>
+  <div class="chip" id="chipAgents">— agents</div>
+  <div class="chip" id="chipHealth">—</div>
+  <div class="chip" id="chipTime">—</div>
+</div>
+
+<div class="wrap">
+  <div class="kpis" id="kpis"></div>
+  <div class="body">
+    <div class="col">
+      <div class="card">
+        <h3>Value history</h3>
+        <div id="chartValue"></div>
+      </div>
+      <div class="card">
+        <h3>Open positions</h3>
+        <div id="positions"></div>
+      </div>
+      <div class="card">
+        <h3>Activity · last 14 days</h3>
+        <div id="chartDaily"></div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card">
+        <h3>Agents</h3>
+        <div id="agents"></div>
+      </div>
+      <div class="card">
+        <h3>Fuel &amp; spend</h3>
+        <div id="spend"></div>
+      </div>
+      <div class="card">
+        <h3>Task queue</h3>
+        <div id="queue"></div>
+      </div>
+    </div>
+  </div>
+  <div class="foot" id="foot">—</div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const money = (v, d=2) => v===null||v===undefined ? '—' :
+  (v<0?'-':'') + '$' + Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+const pct = v => v===null||v===undefined ? '' : (v>=0?'+':'') + v.toFixed(2) + '%';
+const cls = v => v===null||v===undefined ? 'flat' : v>0 ? 'up' : v<0 ? 'down' : 'flat';
+const esc = s => String(s??'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ago = m => m===null||m===undefined ? 'never' : m<1 ? 'just now' : m<60 ? m+'m ago'
+  : m<1440 ? Math.floor(m/60)+'h ago' : Math.floor(m/1440)+'d ago';
+
+function emptyState(icon, title, sub){
+  return `<div class="empty"><div class="big">${icon}</div><div>${esc(title)}</div>${sub?`<div style="font-size:11.5px">${esc(sub)}</div>`:''}</div>`;
+}
+
+function lineChart(series, h=190){
+  if(!series || series.length < 2){
+    const only = series && series.length === 1 ? money(series[0].v) : null;
+    return emptyState('📈','Collecting history',
+      only ? `Current value ${only} · the line appears once there are two snapshots` : 'A snapshot is taken every 15 minutes');
+  }
+  const w=680, pad={t:12,r:10,b:22,l:52};
+  const xs=series.map((_,i)=>i), ys=series.map(p=>p.v);
+  let lo=Math.min(...ys), hi=Math.max(...ys);
+  if(hi===lo){hi=lo+1;lo=lo-1;}
+  const padY=(hi-lo)*0.12; lo-=padY; hi+=padY;
+  const X=i=>pad.l+(i/(xs.length-1))*(w-pad.l-pad.r);
+  const Y=v=>pad.t+(1-(v-lo)/(hi-lo))*(h-pad.t-pad.b);
+  const pts=series.map((p,i)=>[X(i),Y(p.v)]);
+  const line=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
+  const area=line+` L ${X(xs.length-1).toFixed(1)} ${h-pad.b} L ${pad.l} ${h-pad.b} Z`;
+  const rising = ys[ys.length-1] >= ys[0];
+  const grid=[0,.5,1].map(f=>{
+    const v=lo+(hi-lo)*(1-f), y=pad.t+f*(h-pad.t-pad.b);
+    return `<line x1="${pad.l}" y1="${y}" x2="${w-pad.r}" y2="${y}" stroke="rgba(255,255,255,.05)"/>
+            <text x="${pad.l-9}" y="${y+4}" text-anchor="end" font-size="10" fill="#5b6478" class="num">${money(v,0)}</text>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none" style="display:block">
+    <defs>
+      <linearGradient id="ga" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${rising?'#22d3ee':'#fb7185'}" stop-opacity=".28"/>
+        <stop offset="100%" stop-color="${rising?'#22d3ee':'#fb7185'}" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="gl" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0%" stop-color="#22d3ee"/><stop offset="60%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#f472b6"/>
+      </linearGradient>
+    </defs>
+    ${grid}
+    <path d="${area}" fill="url(#ga)"/>
+    <path d="${line}" fill="none" stroke="url(#gl)" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${pts[pts.length-1][0].toFixed(1)}" cy="${pts[pts.length-1][1].toFixed(1)}" r="3.6" fill="#f472b6"/>
+  </svg>`;
+}
+
+function barChart(daily){
+  if(!daily || !daily.length || daily.every(d=>!d.n))
+    return emptyState('▁▃▅','No activity yet','Cycles and completed tasks appear here');
+  const w=680,h=130,pad={t:10,r:8,b:20,l:8};
+  const max=Math.max(...daily.map(d=>d.n),1);
+  const bw=(w-pad.l-pad.r)/daily.length;
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" style="display:block">
+    <defs><linearGradient id="gb" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#22d3ee" stop-opacity=".55"/>
+    </linearGradient></defs>
+    ${daily.map((d,i)=>{
+      const bh=Math.max(3,(d.n/max)*(h-pad.t-pad.b));
+      const cw=Math.min(bw*0.62, 30);            // never let one bar become a slab
+      const x=pad.l+i*bw+(bw-cw)/2, y=h-pad.b-bh;
+      return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${cw.toFixed(1)}" height="${bh.toFixed(1)}" rx="3" fill="url(#gb)"><title>${d.d}: ${d.n}</title></rect>
+              <text x="${(x+bw*0.3).toFixed(1)}" y="${h-6}" text-anchor="middle" font-size="9" fill="#5b6478">${d.d.slice(8)}</text>`;
+    }).join('')}
+  </svg>`;
+}
+
+function render(d){
+  $('livedot').className = 'dot' + (d.health.status==='healthy' ? '' : ' warn');
+  $('livetext').textContent = d.health.status==='healthy' ? 'live' : 'degraded';
+  $('chipHealth').title = d.health.market_open ? 'US market open' : 'US market closed';
+  $('chipAgents').textContent = d.health.agents_total + (d.health.agents_total===1?' agent':' agents');
+  $('chipHealth').textContent = 'queue ' + d.queue.total + ' · api up';
+  $('chipTime').textContent = d.generated_at.slice(11) + ' UTC';
+
+  const k = d.kpis;
+  $('kpis').innerHTML = [
+    {l:'Portfolio value', v:money(k.total_value), d:k.total_pnl!==null?`${pct(k.total_pnl_pct)} all time`:'', c:cls(k.total_pnl),
+     s:k.total_pnl!==null?`${k.total_pnl>=0?'+':''}${money(k.total_pnl)} vs start`:'no portfolio yet'},
+    {l:'Open positions', v:k.open_positions ?? 0, d:'', c:'flat',
+     s:k.open_positions?'marked to live prices':'no positions yet'},
+    {l:'Spend today', v:k.has_cost_data?money(k.spend_today,2):'—', d:'', c:'flat',
+     s:k.has_cost_data?'from queue cost_actual':'no queue-reported costs'},
+    {l:'Total runs', v:k.runs_total ?? 0, d:'', c:'flat', s:'agent cycles completed'},
+  ].map(t=>`<div class="card kpi">
+      <div class="label">${t.l}</div>
+      <div class="val num">${t.v}</div>
+      <div class="sub">${t.d?`<span class="delta ${t.c}">${t.d}</span> · `:''}${esc(t.s)}</div>
+    </div>`).join('');
+
+  $('chartValue').innerHTML = lineChart(d.charts.value_series);
+  $('chartDaily').innerHTML = barChart(d.charts.daily);
+
+  // agents
+  $('agents').innerHTML = d.agents.length ? d.agents.map(a=>`
+    <div class="agent">
+      <div class="astat s-${a.status}"></div>
+      <div style="flex:1;min-width:0">
+        <div><span class="aname">${esc(a.name)}</span>${a.mode?`<span class="tag">${esc(a.mode)}</span>`:''}</div>
+        <div class="ameta">${a.status} · last run ${ago(a.last_run_age_min)} · ${a.runs ?? 0} cycles${
+          a.data_age_min!==null?` · data ${ago(a.data_age_min)}`:''}</div>
+        ${a.value!==null?`<div class="ameta num">${money(a.value)} <span class="${cls(a.pnl)}">${pct(a.pnl_pct)}</span></div>`:''}
+        <div class="aline">${a.headline?esc(a.headline):'<span style="color:#5b6478">waiting for first cycle</span>'}</div>
+        ${a.latest_report?`<div class="ameta">📄 ${esc(a.latest_report)}</div>`:''}
+      </div>
+    </div>`).join('')
+    : emptyState('🤖','No agents yet','Add a folder under agents/ and it appears here automatically');
+
+  // positions
+  const rows = d.agents.flatMap(a=>a.positions.map(p=>({...p, agent:a.name})));
+  $('positions').innerHTML = rows.length ? `<table>
+      <thead><tr><th>Symbol</th><th>Shares</th><th>Entry</th><th>Last</th><th>Value</th><th>P&amp;L</th></tr></thead>
+      <tbody>${rows.map(p=>`<tr>
+        <td><span class="sym">${esc(p.symbol)}</span></td>
+        <td class="num">${p.shares ?? '—'}</td>
+        <td class="num">${money(p.entry)}</td>
+        <td class="num">${p.priced?money(p.price):'<span style="color:#5b6478">stale</span>'}</td>
+        <td class="num">${money(p.value)}</td>
+        <td class="num ${cls(p.pnl)}">${p.pnl===null?'—':money(p.pnl)+' <span style="opacity:.75">'+pct(p.pnl_pct)+'</span>'}</td>
+      </tr>`).join('')}</tbody></table>`
+    : emptyState('◎','No open positions','Positions appear here once an agent opens one');
+
+  // spend
+  const sp = d.spend.by_agent.filter(r=>r.agent!=='unassigned' || r.runs>0);
+  if(d.spend.has_cost_data && sp.length){
+    const max = Math.max(...sp.map(r=>r.cost),0.0001);
+    $('spend').innerHTML = sp.map(r=>`<div class="bar">
+        <div class="nm">${esc(r.agent)}</div>
+        <div class="track"><div class="fill" style="width:${(r.cost/max*100).toFixed(1)}%"></div></div>
+        <div class="vl num">${money(r.cost,2)}</div>
+      </div>`).join('') +
+      `<div class="note">Total today ${money(d.spend.total_today,2)} · caps: ${money(d.limits.single_task_cost_max,2)}/task, ${money(d.limits.daily_total_spend_cap,2)}/day</div>`;
+  } else {
+    const runs = d.agents.filter(a=>(a.runs ?? 0) > 0);
+    const max = Math.max(...runs.map(a=>a.runs),1);
+    $('spend').innerHTML = (runs.length ? runs.map(a=>`<div class="bar">
+        <div class="nm">${esc(a.name)}</div>
+        <div class="track"><div class="fill" style="width:${(a.runs/max*100).toFixed(1)}%"></div></div>
+        <div class="vl num">${a.runs} runs</div>
+      </div>`).join('') : emptyState('⛽','No runs yet','Spend appears once agents report costs')) +
+      `<div class="note">Showing <b>run counts</b>, not dollars. Timer-driven agents don't
+       write to the task queue, so no <code>cost_actual</code> is reported. Per-agent dollar
+       figures appear once a task-driven agent runs, or once an agent posts its own cost.</div>`;
+  }
+
+  // queue
+  const bs = d.queue.byStatus, keys = Object.keys(bs);
+  $('queue').innerHTML = keys.length ? `<table><tbody>${keys.map(s=>`<tr>
+      <td style="text-transform:capitalize">${esc(s.replace('_',' '))}</td>
+      <td class="num">${bs[s]}</td></tr>`).join('')}</tbody></table>
+      <div class="note">${d.queue.total} tasks total</div>`
+    : emptyState('☰','Queue empty','Task-driven agents will populate this');
+
+  $('foot').textContent = `updated ${d.generated_at} UTC · refreshes every 5s`;
+}
+
+let fails = 0;
+async function tick(){
+  try{
+    const r = await fetch('/api/dashboard', {cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    render(await r.json());
+    fails = 0;
+  }catch(e){
+    if(++fails > 2){
+      $('livedot').className='dot off';
+      $('livetext').textContent='disconnected';
+      $('foot').textContent='cannot reach /api/dashboard — is mission-control-api running?';
+    }
+  }
+}
+tick(); setInterval(tick, 5000);
+</script>
+</body>
+</html>
