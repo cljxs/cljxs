@@ -1,0 +1,25 @@
+[Unit]
+Description=Mission Control API (agent task queue)
+Documentation=https://github.com/cljxs/cljxs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+# HOME must be set so anything shelling out finds ~/.openclaw/openclaw.json
+Environment=HOME=/root
+Environment=NODE_ENV=production
+Environment=PORT=3001
+# Loopback only. Change to 0.0.0.0 ONLY if you deliberately want this
+# reachable from outside the box, and open the firewall to match.
+Environment=HOST=127.0.0.1
+WorkingDirectory=/root/ecosystem/mission-control-api
+ExecStart=/usr/bin/node /root/ecosystem/mission-control-api/server.js
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
