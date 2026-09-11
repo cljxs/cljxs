@@ -18,7 +18,7 @@ location, or from `ECOSYSTEM_ROOT` if you set it.
 ## Install (VPS, as root)
 
     git clone -b claude/ai-agent-ecosystem-setup-0280zz https://github.com/cljxs/cljxs.git /root/ecosystem
-    cd /root/ecosystem/mission-control-api && npm install --no-audit --no-fund
+    cd /root/ecosystem/mission-control-api && npm install --ignore-scripts --no-audit --no-fund
     cp /root/ecosystem/deploy/*.service /etc/systemd/system/
     systemctl daemon-reload
     systemctl enable --now mission-control-api task-dispatcher
@@ -106,9 +106,14 @@ open task with a key already in use returns **409**.
 
 ## Notes
 
-- `better-sqlite3` is a native module but ships prebuilt binaries, so a plain
-  `npm install` works on Node 20/22 Linux x64. If a build is ever skipped, use
-  `npm install --foreground-scripts`.
+- **Install with `--ignore-scripts`.** `better-sqlite3` ships ready-made
+  binaries for every platform in `prebuilds/` (including `linux-x64.node`),
+  but it also contains a `binding.gyp`, and npm's default is to run
+  `node-gyp rebuild` whenever it sees one. That discards the prebuilt binary
+  and tries to compile from source, which fails with
+  `gyp ERR! stack Error: not found: make` on any box without build tools.
+  `--ignore-scripts` skips the pointless rebuild and the shipped binary is
+  used instead — a 2 second install with no compiler required.
 - The API binds to `127.0.0.1`. Together with the firewall allowing only SSH,
   nothing here is reachable from the internet.
 - On Windows the dispatcher spawns agents with `CREATE_NO_WINDOW` so console
