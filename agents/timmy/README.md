@@ -6,6 +6,46 @@ data and forms opinions; you decide what to do with them.
 
     Fetcher (free, every 15 min)  ->  data/*.json  ->  Timmy (costs fuel, 3x/day)  ->  reports/
 
+## Install
+
+Register FIRST — `openclaw agents add` seeds `AGENTS.md`, so Timmy's
+instructions have to be merged in on top of it afterwards, not before.
+
+    git -C /root/ecosystem pull
+    openclaw agents add timmy --workspace /root/ecosystem/agents/timmy --non-interactive
+    cd /root/ecosystem/agents/timmy && cat _timmy-agents-header.md AGENTS.md > .a && mv .a AGENTS.md
+    cp -n /root/ecosystem/agents/timmy/MEMORY.seed.md /root/ecosystem/agents/timmy/MEMORY.md
+    openclaw models auth paste-api-key --provider openrouter --agent timmy
+    openclaw agents list        # confirm timmy's index before the next two lines
+    openclaw config set 'agents.list[6].model' 'openrouter/google/gemini-2.5-flash-lite'
+    openclaw config set 'agents.list[6].thinkingDefault' 'low'
+    openclaw gateway restart
+    cp /root/ecosystem/deploy/timmy-*.service /root/ecosystem/deploy/timmy-*.timer /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable --now timmy-fetch.timer
+    systemctl enable --now timmy-cycle.timer
+
+`--workspace` is not optional. Without it the agent reads
+`~/.openclaw/workspace` instead of its own folder, never sees `data/`, and
+improvises the numbers — which is the exact failure the whole fetcher design
+exists to prevent.
+
+`agents.list[6]` assumes Timmy is the seventh agent. Run `openclaw agents
+list` and use the index it actually shows; setting the wrong index silently
+reconfigures a different agent.
+
+No heartbeat is set, deliberately. The systemd timer is what wakes Timmy. A
+heartbeat on top of it would mean paying for wakes nobody asked for.
+
+## What runs when
+
+    timmy-fetch.timer    every 15 min, Mon-Fri 08:00-17:00 ET      free
+                         every 6 hours otherwise (weekend freshness)  free
+    timmy-cycle.timer    10:15, 12:45, 15:40 ET, Mon-Fri           costs fuel
+
+Offset from the other agents on purpose — Scout runs 08:00, Fury 08:30, Ace
+09:00/15:00/23:30, Belfort 09:35/15:55. Nothing collides on a 1-vCPU box.
+
 ## The watchlist
 
 `state/watchlist.json`. Four tickers to start: HIMS, ASTS, UBER, IREN. Edit
