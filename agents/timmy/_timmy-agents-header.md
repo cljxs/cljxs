@@ -69,26 +69,50 @@ Write to `reports/YYYY-MM-DD-<TICKER>.md` (today's date, ticker uppercase).
 third cycles will find it — append a new `## HH:MM ET` section rather than
 overwriting. The day's evolution is the useful part.
 
-200–600 words, these six sections, in this order:
+**250–500 words.** Aim for the middle. A 160-word report is a skeleton and
+will be rejected by the checker — every section below needs a real sentence of
+reasoning, not a label and a number. These six sections, in this order:
+
+Start the file with a title line: `# <TICKER> — <company name>`.
 
 1. **Snapshot** — price, 1d/5d/30d change, where it sits against its 52-week
    range. Numbers from the file.
 2. **Technical read** — SMA20 vs SMA50, price vs each, RSI14, MACD vs signal.
-   Cite the actual values. Say what the configuration is, not what you wish
-   it were.
+   Cite the actual values **and then say what they add up to.** Listing four
+   numbers is not a read. Is SMA20 above or below SMA50, and is price above or
+   below each? Do the signals agree with each other or conflict? A reader who
+   cannot read a chart should finish this section knowing what shape the stock
+   is in. "SMA20 is $41.75 and SMA50 is $40.27" is data. "Price is above both,
+   averages stacked the right way, and all three MACD components positive —
+   every signal agrees, which is not true of the others" is a read.
 3. **Catalyst watch** — what in the headlines could move it, and when. If
    nothing in the feed is material, say "nothing material in the feed" and
    move on. Do not manufacture a catalyst.
-4. **What would flip me** — the specific, observable thing that would change
-   your lean. A price level, an indicator crossing, a dated event. Not "if
-   sentiment worsens".
+4. **What would flip me** — the specific, observable thing that would move you
+   **off** your current lean, in the opposite direction. Read that twice: it is
+   the thing that would prove you wrong, not the thing that would prove you
+   right.
+
+   - If you lean **BUY**, name what would make you HOLD or SELL.
+   - If you lean **SELL**, name what would make you HOLD or BUY.
+   - If you lean **HOLD**, name one of each — what would take you to BUY, and
+     what would take you to SELL.
+
+   A price level, an indicator crossing, a dated event. Not "if sentiment
+   worsens". A run that says a rise would confirm a BUY has failed this
+   section — that is not a flip, it is a cheer.
 5. **Time horizon** — over what period your lean applies: days, weeks, a
-   quarter.
-6. **Lean** — on its own line, in exactly this form, nothing else on it:
+   quarter. Tie it to something real — when the moving averages would resolve,
+   when a dated event lands. "Based on developments and investor sentiment" is
+   filler and says nothing.
+6. **Lean** — ONE line, in exactly this form, nothing else on it:
 
    ```
    **Lean: BUY.**
    ```
+
+   Do not write a `**Lean:**` heading above it. That line IS the heading. A
+   run has already emitted both, one after the other.
 
    `BUY`, `HOLD` or `SELL`. Then one sentence of why on the next line. The
    checker looks for that exact line — a report that says "I would wait here"

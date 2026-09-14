@@ -31,7 +31,9 @@ from pathlib import Path
 
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
 AGENT = ROOT / "agents" / "timmy"
-MIN_WORDS = 150          # the spec asks for 200-600; allow some slack before failing
+MIN_WORDS = 200          # the spec asks for 200-600 - hold that line.
+                         # This was 150 "for slack", and the slack is exactly
+                         # what a 156-word skeleton walked through.
 
 # Anchored to the "Lean:" line on purpose. A bare search for BUY|HOLD|SELL
 # matches "To BUY:" in the What-would-flip-me section and reports the wrong
@@ -96,6 +98,11 @@ def main():
         if words < MIN_WORDS:
             problems.append(f"{sym}: report is {words} words - too short to be a real report")
         leans = LEAN.findall(text)
+        # A bare "**Lean:**" heading above the real line is a formatting slip
+        # that has already happened; catch it rather than let it set.
+        if re.search(r"^\W*\**\s*Lean\s*:?\**\s*$", text, re.MULTILINE):
+            problems.append(f"{sym}: has an empty '**Lean:**' heading - "
+                            "the '**Lean: BUY.**' line is the heading, write only that")
         if not leans:
             problems.append(f"{sym}: no 'Lean: BUY|HOLD|SELL' line - "
                             "the report must state its call in that exact form")
