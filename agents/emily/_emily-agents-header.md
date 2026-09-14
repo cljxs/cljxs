@@ -42,9 +42,19 @@ Everything you need is there. Read it first.
 3. **Write the listing copy** to `builds/<slug>/listing.json`:
    `title` (≤140 chars), `description`, `tags` (13 max, ≤20 chars each),
    `materials`, `price_suggestion`, `product_type`.
-4. **Create the drafts** — Etsy draft listing, Printify product unpublished —
-   **only if** `state/credentials.env` has the tokens. If it does not, build
-   everything locally and mark the build `ready_local`, not `ready_to_publish`.
+4. **Create the Printify product, UNPUBLISHED** — only if
+   `state/credentials.env` has `PRINTIFY_API_TOKEN`. If it does not, build
+   everything locally and mark the build `ready_local`, not `ready_for_review`.
+
+   ```
+   python3 ../../scripts/emily-printify.py upload builds/<slug>/design.png
+   python3 ../../scripts/emily-printify.py create --spec builds/<slug>/printify.json
+   ```
+
+   That tool has **no publish command**. You cannot publish, by design. The
+   Etsy listing is created when the user presses Publish in Printify, which
+   pushes to their connected Etsy shop. Do not look for another way to do it
+   and do not ask the user to give you one.
 5. **Write `builds/<slug>/build.json`** with `status`, every file produced and
    its byte count, whether art was generated or placeholder, and any IP
    substitutions made.

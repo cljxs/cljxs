@@ -27,6 +27,25 @@ import urllib.request
 import zlib
 from pathlib import Path
 
+def load_credentials():
+    """credentials.env is a file, not an environment. Nothing was loading it,
+    so the key was never visible and every build silently fell back to a
+    placeholder. Read it here so the file actually does something."""
+    here = Path(__file__).resolve().parent.parent
+    for cand in (here / "agents" / "emily" / "state" / "credentials.env",
+                 Path(os.environ.get("EMILY_CREDENTIALS", "/nonexistent"))):
+        if not cand.is_file():
+            continue
+        for line in cand.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k, v = k.strip(), v.strip().strip('"').strip("'")
+            if v and k not in os.environ:
+                os.environ[k] = v
+
+
 OR_URL = "https://openrouter.ai/api/v1/chat/completions"
 OR_MODEL = os.environ.get("EMILY_IMAGE_MODEL", "google/gemini-2.5-flash-image")
 
@@ -115,6 +134,7 @@ def main():
     a = ap.parse_args()
 
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+    load_credentials()
     key = os.environ.get("OPENROUTER_API_KEY", "").strip()
 
     if key and not a.placeholder_only:
