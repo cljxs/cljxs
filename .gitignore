@@ -37,3 +37,13 @@ agents/ace/MEMORY.md
 
 # Phaser is fetched at install time, not committed
 mission-control-api/public/vendor/
+
+# Emily runtime state - credentials must NEVER reach this public repo
+agents/*/state/credentials.env
+**/credentials.env
+agents/emily/builds/*
+!agents/emily/builds/.gitkeep
+agents/emily/reports/*
+!agents/emily/reports/.gitkeep
+agents/emily/MEMORY.md
+agents/emily/state/lessons.md
