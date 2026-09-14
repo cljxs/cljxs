@@ -146,8 +146,17 @@ function buildAgent(name) {
   const cycles = portfolio ? num(firstOf(portfolio, ['cycle_count', 'cycles', 'runs'], null)) : null;
   const runs = cycles !== null ? cycles : report.count;
 
-  const lastRun = (portfolio && firstOf(portfolio, ['last_cycle_utc', 'last_run', 'updated_at'], null)) || report.when;
-  const lastRunAge = minutesSince(lastRun);
+  // Trust whichever is NEWER. An agent that writes its report but forgets to
+  // update its state file would otherwise be reported as days idle when it
+  // actually ran minutes ago - which is exactly what Belfort did on 2026-09-14.
+  const stateRun = portfolio && firstOf(portfolio, ['last_cycle_utc', 'last_run', 'updated_at'], null);
+  const stateAge = minutesSince(stateRun);
+  const reportAge = minutesSince(report.when);
+  const candidates = [[stateAge, stateRun], [reportAge, report.when]]
+    .filter(([age]) => age !== null)
+    .sort((a, b) => a[0] - b[0]);
+  const lastRun = candidates.length ? candidates[0][1] : null;
+  const lastRunAge = candidates.length ? candidates[0][0] : null;
 
   let status = 'idle';
   if (!portfolio && report.count === 0) status = 'waiting';
