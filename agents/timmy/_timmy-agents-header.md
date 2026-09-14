@@ -45,7 +45,16 @@ verified. Write "a headline this week claims X" — never "X happened".
 If `_meta.json` lists a ticker under `failed`, write no report for it. Say
 the fetch failed. Do not fill the gap from memory.
 
-## Step 2 — one report per ticker
+## Step 2 — one report per ticker, written one at a time
+
+**Finish each ticker completely — including saving its file — before you
+start the next one.** Do not analyse all four and save at the end.
+
+If the run dies partway through (a provider error, a timeout), everything
+already on disk survives and only the unfinished ticker is lost. Holding all
+four in your head until the end means one failure costs the whole cycle. That
+is exactly what happened on the first run: the analysis was done, the memory
+line was written, and not one report reached the disk.
 
 Find your previous report for the ticker first:
 
@@ -93,7 +102,27 @@ you are guessing.
 
 ## Step 3 — one line to MEMORY.md
 
-Append exactly one line, this shape:
+**Append. Never overwrite.** Use `>>`, not `>`:
+
+```
+echo "..." >> MEMORY.md
+```
+
+Writing with `>` destroys every previous cycle's line. It has already
+happened once — a run replaced the whole file with a single line and the
+history was gone. The log is only useful because it accumulates.
+
+The timestamp is **US/Eastern**, not UTC. The box runs UTC, so convert, or
+read it off the clock rather than guessing:
+
+```
+TZ=America/New_York date "+%Y-%m-%d %H:%M ET"
+```
+
+A line stamped 18:08 ET when it was really 14:08 ET makes the log lie about
+when you formed a view. That has also already happened once.
+
+One line, this shape:
 
 ```
 2026-09-14 15:40 ET | HIMS HOLD | ASTS BUY | UBER HOLD | IREN SELL (flip from HOLD: lost SMA50)
