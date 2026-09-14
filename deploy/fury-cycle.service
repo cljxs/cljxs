@@ -1,0 +1,25 @@
+[Unit]
+Description=Fury daily briefing (costs fuel - once a day)
+Documentation=https://github.com/cljxs/cljxs
+After=fury-collect.service
+Wants=fury-collect.service
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WorkingDirectory=/root/ecosystem
+# Collect the facts first, then wake Fury, then verify she actually wrote a
+# briefing. A run that writes nothing is a failed run, not a successful one.
+ExecStartPre=/usr/bin/python3 /root/ecosystem/scripts/fury-collect.py
+ExecStart=/bin/bash -lc 'D=/root/ecosystem/agents/fury/reports; \
+B=$(ls -A "$D"/*.md 2>/dev/null | wc -l); \
+T=$(find "$D" -name "*.md" -newermt "-10 minutes" 2>/dev/null | wc -l); \
+/usr/bin/openclaw agent --agent fury --message "scheduled briefing" --session-id "wake-fury-$(date +%%s)" --timeout 600 --json; \
+A=$(find "$D" -name "*.md" -newermt "-10 minutes" 2>/dev/null | wc -l); \
+if [ "$A" -le "$T" ]; then echo "FURY WROTE NOTHING: no briefing written in the last 10 minutes"; exit 1; fi; \
+echo "fury wrote a briefing ok"'
+TimeoutStartSec=900
+StandardOutput=journal
+StandardError=journal

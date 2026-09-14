@@ -134,6 +134,10 @@
 </div>
 
 <div class="wrap">
+  <div class="card" id="briefingCard" style="margin-bottom:16px;display:none">
+    <h3>Today's briefing <span id="briefingWhen" style="text-transform:none;letter-spacing:0;color:var(--dim);font-weight:400"></span></h3>
+    <div id="briefing" style="font-size:13.5px;line-height:1.65;white-space:pre-wrap"></div>
+  </div>
   <div class="kpis" id="kpis"></div>
   <div class="body">
     <div class="col">
@@ -263,6 +267,20 @@ function render(d){
       <div class="val num">${t.v}</div>
       <div class="sub">${t.d?`<span class="delta ${t.c}">${t.d}</span> · `:''}${esc(t.s)}</div>
     </div>`).join('');
+
+  // briefing
+  const bf = d.briefing;
+  if (bf) {
+    $('briefingCard').style.display = 'block';
+    $('briefingWhen').textContent = ' · ' + ago(bf.age_min);
+    $('briefing').innerHTML = esc(bf.body)
+      .replace(/^#+\s*(.+)$/gm, '<b>$1</b>')
+      .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+      .replace(/^[-*]\s+/gm, '· ')
+      .replace(/⚠️/g, '<span style="color:var(--warn)">⚠️</span>');
+  } else {
+    $('briefingCard').style.display = 'none';
+  }
 
   $('chartValue').innerHTML = lineChart(d.charts.value_series);
   $('chartDaily').innerHTML = barChart(d.charts.daily);

@@ -183,6 +183,26 @@ function buildAgent(name) {
   };
 }
 
+// Fury's latest briefing, surfaced on the dashboard so it is read on a phone
+// rather than by SSHing in - which is the entire point of having it.
+function latestBriefing() {
+  const dir = path.join(AGENTS_DIR, 'fury', 'reports');
+  try {
+    const files = fs.readdirSync(dir)
+      .filter(f => f.endsWith('.md'))
+      .map(f => ({ f, m: fs.statSync(path.join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.m - a.m);
+    if (!files.length) return null;
+    const body = fs.readFileSync(path.join(dir, files[0].f), 'utf8');
+    return {
+      name: files[0].f,
+      written: new Date(files[0].m).toISOString().replace('T', ' ').slice(0, 16),
+      age_min: Math.round((Date.now() - files[0].m) / 60000),
+      body: body.slice(0, 4000),
+    };
+  } catch { return null; }
+}
+
 function queueSpend(db) {
   let byAgent = [];
   let totalToday = 0;
@@ -300,6 +320,7 @@ function build() {
       runs_total: agents.reduce((s, a) => s + (a.runs ?? 0), 0),
     },
     agents,
+    briefing: latestBriefing(),
     spend,
     queue,
     limits: readLimits(),
