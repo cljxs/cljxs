@@ -5,6 +5,7 @@ const express = require('express');
 const { openDb, readLimits, writeLimits, logEvent } = require('./db');
 const dashboardData = require('./dashboard-data');
 const scoutRoutes = require('./scout');
+const emilyRoutes = require('./emily');
 
 const PORT = Number(process.env.PORT || 3001);
 // Bind to loopback by default, matching the OpenClaw gateway's posture.
@@ -275,6 +276,7 @@ app.get('/village', (req, res) => {
 });
 
 scoutRoutes.register(app, PORT);
+emilyRoutes.register(app);
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'mission-control-api' }));
 

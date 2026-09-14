@@ -124,6 +124,36 @@
     padding:28px 16px;text-align:center;color:var(--dim);font-size:13px;gap:5px;
   }
   .empty .big{font-size:22px;opacity:.4}
+
+  /* Emily's builds gallery */
+  .gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(184px,1fr));gap:14px}
+  .build{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:rgba(255,255,255,.02)}
+  .build .shot{
+    display:block;width:100%;aspect-ratio:1;object-fit:cover;background:rgba(255,255,255,.04);
+    border:0;padding:0;cursor:zoom-in;
+  }
+  .build .meta{padding:10px 11px 11px}
+  .build .bt{font-size:12.5px;font-weight:600;line-height:1.35;letter-spacing:-.01em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+  .build .bs{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+  .pill{font-size:10px;letter-spacing:.05em;text-transform:uppercase;border-radius:5px;
+    padding:2px 6px;border:1px solid var(--line2);color:var(--mute)}
+  .pill.ok{border-color:rgba(52,211,153,.45);color:var(--up)}
+  .pill.warn{border-color:rgba(245,158,11,.45);color:var(--warn)}
+  .build .bd{font-size:11.5px;color:var(--dim);margin-top:7px;line-height:1.45}
+  .noart{display:flex;align-items:center;justify-content:center;width:100%;aspect-ratio:1;
+    color:var(--dim);font-size:11.5px;background:rgba(255,255,255,.03)}
+  .lightbox{
+    position:fixed;inset:0;background:rgba(5,6,10,.93);z-index:50;display:none;
+    align-items:center;justify-content:center;flex-direction:column;gap:14px;padding:20px;
+  }
+  .lightbox.on{display:flex}
+  .lightbox img{max-width:min(100%,900px);max-height:74vh;border-radius:10px;
+    border:1px solid var(--line2);background:#000}
+  .lbbar{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;max-width:100%}
+  .lbbar button{padding:7px 12px;border-radius:9px;font-size:12px;font-weight:600;cursor:pointer;
+    border:1px solid var(--line2);background:rgba(255,255,255,.06);color:var(--ink)}
+  .lbbar button.sel{border-color:var(--c2);color:#fff}
+  .lbcap{font-size:12.5px;color:var(--mute);text-align:center}
   .note{font-size:11.5px;color:var(--dim);margin-top:12px;line-height:1.5}
   .foot{text-align:center;color:var(--dim);font-size:11.5px;padding:24px 0 0}
 
@@ -188,7 +218,19 @@
       </div>
     </div>
   </div>
-  <div class="foot" id="foot">—</div>
+  <div class="card" id="buildsCard" style="margin-top:16px;display:none">
+    <h3>Emily&rsquo;s builds <span id="buildsCount" style="text-transform:none;letter-spacing:0;color:var(--dim);font-weight:400"></span></h3>
+    <div id="builds"></div>
+    <div class="note">Tap any image to see it full size. Publishing still happens in Printify &mdash; nothing here puts a product on sale.</div>
+  </div>
+  <div class="foot" id="foot">&mdash;</div>
+</div>
+
+<div class="lightbox" id="lb" onclick="if(event.target===this)closeLb()">
+  <img id="lbimg" alt="">
+  <div class="lbbar" id="lbbar"></div>
+  <div class="lbcap" id="lbcap"></div>
+  <div class="lbbar"><button onclick="closeLb()">Close</button></div>
 </div>
 
 <script>
@@ -427,6 +469,82 @@ async function loadIdeas() {
   } catch { /* the main poll already reports connectivity */ }
 }
 
+// ---------------------------------------------------------- Emily's builds
+let lbFiles = [], lbSlug = '', lbIdx = 0;
+
+function buildUrl(slug, name){
+  return `/api/emily/builds/${encodeURIComponent(slug)}/file/${encodeURIComponent(name)}`;
+}
+
+function openLb(slug, start){
+  const b = (window.__builds || []).find(x => x.slug === slug);
+  if (!b || !b.images.length) return;
+  lbFiles = b.images; lbSlug = slug; lbIdx = Math.max(0, lbFiles.findIndex(f => f.name === start));
+  $('lbbar').innerHTML = lbFiles.map((f,i) =>
+    `<button class="${i===lbIdx?'sel':''}" onclick="showLb(${i})">${esc(f.name)}</button>`).join('');
+  $('lbcap').textContent = b.title;
+  showLb(lbIdx);
+  $('lb').classList.add('on');
+}
+function showLb(i){
+  lbIdx = i;
+  $('lbimg').src = buildUrl(lbSlug, lbFiles[i].name);
+  $('lbimg').alt = lbFiles[i].name;
+  [...$('lbbar').children].forEach((b,n) => b.className = n===i ? 'sel' : '');
+}
+function closeLb(){ $('lb').classList.remove('on'); $('lbimg').src = ''; }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLb(); });
+
+const kb = n => n >= 1048576 ? (n/1048576).toFixed(1)+' MB' : Math.round(n/1024)+' KB';
+
+// What the user actually needs to know at a glance: is this finished, and is
+// the art real? A placeholder build looks fine as a thumbnail and is not
+// sellable, so it gets said out loud rather than left to be discovered.
+function buildPills(b){
+  const p = [];
+  if (b.status === 'ready_for_review')  p.push(['ok','ready for review']);
+  else if (b.status === 'ready_local')  p.push(['','local only']);
+  else if (b.status === 'in_progress')  p.push(['','building…']);
+  else p.push(['', String(b.status).replace(/_/g,' ')]);
+  if (b.art_mode === 'placeholder') p.push(['warn','placeholder art']);
+  if (b.product_type) p.push(['', b.product_type]);
+  return p.map(([c,t]) => `<span class="pill ${c}">${esc(t)}</span>`).join('');
+}
+
+async function loadBuilds(){
+  try{
+    const r = await fetch('/api/emily/builds', {cache:'no-store'});
+    const d = await r.json();
+    const builds = d.builds || [];
+    window.__builds = builds;
+    if (!d.available || !builds.length){
+      $('buildsCard').style.display = d.available ? 'block' : 'none';
+      if (d.available){
+        $('buildsCount').textContent = '';
+        $('builds').innerHTML = emptyState('▦','Nothing built yet','Approve one of Scout’s ideas and Emily starts a build');
+      }
+      return;
+    }
+    $('buildsCard').style.display = 'block';
+    const c = d.counts || {};
+    $('buildsCount').textContent = ` · ${c.total} build${c.total===1?'':'s'}`
+      + (c.ready_for_review ? `, ${c.ready_for_review} ready for review` : '');
+    $('builds').innerHTML = `<div class="gal">` + builds.map(b => {
+      const cover = b.images[0];
+      const shot = cover
+        ? `<img class="shot" loading="lazy" src="${buildUrl(b.slug, cover.name)}" alt="${esc(b.title)}"
+             onclick="openLb('${esc(b.slug)}','${esc(cover.name)}')">`
+        : `<div class="noart">no image yet</div>`;
+      return `<div class="build">${shot}<div class="meta">
+        <div class="bt">${esc(b.title)}</div>
+        <div class="bs">${buildPills(b)}</div>
+        <div class="bd">${b.images.length} image${b.images.length===1?'':'s'} · ${kb(b.bytes)}${
+          b.price_suggestion ? ' · suggests ' + money(b.price_suggestion) : ''}</div>
+      </div></div>`;
+    }).join('') + `</div>`;
+  }catch{ /* the main poll already reports connectivity */ }
+}
+
 let fails = 0;
 async function tick(){
   try{
@@ -442,9 +560,10 @@ async function tick(){
     }
   }
 }
-tick(); loadIdeas();
+tick(); loadIdeas(); loadBuilds();
 setInterval(tick, 5000);
 setInterval(() => { if (!busy) loadIdeas(); }, 15000);
+setInterval(() => { if (!$('lb').classList.contains('on')) loadBuilds(); }, 20000);
 </script>
 </body>
 </html>
