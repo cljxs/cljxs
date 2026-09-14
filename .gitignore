@@ -34,3 +34,6 @@ agents/ace/reports/*
 !agents/ace/reports/.gitkeep
 agents/ace/state/bankroll.json
 agents/ace/MEMORY.md
+
+# Phaser is fetched at install time, not committed
+mission-control-api/public/vendor/

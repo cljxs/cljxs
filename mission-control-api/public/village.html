@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Pixel Village</title>
+<style>
+  :root{ --ink:#e8ecf5; --mute:#9aa4bb; --card:#141824; --line:rgba(255,255,255,.10);
+         --up:#34d399; --down:#fb7185; --warn:#fbbf24; --c1:#22d3ee; --c2:#a78bfa; }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#1b2a1f;
+    font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink)}
+  #game{position:fixed;inset:0}
+  canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges}
+  .num{font-variant-numeric:tabular-nums}
+
+  /* HUD */
+  #hud{position:fixed;top:0;left:0;right:0;padding:10px 14px;display:flex;gap:10px;
+    align-items:center;pointer-events:none;z-index:5;
+    background:linear-gradient(180deg,rgba(8,12,10,.72),transparent)}
+  #hud .title{font-weight:700;letter-spacing:-.01em;text-shadow:0 2px 6px rgba(0,0,0,.6)}
+  #hud .chip{margin-left:auto;font-size:12px;color:var(--mute);background:rgba(0,0,0,.42);
+    border:1px solid var(--line);border-radius:999px;padding:4px 10px}
+
+  /* interaction prompt */
+  #prompt{position:fixed;left:50%;bottom:112px;transform:translateX(-50%);z-index:6;
+    background:rgba(10,14,12,.88);border:1px solid var(--line);border-radius:12px;
+    padding:9px 16px;font-size:13px;display:none;pointer-events:none;
+    box-shadow:0 8px 26px rgba(0,0,0,.45)}
+  #prompt b{color:var(--c1)}
+
+  /* touch controls */
+  #stick{position:fixed;left:20px;bottom:22px;width:132px;height:132px;z-index:7;
+    border-radius:50%;background:rgba(0,0,0,.26);border:1px solid var(--line);touch-action:none;display:none}
+  #nub{position:absolute;left:50%;top:50%;width:56px;height:56px;margin:-28px 0 0 -28px;
+    border-radius:50%;background:rgba(255,255,255,.30);border:1px solid rgba(255,255,255,.4)}
+  #act{position:fixed;right:22px;bottom:38px;width:88px;height:88px;z-index:7;border-radius:50%;
+    background:linear-gradient(135deg,var(--c1),var(--c2));border:0;color:#06121a;font-weight:800;
+    font-size:15px;display:none;box-shadow:0 8px 26px rgba(0,0,0,.5)}
+  #act:active{transform:scale(.94)}
+
+  /* agent panel */
+  #panel{position:fixed;inset:0;z-index:20;display:none;align-items:center;justify-content:center;
+    background:rgba(4,7,10,.72);backdrop-filter:blur(6px);padding:18px}
+  #card{background:var(--card);border:1px solid var(--line);border-radius:18px;
+    width:min(560px,100%);max-height:86vh;overflow:auto;padding:20px;
+    box-shadow:0 24px 70px rgba(0,0,0,.6)}
+  #card h2{margin:0 0 2px;font-size:21px;text-transform:capitalize;letter-spacing:-.01em}
+  #card .sub{color:var(--mute);font-size:12.5px;margin-bottom:16px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+  .stat{background:rgba(255,255,255,.035);border:1px solid var(--line);border-radius:11px;padding:11px}
+  .stat .l{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute)}
+  .stat .v{font-size:20px;font-weight:650;margin-top:3px}
+  .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--mute)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:right;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--mute);
+     padding-bottom:7px;border-bottom:1px solid var(--line);font-weight:600}
+  th:first-child,td:first-child{text-align:left}
+  td{padding:8px 0;border-bottom:1px solid var(--line);text-align:right}
+  tr:last-child td{border-bottom:0}
+  .quote{background:rgba(255,255,255,.035);border-left:2px solid var(--c2);border-radius:0 9px 9px 0;
+    padding:10px 12px;font-size:12.5px;color:var(--mute);line-height:1.5;margin-top:6px}
+  #close{margin-top:16px;width:100%;padding:12px;border-radius:11px;border:1px solid var(--line);
+    background:rgba(255,255,255,.06);color:var(--ink);font-size:14px;font-weight:600}
+  .muted{color:var(--mute);font-size:12.5px}
+
+  #boot{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:30;
+    background:#121a14;color:var(--mute);font-size:13px;text-align:center;padding:24px}
+</style>
+</head>
+<body>
+<div id="game"></div>
+
+<div id="hud">
+  <div class="title">🏡 Pixel Village</div>
+  <div class="chip" id="chip">loading…</div>
+</div>
+
+<div id="prompt"></div>
+<div id="stick"><div id="nub"></div></div>
+<button id="act">ENTER</button>
+
+<div id="panel"><div id="card"></div></div>
+<div id="boot">Loading the village…</div>
+
+<script src="/vendor/phaser.min.js"></script>
+<script>
+/* ------------------------------------------------------------------ *
+ * Pixel Village — a walkable front-end for the agent ecosystem.
+ * Every texture here is generated in code. No image files, no asset
+ * packs, nothing to buy. Swap in a real tileset later if you want.
+ * ------------------------------------------------------------------ */
+
+const T = 32;                 // tile size
+const MAP_W = 34, MAP_H = 22; // tiles
+const W = MAP_W * T, H = MAP_H * T;
+
+let DATA = { agents: [], kpis: {}, health: {} };
+let scene = null, player = null, doors = [], nearDoor = null, openAgent = null;
+const keys = {};
+const touch = { active: false, dx: 0, dy: 0, id: null };
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const money = v => (v === null || v === undefined) ? '—'
+  : (v < 0 ? '-' : '') + '$' + Math.abs(v).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+const pctTxt = v => (v === null || v === undefined) ? '' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+const cls = v => (v === null || v === undefined) ? 'flat' : v > 0 ? 'up' : v < 0 ? 'down' : 'flat';
+const ago = m => (m === null || m === undefined) ? 'never' : m < 1 ? 'just now'
+  : m < 60 ? m + 'm ago' : m < 1440 ? Math.floor(m/60) + 'h ago' : Math.floor(m/1440) + 'd ago';
+
+/* ---------------- procedural pixel art ---------------- */
+
+function px(g, x, y, w, h, color) { g.fillStyle(color, 1); g.fillRect(x, y, w, h); }
+
+function makeTextures(s) {
+  // --- grass, with a few deterministic tufts so it isn't flat ---
+  let g = s.add.graphics();
+  px(g, 0, 0, T, T, 0x5a9e4b);
+  const tufts = [[5,7],[19,4],[11,20],[25,15],[2,25],[28,26]];
+  tufts.forEach(([a,b], i) => px(g, a, b, 2, i % 2 ? 3 : 2, i % 2 ? 0x4e8c42 : 0x6bb15a));
+  g.generateTexture('grass', T, T); g.destroy();
+
+  // --- dirt path ---
+  g = s.add.graphics();
+  px(g, 0, 0, T, T, 0xc2a878);
+  [[4,6],[17,10],[9,22],[26,18],[21,27]].forEach(([a,b],i)=>px(g,a,b,3,2, i%2?0xb39a6b:0xd0b98c));
+  g.generateTexture('path', T, T); g.destroy();
+
+  // --- water ---
+  g = s.add.graphics();
+  px(g, 0, 0, T, T, 0x3f7fb5);
+  px(g, 3, 8, 12, 2, 0x5b9ed0); px(g, 18, 19, 10, 2, 0x5b9ed0);
+  g.generateTexture('water', T, T); g.destroy();
+
+  // --- tree (2 tiles tall) ---
+  g = s.add.graphics();
+  px(g, 13, 40, 6, 20, 0x7a5230);
+  px(g, 4, 8, 24, 30, 0x2f7d3d);
+  px(g, 8, 2, 16, 12, 0x3d9950);
+  px(g, 10, 12, 6, 6, 0x53b566);
+  g.generateTexture('tree', 32, 60); g.destroy();
+
+  // --- hero, 2-frame walk, three facings ---
+  const hero = (name, facing, frame) => {
+    const gg = s.add.graphics();
+    const skin = 0xf0c9a0, shirt = facing === 'up' ? 0x3d5a99 : 0x4b6cb7, hair = 0x3a2a1d;
+    // legs (the frame difference)
+    if (frame === 0) { px(gg, 7, 20, 4, 6, 0x2c3550); px(gg, 13, 20, 4, 6, 0x2c3550); }
+    else { px(gg, 5, 20, 4, 6, 0x2c3550); px(gg, 15, 20, 4, 6, 0x2c3550); }
+    px(gg, 6, 11, 12, 10, shirt);                       // body
+    if (facing !== 'up') { px(gg, 8, 4, 8, 8, skin); }  // face
+    else { px(gg, 8, 4, 8, 8, hair); }
+    px(gg, 7, 2, 10, 4, hair);                          // hair
+    if (facing === 'down') { px(gg, 9, 8, 2, 2, 0x22303f); px(gg, 13, 8, 2, 2, 0x22303f); }
+    if (facing === 'side') { px(gg, 12, 8, 2, 2, 0x22303f); }
+    gg.generateTexture(name, 24, 28); gg.destroy();
+  };
+  ['down','up','side'].forEach(f => { hero(`hero-${f}-0`, f, 0); hero(`hero-${f}-1`, f, 1); });
+
+  // --- buildings, one colourway per agent slot ---
+  const ROOFS = [0xc0504d, 0x4f81bd, 0x9bbb59, 0x8064a2, 0xd99694, 0x4bacc6];
+  ROOFS.forEach((roof, i) => {
+    const gg = s.add.graphics();
+    px(gg, 0, 26, 96, 54, 0xe8dcc0);                // walls
+    px(gg, 0, 26, 96, 4, 0xcbbb9a);
+    // pitched roof: narrow at the ridge, widening to the eaves
+    for (let r = 0; r < 10; r++) {
+      const half = 7 + r * 4.2, y = 4 + r * 2.1;
+      px(gg, 48 - half, y, half * 2, 3, roof);
+    }
+    px(gg, 0, 24, 96, 5, roof);                     // eaves
+    px(gg, 0, 24, 96, 1, 0x00000022);
+    px(gg, 40, 50, 18, 30, 0x7a5230);               // door
+    px(gg, 54, 64, 3, 3, 0xffd76e);                 // handle
+    px(gg, 12, 38, 16, 14, 0x9fd3e8); px(gg, 68, 38, 16, 14, 0x9fd3e8); // windows
+    px(gg, 12, 38, 16, 2, 0x6a5b45); px(gg, 68, 38, 16, 2, 0x6a5b45);
+    gg.generateTexture(`house-${i}`, 96, 80); gg.destroy();
+  });
+
+  // --- signpost ---
+  g = s.add.graphics();
+  px(g, 7, 10, 3, 14, 0x7a5230);
+  px(g, 0, 2, 17, 9, 0xd9c9a3);
+  px(g, 0, 2, 17, 2, 0xb9a888);
+  g.generateTexture('sign', 17, 24); g.destroy();
+}
+
+/* ---------------- scene ---------------- */
+
+function preload() {}
+
+function create() {
+  scene = this;
+  makeTextures(this);
+
+  // ground: painted once into a RenderTexture, cheap to draw thereafter
+  const ground = this.add.renderTexture(0, 0, W, H).setOrigin(0).setDepth(0);
+  for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) ground.draw('grass', x * T, y * T);
+
+  // a horizontal high street plus a vertical spur
+  const ROAD_Y = 12;
+  for (let x = 0; x < MAP_W; x++) { ground.draw('path', x*T, ROAD_Y*T); ground.draw('path', x*T, (ROAD_Y+1)*T); }
+  for (let y = ROAD_Y; y < MAP_H - 2; y++) { ground.draw('path', 16*T, y*T); ground.draw('path', 17*T, y*T); }
+
+  // pond
+  for (let y = 17; y < 20; y++) for (let x = 2; x < 8; x++) ground.draw('water', x*T, y*T);
+
+  // flowers: pure decoration, deterministic positions, no collision
+  const fl = this.add.graphics();
+  px(fl, 2, 2, 2, 2, 0xf2e06a); px(fl, 0, 4, 2, 2, 0xffffff); px(fl, 5, 5, 2, 2, 0xe8798f);
+  fl.generateTexture('flowers', 8, 8); fl.destroy();
+  let seed = 1337;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  for (let i = 0; i < 90; i++) {
+    const fx = Math.floor(rnd() * MAP_W) * T + 8, fy = Math.floor(rnd() * MAP_H) * T + 8;
+    const onRoad = (fy > (ROAD_Y - 1) * T && fy < (ROAD_Y + 2) * T) ||
+                   (fx > 15 * T && fx < 18 * T && fy > ROAD_Y * T);
+    if (!onRoad) ground.draw('flowers', fx, fy);
+  }
+
+  this.physics.world.setBounds(0, 0, W, H);
+
+  const solids = this.physics.add.staticGroup();
+
+  // pond collision
+  solids.add(this.add.zone(5*T, 18.5*T, 6*T, 3*T).setOrigin(.5));
+
+  // trees along the edges
+  const treeSpots = [[1,2],[5,1],[11,1],[19,2],[25,1],[31,2],[0,8],[33,8],
+                     [2,15],[9,16],[13,20],[21,16],[26,19],[31,15],[29,21],[6,21]];
+  treeSpots.forEach(([tx,ty]) => {
+    const t = this.add.image(tx*T+16, ty*T+16, 'tree').setDepth(ty*T+40);
+    solids.add(this.add.zone(t.x, t.y+18, 20, 14).setOrigin(.5));
+  });
+
+  // ---- one building per agent, auto-discovered ----
+  doors = [];
+  const agents = DATA.agents || [];
+  agents.forEach((a, i) => {
+    const col = i % 5, row = Math.floor(i / 5);
+    const bx = (3 + col * 6) * T;
+    const by = (row === 0 ? 6 : 15) * T;   // north side of the road first, then south
+    const house = this.add.image(bx, by, `house-${i % 6}`).setOrigin(0, 0);
+    house.setDepth(by + 80);
+    solids.add(this.add.zone(bx + 48, by + 52, 92, 46).setOrigin(.5));
+
+    // nameplate
+    const plateW = Math.max(56, a.name.length * 9 + 16);
+    const plate = this.add.rectangle(bx + 48, by + 90, plateW, 17, 0xd9c9a3)
+      .setStrokeStyle(2, 0x8a7a5c).setDepth(by + 190);
+    this.add.rectangle(bx + 48, by + 100, 4, 10, 0x7a5230).setDepth(by + 189);
+    this.add.text(bx + 48, by + 90, a.name.toUpperCase(), {
+      fontFamily: 'ui-monospace,Menlo,monospace', fontSize: '11px', color: '#2b3a2e',
+    }).setOrigin(.5).setDepth(by + 191);
+
+    // status lamp above the door
+    const colors = { active: 0x34d399, idle: 0x22d3ee, stale: 0xfbbf24, waiting: 0x8791a8 };
+    const lamp = this.add.circle(bx + 48, by + 16, 5, colors[a.status] || 0x8791a8)
+      .setStrokeStyle(1, 0x00000055).setDepth(by + 201);
+    this.tweens.add({ targets: lamp, alpha: .35, duration: 900, yoyo: true, repeat: -1 });
+
+    doors.push({ name: a.name, x: bx + 48, y: by + 80 });
+  });
+
+  if (!agents.length) {
+    this.add.text(W/2, 9*T, 'No agents yet —\nadd one and a house appears here.', {
+      fontFamily: 'ui-sans-serif,system-ui', fontSize: '16px', color: '#ffffff',
+      align: 'center', backgroundColor: '#00000066', padding: { x: 14, y: 10 },
+    }).setOrigin(.5).setDepth(9000);
+  }
+
+  // ---- player ----
+  ['down','up','side'].forEach(f => {
+    this.anims.create({ key: `walk-${f}`, frames: [{key:`hero-${f}-0`},{key:`hero-${f}-1`}], frameRate: 7, repeat: -1 });
+  });
+  player = this.physics.add.sprite(9*T, (ROAD_Y)*T + 20, 'hero-down-0');
+  player.setCollideWorldBounds(true);
+  player.body.setSize(14, 12).setOffset(5, 16);
+  player.setDepth(1);
+  this.physics.add.collider(player, solids);
+
+  this.cameras.main.setBounds(0, 0, W, H);
+  this.cameras.main.startFollow(player, true, .12, .12);
+  this.cameras.main.setZoom(zoomForViewport());
+
+  // keyboard (works when a keyboard is attached)
+  this.input.keyboard.on('keydown', e => {
+    keys[e.key.toLowerCase()] = true;
+    if (e.key.toLowerCase() === 'e' && nearDoor) openPanel(nearDoor.name);
+    if (e.key === 'Escape') closePanel();
+  });
+  this.input.keyboard.on('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+  // tap a house to enter it
+  this.input.on('pointerdown', p => {
+    if (openAgent) return;
+    const wp = this.cameras.main.getWorldPoint(p.x, p.y);
+    const hit = doors.find(d => Math.abs(wp.x - d.x) < 52 && wp.y > d.y - 82 && wp.y < d.y + 16);
+    if (hit) openPanel(hit.name);
+  });
+
+  $('boot').style.display = 'none';
+  if (isTouch()) { $('stick').style.display = 'block'; }
+}
+
+function zoomForViewport() {
+  // Show roughly 800px of world width: enough for three or four houses at once.
+  const z = Math.min(window.innerWidth / 800, window.innerHeight / 560);
+  return Math.max(1.0, Math.min(1.9, z));
+}
+
+function update() {
+  if (!player) return;
+  const SP = 165;
+  let vx = 0, vy = 0;
+
+  if (!openAgent) {
+    if (keys['arrowleft'] || keys['a']) vx -= 1;
+    if (keys['arrowright'] || keys['d']) vx += 1;
+    if (keys['arrowup'] || keys['w']) vy -= 1;
+    if (keys['arrowdown'] || keys['s']) vy += 1;
+    if (touch.active) { vx += touch.dx; vy += touch.dy; }
+  }
+
+  const len = Math.hypot(vx, vy) || 1;
+  player.setVelocity((vx/len) * SP * Math.min(1, Math.hypot(vx,vy)),
+                     (vy/len) * SP * Math.min(1, Math.hypot(vx,vy)));
+
+  const moving = Math.hypot(vx, vy) > .12;
+  if (moving) {
+    if (Math.abs(vx) > Math.abs(vy)) { player.anims.play('walk-side', true); player.setFlipX(vx < 0); }
+    else if (vy < 0) { player.anims.play('walk-up', true); player.setFlipX(false); }
+    else { player.anims.play('walk-down', true); player.setFlipX(false); }
+  } else {
+    player.anims.stop();
+    player.setTexture(player.anims.currentAnim ? player.anims.currentAnim.key.replace('walk-','hero-') + '-0' : 'hero-down-0');
+  }
+  player.setDepth(player.y);
+
+  // nearest door
+  nearDoor = null;
+  let best = 74;
+  for (const d of doors) {
+    const dist = Phaser.Math.Distance.Between(player.x, player.y, d.x, d.y);
+    if (dist < best) { best = dist; nearDoor = d; }
+  }
+  const prompt = $('prompt'), act = $('act');
+  if (nearDoor && !openAgent) {
+    prompt.style.display = 'block';
+    prompt.innerHTML = isTouch()
+      ? `<b>${esc(nearDoor.name)}</b> — tap ENTER`
+      : `<b>${esc(nearDoor.name)}</b> — press <b>E</b>`;
+    if (isTouch()) act.style.display = 'block';
+  } else {
+    prompt.style.display = 'none';
+    act.style.display = 'none';
+  }
+}
+
+/* ---------------- the data panel ---------------- */
+
+function openPanel(name) {
+  const a = (DATA.agents || []).find(x => x.name === name);
+  if (!a) return;
+  openAgent = name;
+
+  const isTrader = a.has_portfolio && a.value !== null;
+  const stats = isTrader ? [
+    { l: 'Value', v: money(a.value) },
+    { l: 'P&L', v: `<span class="${cls(a.pnl)}">${money(a.pnl)}</span>`, s: pctTxt(a.pnl_pct) },
+    { l: 'Cash', v: money(a.cash) },
+    { l: 'Positions', v: a.positions.length },
+  ] : [
+    { l: 'Status', v: a.status },
+    { l: 'Cycles', v: a.runs ?? 0 },
+    { l: 'Reports', v: a.report_count ?? 0 },
+    { l: 'Last run', v: ago(a.last_run_age_min) },
+  ];
+
+  const rows = (a.positions || []).map(p => `<tr>
+      <td><b>${esc(p.symbol)}</b></td>
+      <td class="num">${p.shares ?? '—'}</td>
+      <td class="num">${money(p.entry)}</td>
+      <td class="num">${p.priced ? money(p.price) : '—'}</td>
+      <td class="num ${cls(p.pnl)}">${p.pnl === null ? '—' : pctTxt(p.pnl_pct)}</td>
+    </tr>`).join('');
+
+  $('card').innerHTML = `
+    <h2>${esc(a.name)}</h2>
+    <div class="sub">${esc(a.status)}${a.mode ? ' · ' + esc(a.mode) : ''} ·
+      last run ${ago(a.last_run_age_min)} · ${a.runs ?? 0} cycles${
+      a.data_age_min !== null ? ' · data ' + ago(a.data_age_min) : ''}</div>
+    <div class="grid">${stats.map(s => `<div class="stat">
+        <div class="l">${s.l}</div><div class="v num">${s.v}</div>
+        ${s.s ? `<div class="l ${cls(a.pnl)}">${s.s}</div>` : ''}
+      </div>`).join('')}</div>
+    ${rows ? `<table><thead><tr><th>Sym</th><th>Sh</th><th>Entry</th><th>Last</th><th>P&L</th></tr></thead>
+      <tbody>${rows}</tbody></table>` : `<div class="muted">No open positions.</div>`}
+    ${a.headline ? `<div class="quote">${esc(a.headline)}</div>` : ''}
+    ${a.latest_report ? `<div class="muted" style="margin-top:10px">📄 ${esc(a.latest_report)}</div>` : ''}
+    <button id="close">Close</button>`;
+  $('panel').style.display = 'flex';
+  $('close').onclick = closePanel;
+}
+function closePanel() { openAgent = null; $('panel').style.display = 'none'; }
+$('panel').addEventListener('click', e => { if (e.target.id === 'panel') closePanel(); });
+
+/* ---------------- touch ---------------- */
+
+function isTouch() { return window.matchMedia('(pointer: coarse)').matches; }
+
+(function stick() {
+  const el = $('stick'), nub = $('nub');
+  const R = 46;
+  const set = (dx, dy) => { nub.style.transform = `translate(${dx}px,${dy}px)`; };
+  const start = e => {
+    const t = e.changedTouches ? e.changedTouches[0] : e;
+    touch.active = true; touch.id = t.identifier ?? 'mouse';
+    move(e); e.preventDefault();
+  };
+  const move = e => {
+    if (!touch.active) return;
+    const t = e.changedTouches ? [...e.changedTouches].find(x => x.identifier === touch.id) : e;
+    if (!t) return;
+    const r = el.getBoundingClientRect();
+    let dx = t.clientX - (r.left + r.width/2), dy = t.clientY - (r.top + r.height/2);
+    const d = Math.hypot(dx, dy);
+    if (d > R) { dx = dx/d*R; dy = dy/d*R; }
+    set(dx, dy);
+    touch.dx = dx / R; touch.dy = dy / R;
+    e.preventDefault();
+  };
+  const end = e => { touch.active = false; touch.dx = touch.dy = 0; set(0,0); };
+  el.addEventListener('touchstart', start, {passive:false});
+  el.addEventListener('touchmove', move, {passive:false});
+  el.addEventListener('touchend', end);
+  el.addEventListener('touchcancel', end);
+  el.addEventListener('mousedown', start);
+  window.addEventListener('mousemove', e => touch.active && move(e));
+  window.addEventListener('mouseup', end);
+})();
+
+$('act').addEventListener('click', () => { if (nearDoor) openPanel(nearDoor.name); });
+
+/* ---------------- data ---------------- */
+
+async function pull(first) {
+  try {
+    const r = await fetch('/api/dashboard', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const next = await r.json();
+    const changed = first || (next.agents || []).length !== (DATA.agents || []).length;
+    DATA = next;
+    $('chip').textContent = `${DATA.agents.length} agent${DATA.agents.length===1?'':'s'} · ${DATA.health.status}`;
+    if (first) boot();
+    else if (changed && scene) scene.scene.restart();   // a new agent gets a house
+    if (openAgent) openPanel(openAgent);
+  } catch (e) {
+    $('chip').textContent = 'offline';
+    if (first) $('boot').textContent = 'Cannot reach /api/dashboard — is mission-control-api running?';
+  }
+}
+
+function boot() {
+  new Phaser.Game({
+    type: Phaser.AUTO, parent: 'game',
+    backgroundColor: '#5a9e4b',
+    pixelArt: true, roundPixels: true,
+    scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH },
+    physics: { default: 'arcade', arcade: { gravity: { y: 0 }, debug: false } },
+    scene: { preload, create, update },
+  });
+  window.addEventListener('resize', () => {
+    if (scene) scene.cameras.main.setZoom(zoomForViewport());
+  });
+}
+
+pull(true);
+setInterval(() => pull(false), 6000);
+</script>
+</body>
+</html>

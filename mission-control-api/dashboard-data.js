@@ -106,7 +106,8 @@ function markToMarket(agentDir, portfolio) {
     return q ? num(q.price) : null;
   };
 
-  const raw = Array.isArray(portfolio && portfolio.positions) ? portfolio.positions : [];
+  const raw = Array.isArray(portfolio && portfolio.positions) ? portfolio.positions
+    : Array.isArray(portfolio && portfolio.open_bets) ? portfolio.open_bets : [];
   const rows = [];
   for (const pos of raw) {
     const symbol = String(firstOf(pos, ['symbol', 'ticker', 'sym'], '') || '').toUpperCase();
@@ -136,8 +137,8 @@ function buildAgent(name) {
   const dataAge = meta ? minutesSince(meta.asof_utc) : null;
 
   const { rows, quotes_asof } = markToMarket(dir, portfolio);
-  const cash = portfolio ? num(firstOf(portfolio, ['cash', 'balance', 'available_cash'], 0)) ?? 0 : null;
-  const start = portfolio ? num(firstOf(portfolio, ['starting_cash', 'start_balance', 'initial'], null)) : null;
+  const cash = portfolio ? num(firstOf(portfolio, ['cash', 'bankroll', 'balance', 'available_cash'], 0)) ?? 0 : null;
+  const start = portfolio ? num(firstOf(portfolio, ['starting_cash', 'starting_bankroll', 'start_balance', 'initial'], null)) : null;
   const held = rows.reduce((s, r) => s + (r.value ?? 0), 0);
   const value = portfolio ? cash + held : null;
   const pnl = value !== null && start !== null ? value - start : null;

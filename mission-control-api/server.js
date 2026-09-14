@@ -263,6 +263,16 @@ app.get('/dashboard', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
 });
 
+// Pixel Village: the same data, as a walkable town. Phaser is vendored
+// locally so the page works without reaching a CDN at runtime.
+app.use('/vendor', express.static(path.join(__dirname, 'public', 'vendor'), {
+  maxAge: '7d', immutable: true,
+}));
+
+app.get('/village', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'village.html'));
+});
+
 app.get('/health', (req, res) => res.json({ ok: true, service: 'mission-control-api' }));
 
 app.use((err, req, res, next) => {
