@@ -13,11 +13,14 @@ are not on disk. A missing report is a broken run, not a quiet one.
 
 Checks, against today's date in US/Eastern:
   * MEMORY.md gained a line
-  * one report file exists per ticker that fetched OK
+  * one report file exists per ticker that fetched OK, WRITTEN BY THIS RUN -
+    a file left by an earlier cycle today does not count. Without that check
+    a run that did nothing at all inherits the previous run's files and
+    passes, which is the exact failure this script exists to prevent.
   * each report is long enough to be a real report, not a stub
   * each report names a lean
 
-Usage:  timmy-verify.py <memory-bytes-before>
+Usage:  timmy-verify.py <memory-bytes-before> <run-started-epoch>
 
 Standard library only.
 """
@@ -26,6 +29,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -51,6 +55,9 @@ def eastern_today():
 
 def main():
     before = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+    # Epoch when the cycle started. Anything older than this on disk was not
+    # written by this run. 0 disables the check (a manual invocation).
+    started = int(sys.argv[2]) if len(sys.argv) > 2 else 0
     problems, notes = [], []
 
     memory = AGENT / "MEMORY.md"
@@ -92,6 +99,12 @@ def main():
         path = AGENT / "reports" / f"{day}-{sym}.md"
         if not path.exists():
             problems.append(f"no report for {sym} (expected reports/{path.name})")
+            continue
+        if started and path.stat().st_mtime < started:
+            age = int(time.time() - path.stat().st_mtime)
+            problems.append(f"{sym}: reports/{path.name} is stale - last written "
+                            f"{age}s ago, before this cycle started. This run did "
+                            "not write it; an earlier one did.")
             continue
         text = path.read_text()
         words = len(text.split())

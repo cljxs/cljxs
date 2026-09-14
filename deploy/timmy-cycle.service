@@ -15,9 +15,9 @@ WorkingDirectory=/root/ecosystem
 # the chat. Belfort and Scout both shipped that failure and both were logged
 # as successes. Timmy fails loudly instead.
 ExecStart=/bin/bash -lc 'M=/root/ecosystem/agents/timmy/MEMORY.md; \
-B=$(stat -c %%s "$M" 2>/dev/null || echo 0); \
+B=$(stat -c %%s "$M" 2>/dev/null || echo 0); S=$(date +%%s); \
 /usr/bin/openclaw agent --agent timmy --message "scheduled cycle" --session-id "wake-timmy-$(date +%%s)" --timeout 900 --json; \
-/usr/bin/python3 /root/ecosystem/scripts/timmy-verify.py "$B"'
+/usr/bin/python3 /root/ecosystem/scripts/timmy-verify.py "$B" "$S"'
 TimeoutStartSec=1200
 StandardOutput=journal
 StandardError=journal
