@@ -8,7 +8,15 @@ User=root
 Environment=HOME=/root
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WorkingDirectory=/root/ecosystem
-ExecStart=/bin/bash -lc '/usr/bin/openclaw agent --agent scout --message "scheduled idea run" --session-id "wake-scout-$(date +%%s)" --timeout 600 --json'
+# A run that writes nothing is a failed run, not a successful one. systemd only
+# knows the process exited 0, which is not the same as the agent doing its job -
+# so check whether ideas.json actually changed and fail loudly if it did not.
+ExecStart=/bin/bash -lc 'F=/root/ecosystem/agents/scout/state/ideas.json; \
+B=$(stat -c %%Y "$F" 2>/dev/null || echo 0); \
+/usr/bin/openclaw agent --agent scout --message "scheduled idea run" --session-id "wake-scout-$(date +%%s)" --timeout 600 --json; \
+A=$(stat -c %%Y "$F" 2>/dev/null || echo 0); \
+if [ "$A" -le "$B" ]; then echo "SCOUT WROTE NOTHING: ideas.json unchanged - the run produced no ideas on disk"; exit 1; fi; \
+echo "scout wrote ideas.json ok"'
 TimeoutStartSec=900
 StandardOutput=journal
 StandardError=journal
