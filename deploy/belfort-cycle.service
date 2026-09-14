@@ -9,7 +9,15 @@ Environment=HOME=/root
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WorkingDirectory=/root/ecosystem
 # A fresh session id per wake is required; reused sessions cause runaway loops.
-ExecStart=/bin/bash -lc '/usr/bin/openclaw agent --agent belfort --message "scheduled cycle" --session-id "wake-belfort-$(date +%%s)" --timeout 600 --json'
+# A cycle that never updates state is a failed cycle, not a successful
+# one. systemd only knows the process exited 0. Both agents have already
+# shipped a run that skipped its state write and was logged as a success.
+ExecStart=/bin/bash -lc 'F=/root/ecosystem/agents/belfort/state/portfolio.json; \
+B=$(stat -c %%Y "$F" 2>/dev/null || echo 0); \
+/usr/bin/openclaw agent --agent belfort --message "scheduled cycle" --session-id "wake-belfort-$(date +%%s)" --timeout 600 --json; \
+A=$(stat -c %%Y "$F" 2>/dev/null || echo 0); \
+if [ "$A" -le "$B" ]; then echo "BELFORT WROTE NOTHING: $F unchanged - the cycle did not update state"; exit 1; fi; \
+echo "belfort updated state ok"'
 TimeoutStartSec=900
 StandardOutput=journal
 StandardError=journal
