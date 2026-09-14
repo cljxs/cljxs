@@ -31,7 +31,9 @@ instructions merge in afterwards. **No systemd timer**: that is deliberate.
     openclaw config set 'agents.list[3].model' 'openrouter/google/gemini-2.5-flash-lite'
     openclaw config set 'agents.list[3].thinkingDefault' 'low'
     openclaw gateway restart
-    systemctl restart task-dispatcher
+
+The dispatcher re-scans `agents/` on every loop, so it finds Emily within a
+couple of seconds. No restart is needed.
 
 ## External accounts
 
