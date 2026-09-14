@@ -47,3 +47,9 @@ agents/emily/reports/*
 !agents/emily/reports/.gitkeep
 agents/emily/MEMORY.md
 agents/emily/state/lessons.md
+
+# Scout runtime state
+agents/scout/state/ideas.json
+agents/scout/reports/*
+!agents/scout/reports/.gitkeep
+agents/scout/MEMORY.md

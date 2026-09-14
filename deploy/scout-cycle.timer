@@ -1,0 +1,12 @@
+[Unit]
+Description=Wake Scout once a day to propose ideas
+
+[Timer]
+# Once a day is plenty. Ideas do not go stale in hours, and this is the only
+# part of Scout that costs money - roughly 9p a month.
+OnCalendar=*-*-* 08:00 America/New_York
+Persistent=false
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
