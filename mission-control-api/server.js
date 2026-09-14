@@ -4,6 +4,7 @@ const path = require('path');
 const express = require('express');
 const { openDb, readLimits, writeLimits, logEvent } = require('./db');
 const dashboardData = require('./dashboard-data');
+const scoutRoutes = require('./scout');
 
 const PORT = Number(process.env.PORT || 3001);
 // Bind to loopback by default, matching the OpenClaw gateway's posture.
@@ -272,6 +273,8 @@ app.use('/vendor', express.static(path.join(__dirname, 'public', 'vendor'), {
 app.get('/village', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'village.html'));
 });
+
+scoutRoutes.register(app, PORT);
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'mission-control-api' }));
 

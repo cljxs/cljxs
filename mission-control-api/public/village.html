@@ -64,6 +64,19 @@
   #close{margin-top:16px;width:100%;padding:12px;border-radius:11px;border:1px solid var(--line);
     background:rgba(255,255,255,.06);color:var(--ink);font-size:14px;font-weight:600}
   .muted{color:var(--mute);font-size:12.5px}
+  .idea{padding:11px 0;border-bottom:1px solid var(--line)}
+  .idea:last-of-type{border-bottom:0}
+  .idea .t{font-weight:600}
+  .idea .p{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute);
+    border:1px solid var(--line);border-radius:5px;padding:1px 6px;margin-left:7px;vertical-align:1px}
+  .idea .d{font-size:12px;color:var(--mute);margin-top:4px;line-height:1.45}
+  .idea .w{font-size:11.5px;color:#7c869c;margin-top:4px;font-style:italic;line-height:1.45}
+  .acts{display:flex;gap:8px;margin-top:9px}
+  .acts button{flex:1;padding:9px;border-radius:10px;font-size:12.5px;font-weight:600;
+    border:1px solid var(--line);background:rgba(255,255,255,.05);color:var(--ink)}
+  .acts button:disabled{opacity:.45}
+  .acts .yes{border-color:rgba(52,211,153,.45);color:var(--up)}
+  .acts .no{border-color:rgba(251,113,133,.40);color:var(--down)}
 
   #boot{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:30;
     background:#121a14;color:var(--mute);font-size:13px;text-align:center;padding:24px}
@@ -386,7 +399,8 @@ function create() {
     if (hit) openPanel(hit.name);
   });
 
-  window.__npcs = npcs;   // exposed for debugging / verification
+  window.__npcs = npcs;          // exposed for debugging / verification
+  window.__openPanel = openPanel; // ditto - lets a panel be opened without walking to it
   $('boot').style.display = 'none';
   if (isTouch()) $('stick').style.display = 'block';
 }
@@ -524,13 +538,73 @@ function openPanel(name) {
         ${s.s ? `<div class="l ${cls(a.pnl)}">${s.s}</div>` : ''}
       </div>`).join('')}</div>
     ${rows ? `<table><thead><tr><th>Sym</th><th>Sh</th><th>Entry</th><th>Last</th><th>P&L</th></tr></thead>
-      <tbody>${rows}</tbody></table>` : `<div class="muted">No open positions.</div>`}
+      <tbody>${rows}</tbody></table>`
+      : (isTrader ? `<div class="muted">No open positions.</div>` : '')}
     ${a.headline ? `<div class="quote">${esc(a.headline)}</div>` : ''}
     ${a.latest_report ? `<div class="muted" style="margin-top:10px">📄 ${esc(a.latest_report)}</div>` : ''}
+    ${a.name === 'scout' ? `<h2 style="font-size:15px;margin:18px 0 8px">Ideas awaiting you</h2>
+      <div id="scoutIdeas"><div class="muted">loading…</div></div>` : ''}
     <button id="close">Close</button>`;
   $('panel').style.display = 'flex';
   $('close').onclick = closePanel;
+  if (a.name === 'scout') loadScoutIdeas();
 }
+let ideaBusy = false;
+
+async function actOnIdea(id, verb) {
+  if (ideaBusy) return;
+  let reason = '';
+  if (verb === 'reject') {
+    reason = (window.prompt('Why? Scout reads this so it does not propose it again.') || '').trim();
+    if (!reason) return;
+  } else {
+    reason = (window.prompt('Note for the record (optional):', 'approved from the village') || 'approved from the village').trim();
+  }
+  ideaBusy = true;
+  document.querySelectorAll('.acts button').forEach(b => b.disabled = true);
+  try {
+    const r = await fetch(`/api/scout/ideas/${id}/${verb}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+    const j = await r.json();
+    if (!r.ok || j.ok === false) alert((j.error || j.stderr || 'That did not work').slice(0, 300));
+    else if (verb === 'approve') alert('Approved and queued to Emily.\n\n' + (j.stdout || ''));
+  } catch (e) {
+    alert('Could not reach the API: ' + e.message);
+  } finally {
+    ideaBusy = false;
+    loadScoutIdeas();
+  }
+}
+
+async function loadScoutIdeas() {
+  const host = document.getElementById('scoutIdeas');
+  if (!host) return;
+  try {
+    const r = await fetch('/api/scout/ideas', { cache: 'no-store' });
+    const d = await r.json();
+    const pending = (d.ideas || []).filter(i => i.status === 'pending');
+    if (!pending.length) {
+      host.innerHTML = '<div class="muted">No ideas waiting. Scout proposes again tomorrow morning.</div>';
+      return;
+    }
+    host.innerHTML = `<div class="muted" style="margin-bottom:8px">${pending.length} waiting for you</div>` +
+      pending.map(i => `<div class="idea">
+        <div><span class="t">${esc(i.title)}</span><span class="p">${esc(i.product || '')}</span></div>
+        ${i.angle ? `<div class="d">${esc(i.angle)}</div>` : ''}
+        ${i.brief ? `<div class="d">${esc(i.brief)}</div>` : ''}
+        ${i.why_now ? `<div class="w">${esc(i.why_now)}</div>` : ''}
+        <div class="acts">
+          <button class="yes" onclick="actOnIdea(${Number(i.id)},'approve')">\u2713 Approve</button>
+          <button class="no"  onclick="actOnIdea(${Number(i.id)},'reject')">\u2717 Reject</button>
+        </div>
+      </div>`).join('');
+  } catch {
+    host.innerHTML = '<div class="muted">Could not load ideas.</div>';
+  }
+}
+
 function closePanel() { openAgent = null; $('panel').style.display = 'none'; }
 $('panel').addEventListener('click', e => { if (e.target.id === 'panel') closePanel(); });
 

@@ -104,6 +104,21 @@
   .fill{height:100%;border-radius:999px;background:linear-gradient(90deg,var(--c1),var(--c2));transition:width .5s ease}
   .bar .vl{width:72px;text-align:right;font-size:12.5px;color:var(--mute)}
 
+  .idea{padding:12px 0;border-bottom:1px solid var(--line)}
+  .idea:last-child{border-bottom:0;padding-bottom:0}
+  .idea .t{font-weight:600;letter-spacing:-.01em}
+  .idea .p{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute);
+    border:1px solid var(--line2);border-radius:5px;padding:1px 6px;margin-left:7px;vertical-align:1px}
+  .idea .d{font-size:12.5px;color:var(--mute);margin-top:5px;line-height:1.5}
+  .idea .w{font-size:12px;color:var(--dim);margin-top:5px;line-height:1.5;font-style:italic}
+  .acts{display:flex;gap:8px;margin-top:10px}
+  .acts button{flex:1;padding:8px;border-radius:9px;font-size:12.5px;font-weight:600;
+    border:1px solid var(--line2);background:rgba(255,255,255,.05);color:var(--ink);cursor:pointer;
+    transition:background .15s,border-color .15s}
+  .acts button:hover:not(:disabled){background:rgba(255,255,255,.10)}
+  .acts button:disabled{opacity:.45;cursor:default}
+  .acts .yes{border-color:rgba(52,211,153,.45);color:var(--up)}
+  .acts .no{border-color:rgba(251,113,133,.40);color:var(--down)}
   .empty{
     display:flex;flex-direction:column;align-items:center;justify-content:center;
     padding:28px 16px;text-align:center;color:var(--dim);font-size:13px;gap:5px;
@@ -155,6 +170,10 @@
       </div>
     </div>
     <div class="col">
+      <div class="card" id="ideasCard" style="display:none">
+        <h3>Scout ideas <span id="ideasCount" style="text-transform:none;letter-spacing:0;color:var(--dim);font-weight:400"></span></h3>
+        <div id="ideas"></div>
+      </div>
       <div class="card">
         <h3>Agents</h3>
         <div id="agents"></div>
@@ -348,6 +367,66 @@ function render(d){
   $('foot').textContent = `updated ${d.generated_at} UTC · refreshes every 5s`;
 }
 
+let busy = false;
+
+async function actOnIdea(id, verb) {
+  if (busy) return;
+  let reason = '';
+  if (verb === 'reject') {
+    reason = (window.prompt('Why are you rejecting it? Scout reads this so it does not propose the same thing again.') || '').trim();
+    if (!reason) return;
+  } else {
+    reason = (window.prompt('Note for the record (optional):', 'approved from the dashboard') || 'approved from the dashboard').trim();
+  }
+  busy = true;
+  document.querySelectorAll('.acts button').forEach(b => b.disabled = true);
+  try {
+    const r = await fetch(`/api/scout/ideas/${id}/${verb}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+    const j = await r.json();
+    if (!r.ok || j.ok === false) {
+      alert((j.error || j.stderr || 'That did not work').slice(0, 300));
+    } else if (verb === 'approve') {
+      alert('Approved and queued to Emily.\n\n' + (j.stdout || ''));
+    }
+  } catch (e) {
+    alert('Could not reach the API: ' + e.message);
+  } finally {
+    busy = false;
+    loadIdeas();
+  }
+}
+
+async function loadIdeas() {
+  try {
+    const r = await fetch('/api/scout/ideas', { cache: 'no-store' });
+    const d = await r.json();
+    const pending = (d.ideas || []).filter(i => i.status === 'pending');
+    if (!d.available || !pending.length) {
+      $('ideasCard').style.display = d.available ? 'block' : 'none';
+      if (d.available) {
+        $('ideasCount').textContent = ' · none pending';
+        $('ideas').innerHTML = emptyState('\u2713', 'All caught up', 'Scout proposes again tomorrow morning');
+      }
+      return;
+    }
+    $('ideasCard').style.display = 'block';
+    $('ideasCount').textContent = ` \u00b7 ${pending.length} pending`;
+    $('ideas').innerHTML = pending.map(i => `<div class="idea">
+        <div><span class="t">${esc(i.title)}</span><span class="p">${esc(i.product || '')}</span></div>
+        ${i.angle ? `<div class="d">${esc(i.angle)}</div>` : ''}
+        ${i.brief ? `<div class="d">${esc(i.brief)}</div>` : ''}
+        ${i.why_now ? `<div class="w">${esc(i.why_now)}</div>` : ''}
+        <div class="acts">
+          <button class="yes" onclick="actOnIdea(${Number(i.id)},'approve')">\u2713 Approve</button>
+          <button class="no"  onclick="actOnIdea(${Number(i.id)},'reject')">\u2717 Reject</button>
+        </div>
+      </div>`).join('');
+  } catch { /* the main poll already reports connectivity */ }
+}
+
 let fails = 0;
 async function tick(){
   try{
@@ -363,7 +442,9 @@ async function tick(){
     }
   }
 }
-tick(); setInterval(tick, 5000);
+tick(); loadIdeas();
+setInterval(tick, 5000);
+setInterval(() => { if (!busy) loadIdeas(); }, 15000);
 </script>
 </body>
 </html>
