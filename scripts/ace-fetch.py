@@ -1,0 +1,275 @@
+#!/usr/bin/env python3
+"""
+ace-fetch.py — sports data fetcher for the Ace agent.
+
+Plain code. NO AI. Pulls scoreboards and per-game context, computes every
+number locally, writes JSON. Ace READS those files. If a number is not in a
+data file, Ace does not cite it.
+
+Standard library only — no pip installs, no compiler needed.
+"""
+
+import json
+import os
+import ssl
+import sys
+import time
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
+DATA = ROOT / "agents" / "ace" / "data"
+CTX = DATA / "context"
+
+# site.api.espn.com is blocked from many datacentre IPs; site.web.api serves
+# the same API and is reachable.
+BASE = "https://site.web.api.espn.com/apis/site/v2/sports"
+UA = "Mozilla/5.0 (compatible; ace-fetch/1.0)"
+TIMEOUT = 20
+GAP = 0.4
+DEEP_CAP = 12          # polite cap on per-game context fetches, per sport
+
+SPORTS = {
+    "mlb": {"path": "baseball/mlb", "months": {4, 5, 6, 7, 8, 9, 10}},
+    "nfl": {"path": "football/nfl", "months": {9, 10, 11, 12, 1, 2}},
+    "nba": {"path": "basketball/nba", "months": {10, 11, 12, 1, 2, 3, 4, 5, 6}},
+}
+
+
+def log(m):
+    print(f"[ace-fetch {datetime.now(timezone.utc):%H:%M:%S}] {m}", flush=True)
+
+
+def get(url, retries=2):
+    last = None
+    for a in range(retries + 1):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=TIMEOUT,
+                                        context=ssl.create_default_context()) as r:
+                return json.loads(r.read())
+        except Exception as e:
+            last = e
+            if a < retries:
+                time.sleep(1.5 * (a + 1))
+    raise last
+
+
+# --- the maths that matters, done here and not by a language model ---------
+
+def implied(ml):
+    """American moneyline -> implied probability (includes the vig)."""
+    if ml is None:
+        return None
+    try:
+        ml = float(ml)
+    except (TypeError, ValueError):
+        return None
+    if ml == 0:
+        return None
+    return (-ml) / ((-ml) + 100) if ml < 0 else 100.0 / (ml + 100)
+
+
+def devig(p_home, p_away):
+    """Strip the vig so the two sides sum to 100%. This is the number an
+    estimate must beat — not the raw implied probability."""
+    if p_home is None or p_away is None:
+        return None, None, None
+    total = p_home + p_away
+    if total <= 0:
+        return None, None, None
+    return p_home / total, p_away / total, (total - 1.0)
+
+
+def r1(x):
+    return None if x is None else round(x * 100, 1)
+
+
+def in_season(now=None):
+    m = (now or datetime.now(timezone.utc)).month
+    return [k for k, v in SPORTS.items() if m in v["months"]]
+
+
+def team_of(comp, home):
+    for c in comp.get("competitors", []):
+        if (c.get("homeAway") == "home") == home:
+            return c
+    return {}
+
+
+def build_context(sport, path, event):
+    """One compact context file per game. Compact matters: Ace reads these,
+    and every byte it reads is fuel."""
+    eid = event["id"]
+    comp = event["competitions"][0]
+    home, away = team_of(comp, True), team_of(comp, False)
+
+    summary = get(f"{BASE}/{path}/summary?event={eid}")
+
+    # odds
+    pc = (summary.get("pickcenter") or comp.get("odds") or [])
+    odds = {}
+    if pc:
+        o = pc[0]
+        hm = (o.get("homeTeamOdds") or {}).get("moneyLine")
+        am = (o.get("awayTeamOdds") or {}).get("moneyLine")
+        ph, pa = implied(hm), implied(am)
+        nh, na, vig = devig(ph, pa)
+        odds = {
+            "book": (o.get("provider") or {}).get("name"),
+            "details": o.get("details"),
+            "over_under": o.get("overUnder"),
+            "spread": o.get("spread"),
+            "moneyline_home": hm, "moneyline_away": am,
+            "implied_home_pct": r1(ph), "implied_away_pct": r1(pa),
+            "novig_home_pct": r1(nh), "novig_away_pct": r1(na),
+            "vig_pct": r1(vig),
+            "_note": "Compare your estimate against novig_*_pct, not implied_*_pct.",
+        }
+
+    # ESPN's own model. Deliberately labelled: a gap between this and the
+    # line is NOT an edge, it is the single most common way to lose money.
+    pred = summary.get("predictor") or {}
+    predictor = {
+        "home_pct": (pred.get("homeTeam") or {}).get("gameProjection"),
+        "away_pct": (pred.get("awayTeam") or {}).get("gameProjection"),
+        "_warning": "ESPN's public model. The line already prices models like "
+                    "this. A gap here is NOT an edge and must never justify a bet.",
+    } if pred else {}
+
+    # injuries: name + status only, capped
+    injuries = []
+    for blk in (summary.get("injuries") or []):
+        tm = (blk.get("team") or {}).get("abbreviation")
+        for i in (blk.get("injuries") or [])[:6]:
+            ath = i.get("athlete") or {}
+            injuries.append({
+                "team": tm,
+                "player": ath.get("displayName"),
+                "position": ((ath.get("position") or {}).get("abbreviation")),
+                "status": i.get("status"),
+                "date": i.get("date"),
+            })
+
+    last5 = []
+    for blk in (summary.get("lastFiveGames") or []):
+        tm = (blk.get("team") or {}).get("abbreviation")
+        for g in (blk.get("events") or [])[:5]:
+            last5.append({"team": tm, "result": g.get("gameResult"),
+                          "score": g.get("score"), "opponent": (g.get("opponent") or {}).get("abbreviation")})
+
+    ats = [{"team": (b.get("team") or {}).get("abbreviation"),
+            "records": [(r.get("type"), r.get("summary")) for r in (b.get("records") or [])[:3]]}
+           for b in (summary.get("againstTheSpread") or [])]
+
+    gi = summary.get("gameInfo") or {}
+    weather = gi.get("weather") or {}
+
+    probables = []
+    for p in (comp.get("probables") or []):
+        ath = p.get("athlete") or {}
+        probables.append({"team": (p.get("homeAway") or ""), "player": ath.get("displayName")})
+
+    return {
+        "sport": sport,
+        "event_id": eid,
+        "name": event.get("name"),
+        "short": event.get("shortName"),
+        "start_utc": event.get("date"),
+        "status": comp["status"]["type"]["name"],
+        "home": {"abbr": (home.get("team") or {}).get("abbreviation"),
+                 "record": ((home.get("records") or [{}])[0]).get("summary")},
+        "away": {"abbr": (away.get("team") or {}).get("abbreviation"),
+                 "record": ((away.get("records") or [{}])[0]).get("summary")},
+        "odds": odds,
+        "predictor": predictor,
+        "injuries": injuries,
+        "last_five": last5,
+        "against_the_spread": ats,
+        "venue": (gi.get("venue") or {}).get("fullName"),
+        "weather": {"temp_f": weather.get("temperature"),
+                    "conditions": weather.get("conditionId") and weather.get("displayValue")} if weather else {},
+        "probable_pitchers": probables,
+        "fetched_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def main():
+    CTX.mkdir(parents=True, exist_ok=True)
+    started = datetime.now(timezone.utc)
+    season = in_season(started)
+    log(f"in season: {season or '(none)'}")
+
+    slate, failures, deep_written = [], [], 0
+
+    for sport in season:
+        path = SPORTS[sport]["path"]
+        try:
+            board = get(f"{BASE}/{path}/scoreboard")
+        except Exception as e:
+            failures.append({"sport": sport, "error": str(e)[:140]})
+            log(f"{sport}: scoreboard FAILED — {e}")
+            continue
+
+        events = board.get("events", [])
+        scheduled = [e for e in events
+                     if e["competitions"][0]["status"]["type"]["name"] == "STATUS_SCHEDULED"]
+        finals = [e for e in events
+                  if e["competitions"][0]["status"]["type"]["name"] == "STATUS_FINAL"]
+
+        for e in events:
+            c = e["competitions"][0]
+            h, a = team_of(c, True), team_of(c, False)
+            slate.append({
+                "sport": sport, "event_id": e["id"], "short": e.get("shortName"),
+                "start_utc": e.get("date"), "status": c["status"]["type"]["name"],
+                "home": (h.get("team") or {}).get("abbreviation"),
+                "away": (a.get("team") or {}).get("abbreviation"),
+                "home_score": h.get("score"), "away_score": a.get("score"),
+            })
+
+        # Deep context only for games that can still be bet, capped.
+        for e in scheduled[:DEEP_CAP]:
+            try:
+                ctx = build_context(sport, path, e)
+                (CTX / f"{sport}-{e['id']}.json").write_text(json.dumps(ctx, indent=1) + "\n")
+                deep_written += 1
+            except Exception as exc:
+                failures.append({"sport": sport, "event": e["id"], "error": str(exc)[:140]})
+                log(f"{sport} {e.get('shortName')}: context FAILED — {exc}")
+            time.sleep(GAP)
+
+        log(f"{sport}: {len(events)} games ({len(scheduled)} scheduled, {len(finals)} final)")
+
+    if not slate and failures:
+        log("nothing fetched — leaving previous data files untouched")
+        return 1
+
+    (DATA / "slate.json").write_text(json.dumps({
+        "asof_utc": started.strftime("%Y-%m-%d %H:%M:%S"),
+        "sports_in_season": season,
+        "games": slate,
+    }, indent=1) + "\n")
+
+    # Prune context files for games no longer on the slate.
+    live_ids = {f"{g['sport']}-{g['event_id']}.json" for g in slate}
+    for f in CTX.glob("*.json"):
+        if f.name not in live_ids:
+            f.unlink(missing_ok=True)
+
+    (DATA / "_meta.json").write_text(json.dumps({
+        "asof_utc": started.strftime("%Y-%m-%d %H:%M:%S"),
+        "sports_in_season": season,
+        "games_on_slate": len(slate),
+        "context_files_written": deep_written,
+        "failures": failures,
+        "source": "ESPN public API (site.web.api.espn.com), no API key",
+    }, indent=1) + "\n")
+
+    log(f"ok: {len(slate)} games, {deep_written} context files, {len(failures)} failures")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
