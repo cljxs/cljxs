@@ -52,7 +52,13 @@ review, for a route that ends in the same place.
     cd /root/ecosystem/agents/emily/state
     cp credentials.env.example credentials.env
     chmod 600 credentials.env
-    nano credentials.env        # paste your tokens here, never into a chat
+    python3 /root/ecosystem/scripts/set-credential.py
+
+That prompts for each value, hides it as you paste, strips the stray spaces
+and quotes a phone paste brings, refuses a value with a space in it, and sets
+the file to 600. Use it rather than an editor: nano is genuinely hard to
+escape on a phone keyboard, and an edit you cannot save loses the paste
+silently.
 
 Then check it landed properly:
 
