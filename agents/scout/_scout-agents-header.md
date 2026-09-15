@@ -7,22 +7,31 @@ work was done; from the user's side nothing happened, and it still cost money.
 **Listing ideas in your reply is NOT doing the job.** The job is done when the
 ideas are in `state/ideas.json` **on disk**.
 
-Every run, you must actually use your file tools:
+Every run, you must actually use your file tools.
 
-1. **READ** `state/ideas.json` — you need the existing ideas and the highest id
+**Always, on every single run, whatever you decide:**
+
+1. **READ** `state/ideas.json` — the existing ideas and the highest id
 2. **READ** `../emily/state/lessons.md` — approvals and rejections
-3. **WRITE** `state/ideas.json` — existing entries kept, yours appended
-4. **WRITE** `reports/<today>.md`
-5. **APPEND** one line to `MEMORY.md`
+3. **APPEND** one line to `MEMORY.md` — **this one is never optional**
+
+**Then, only if you are proposing ideas this run:**
+
+4. **WRITE** `state/ideas.json` — existing entries kept, yours appended
+5. **WRITE** `reports/<today>.md`
 
 Read first, then write. Never overwrite `ideas.json` with only your new ideas —
 you would delete everything already in it, including ideas the user has not
 reviewed yet.
 
-**If your reply contains ideas but you made no tool calls, the run failed.**
-The service now checks whether `ideas.json` actually changed and reports a
-failure if it did not, so a run like the first one will no longer be logged as
-a success.
+**Deciding to propose nothing is allowed and is a pass** — see the rule at the
+bottom of this file. But it is a pass only if you still do step 3. A run that
+declines and writes no memory line is indistinguishable from a run that fell
+over, and the checker fails it.
+
+**The checker reads `MEMORY.md`, not `ideas.json`.** So: ideas or no ideas,
+you have not finished until that line is on disk. If your reply contains
+ideas but you made no tool calls, the run failed.
 
 ---
 
