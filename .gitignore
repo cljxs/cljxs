@@ -53,6 +53,7 @@ agents/scout/state/ideas.json
 agents/scout/reports/*
 !agents/scout/reports/.gitkeep
 agents/scout/MEMORY.md
+agents/scout/state/last-run.txt
 
 # Timmy — fetcher-owned data, daily reports and live memory stay local.
 # The seeds (watchlist.json, MEMORY.seed.md) are tracked; the live files are not.

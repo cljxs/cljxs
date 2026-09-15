@@ -35,12 +35,19 @@ Scout is told to propose fewer ideas, or none, when everything it can think
 of is already listed or when five or more are already waiting on you. Those
 runs are correct behaviour, not failures.
 
-The way the two are told apart is `MEMORY.md`: **every** run appends one line,
-including the runs that decline.
+The way the two are told apart is `state/last-run.txt`: **every** run writes
+one line there, including the runs that decline. The service then appends that
+line to `MEMORY.md` itself.
+
+Scout does not append to `MEMORY.md`, deliberately. It was asked twice, in two
+wordings, at the top of its instructions, and replaced the file both times -
+destroying the log. Appending a line is deterministic work, so it moved into
+code, the same reason the fetchers compute indicators instead of the agent.
+Scout now owns a scratch file it is free to overwrite.
 
     2026-09-15 08:00 ET | proposed 0 - 6 already pending, nothing new | 6 pending
 
-The service checks that line, not `ideas.json`. A run that proposes nothing
+The service checks that file, not `ideas.json`. A run that proposes nothing
 and says why passes; a run that writes neither fails. An earlier version
 checked `ideas.json` alone and so failed every run that correctly declined -
 which made a working agent look broken for a day.

@@ -8,28 +8,27 @@ User=root
 Environment=HOME=/root
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WorkingDirectory=/root/ecosystem/agents/scout
-# A run that writes nothing is a failed run, not a successful one. systemd only
-# knows the process exited 0, which is not the same as the agent doing its job.
+# Scout writes ONE line to state/last-run.txt; this appends it to MEMORY.md.
 #
-# But "wrote no ideas" and "did nothing" are different things. Scout is told to
-# propose nothing when everything it can think of is already listed, or when
-# five or more are already waiting on the user - and the earlier version of
-# this check failed exactly those runs, which is how a correctly-behaving agent
-# looked broken for a day.
+# Scout was asked twice, in two wordings, at the top of its instructions, to
+# append to MEMORY.md rather than replace it. It replaced it both times and
+# destroyed the log. Appending a line is deterministic work, so it belongs in
+# code - the same reason the fetchers compute the indicators instead of the
+# agent. Scout now owns a scratch file it is free to overwrite, and plain code
+# does the append it kept getting wrong.
 #
-# So the deliverable is the MEMORY.md line, which EVERY run writes including
-# the ones that decline. ideas.json changing is the bonus, not the test.
-ExecStart=/bin/bash -lc 'M=/root/ecosystem/agents/scout/MEMORY.md; \
-F=/root/ecosystem/agents/scout/state/ideas.json; \
-B=$(stat -c %%s "$M" 2>/dev/null || echo 0); T=$(stat -c %%Y "$M" 2>/dev/null || echo 0); \
-I=$(stat -c %%Y "$F" 2>/dev/null || echo 0); \
+# "Wrote no ideas" and "did nothing" stay different things: Scout is told to
+# propose nothing when ideas are already piling up, and those runs pass.
+ExecStart=/bin/bash -lc 'D=/root/ecosystem/agents/scout; L=$D/state/last-run.txt; M=$D/MEMORY.md; F=$D/state/ideas.json; \
+T=$(stat -c %%Y "$L" 2>/dev/null || echo 0); I=$(stat -c %%Y "$F" 2>/dev/null || echo 0); \
 /usr/bin/openclaw agent --agent scout --message "scheduled idea run" --session-id "wake-scout-$(date +%%s)" --timeout 600 --json; \
-A=$(stat -c %%s "$M" 2>/dev/null || echo 0); U=$(stat -c %%Y "$M" 2>/dev/null || echo 0); \
-J=$(stat -c %%Y "$F" 2>/dev/null || echo 0); \
-if [ "$U" -le "$T" ]; then echo "SCOUT RECORDED NOTHING: MEMORY.md never written. Every run logs one line, including a run that deliberately proposes no ideas."; exit 1; fi; \
-if [ "$A" -lt "$B" ]; then echo "SCOUT OVERWROTE MEMORY.md: $B bytes before, $A after - it replaced the log instead of appending, so previous runs are gone. Read the file and write it back with the new line added, or use >> from the shell."; exit 1; fi; \
-if [ "$J" -gt "$I" ]; then echo "scout wrote ideas.json and logged the run"; \
-else echo "scout proposed no new ideas and logged why - this is a pass, see MEMORY.md"; fi'
+U=$(stat -c %%Y "$L" 2>/dev/null || echo 0); J=$(stat -c %%Y "$F" 2>/dev/null || echo 0); \
+if [ "$U" -le "$T" ]; then echo "SCOUT RECORDED NOTHING: state/last-run.txt not written. Every run writes one line there, including a run that deliberately proposes no ideas."; exit 1; fi; \
+LINE=$(head -c 400 "$L" | tr -d "\\n" | sed "s/[[:space:]]\\+/ /g"); \
+if [ -z "$LINE" ]; then echo "SCOUT RECORDED NOTHING: state/last-run.txt is empty."; exit 1; fi; \
+printf "%%s\\n" "$LINE" >> "$M"; \
+if [ "$J" -gt "$I" ]; then echo "scout wrote ideas.json; logged to MEMORY.md: $LINE"; \
+else echo "scout proposed no new ideas - a pass; logged to MEMORY.md: $LINE"; fi'
 TimeoutStartSec=900
 StandardOutput=journal
 StandardError=journal

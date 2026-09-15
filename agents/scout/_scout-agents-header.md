@@ -8,21 +8,19 @@ zero tool calls, and cost money for nothing.
 
 1. **READ** `state/ideas.json` — existing ideas and the highest id
 2. **READ** `../emily/state/lessons.md` — approvals and rejections
-3. **APPEND** one line to `MEMORY.md` — **never optional.** Your write tool
-   probably *replaces* files, so appending is deliberate: read it, write it
-   back with your line added. Or use the shell, which appends properly:
-   `echo "<line>" >> /root/ecosystem/agents/scout/MEMORY.md`.
-   A run once replaced the file with one line and lost the history; the
-   checker now fails any run that shrinks it.
+3. **WRITE** your one-line summary of this run to `state/last-run.txt` —
+   **never optional.** Just the line, nothing else. Replacing that file is
+   correct; it holds only this run. Plain code copies it into `MEMORY.md`
+   afterwards, so you never have to append anything.
 
 **Then, only if proposing ideas this run:**
 
 4. **WRITE** `state/ideas.json` — every existing entry kept, yours appended
 5. **WRITE** `reports/<today>.md`
 
-**The checker reads `MEMORY.md`, not `ideas.json`.** Proposing nothing is a
-pass; proposing nothing *and writing no memory line* is indistinguishable from
-falling over, and fails.
+**The checker reads `state/last-run.txt`, not `ideas.json`.** Proposing
+nothing is a pass; proposing nothing *and writing no summary line* is
+indistinguishable from falling over, and fails.
 
 ---
 
@@ -104,8 +102,8 @@ If everything you can think of is already listed, propose **fewer, or none**,
 and say so. **Count what is still `pending`** — at five or more waiting on the
 user, do not add to the pile. The bottleneck is review, not supply.
 
-Declining is doing your job. It is a pass **only if you still append the memory
-line**, which every run writes either way:
+Declining is doing your job. It is a pass **only if you still write
+`state/last-run.txt`**, which every run does either way:
 
 ```
 2026-09-15 08:00 CT | proposed 2 (autumn cocoa sticker, rainy-window print) | 6 pending
@@ -120,7 +118,7 @@ deliberately did not propose and why. Then end with:
 ```
 STATE:  state/ideas.json  ideas_added=<n>  total=<n>
 REPORT: <path>
-MEMORY: <the exact line you appended>
+MEMORY: <the exact line you wrote to state/last-run.txt>
 ```
 
 If you cannot write all three truthfully, you have not finished.
