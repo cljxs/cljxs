@@ -54,6 +54,16 @@ review, for a route that ends in the same place.
     chmod 600 credentials.env
     nano credentials.env        # paste your tokens here, never into a chat
 
+Then check it landed properly:
+
+    python3 /root/ecosystem/scripts/check-credentials.py
+
+That prints each key with a character count and four characters from each end
+— enough to spot an empty or mangled value, safe to screenshot, and it never
+prints a secret. It also repairs the paste this file invites: on a phone, a
+long token often lands on the line *after* `KEY=`, which leaves the key empty
+and orphans the token on a line every reader silently skips.
+
 `credentials.env` is gitignored. **This repo is public — never commit it.**
 
 ## Which model
