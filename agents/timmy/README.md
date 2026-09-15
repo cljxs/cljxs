@@ -17,7 +17,7 @@ instructions have to be merged in on top of it afterwards, not before.
     cp -n /root/ecosystem/agents/timmy/MEMORY.seed.md /root/ecosystem/agents/timmy/MEMORY.md
     openclaw models auth paste-api-key --provider openrouter --agent timmy
     openclaw agents list        # confirm timmy's index before the next two lines
-    openclaw config set 'agents.list[6].model' 'openrouter/google/gemini-2.5-flash-lite'
+    openclaw config set 'agents.list[6].model' 'openrouter/openai/gpt-4o'
     openclaw config set 'agents.list[6].thinkingDefault' 'low'
     openclaw gateway restart
     cp /root/ecosystem/deploy/timmy-*.service /root/ecosystem/deploy/timmy-*.timer /etc/systemd/system/
@@ -84,6 +84,26 @@ This is also why the fetcher runs every six hours overnight and at weekends.
 The market is shut and the prices do not change — but without those runs the
 data file would be 65 hours old by Monday's first cycle, Timmy would correctly
 refuse to run, and it would look broken when it was working perfectly.
+
+## The model
+
+`gpt-4o`. Not a free choice - four were tried:
+
+| Model | Result |
+|---|---|
+| `google/gemini-2.5-flash-lite` | provider internal error, died mid-cycle every time |
+| `google/gemini-2.5-flash` | same |
+| `openai/gpt-4o-mini` | completed, but reports came in at 153-178 words |
+| `openai/gpt-4o` | completes, reports 205-236 words |
+
+Both Gemini models choke on generating four reports in one session through
+OpenRouter - they read the data, form the leans, write the memory line, then
+die before saving anything. If you ever see `provider internal error` in the
+journal, that is what it looks like.
+
+This costs more than the cheap model the original plan suggested. Twelve
+reports a day is still cents, and a cheaper agent that cannot finish a cycle
+costs more than a dearer one that can.
 
 ## The verifier
 
