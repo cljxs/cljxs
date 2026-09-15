@@ -12,7 +12,7 @@ Two gates, both yours. Scout writes into `state/ideas.json` with
 ## Install
 
     openclaw agents add scout --workspace /root/ecosystem/agents/scout --non-interactive
-    cd /root/ecosystem/agents/scout && cat _scout-tools-first.md _scout-honesty.md _scout-agents-header.md AGENTS.md > .a && mv .a AGENTS.md
+    cd /root/ecosystem/agents/scout && cat _scout-agents-header.md AGENTS.md > .a && mv .a AGENTS.md
     cp -n /root/ecosystem/agents/scout/MEMORY.seed.md /root/ecosystem/agents/scout/MEMORY.md
     cp -n /root/ecosystem/agents/scout/state/ideas.seed.json /root/ecosystem/agents/scout/state/ideas.json
     openclaw models auth paste-api-key --provider openrouter --agent scout
@@ -23,11 +23,11 @@ Two gates, both yours. Scout writes into `state/ideas.json` with
     systemctl daemon-reload
     systemctl enable --now scout-cycle.timer
 
-All three instruction files go in, in that order. `_scout-tools-first.md`
-has to be FIRST - Scout's opening run printed its ideas into the chat and
-saved none, and moving that rule to the top of the file is what fixed it.
-Merging only the header, as this README used to say, quietly drops both it
-and the honesty rules.
+One file. `_scout-agents-header.md` already opens with the file-writing rule
+that fixed Scout's first run (it printed its ideas into the chat and saved
+none), and already carries the honesty and no-duplicate rules at the end.
+Those were once separate files; they were folded in, and merging them
+alongside the header duplicated every rule and contradicted several.
 
 ## Proposing nothing is a pass
 

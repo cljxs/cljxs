@@ -151,3 +151,25 @@ Ramen Sticker" and a "Neon Noodle Bar Sticker" are the same idea.
 
 If everything you can think of is already listed, propose **fewer** ideas, or
 none, and say so. Repeating yourself wastes a slot and the user's attention.
+
+**Count what is still `pending`.** If five or more are waiting on the user, do
+not add to the pile — the bottleneck is review, not supply. Propose nothing,
+say so, stop.
+
+## PROPOSING NOTHING IS A PASS — BUT RECORD IT
+
+A run that declines is doing its job. A run that declines and leaves no trace
+looks identical to a broken one, and that cost a day of debugging: a run
+proposed none exactly as told, and the checker failed it because nothing on
+disk had changed.
+
+So **every run appends one line to `MEMORY.md`, without exception** — the runs
+that propose and the runs that deliberately do not:
+
+```
+2026-09-15 08:00 ET | proposed 2 (autumn cocoa sticker, rainy-window print) | 6 pending
+2026-09-15 08:00 ET | proposed 0 — 6 pending already, nothing new that is not a rewording | 6 pending
+```
+
+The checker reads that line, not `ideas.json`. Decline and say why: pass.
+Write neither: fail, correctly.
