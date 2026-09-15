@@ -28,7 +28,7 @@ instructions merge in afterwards. **No systemd timer**: that is deliberate.
     cp -n /root/ecosystem/agents/emily/state/lessons.seed.md /root/ecosystem/agents/emily/state/lessons.md
     openclaw models auth paste-api-key --provider openrouter --agent emily
     openclaw agents list          # confirm emily's index before the next two lines
-    openclaw config set 'agents.list[3].model' 'openrouter/google/gemini-2.5-flash-lite'
+    openclaw config set 'agents.list[3].model' 'openrouter/openai/gpt-4o-mini'
     openclaw config set 'agents.list[3].thinkingDefault' 'low'
     openclaw gateway restart
 
@@ -42,8 +42,12 @@ Emily builds locally without any of these. She just cannot create the drafts.
 | Account | For | Where |
 |---|---|---|
 | **OpenRouter** | cover art and mockups | you already have it — same key, not a new provider |
-| **Etsy API v3** | creating draft listings | etsy.com/developers/your-apps |
-| **Printify** | the physical product, unpublished | printify.com/app/account/api |
+| **Printify** | the product, and the Etsy listing | printify.com/app/account/api |
+
+**No Etsy API key is needed.** Connect your Etsy shop inside Printify
+(Stores → Connect → Etsy). Pressing Publish there creates the Etsy listing.
+Etsy's own v3 API would mean an OAuth flow, hourly-expiring tokens and app
+review, for a route that ends in the same place.
 
     cd /root/ecosystem/agents/emily/state
     cp credentials.env.example credentials.env
@@ -51,6 +55,27 @@ Emily builds locally without any of these. She just cannot create the drafts.
     nano credentials.env        # paste your tokens here, never into a chat
 
 `credentials.env` is gitignored. **This repo is public — never commit it.**
+
+## Which model
+
+`gpt-4o-mini`. Emily's cycle is the longest in the ecosystem — generate the
+art, write the listing copy, call Printify, write `build.json`, write a report,
+append to memory. Every Gemini model tried in this ecosystem died partway
+through a job of that shape, usually after doing the thinking and before
+saving anything. Her build costs real money in image generation, so a model
+that gives up halfway is the expensive kind of cheap.
+
+## The build is checked
+
+`scripts/emily-verify.py` runs after every build, fired by the dispatcher.
+Completing a task goes through the API, so "done" only ever meant Emily said
+so — and four agents here have finished a run having written nothing.
+
+It fails the task unless the folder holds real artwork (`design.png` over 2KB),
+a `listing.json` with a title, description and at most 13 tags of 20
+characters or fewer, and a `build.json` with a status. A placeholder build
+passes but is labelled loudly: it is a legitimate outcome when no image key is
+set, and it is not sellable.
 
 ## Image generation
 

@@ -200,6 +200,49 @@ def reap_finished(conn):
         else:
             record_event(conn, task_id, "agent_exit", f"exit code {code}, task status {status}")
             log(f"task #{task_id} ({agent}) finished, status={status}")
+            if status == "done":
+                verify_completed(conn, task_id, agent)
+
+
+def verify_completed(conn, task_id, agent):
+    """If an agent ships a verifier, let it have the last word.
+
+    Completing a task goes through the API, which means "done" has only ever
+    meant the agent said so. Four agents in this ecosystem have finished a run
+    having written nothing at all. So when scripts/<agent>-verify.py exists, it
+    is run against the task's build_dir and can flip the task back to failed.
+
+    Agents without a verifier are unaffected - this does nothing for them.
+    """
+    script = ROOT / "scripts" / f"{agent}-verify.py"
+    if not script.is_file():
+        return
+    row = conn.execute("SELECT payload FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    try:
+        payload = json.loads(row["payload"]) if row and row["payload"] else {}
+    except Exception:
+        payload = {}
+    target = payload.get("build_dir") or payload.get("slug")
+    if not target:
+        return
+    try:
+        res = subprocess.run([sys.executable, str(script), str(target)],
+                             cwd=str(ROOT), capture_output=True, text=True, timeout=60)
+    except Exception as exc:
+        log(f"task #{task_id} ({agent}) verifier could not run: {exc}")
+        return
+    out = ((res.stdout or "") + (res.stderr or "")).strip()
+    if res.returncode == 0:
+        log(f"task #{task_id} ({agent}) verified ok")
+        record_event(conn, task_id, "verified", out[:500])
+        return
+    conn.execute(
+        "UPDATE tasks SET status='failed', completed_at=datetime('now'), result=? WHERE id = ?",
+        (f"verifier rejected the result: {out[:450]}", task_id),
+    )
+    conn.commit()
+    record_event(conn, task_id, "verify_failed", out[:500])
+    log(f"task #{task_id} ({agent}) FAILED verification:\n{out}")
 
 
 def handle_signal(signum, _frame):
