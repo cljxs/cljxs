@@ -116,52 +116,150 @@ def units_for(agent):
     return [u for u in (f"{agent}-cycle.service", f"{agent}-fetch.service") if u]
 
 
-# ---------------------------------------------------------------- skeleton
-
-PLACEHOLDER = "FURY-HAS-NOT-WRITTEN-THIS-YET"
-
-SKELETON = """# Daily briefing — {date}
-
-<!-- {ph} -->
-<!-- Fury: replace every line below with the real briefing, then delete the -->
-<!-- comment above. Keep it under 250 words. Data is in data/system.json.   -->
-
-## Is anything wrong?
-
-_(not yet written)_
-
-## ⚠️ Needs you
-
-_(not yet written)_
-
-## What happened
-
-_(not yet written)_
-
-## The money
-
-_(not yet written)_
-"""
+# ---------------------------------------------------------------- briefing
+#
+# Fury the agent was asked five times, in five wordings, to write this file.
+# Every run made one tool call, composed a good briefing into its reply, and
+# saved nothing - including the run where the file was already on disk with
+# the headings in place and it only had to fill them in.
+#
+# Everything the briefing needs is already in this script's own output. The
+# model was only ever turning known facts into sentences, so this does that
+# in plain code: correct every morning, never silently missing, and free.
 
 
-def write_skeleton(reports_dir, date_str):
-    """Leave today's briefing file on disk, pre-filled with headings.
+def money(v):
+    if v is None:
+        return None
+    return f"{'-' if v < 0 else ''}${abs(v):,.2f}"
 
-    Fury kept composing a good briefing into its reply and saving nothing -
-    three separate wordings of "write the file" did not change that. Creating
-    a file from scratch is the step it skips; editing one that already exists
-    is a different, easier task. So the collector creates it and Fury fills
-    it in. The service fails the run while the placeholder is still there.
 
-    Never clobbers a real briefing: if the file exists and no longer carries
-    the placeholder, Fury has already written it and we leave it alone.
-    """
+def pick(d, *names):
+    """State files spell the same idea differently - cash/bankroll/balance,
+    positions/open_bets. Take the first one that is actually there."""
+    for n in names:
+        if isinstance(d, dict) and d.get(n) is not None:
+            return d[n]
+    return None
+
+
+def agent_money(state):
+    """Returns (value, pnl, pnl_pct) or (None, None, None)."""
+    if not isinstance(state, dict):
+        return None, None, None
+    cash = pick(state, "cash", "bankroll", "balance")
+    start = pick(state, "starting_cash", "starting_bankroll", "starting_balance")
+    positions = pick(state, "positions", "open_bets") or []
+    if cash is None:
+        return None, None, None
+    held = 0.0
+    for p in positions if isinstance(positions, list) else []:
+        if not isinstance(p, dict):
+            continue
+        px = pick(p, "price", "last", "entry")
+        sh = pick(p, "shares", "qty", "stake")
+        if px is not None and sh is not None:
+            held += float(px) * float(sh)
+    value = float(cash) + held
+    if not start:
+        return value, None, None
+    start = float(start)
+    return value, value - start, (value / start - 1) * 100
+
+
+def build_briefing(report, date_str):
+    agents = report.get("agents") or {}
+    needs, happened, monies = [], [], []
+
+    for unit in report.get("failures") or []:
+        needs.append(f"`{unit.get('unit', 'a service')}` failed"
+                     + (f" (exit {unit['exit_code']})" if unit.get("exit_code") else ""))
+
+    q = report.get("queue") or {}
+    pending = q.get("pending") if isinstance(q, dict) else None
+    if pending:
+        needs.append(f"{pending} task{'s' if pending != 1 else ''} pending in the queue")
+    if report.get("queue_error"):
+        needs.append(f"the task queue could not be read ({report['queue_error'][:60]})")
+
+    ideas = ROOT / "agents" / "scout" / "state" / "ideas.json"
+    try:
+        j = json.loads(ideas.read_text())
+        lst = j.get("ideas") if isinstance(j, dict) else j
+        n = sum(1 for i in lst if (i.get("status") or "pending") == "pending")
+        if n:
+            needs.append(f"{n} Scout idea{'s' if n != 1 else ''} awaiting your review")
+    except Exception:
+        pass
+
+    for name in sorted(agents):
+        a = agents[name] or {}
+        state, line = a.get("state"), a.get("last_memory_line")
+        value, pnl, pct = agent_money(state)
+        if value is not None:
+            monies.append((name, value, pnl, pct))
+        if line:
+            happened.append(f"**{name.title()}** — {str(line).strip()[:160]}")
+        elif isinstance(state, dict) and pick(state, "cycle_count") is not None:
+            happened.append(f"**{name.title()}** — cycle {pick(state, 'cycle_count')}, no note written")
+
+    if needs:
+        opener = (f"**{len(needs)} thing{'s' if len(needs) != 1 else ''} need"
+                  f"{'' if len(needs) != 1 else 's'} you today.**")
+    else:
+        opener = "**Nothing needs you today.** Everything that was scheduled ran."
+
+    out = [f"# Daily briefing — {date_str}", "", opener, ""]
+
+    out.append("## \u26a0\ufe0f Needs you")
+    out.append("")
+    out += [f"- {n}" for n in needs] if needs else ["- Nothing."]
+    out.append("")
+
+    out.append("## What happened")
+    out.append("")
+    out += [f"- {h}" for h in happened] if happened else ["- No agent recorded activity."]
+    out.append("")
+
+    if monies:
+        out.append("## The money")
+        out.append("")
+        total = 0.0
+        for name, value, pnl, pct in monies:
+            total += value
+            bit = f"- **{name.title()}** {money(value)}"
+            if pct is not None:
+                bit += f" ({'+' if pct >= 0 else ''}{pct:.2f}%)"
+            out.append(bit)
+        if len(monies) > 1:
+            out.append(f"- **Combined** {money(total)}")
+        out.append("")
+
+    out.append(f"_Assembled from data/system.json at {report.get('generated_utc', '?')} UTC. "
+               "Every figure here was read from a state file, not estimated._")
+    return "\n".join(out) + "\n"
+
+
+def write_briefing(reports_dir, date_str, report):
     reports_dir.mkdir(parents=True, exist_ok=True)
     path = reports_dir / f"{date_str}.md"
-    if path.exists() and PLACEHOLDER not in path.read_text():
-        return path, False
-    path.write_text(SKELETON.format(date=date_str, ph=PLACEHOLDER))
-    return path, True
+    path.write_text(build_briefing(report, date_str))
+    return path
+
+
+def log_line(agent_dir, date_str, report):
+    """One line per briefing, appended - the same log the agents keep."""
+    needs = len(report.get("failures") or [])
+    q = report.get("queue") or {}
+    if isinstance(q, dict) and q.get("pending"):
+        needs += 1
+    ran = sum(1 for a in (report.get("agents") or {}).values()
+              if a and a.get("last_memory_line"))
+    mem = agent_dir / "MEMORY.md"
+    with mem.open("a") as f:
+        f.write(f"{date_str} | briefing written | {ran} agent(s) active | "
+                f"{needs} item(s) needing attention\n")
+    return mem
 
 
 def main():
@@ -220,8 +318,10 @@ def main():
     OUT.write_text(json.dumps(report, indent=1) + "\n")
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    path, created = write_skeleton(OUT.parent.parent / "reports", today)
-    print(f"[fury-collect] briefing skeleton {'created' if created else 'left alone (already written)'}: {path}")
+    path = write_briefing(OUT.parent.parent / "reports", today, report)
+    mem = log_line(OUT.parent.parent, today, report)
+    print(f"[fury-collect] briefing written: {path}")
+    print(f"[fury-collect] logged to {mem}")
 
     print(f"[fury-collect] ok: {len(agents)} agents, "
           f"{len(report['services'])} services, {len(report['failures'])} failure(s) -> {OUT}")

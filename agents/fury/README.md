@@ -1,34 +1,40 @@
 # Fury — daily briefing
 
-Reads the whole ecosystem and writes one short briefing you can read in thirty
-seconds. Fury is the reason you do not have to SSH in to know what happened.
+One short briefing every morning, so you do not have to SSH in to know whether
+anything needs you.
 
-## How it works
+**Fury is plain code, not a model.** `scripts/fury-collect.py` reads every
+agent's state, last run and memory line, the failed services, and the task
+queue, and writes `reports/YYYY-MM-DD.md` from those facts. It costs nothing
+to run and cannot silently skip a morning.
 
-Same split the other agents use, pointed at the ecosystem itself:
+It was a model agent first. It was asked five times, in five different
+wordings, to write the briefing to a file. Every run made one tool call, read
+the system state, composed a perfectly good briefing into its reply, and saved
+nothing — including the run where the file already existed on disk with the
+headings in place and all it had to do was fill them in.
 
-    fury-collect.py  (plain code, no AI)  ->  data/system.json  ->  Fury reads it
+Everything the briefing needed was already in the collector's own output. The
+model was only turning known facts into sentences. So the script does that
+part too. What was lost is fluent prose and judgement about what matters most;
+what was gained is a briefing that is correct every morning, never missing,
+and free.
 
-The collector gathers every agent's state file, latest report and memory line,
-every service's exit status, the timers, and the task queue. Fury may only
-state facts that are in that file. It cannot guess whether something ran.
-
-The briefing then appears **at the top of your Command Deck**, so it is read on
-a phone rather than over SSH.
+The OpenClaw agent registration is left in place, unused. Nothing wakes it, so
+it costs nothing.
 
 ## Install
 
-    openclaw agents add fury --workspace /root/ecosystem/agents/fury --non-interactive
-    cd /root/ecosystem/agents/fury && cat _fury-agents-header.md AGENTS.md > .a && mv .a AGENTS.md
-    cp -n /root/ecosystem/agents/fury/MEMORY.seed.md /root/ecosystem/agents/fury/MEMORY.md
-    openclaw models auth paste-api-key --provider openrouter --agent fury
-    openclaw agents list        # confirm fury's index before the next two lines
-    openclaw config set 'agents.list[5].model' 'openrouter/google/gemini-2.5-flash-lite'
-    openclaw config set 'agents.list[5].thinkingDefault' 'low'
-    cp /root/ecosystem/deploy/fury-*.service /root/ecosystem/deploy/fury-cycle.timer /etc/systemd/system/
+    git -C /root/ecosystem pull
+    cp /root/ecosystem/deploy/fury-cycle.service /root/ecosystem/deploy/fury-cycle.timer /etc/systemd/system/
     systemctl daemon-reload
     systemctl enable --now fury-cycle.timer
-    systemctl restart mission-control-api      # picks up the briefing panel
+
+No model, no API key, no AGENTS.md merge. It is a Python script on a timer.
+
+    systemctl start fury-cycle.service            # run it now
+    cat agents/fury/reports/$(date -u +%F).md     # read this morning's briefing
+
 
 ## What runs when
 
