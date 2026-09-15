@@ -56,6 +56,16 @@ agents/scout/MEMORY.md
 agents/scout/state/last-run.txt
 agents/fury/state/last-run.txt
 
+# Fury - the collector writes data/ and the briefing skeleton into reports/.
+# Both are live state. They were untracked by omission until a test run here
+# committed system.json and a skeleton, which then blocked git pull on the
+# droplet because its own copies were in the way.
+agents/fury/data/*
+!agents/fury/data/.gitkeep
+agents/fury/reports/*
+!agents/fury/reports/.gitkeep
+agents/fury/MEMORY.md
+
 # Timmy — fetcher-owned data, daily reports and live memory stay local.
 # The seeds (watchlist.json, MEMORY.seed.md) are tracked; the live files are not.
 agents/timmy/data/*
