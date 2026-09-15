@@ -13,7 +13,19 @@ Every run, you must actually use your file tools.
 
 1. **READ** `state/ideas.json` — the existing ideas and the highest id
 2. **READ** `../emily/state/lessons.md` — approvals and rejections
-3. **APPEND** one line to `MEMORY.md` — **this one is never optional**
+3. **APPEND** one line to `MEMORY.md` — **this one is never optional**, and
+   *append* is the operative word. Your file-writing tool most likely
+   **replaces** a file rather than adding to it, so appending is something you
+   have to do deliberately: read `MEMORY.md`, then write back everything it
+   already contained plus your new line at the end. Or sidestep the tool and
+   use the shell, which appends properly:
+
+   ```
+   echo "<your line>" >> /root/ecosystem/agents/scout/MEMORY.md
+   ```
+
+   A run has already replaced the whole file with one line and destroyed the
+   history. The checker fails a run that shrinks it.
 
 **Then, only if you are proposing ideas this run:**
 

@@ -21,10 +21,13 @@ WorkingDirectory=/root/ecosystem/agents/scout
 # the ones that decline. ideas.json changing is the bonus, not the test.
 ExecStart=/bin/bash -lc 'M=/root/ecosystem/agents/scout/MEMORY.md; \
 F=/root/ecosystem/agents/scout/state/ideas.json; \
-B=$(stat -c %%s "$M" 2>/dev/null || echo 0); I=$(stat -c %%Y "$F" 2>/dev/null || echo 0); \
+B=$(stat -c %%s "$M" 2>/dev/null || echo 0); T=$(stat -c %%Y "$M" 2>/dev/null || echo 0); \
+I=$(stat -c %%Y "$F" 2>/dev/null || echo 0); \
 /usr/bin/openclaw agent --agent scout --message "scheduled idea run" --session-id "wake-scout-$(date +%%s)" --timeout 600 --json; \
-A=$(stat -c %%s "$M" 2>/dev/null || echo 0); J=$(stat -c %%Y "$F" 2>/dev/null || echo 0); \
-if [ "$A" -le "$B" ]; then echo "SCOUT RECORDED NOTHING: MEMORY.md unchanged at $B bytes. Every run logs one line, including a run that deliberately proposes no ideas."; exit 1; fi; \
+A=$(stat -c %%s "$M" 2>/dev/null || echo 0); U=$(stat -c %%Y "$M" 2>/dev/null || echo 0); \
+J=$(stat -c %%Y "$F" 2>/dev/null || echo 0); \
+if [ "$U" -le "$T" ]; then echo "SCOUT RECORDED NOTHING: MEMORY.md never written. Every run logs one line, including a run that deliberately proposes no ideas."; exit 1; fi; \
+if [ "$A" -lt "$B" ]; then echo "SCOUT OVERWROTE MEMORY.md: $B bytes before, $A after - it replaced the log instead of appending, so previous runs are gone. Read the file and write it back with the new line added, or use >> from the shell."; exit 1; fi; \
 if [ "$J" -gt "$I" ]; then echo "scout wrote ideas.json and logged the run"; \
 else echo "scout proposed no new ideas and logged why - this is a pass, see MEMORY.md"; fi'
 TimeoutStartSec=900
