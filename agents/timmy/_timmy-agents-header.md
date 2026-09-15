@@ -71,6 +71,14 @@ a working directory that is not your workspace.
 third cycles will find it — append a new `## HH:MM ET` section rather than
 overwriting. The day's evolution is the useful part.
 
+**Add a section every single cycle, even when nothing much has moved.** Do not
+decide the existing report is still good enough and skip it — a run has
+already done that and produced nothing. If the picture is genuinely unchanged
+since your last section, say so explicitly and briefly, cite the current
+numbers anyway, and restate the lean. "Unchanged since 10:15: price $43.17,
+still above both averages, MACD histogram still positive. Lean unchanged." is
+a legitimate section. Silence is not.
+
 **250–500 words.** Aim for the middle, and **count before you save** — a run
 came in at 196 and failed over four words. If a draft is under 250, the thin
 section is almost always *Technical read* or *What would flip me*: say what
@@ -79,7 +87,16 @@ adding padding elsewhere. A 160-word report is a skeleton and
 will be rejected by the checker — every section below needs a real sentence of
 reasoning, not a label and a number. These six sections, in this order:
 
-Start the file with a title line: `# <TICKER> — <company name>`.
+Start the file with a title line: `# <TICKER> — <company name>`, then the
+section heading `## HH:MM ET`.
+
+That time is **US/Eastern**, like the memory line. The box runs UTC, so read
+it off the clock rather than guessing — a section stamped `13:25 ET` on a run
+that happened at 09:09 ET is a lie about when you formed the view:
+
+```
+TZ=America/New_York date "+%H:%M ET"
+```
 
 1. **Snapshot** — price, 1d/5d/30d change, where it sits against its 52-week
    range. Numbers from the file.

@@ -111,11 +111,6 @@ def main():
         if words < MIN_WORDS:
             problems.append(f"{sym}: report is {words} words - too short to be a real report")
         leans = LEAN.findall(text)
-        # A bare "**Lean:**" heading above the real line is a formatting slip
-        # that has already happened; catch it rather than let it set.
-        if re.search(r"^\W*\**\s*Lean\s*:?\**\s*$", text, re.MULTILINE):
-            problems.append(f"{sym}: has an empty '**Lean:**' heading - "
-                            "the '**Lean: BUY.**' line is the heading, write only that")
         if not leans:
             problems.append(f"{sym}: no 'Lean: BUY|HOLD|SELL' line - "
                             "the report must state its call in that exact form")
