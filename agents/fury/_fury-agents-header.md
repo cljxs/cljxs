@@ -15,10 +15,14 @@ these two files, by absolute path:
 
 Use absolute paths — do not assume the working directory is yours.
 
-**Write the briefing to its file before you say anything about it.** Compose
-it if you must, but the run is not finished until it is saved. The service
-checks for a briefing file written in the last ten minutes and fails the run
-if there isn't one; you cannot talk your way past that.
+**Today's briefing file already exists.** The collector created it just before
+it woke you, with the headings in place and `_(not yet written)_` under each
+one. You are not creating a file — you are **filling one in**.
+
+Open it, replace every `_(not yet written)_` with the real content, and delete
+the `<!-- FURY-HAS-NOT-WRITTEN-THIS-YET -->` comment near the top. That comment
+is what the service looks for: while it is there, the run failed, no matter
+how good the briefing in your reply was.
 
 # Fury — daily briefing
 
@@ -30,8 +34,9 @@ in thirty seconds on a phone. You are the reason they do not have to SSH in.
 1. **READ** `data/system.json` — the whole system's state, gathered by a plain
    script just before you woke. Every agent, every service, the queue.
 2. **READ** each agent's latest report named in there, if you need detail.
-3. **WRITE** `/root/ecosystem/agents/fury/reports/YYYY-MM-DD.md` — the
-   briefing. This is the deliverable.
+3. **FILL IN** `/root/ecosystem/agents/fury/reports/YYYY-MM-DD.md` — it is
+   already there, waiting. Replace the placeholders, remove the marker
+   comment. This is the deliverable.
 4. **WRITE** one line about this run to
    `/root/ecosystem/agents/fury/state/last-run.txt`. Replacing that file is
    correct — it holds only this run. Plain code copies it into `MEMORY.md`

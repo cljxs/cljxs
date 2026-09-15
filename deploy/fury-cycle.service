@@ -11,9 +11,14 @@ WorkingDirectory=/root/ecosystem/agents/fury
 # Refresh the system snapshot immediately before waking Fury, so the briefing
 # describes the ecosystem as it is now rather than as it was this morning.
 ExecStartPre=/usr/bin/python3 /root/ecosystem/scripts/fury-collect.py
-# The briefing is the deliverable and it is a FILE. A run once made a single
-# tool call, read the system state, wrote the briefing into its reply and saved
-# nothing - so the check is whether today's briefing actually landed.
+# The briefing is the deliverable and it is a FILE. Fury made a single tool
+# call, read the system state, wrote the briefing into its reply and saved
+# nothing - three times, through three rewordings of "write the file".
+#
+# So fury-collect.py now leaves today's briefing on disk with the headings
+# already in it, and Fury only has to fill it in. Creating a file from nothing
+# was the step it kept skipping; editing an existing one is a different task.
+# The check is whether the placeholder marker is gone.
 #
 # Fury writes one line to state/last-run.txt; this appends it to MEMORY.md.
 # Scout was asked twice to append to its own log and destroyed it twice, so
@@ -21,8 +26,9 @@ ExecStartPre=/usr/bin/python3 /root/ecosystem/scripts/fury-collect.py
 ExecStart=/bin/bash -lc 'D=/root/ecosystem/agents/fury; R=$D/reports; L=$D/state/last-run.txt; M=$D/MEMORY.md; \
 T=$(stat -c %%Y "$L" 2>/dev/null || echo 0); \
 /usr/bin/openclaw agent --agent fury --message "scheduled briefing" --session-id "wake-fury-$(date +%%s)" --timeout 600 --json; \
-A=$(find "$R" -name "*.md" -newermt "-10 minutes" 2>/dev/null | wc -l); \
-if [ "$A" -lt 1 ]; then echo "FURY WROTE NOTHING: no briefing file in $R from the last 10 minutes. The briefing is a file, not a reply."; exit 1; fi; \
+TODAY=$(date -u +%%F); BRIEF=$R/$TODAY.md; \
+if [ ! -f "$BRIEF" ]; then echo "FURY: $BRIEF is missing - fury-collect.py should have created it. The collector failed, not the agent."; exit 1; fi; \
+if grep -q "FURY-HAS-NOT-WRITTEN-THIS-YET" "$BRIEF"; then echo "FURY WROTE NOTHING: $BRIEF still carries the placeholder marker. The briefing is a file to fill in, not a reply."; exit 1; fi; \
 U=$(stat -c %%Y "$L" 2>/dev/null || echo 0); \
 if [ "$U" -le "$T" ]; then echo "FURY WROTE THE BRIEFING BUT LOGGED NOTHING: state/last-run.txt not written."; exit 1; fi; \
 LINE=$(head -c 400 "$L" | tr -d "\\n" | sed "s/[[:space:]]\\+/ /g"); \

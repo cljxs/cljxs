@@ -1,0 +1,53 @@
+{
+ "generated_utc": "2026-09-15 15:22:25",
+ "generated_day": "2026-09-15",
+ "agents": {
+  "ace": {
+   "state": null,
+   "latest_report": null,
+   "last_memory_line": null,
+   "data_asof": null
+  },
+  "belfort": {
+   "state": null,
+   "latest_report": null,
+   "last_memory_line": null,
+   "data_asof": "2026-09-11 14:51:19"
+  },
+  "emily": {
+   "state": null,
+   "latest_report": null,
+   "last_memory_line": null,
+   "data_asof": null
+  },
+  "fury": {
+   "state": null,
+   "latest_report": null,
+   "last_memory_line": null,
+   "data_asof": null
+  },
+  "scout": {
+   "state": null,
+   "latest_report": null,
+   "last_memory_line": null,
+   "data_asof": null
+  },
+  "timmy": {
+   "state": null,
+   "latest_report": {
+    "name": "2026-09-14-IREN.md",
+    "written_utc": "2026-09-15 13:35",
+    "age_min": 106,
+    "first_line": "**Snapshot.** $43.83, -0.01% on the day (flat), -1.91% over five sessions,",
+    "count_total": 4
+   },
+   "last_memory_line": null,
+   "data_asof": "2026-09-15 13:53:27"
+  }
+ },
+ "services": {},
+ "queue": null,
+ "failures": [],
+ "timers_raw": [],
+ "queue_error": "<urlopen error [Errno 111] Connection refused>"
+}

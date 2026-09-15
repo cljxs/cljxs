@@ -116,6 +116,54 @@ def units_for(agent):
     return [u for u in (f"{agent}-cycle.service", f"{agent}-fetch.service") if u]
 
 
+# ---------------------------------------------------------------- skeleton
+
+PLACEHOLDER = "FURY-HAS-NOT-WRITTEN-THIS-YET"
+
+SKELETON = """# Daily briefing — {date}
+
+<!-- {ph} -->
+<!-- Fury: replace every line below with the real briefing, then delete the -->
+<!-- comment above. Keep it under 250 words. Data is in data/system.json.   -->
+
+## Is anything wrong?
+
+_(not yet written)_
+
+## ⚠️ Needs you
+
+_(not yet written)_
+
+## What happened
+
+_(not yet written)_
+
+## The money
+
+_(not yet written)_
+"""
+
+
+def write_skeleton(reports_dir, date_str):
+    """Leave today's briefing file on disk, pre-filled with headings.
+
+    Fury kept composing a good briefing into its reply and saving nothing -
+    three separate wordings of "write the file" did not change that. Creating
+    a file from scratch is the step it skips; editing one that already exists
+    is a different, easier task. So the collector creates it and Fury fills
+    it in. The service fails the run while the placeholder is still there.
+
+    Never clobbers a real briefing: if the file exists and no longer carries
+    the placeholder, Fury has already written it and we leave it alone.
+    """
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    path = reports_dir / f"{date_str}.md"
+    if path.exists() and PLACEHOLDER not in path.read_text():
+        return path, False
+    path.write_text(SKELETON.format(date=date_str, ph=PLACEHOLDER))
+    return path, True
+
+
 def main():
     OUT.parent.mkdir(parents=True, exist_ok=True)
     now = datetime.now(timezone.utc)
@@ -170,6 +218,11 @@ def main():
         report["queue_error"] = str(exc)[:160]
 
     OUT.write_text(json.dumps(report, indent=1) + "\n")
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    path, created = write_skeleton(OUT.parent.parent / "reports", today)
+    print(f"[fury-collect] briefing skeleton {'created' if created else 'left alone (already written)'}: {path}")
+
     print(f"[fury-collect] ok: {len(agents)} agents, "
           f"{len(report['services'])} services, {len(report['failures'])} failure(s) -> {OUT}")
     return 0
