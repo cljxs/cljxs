@@ -13,7 +13,7 @@ instructions have to be merged in on top of it afterwards, not before.
 
     git -C /root/ecosystem pull
     openclaw agents add timmy --workspace /root/ecosystem/agents/timmy --non-interactive
-    cd /root/ecosystem/agents/timmy && cat _timmy-agents-header.md AGENTS.md > .a && mv .a AGENTS.md
+    cd /root/ecosystem/agents/timmy && cat _timmy-tools-first.md _timmy-agents-header.md AGENTS.md > .a && mv .a AGENTS.md
     cp -n /root/ecosystem/agents/timmy/MEMORY.seed.md /root/ecosystem/agents/timmy/MEMORY.md
     openclaw models auth paste-api-key --provider openrouter --agent timmy
     openclaw agents list        # confirm timmy's index before the next two lines

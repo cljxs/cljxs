@@ -7,7 +7,7 @@ Type=oneshot
 User=root
 Environment=HOME=/root
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-WorkingDirectory=/root/ecosystem
+WorkingDirectory=/root/ecosystem/agents/timmy
 # A fresh session id per wake is required; reused sessions cause runaway loops.
 #
 # The verifier is the point of this wrapper. systemd only sees the exit code,

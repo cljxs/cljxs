@@ -64,7 +64,9 @@ ls -t reports/ | head -20
 
 Read the most recent one for that ticker so you can compare.
 
-Write to `reports/YYYY-MM-DD-<TICKER>.md` (today's date, ticker uppercase).
+Write to `/root/ecosystem/agents/timmy/reports/YYYY-MM-DD-<TICKER>.md`
+(today's date, ticker uppercase). Use the absolute path — the cycle runs with
+a working directory that is not your workspace.
 **If the file already exists** — you run three times a day, so the second and
 third cycles will find it — append a new `## HH:MM ET` section rather than
 overwriting. The day's evolution is the useful part.
@@ -126,15 +128,19 @@ you are guessing.
 
 ## Step 3 — one line to MEMORY.md
 
-**Append. Never overwrite.** Use `>>`, not `>`:
+**Append. Never overwrite.** Your file-writing tool most likely REPLACES a
+file rather than adding to it, so "append" is something you have to do
+deliberately: read MEMORY.md, then write back everything that was in it plus
+your new line at the end. Or sidestep the tool entirely and use the shell,
+which appends properly:
 
 ```
-echo "..." >> MEMORY.md
+echo "<your line>" >> /root/ecosystem/agents/timmy/MEMORY.md
 ```
 
-Writing with `>` destroys every previous cycle's line. It has already
-happened once — a run replaced the whole file with a single line and the
-history was gone. The log is only useful because it accumulates.
+This has already gone wrong twice — a run replaced the whole file with a
+single line and the history was gone. The log is only useful because it
+accumulates.
 
 The timestamp is **US/Eastern**, not UTC. The box runs UTC, so convert, or
 read it off the clock rather than guessing:
