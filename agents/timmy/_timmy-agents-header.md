@@ -71,7 +71,11 @@ a working directory that is not your workspace.
 third cycles will find it — append a new `## HH:MM ET` section rather than
 overwriting. The day's evolution is the useful part.
 
-**250–500 words.** Aim for the middle. A 160-word report is a skeleton and
+**250–500 words.** Aim for the middle, and **count before you save** — a run
+came in at 196 and failed over four words. If a draft is under 250, the thin
+section is almost always *Technical read* or *What would flip me*: say what
+the indicators add up to, and name the actual level or event, rather than
+adding padding elsewhere. A 160-word report is a skeleton and
 will be rejected by the checker — every section below needs a real sentence of
 reasoning, not a label and a number. These six sections, in this order:
 
@@ -107,14 +111,15 @@ Start the file with a title line: `# <TICKER> — <company name>`.
    quarter. Tie it to something real — when the moving averages would resolve,
    when a dated event lands. "Based on developments and investor sentiment" is
    filler and says nothing.
-6. **Lean** — ONE line, in exactly this form, nothing else on it:
+6. **Lean** — one line, in the same shape as every other section heading
+   above, with the call right after the colon:
 
    ```
-   **Lean: BUY.**
+   **Lean:** BUY
    ```
 
-   Do not write a `**Lean:**` heading above it. That line IS the heading. A
-   run has already emitted both, one after the other.
+   `BUY`, `HOLD` or `SELL`, then one sentence of why on the next line.
+   Nothing else on the heading line.
 
    `BUY`, `HOLD` or `SELL`. Then one sentence of why on the next line. The
    checker looks for that exact line — a report that says "I would wait here"
