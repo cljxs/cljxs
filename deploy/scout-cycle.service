@@ -7,16 +7,26 @@ Type=oneshot
 User=root
 Environment=HOME=/root
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-WorkingDirectory=/root/ecosystem
+WorkingDirectory=/root/ecosystem/agents/scout
 # A run that writes nothing is a failed run, not a successful one. systemd only
-# knows the process exited 0, which is not the same as the agent doing its job -
-# so check whether ideas.json actually changed and fail loudly if it did not.
-ExecStart=/bin/bash -lc 'F=/root/ecosystem/agents/scout/state/ideas.json; \
-B=$(stat -c %%Y "$F" 2>/dev/null || echo 0); \
+# knows the process exited 0, which is not the same as the agent doing its job.
+#
+# But "wrote no ideas" and "did nothing" are different things. Scout is told to
+# propose nothing when everything it can think of is already listed, or when
+# five or more are already waiting on the user - and the earlier version of
+# this check failed exactly those runs, which is how a correctly-behaving agent
+# looked broken for a day.
+#
+# So the deliverable is the MEMORY.md line, which EVERY run writes including
+# the ones that decline. ideas.json changing is the bonus, not the test.
+ExecStart=/bin/bash -lc 'M=/root/ecosystem/agents/scout/MEMORY.md; \
+F=/root/ecosystem/agents/scout/state/ideas.json; \
+B=$(stat -c %%s "$M" 2>/dev/null || echo 0); I=$(stat -c %%Y "$F" 2>/dev/null || echo 0); \
 /usr/bin/openclaw agent --agent scout --message "scheduled idea run" --session-id "wake-scout-$(date +%%s)" --timeout 600 --json; \
-A=$(stat -c %%Y "$F" 2>/dev/null || echo 0); \
-if [ "$A" -le "$B" ]; then echo "SCOUT WROTE NOTHING: ideas.json unchanged - the run produced no ideas on disk"; exit 1; fi; \
-echo "scout wrote ideas.json ok"'
+A=$(stat -c %%s "$M" 2>/dev/null || echo 0); J=$(stat -c %%Y "$F" 2>/dev/null || echo 0); \
+if [ "$A" -le "$B" ]; then echo "SCOUT RECORDED NOTHING: MEMORY.md unchanged at $B bytes. Every run logs one line, including a run that deliberately proposes no ideas."; exit 1; fi; \
+if [ "$J" -gt "$I" ]; then echo "scout wrote ideas.json and logged the run"; \
+else echo "scout proposed no new ideas and logged why - this is a pass, see MEMORY.md"; fi'
 TimeoutStartSec=900
 StandardOutput=journal
 StandardError=journal

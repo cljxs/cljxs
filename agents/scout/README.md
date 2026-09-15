@@ -12,7 +12,7 @@ Two gates, both yours. Scout writes into `state/ideas.json` with
 ## Install
 
     openclaw agents add scout --workspace /root/ecosystem/agents/scout --non-interactive
-    cd /root/ecosystem/agents/scout && cat _scout-agents-header.md AGENTS.md > .a && mv .a AGENTS.md
+    cd /root/ecosystem/agents/scout && cat _scout-tools-first.md _scout-honesty.md _scout-agents-header.md AGENTS.md > .a && mv .a AGENTS.md
     cp -n /root/ecosystem/agents/scout/MEMORY.seed.md /root/ecosystem/agents/scout/MEMORY.md
     cp -n /root/ecosystem/agents/scout/state/ideas.seed.json /root/ecosystem/agents/scout/state/ideas.json
     openclaw models auth paste-api-key --provider openrouter --agent scout
@@ -22,6 +22,31 @@ Two gates, both yours. Scout writes into `state/ideas.json` with
     cp /root/ecosystem/deploy/scout-cycle.service /root/ecosystem/deploy/scout-cycle.timer /etc/systemd/system/
     systemctl daemon-reload
     systemctl enable --now scout-cycle.timer
+
+All three instruction files go in, in that order. `_scout-tools-first.md`
+has to be FIRST - Scout's opening run printed its ideas into the chat and
+saved none, and moving that rule to the top of the file is what fixed it.
+Merging only the header, as this README used to say, quietly drops both it
+and the honesty rules.
+
+## Proposing nothing is a pass
+
+Scout is told to propose fewer ideas, or none, when everything it can think
+of is already listed or when five or more are already waiting on you. Those
+runs are correct behaviour, not failures.
+
+The way the two are told apart is `MEMORY.md`: **every** run appends one line,
+including the runs that decline.
+
+    2026-09-15 08:00 ET | proposed 0 - 6 already pending, nothing new | 6 pending
+
+The service checks that line, not `ideas.json`. A run that proposes nothing
+and says why passes; a run that writes neither fails. An earlier version
+checked `ideas.json` alone and so failed every run that correctly declined -
+which made a working agent look broken for a day.
+
+If Scout keeps declining, that is not a Scout problem. It means ideas are
+piling up unreviewed, and the fix is at your end: approve or reject them.
 
 ## Reviewing ideas
 
