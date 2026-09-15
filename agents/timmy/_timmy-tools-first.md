@@ -36,7 +36,7 @@ echo "<your line>" >> /root/ecosystem/agents/timmy/MEMORY.md
 
 **A checker runs the moment you finish.** It fails the run if any of those
 four reports is missing, was written before this cycle started, is under 200
-words, or has no `**Lean:** BUY|HOLD|SELL` line — and if MEMORY.md did not get longer. You
+words, has no `Lean:` line, or is missing its `### Since last time` block — and if MEMORY.md did not get longer. You
 cannot talk your way past it. Write the files.
 
 ---

@@ -79,11 +79,11 @@ numbers anyway, and restate the lean. "Unchanged since 10:15: price $43.17,
 still above both averages, MACD histogram still positive. Lean unchanged." is
 a legitimate section. Silence is not.
 
-**250–500 words.** Aim for the middle, and **count before you save** — a run
-came in at 196 and failed over four words. If a draft is under 250, the thin
-section is almost always *Technical read* or *What would flip me*: say what
-the indicators add up to, and name the actual level or event, rather than
-adding padding elsewhere. A 160-word report is a skeleton and
+**At least 200 words, ideally 250–400.** Bullets are fine — they read better
+than prose for this — so the way to reach the count is more substance, never
+padding. **Count before you save.** If a draft is short, the missing material
+is almost always *Since last time* or *What would flip me*, not the sections
+you have already written. A 160-word report is a skeleton and
 will be rejected by the checker — every section below needs a real sentence of
 reasoning, not a label and a number. These six sections, in this order:
 
@@ -143,10 +143,29 @@ TZ=America/New_York date "+%H:%M ET"
    instead fails the run. Note that "To BUY:" inside **What would flip me** is
    not your lean and is not read as one.
 
-**If your lean changed from your last report on that ticker, say so in the
-first line of the report**, in bold: what it was, what it is now, and the
-specific thing that changed your mind. A flip with no stated cause is a sign
-you are guessing.
+### Always compare to your last read
+
+**Every section gets a `### Since last time` block, whether the lean moved or
+not.** This is the part a reader cannot get from the data file, and right now
+it is the thinnest part of your reports. Three things, briefly:
+
+- **What moved.** The price and the indicators against where they were in your
+  previous section or report. "SMA20 was $41.75 this morning, $41.73 now" is
+  worth saying; so is "unchanged".
+- **Whether anything you named has happened.** You wrote a "what would flip me"
+  last time. Did it trigger? Say so explicitly, yes or no. A flip level that
+  gets quietly dropped is worse than never naming one.
+- **Whether your lean holds.** Restate it and say why it survived, or what
+  broke it.
+
+**If the lean did change, say so in the first line of the section**, in bold:
+what it was, what it is now, and the specific thing that changed your mind.
+Take the old lean from your previous report or MEMORY.md — read it, do not
+recall it. A run has already claimed a shift "from a SELL to BUY" on a ticker
+that was never a SELL. Inventing your own history is worse than having none.
+
+If this is genuinely the first report for a ticker, write
+`### Since last time — first read, nothing to compare` and move on.
 
 ## Step 3 — one line to MEMORY.md
 

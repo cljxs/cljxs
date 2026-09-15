@@ -110,6 +110,13 @@ def main():
         words = len(text.split())
         if words < MIN_WORDS:
             problems.append(f"{sym}: report is {words} words - too short to be a real report")
+        # The comparison against the previous read is the one thing a reader
+        # cannot get from the data file, and it was being skipped whenever the
+        # lean happened not to move.
+        if "since last time" not in text.lower():
+            problems.append(f"{sym}: no '### Since last time' block - the "
+                            "comparison against the previous read is required "
+                            "every cycle, not only when the lean moves")
         leans = LEAN.findall(text)
         if not leans:
             problems.append(f"{sym}: no 'Lean: BUY|HOLD|SELL' line - "
