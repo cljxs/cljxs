@@ -32,12 +32,26 @@ def main():
         return 2
 
     raw = sys.argv[1]
-    d = Path(raw) if Path(raw).is_absolute() else ROOT / raw
     problems, notes = [], []
 
-    if not d.is_dir():
-        print(f"emily-verify: FAILED - {d} does not exist. "
-              "The task was marked complete but no build folder was created.")
+    # build_dir in the task payload is "builds/<slug>" - relative to EMILY'S
+    # WORKSPACE, not to the ecosystem root. Resolving it against the root
+    # looked for /root/ecosystem/builds/<slug> and called a finished build
+    # missing. Try the bases that could be meant, in order of likelihood.
+    agent_dir = ROOT / "agents" / "emily"
+    candidates = [Path(raw)] if Path(raw).is_absolute() else [
+        agent_dir / raw,                 # builds/<slug> - what the payload holds
+        agent_dir / "builds" / raw,      # a bare slug
+        ROOT / raw,                      # already fully qualified from the root
+    ]
+    d = next((c for c in candidates if c.is_dir()), None)
+
+    if d is None:
+        print("emily-verify: FAILED - no build folder found. "
+              "The task was marked complete but nothing was created.")
+        print("  looked in:")
+        for c in candidates:
+            print(f"    {c}")
         return 1
 
     design = d / "design.png"
