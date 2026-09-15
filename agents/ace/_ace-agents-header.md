@@ -41,10 +41,37 @@ settled bets only, open nothing new**, and say so.
    `last_cycle_utc`. **Before the report, not after.** A cycle once wrote a
    report while `MEMORY.md` still read "No cycles run yet"; an empty log means
    every later cycle starts blind.
-5. **Write the report**, named for the slot you are in, in ET: 09:00 is
+5. **Write `state/ledger.json`** — the shadow ledger. This is what the
+   dashboard and the village render, and it is the most useful thing you
+   produce, because your passes are the job.
+
+   `data/candidates.json` already lists every game with its price and no-vig
+   line, written by the fetcher. **Copy each row you considered and add your
+   judgement**, keeping `selection` and `match` exactly as they appear there —
+   that is how the two are matched up:
+
+   ```json
+   {"day":"2026-09-15","slot":"afternoon",
+    "verdict":"No picks — 6 candidates tracked, nothing cleared the bar.",
+    "candidates":[
+      {"selection":"Yankees ML","match":"Yankees v Red Sox","price":-118,
+       "novig_pct":58.1,"my_pct":60.0,"edge_pts":1.9,
+       "why_not":["gap 1.9 pts, need 8+"],"status":"passed"}]}
+   ```
+
+   `status` is `passed` or `bet`. **Every row you looked at needs a `why_not`
+   reason in plain words** — "gap 1.9 pts, need 8+", "estimate came from the
+   predictor block, which the line has priced", "no context file read". A row
+   you never judged stays out; the board marks those `unjudged` on its own,
+   which is honest and tells the user what you skipped.
+
+   Write prices as plain numbers: `104`, not `+104` — JSON has no leading
+   plus, and a file that will not parse shows the user nothing.
+
+6. **Write the report**, named for the slot you are in, in ET: 09:00 is
    `reports/YYYY-MM-DD-morning.md`, 15:00 `-afternoon.md`, 23:30 `-night.md`.
    Check the clock rather than guessing. Explain **every pass**, not just bets.
-6. **Append ONE short line** to `MEMORY.md`. Trim oldest lines past ~2KB.
+7. **Append ONE short line** to `MEMORY.md`. Trim oldest lines past ~2KB.
 
 ## The only bet worth making
 

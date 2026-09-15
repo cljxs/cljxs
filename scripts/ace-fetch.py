@@ -195,6 +195,64 @@ def build_context(sport, path, event):
     }
 
 
+# ------------------------------------------------------------ shadow ledger
+
+def build_ledger(day, ctx_dir):
+    """Every game that could still be bet, with the mechanical verdict already
+    filled in.
+
+    The interesting output of a disciplined betting agent is mostly its passes
+    - "six games, none cleared the bar" is the system working, but it is
+    worthless unless you can see which six and why. So the ledger is built
+    here, in plain code, from the context files this script already wrote.
+
+    Everything except Ace's own probability estimate is decidable without a
+    model: the price, the no-vig line, whether the game has started, whether a
+    context file exists at all. Ace overlays its estimate and any further
+    reasons in state/ledger.json; if it never does, the board still shows what
+    was on the slate and what plain code already knew about it.
+    """
+    rows = []
+    for f in sorted(ctx_dir.glob("*.json")):
+        try:
+            c = json.loads(f.read_text())
+        except Exception:
+            continue
+        odds = c.get("odds") or {}
+        nh, na = odds.get("novig_home_pct"), odds.get("novig_away_pct")
+        started = str(c.get("status") or "").upper() != "STATUS_SCHEDULED"
+        for side, pct, ml in (("home", nh, odds.get("home_ml")),
+                              ("away", na, odds.get("away_ml"))):
+            team = c.get(side) or side
+            why = []
+            if started:
+                why.append("game already started")
+            if pct is None:
+                why.append("no priced line in the context file")
+            rows.append({
+                "selection": f"{team} ML",
+                "sport": c.get("sport"),
+                "match": c.get("short") or c.get("match"),
+                "starts_utc": c.get("start_utc"),
+                "price": ml,
+                "novig_pct": pct,
+                "my_pct": None,
+                "edge_pts": None,
+                "why_not": why,
+                # Nothing here is a pass yet - Ace has not looked. Saying
+                # "passed" before it has would be a lie the board repeats.
+                "status": "passed" if why else "unjudged",
+            })
+    return {
+        "asof_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "day": day,
+        "slot": None,
+        "verdict": None,
+        "source": "ace-fetch.py - mechanical fields only, awaiting Ace's estimates",
+        "candidates": rows,
+    }
+
+
 def main():
     CTX.mkdir(parents=True, exist_ok=True)
     started = datetime.now(timezone.utc)
@@ -245,6 +303,10 @@ def main():
     if not slate and failures:
         log("nothing fetched — leaving previous data files untouched")
         return 1
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    (DATA / "candidates.json").write_text(
+        json.dumps(build_ledger(today, CTX), indent=1) + "\n")
 
     (DATA / "slate.json").write_text(json.dumps({
         "asof_utc": started.strftime("%Y-%m-%d %H:%M:%S"),

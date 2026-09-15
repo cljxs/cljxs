@@ -33,6 +33,7 @@ agents/ace/data/context/*
 agents/ace/reports/*
 !agents/ace/reports/.gitkeep
 agents/ace/state/bankroll.json
+agents/ace/state/ledger.json
 agents/ace/MEMORY.md
 
 # Phaser is fetched at install time, not committed

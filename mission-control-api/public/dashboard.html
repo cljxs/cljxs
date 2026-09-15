@@ -154,6 +154,40 @@
     border:1px solid var(--line2);background:rgba(255,255,255,.06);color:var(--ink)}
   .lbbar button.sel{border-color:var(--c2);color:#fff}
   .lbcap{font-size:12.5px;color:var(--mute);text-align:center}
+
+  /* report reader */
+  .doclink{cursor:pointer;color:var(--c2);text-decoration:none;border-bottom:1px dotted rgba(255,255,255,.25)}
+  .doclink:hover{border-bottom-style:solid}
+  #doc{position:fixed;inset:0;z-index:60;display:none;align-items:flex-start;justify-content:center;
+    background:rgba(5,6,10,.93);padding:20px;overflow:auto}
+  #doc.on{display:flex}
+  #docbox{background:var(--card);border:1px solid var(--line2);border-radius:14px;
+    width:min(760px,100%);margin:auto;padding:0;box-shadow:0 24px 70px rgba(0,0,0,.6)}
+  #dochead{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line);
+    position:sticky;top:0;background:var(--card);border-radius:14px 14px 0 0;flex-wrap:wrap}
+  #dochead .who{font-weight:650;text-transform:capitalize;letter-spacing:-.01em}
+  #dochead .when{font-size:12px;color:var(--dim)}
+  #dochead button{margin-left:auto;padding:7px 13px;border-radius:9px;font-size:12.5px;font-weight:600;
+    border:1px solid var(--line2);background:rgba(255,255,255,.06);color:var(--ink);cursor:pointer}
+  #docdays{display:flex;gap:6px;flex-wrap:wrap;padding:10px 18px 0}
+  #docdays button{padding:4px 9px;border-radius:7px;font-size:11.5px;cursor:pointer;
+    border:1px solid var(--line);background:rgba(255,255,255,.04);color:var(--mute)}
+  #docdays button.sel{border-color:var(--c2);color:#fff}
+  #docbody{padding:6px 22px 24px;font-size:14px;line-height:1.65;color:var(--ink)}
+  #docbody h1{font-size:20px;margin:18px 0 10px;letter-spacing:-.02em}
+  #docbody h2{font-size:15px;margin:22px 0 8px;color:var(--c2);letter-spacing:-.01em}
+  #docbody h3{font-size:13.5px;margin:16px 0 6px;color:var(--mute);text-transform:none}
+  #docbody h4{font-size:13px;margin:14px 0 6px;color:var(--mute)}
+  #docbody p{margin:9px 0}
+  #docbody ul,#docbody ol{margin:9px 0;padding-left:22px}
+  #docbody li{margin:5px 0}
+  #docbody code{background:rgba(255,255,255,.07);border-radius:4px;padding:1px 5px;font-size:12.5px}
+  #docbody blockquote{margin:12px 0;padding:9px 14px;border-left:2px solid var(--c1);
+    background:rgba(255,255,255,.03);border-radius:0 8px 8px 0;color:var(--mute)}
+  #docbody hr{border:0;border-top:1px solid var(--line);margin:18px 0}
+  #docbody .tw{overflow-x:auto;margin:12px 0}
+  #docbody table{width:100%;font-size:13px}
+  #docbody em{color:var(--mute)}
   .note{font-size:11.5px;color:var(--dim);margin-top:12px;line-height:1.5}
   .foot{text-align:center;color:var(--dim);font-size:11.5px;padding:24px 0 0}
 
@@ -224,6 +258,18 @@
     <div class="note">Tap any image to see it full size. Publishing still happens in Printify &mdash; nothing here puts a product on sale.</div>
   </div>
   <div class="foot" id="foot">&mdash;</div>
+</div>
+
+<div id="doc" onclick="if(event.target===this)closeDoc()">
+  <div id="docbox">
+    <div id="dochead">
+      <span class="who" id="docwho"></span>
+      <span class="when" id="docwhen"></span>
+      <button onclick="closeDoc()">Close</button>
+    </div>
+    <div id="docdays"></div>
+    <div id="docbody"></div>
+  </div>
 </div>
 
 <div class="lightbox" id="lb" onclick="if(event.target===this)closeLb()">
@@ -356,7 +402,7 @@ function render(d){
           a.data_age_min!==null?` · data ${ago(a.data_age_min)}`:''}</div>
         ${a.value!==null?`<div class="ameta num">${money(a.value)} <span class="${cls(a.pnl)}">${pct(a.pnl_pct)}</span></div>`:''}
         <div class="aline">${a.headline?esc(a.headline):'<span style="color:#5b6478">waiting for first cycle</span>'}</div>
-        ${a.latest_report?`<div class="ameta">📄 ${esc(a.latest_report)}</div>`:''}
+        ${a.latest_report?`<div class="ameta">📄 <span class="doclink" onclick="openDoc('${esc(a.name)}','${esc(a.latest_report)}')">${esc(a.latest_report)}</span></div>`:`<div class="ameta"><span class="doclink" onclick="openDoc('${esc(a.name)}')">reports…</span></div>`}
       </div>
     </div>`).join('')
     : emptyState('🤖','No agents yet','Add a folder under agents/ and it appears here automatically');
@@ -493,7 +539,6 @@ function showLb(i){
   [...$('lbbar').children].forEach((b,n) => b.className = n===i ? 'sel' : '');
 }
 function closeLb(){ $('lb').classList.remove('on'); $('lbimg').src = ''; }
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLb(); });
 
 const kb = n => n >= 1048576 ? (n/1048576).toFixed(1)+' MB' : Math.round(n/1024)+' KB';
 
@@ -544,6 +589,93 @@ async function loadBuilds(){
     }).join('') + `</div>`;
   }catch{ /* the main poll already reports connectivity */ }
 }
+
+// ------------------------------------------------------- report reader
+// Reports are written by agents. Escape first, then apply markdown, so any
+// HTML in a report is inert text rather than markup.
+function mdToHtml(src){
+  const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const inline = s => esc(s)
+    .replace(/`([^`]+)`/g,'<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g,'$1<em>$2</em>')
+    .replace(/(^|\s)_([^_\n]+)_(?=\s|$|[.,;:!?])/g,'$1<em>$2</em>');
+  const out=[]; let list=null, table=null;
+  const closeList=()=>{ if(list){out.push(`</${list}>`); list=null;} };
+  const closeTable=()=>{ if(table){out.push('</tbody></table></div>'); table=null;} };
+  for(const raw of String(src||'').split('\n')){
+    const line=raw.replace(/\s+$/,'');
+    const row=line.match(/^\|(.+)\|$/);
+    if(row){
+      const cells=row[1].split('|').map(c=>c.trim());
+      if(cells.every(c=>/^:?-{2,}:?$/.test(c))) continue;      // separator row
+      if(!table){ closeList();
+        out.push('<div class="tw"><table><thead><tr>'+cells.map(c=>`<th>${inline(c)}</th>`).join('')+'</tr></thead><tbody>');
+        table=1; continue; }
+      out.push('<tr>'+cells.map(c=>`<td>${inline(c)}</td>`).join('')+'</tr>'); continue;
+    }
+    closeTable();
+    if(!line.trim()){ closeList(); continue; }
+    let m;
+    if((m=line.match(/^(#{1,4})\s+(.*)$/))){ closeList(); const n=m[1].length; out.push(`<h${n}>${inline(m[2])}</h${n}>`); continue; }
+    if(/^(-{3,}|\*{3,}|_{3,})$/.test(line.trim())){ closeList(); out.push('<hr>'); continue; }
+    if((m=line.match(/^\s*[-*]\s+(.*)$/))){ if(list!=='ul'){closeList(); out.push('<ul>'); list='ul';} out.push(`<li>${inline(m[1])}</li>`); continue; }
+    if((m=line.match(/^\s*\d+[.)]\s+(.*)$/))){ if(list!=='ol'){closeList(); out.push('<ol>'); list='ol';} out.push(`<li>${inline(m[1])}</li>`); continue; }
+    if((m=line.match(/^>\s?(.*)$/))){ closeList(); out.push(`<blockquote>${inline(m[1])}</blockquote>`); continue; }
+    closeList(); out.push(`<p>${inline(line)}</p>`);
+  }
+  closeList(); closeTable();
+  return out.join('\n');
+}
+
+let docAgent = null, docFiles = [];
+
+async function openDoc(agent, file){
+  docAgent = agent;
+  $('docwho').textContent = agent;
+  $('docwhen').textContent = 'loading\u2026';
+  $('docbody').innerHTML = '';
+  $('doc').classList.add('on');
+  try{
+    const r = await fetch(`/api/reports/${encodeURIComponent(agent)}`, {cache:'no-store'});
+    const d = await r.json();
+    docFiles = d.reports || [];
+  }catch{ docFiles = []; }
+  if(!docFiles.length){
+    $('docwhen').textContent = '';
+    $('docbody').innerHTML = emptyState('\u{1F4C4}','No reports yet',`${agent} writes one each time it runs`);
+    $('docdays').innerHTML = '';
+    return;
+  }
+  // Only a handful of buttons - the rest are reachable by opening again.
+  $('docdays').innerHTML = docFiles.slice(0,8).map(f =>
+    `<button data-f="${esc(f.name)}" onclick="showDoc('${esc(f.name)}')">${esc(f.name.replace(/\.md$/,''))}</button>`).join('');
+  showDoc(file && docFiles.some(f=>f.name===file) ? file : docFiles[0].name);
+}
+
+async function showDoc(file){
+  [...$('docdays').children].forEach(b => b.className = b.dataset.f === file ? 'sel' : '');
+  $('docbody').innerHTML = '<p class="note">loading\u2026</p>';
+  try{
+    const r = await fetch(`/api/reports/${encodeURIComponent(docAgent)}/${encodeURIComponent(file)}`, {cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const d = await r.json();
+    $('docwhen').textContent = new Date(d.written_at).toLocaleString() + ` \u00b7 ${Math.round(d.bytes/102.4)/10} KB`;
+    $('docbody').innerHTML = mdToHtml(d.markdown) +
+      (d.truncated ? '<p class="note">\u2026truncated, the file is larger than 512KB</p>' : '');
+    $('docbody').scrollIntoView({block:'start'});
+  }catch(e){
+    $('docbody').innerHTML = `<p class="note">Could not load that report: ${esc(e.message)}</p>`;
+  }
+}
+
+function closeDoc(){ $('doc').classList.remove('on'); }
+document.addEventListener('keydown', e => {
+  if(e.key !== 'Escape') return;
+  // Peel one layer: the enlarged image first, then a report, then nothing.
+  if($('lb').classList.contains('on')) closeLb();
+  else if($('doc').classList.contains('on')) closeDoc();
+});
 
 let fails = 0;
 async function tick(){

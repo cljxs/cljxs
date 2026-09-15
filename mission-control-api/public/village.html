@@ -46,6 +46,7 @@
   #card{background:var(--card);border:1px solid var(--line);border-radius:18px;
     width:min(560px,100%);max-height:86vh;overflow:auto;padding:20px;
     box-shadow:0 24px 70px rgba(0,0,0,.6)}
+  #card.wide{width:min(780px,100%)}
   #card h2{margin:0 0 2px;font-size:21px;text-transform:capitalize;letter-spacing:-.01em}
   #card .sub{color:var(--mute);font-size:12.5px;margin-bottom:16px}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
@@ -101,6 +102,62 @@
   #lb .bar button.sel{border-color:var(--c2);color:#fff}
   #lb .cap{font-size:12.5px;color:var(--mute);text-align:center}
 
+  /* report reader */
+  .doclink{cursor:pointer;color:var(--c2);border-bottom:1px dotted rgba(255,255,255,.3)}
+  #doc{position:fixed;inset:0;z-index:26;display:none;align-items:flex-start;justify-content:center;
+    background:rgba(4,7,10,.94);padding:16px;overflow:auto}
+  #doc.on{display:flex}
+  #docbox{background:var(--card);border:1px solid var(--line);border-radius:16px;
+    width:min(680px,100%);margin:auto;box-shadow:0 24px 70px rgba(0,0,0,.6)}
+  #dochead{display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line);
+    position:sticky;top:0;background:var(--card);border-radius:16px 16px 0 0;flex-wrap:wrap}
+  #dochead .who{font-weight:650;text-transform:capitalize}
+  #dochead .when{font-size:11.5px;color:var(--mute)}
+  #dochead button{margin-left:auto;padding:7px 12px;border-radius:9px;font-size:12px;font-weight:600;
+    border:1px solid var(--line);background:rgba(255,255,255,.07);color:var(--ink)}
+  #docdays{display:flex;gap:6px;flex-wrap:wrap;padding:10px 16px 0}
+  #docdays button{padding:4px 9px;border-radius:7px;font-size:11px;
+    border:1px solid var(--line);background:rgba(255,255,255,.04);color:var(--mute)}
+  #docdays button.sel{border-color:var(--c2);color:#fff}
+  #docbody{padding:4px 18px 20px;font-size:13.5px;line-height:1.6}
+  #docbody h1{font-size:18px;margin:16px 0 8px}
+  #docbody h2{font-size:14px;margin:18px 0 6px;color:var(--c2)}
+  #docbody h3{font-size:13px;margin:14px 0 5px;color:var(--mute)}
+  #docbody p{margin:8px 0}
+  #docbody ul,#docbody ol{margin:8px 0;padding-left:20px}
+  #docbody li{margin:4px 0}
+  #docbody code{background:rgba(255,255,255,.08);border-radius:4px;padding:1px 5px;font-size:12px}
+  #docbody blockquote{margin:10px 0;padding:8px 12px;border-left:2px solid var(--c1);
+    background:rgba(255,255,255,.03);border-radius:0 8px 8px 0;color:var(--mute)}
+  #docbody hr{border:0;border-top:1px solid var(--line);margin:16px 0}
+  #docbody .tw{overflow-x:auto;margin:10px 0}
+  #docbody em{color:var(--mute)}
+
+  /* Ace's betting console */
+  .verdict{background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:11px;
+    padding:12px 14px;font-size:13px;line-height:1.5;margin-bottom:12px}
+  .verdict b{color:var(--ink)}
+  .sect{font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute);
+    margin:18px 0 8px;font-family:ui-monospace,Menlo,monospace}
+  .board{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px}
+  .board table{min-width:560px;font-size:12px}
+  .board th{white-space:nowrap;font-size:9.5px;padding:0 8px 6px 0;text-align:left}
+  .board td{padding:8px 8px 8px 0;vertical-align:top;text-align:left;border-bottom:1px solid var(--line)}
+  .board .sel{font-weight:600;white-space:nowrap}
+  .board .mt{color:var(--mute);font-size:11px}
+  .board .why{color:#c9a227;font-size:11px;line-height:1.4;min-width:150px}
+  .board .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .tagp{font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;border-radius:5px;
+    padding:2px 6px;border:1px solid var(--line);color:var(--mute);white-space:nowrap}
+  .tagp.bet{border-color:rgba(52,211,153,.5);color:var(--up)}
+  .tagp.won{border-color:rgba(52,211,153,.5);color:var(--up)}
+  .tagp.lost{border-color:rgba(251,113,133,.45);color:var(--down)}
+  .mini{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .mini .box{background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:10px;padding:10px}
+  .mini .box .l{font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--mute)}
+  .mini .box .rowline{display:flex;justify-content:space-between;gap:8px;font-size:11.5px;margin-top:5px}
+  .mini .box .rowline span:last-child{color:var(--mute);font-variant-numeric:tabular-nums}
+
   #boot{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:30;
     background:#121a14;color:var(--mute);font-size:13px;text-align:center;padding:24px}
 </style>
@@ -118,6 +175,15 @@
 <button id="act">ENTER</button>
 
 <div id="panel"><div id="card"></div></div>
+<div id="doc" onclick="if(event.target===this)closeDoc()">
+  <div id="docbox">
+    <div id="dochead"><span class="who" id="docwho"></span><span class="when" id="docwhen"></span>
+      <button onclick="closeDoc()">Close</button></div>
+    <div id="docdays"></div>
+    <div id="docbody"></div>
+  </div>
+</div>
+
 <div id="lb" onclick="if(event.target===this)closeLb()">
   <img id="lbimg" alt="">
   <div class="bar" id="lbbar"></div>
@@ -420,7 +486,9 @@ function create() {
     // Escape peels one layer at a time: the enlarged image first,
     // then the panel, so it never dumps you back outside in one press.
     if (e.key === 'Escape') {
-      if ($('lb').classList.contains('on')) closeLb(); else closePanel();
+      if ($('lb').classList.contains('on')) closeLb();
+      else if ($('doc').classList.contains('on')) closeDoc();
+      else closePanel();
     }
   });
   this.input.keyboard.on('keyup', e => { keys[e.key.toLowerCase()] = false; });
@@ -540,7 +608,11 @@ function openPanel(name) {
   if (!a) return;
   openAgent = name;
 
-  const isTrader = a.has_portfolio && a.value !== null;
+  // Ace renders its own bankroll and open bets inside the ledger below, in a
+  // form built for betting. Showing the generic trader tiles as well just
+  // prints the same numbers twice.
+  const isAce = a.name === 'ace';
+  const isTrader = !isAce && a.has_portfolio && a.value !== null;
   const stats = isTrader ? [
     { l: 'Value', v: money(a.value) },
     { l: 'P&L', v: `<span class="${cls(a.pnl)}">${money(a.pnl)}</span>`, s: pctTxt(a.pnl_pct) },
@@ -566,24 +638,28 @@ function openPanel(name) {
     <div class="sub">${esc(a.status)}${a.mode ? ' · ' + esc(a.mode) : ''} ·
       last run ${ago(a.last_run_age_min)} · ${a.runs ?? 0} cycles${
       a.data_age_min !== null ? ' · data ' + ago(a.data_age_min) : ''}</div>
-    <div class="grid">${stats.map(s => `<div class="stat">
+    ${isAce ? '' : `<div class="grid">${stats.map(s => `<div class="stat">
         <div class="l">${s.l}</div><div class="v num">${s.v}</div>
         ${s.s ? `<div class="l ${cls(a.pnl)}">${s.s}</div>` : ''}
-      </div>`).join('')}</div>
-    ${rows ? `<table><thead><tr><th>Sym</th><th>Sh</th><th>Entry</th><th>Last</th><th>P&L</th></tr></thead>
+      </div>`).join('')}</div>`}
+    ${isAce ? '' : (rows ? `<table><thead><tr><th>Sym</th><th>Sh</th><th>Entry</th><th>Last</th><th>P&L</th></tr></thead>
       <tbody>${rows}</tbody></table>`
-      : (isTrader ? `<div class="muted">No open positions.</div>` : '')}
+      : (isTrader ? `<div class="muted">No open positions.</div>` : ''))}
     ${a.headline ? `<div class="quote">${esc(a.headline)}</div>` : ''}
-    ${a.latest_report ? `<div class="muted" style="margin-top:10px">📄 ${esc(a.latest_report)}</div>` : ''}
+    ${a.latest_report ? `<div class="muted" style="margin-top:10px">📄 <span class="doclink" onclick="openDoc('${esc(a.name)}','${esc(a.latest_report)}')">${esc(a.latest_report)}</span></div>`
+      : `<div class="muted" style="margin-top:10px">📄 <span class="doclink" onclick="openDoc('${esc(a.name)}')">reports…</span></div>`}
     ${a.name === 'scout' ? `<h2 style="font-size:15px;margin:18px 0 8px">Ideas awaiting you</h2>
       <div id="scoutIdeas"><div class="muted">loading…</div></div>` : ''}
     ${a.name === 'emily' ? `<h2 style="font-size:15px;margin:18px 0 8px">The gallery</h2>
       <div id="emilyBuilds"><div class="muted">loading…</div></div>` : ''}
+    ${a.name === 'ace' ? `<div id="aceLedger"><div class="muted">loading the ledger…</div></div>` : ''}
     <button id="close">Close</button>`;
+  $('card').className = isAce ? 'wide' : '';
   $('panel').style.display = 'flex';
   $('close').onclick = closePanel;
   if (a.name === 'scout') loadScoutIdeas();
   if (a.name === 'emily') loadEmilyBuilds();
+  if (a.name === 'ace') loadAceLedger();
 }
 let ideaBusy = false;
 
@@ -711,6 +787,170 @@ async function loadEmilyBuilds() {
     host.innerHTML = '<div class="muted">Could not load the gallery.</div>';
   }
 }
+
+/* ---------------- report reader ---------------- */
+// Reports are written by agents. Escape first, then apply markdown, so any
+// HTML in a report is inert text rather than markup.
+function mdToHtml(src){
+  const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const inline = s => esc(s)
+    .replace(/`([^`]+)`/g,'<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g,'$1<em>$2</em>')
+    .replace(/(^|\s)_([^_\n]+)_(?=\s|$|[.,;:!?])/g,'$1<em>$2</em>');
+  const out=[]; let list=null, table=null;
+  const closeList=()=>{ if(list){out.push(`</${list}>`); list=null;} };
+  const closeTable=()=>{ if(table){out.push('</tbody></table></div>'); table=null;} };
+  for(const raw of String(src||'').split('\n')){
+    const line=raw.replace(/\s+$/,'');
+    const row=line.match(/^\|(.+)\|$/);
+    if(row){
+      const cells=row[1].split('|').map(c=>c.trim());
+      if(cells.every(c=>/^:?-{2,}:?$/.test(c))) continue;      // separator row
+      if(!table){ closeList();
+        out.push('<div class="tw"><table><thead><tr>'+cells.map(c=>`<th>${inline(c)}</th>`).join('')+'</tr></thead><tbody>');
+        table=1; continue; }
+      out.push('<tr>'+cells.map(c=>`<td>${inline(c)}</td>`).join('')+'</tr>'); continue;
+    }
+    closeTable();
+    if(!line.trim()){ closeList(); continue; }
+    let m;
+    if((m=line.match(/^(#{1,4})\s+(.*)$/))){ closeList(); const n=m[1].length; out.push(`<h${n}>${inline(m[2])}</h${n}>`); continue; }
+    if(/^(-{3,}|\*{3,}|_{3,})$/.test(line.trim())){ closeList(); out.push('<hr>'); continue; }
+    if((m=line.match(/^\s*[-*]\s+(.*)$/))){ if(list!=='ul'){closeList(); out.push('<ul>'); list='ul';} out.push(`<li>${inline(m[1])}</li>`); continue; }
+    if((m=line.match(/^\s*\d+[.)]\s+(.*)$/))){ if(list!=='ol'){closeList(); out.push('<ol>'); list='ol';} out.push(`<li>${inline(m[1])}</li>`); continue; }
+    if((m=line.match(/^>\s?(.*)$/))){ closeList(); out.push(`<blockquote>${inline(m[1])}</blockquote>`); continue; }
+    closeList(); out.push(`<p>${inline(line)}</p>`);
+  }
+  closeList(); closeTable();
+  return out.join('\n');
+}
+
+let docAgent = null, docFiles = [];
+
+async function openDoc(agent, file){
+  docAgent = agent;
+  $('docwho').textContent = agent;
+  $('docwhen').textContent = 'loading\u2026';
+  $('docbody').innerHTML = '';
+  $('docdays').innerHTML = '';
+  $('doc').classList.add('on');
+  try{
+    const r = await fetch(`/api/reports/${encodeURIComponent(agent)}`, {cache:'no-store'});
+    docFiles = (await r.json()).reports || [];
+  }catch{ docFiles = []; }
+  if(!docFiles.length){
+    $('docwhen').textContent = '';
+    $('docbody').innerHTML = `<div class="muted">No reports yet. ${esc(agent)} writes one each time it runs.</div>`;
+    return;
+  }
+  $('docdays').innerHTML = docFiles.slice(0,8).map(f =>
+    `<button data-f="${esc(f.name)}" onclick="showDoc('${esc(f.name)}')">${esc(f.name.replace(/\.md$/,''))}</button>`).join('');
+  showDoc(file && docFiles.some(f=>f.name===file) ? file : docFiles[0].name);
+}
+
+async function showDoc(file){
+  [...$('docdays').children].forEach(b => b.className = b.dataset.f === file ? 'sel' : '');
+  $('docbody').innerHTML = '<div class="muted">loading\u2026</div>';
+  try{
+    const r = await fetch(`/api/reports/${encodeURIComponent(docAgent)}/${encodeURIComponent(file)}`, {cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const d = await r.json();
+    $('docwhen').textContent = new Date(d.written_at).toLocaleString();
+    $('docbody').innerHTML = mdToHtml(d.markdown);
+  }catch(e){
+    $('docbody').innerHTML = `<div class="muted">Could not load that report: ${esc(e.message)}</div>`;
+  }
+}
+/* ---------------- Ace's betting console ---------------- */
+
+const pctTxt2 = v => v === null || v === undefined ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
+const priceTxt = v => v === null || v === undefined ? '—' : (v > 0 ? `+${v}` : `${v}`);
+
+function miniTable(title, rows, label){
+  if(!rows || !rows.length) return '';
+  return `<div class="box"><div class="l">${esc(title)}</div>` + rows.slice(0,6).map(r =>
+    `<div class="rowline"><span>${esc(r.key)}</span><span>${r.rows}${
+      r.settled ? ` · ${r.hit_pct}% of ${r.settled}` : ''}</span></div>`).join('') + '</div>';
+}
+
+async function loadAceLedger(){
+  const host = $('aceLedger');
+  if(!host) return;
+  let d;
+  try{
+    const r = await fetch('/api/ace/ledger', {cache:'no-store'});
+    d = await r.json();
+  }catch(e){ host.innerHTML = `<div class="muted">Could not load the ledger.</div>`; return; }
+
+  if(!d.available){
+    host.innerHTML = `<div class="muted">${esc(d.reason || 'No ledger yet.')}</div>`;
+    return;
+  }
+
+  const b = d.bankroll;
+  let out = '';
+
+  if(d.verdict){
+    out += `<div class="verdict"><b>${esc(d.verdict)}</b>${
+      d.slot ? `<div class="muted" style="margin-top:4px">${esc(d.day || '')} · ${esc(d.slot)}</div>` : ''}</div>`;
+  }
+
+  if(b){
+    out += `<div class="sect">Bankroll · paper</div>
+      <div class="grid">
+        <div class="stat"><div class="l">Bankroll</div><div class="v num">${money(b.cash)}</div>
+          ${b.pnl_pct !== null ? `<div class="l ${cls(b.pnl)}">${pctTxt(b.pnl_pct)}</div>` : ''}</div>
+        <div class="stat"><div class="l">Open bets</div><div class="v num">${b.open_count}</div>
+          <div class="l">${b.settled_count} settled</div></div>
+      </div>`;
+  }
+
+  out += `<div class="sect">Candidates tracked · ${d.counts.candidates}</div>`;
+  if(!d.candidates.length){
+    out += `<div class="muted">Nothing on the slate this cycle.</div>`;
+  } else {
+    out += `<div class="board"><table><thead><tr>
+        <th>Selection</th><th class="num">Price</th><th class="num">No-vig</th>
+        <th class="num">Mine</th><th class="num">Edge</th><th>Why not a pick</th><th>Status</th>
+      </tr></thead><tbody>` + d.candidates.map(c => `<tr>
+        <td><div class="sel">${esc(c.selection)}</div>${
+          c.match ? `<div class="mt">${esc(c.match)}</div>` : ''}${
+          c.sport ? `<div class="mt">${esc(c.sport)}</div>` : ''}</td>
+        <td class="num">${priceTxt(c.price)}</td>
+        <td class="num">${c.novig_pct === null ? '—' : c.novig_pct.toFixed(1) + '%'}</td>
+        <td class="num">${c.my_pct === null ? '—' : c.my_pct.toFixed(1) + '%'}</td>
+        <td class="num ${c.edge_pts === null ? '' : (c.edge_pts >= 8 ? 'up' : '')}">${
+          c.edge_pts === null ? '—' : pctTxt2(c.edge_pts).replace('%','')}</td>
+        <td class="why">${c.why_not.length ? esc(c.why_not.join(', ')) : '—'}</td>
+        <td><span class="tagp ${esc(c.status)}">${esc(c.status)}</span></td>
+      </tr>`).join('') + `</tbody></table></div>`;
+  }
+
+  if(d.settled_bets.length){
+    out += `<div class="sect">Results</div><div class="board"><table><thead><tr>
+        <th>Bet</th><th class="num">Stake</th><th>Result</th></tr></thead><tbody>` +
+      d.settled_bets.slice(0,10).map(x => `<tr>
+        <td><div class="sel">${esc(x.selection || x.pick || x.match || 'bet')}</div>${
+          x.note ? `<div class="mt">${esc(x.note)}</div>` : ''}</td>
+        <td class="num">${x.stake === undefined ? '—' : money(x.stake)}</td>
+        <td><span class="tagp ${esc(x.result || '')}">${esc(x.result || 'open')}</span></td>
+      </tr>`).join('') + `</tbody></table></div>`;
+  } else {
+    out += `<div class="sect">Results</div><div class="muted">Nothing settled yet.</div>`;
+  }
+
+  const minis = [
+    miniTable('Criterion that failed', d.by_reason),
+    miniTable('By sport', d.by_sport),
+    miniTable('By status', d.by_status),
+  ].filter(Boolean).join('');
+  if(minis) out += `<div class="sect">How the discipline is holding</div><div class="mini">${minis}</div>`;
+
+  host.innerHTML = out;
+}
+
+function closeDoc(){ $('doc').classList.remove('on'); }
 
 function closePanel() { closeLb(); openAgent = null; $('panel').style.display = 'none'; }
 $('panel').addEventListener('click', e => { if (e.target.id === 'panel') closePanel(); });
