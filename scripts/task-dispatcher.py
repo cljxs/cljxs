@@ -31,6 +31,11 @@ POLL_SECONDS = float(os.environ.get("POLL_SECONDS", "2"))
 TASK_TIMEOUT = int(os.environ.get("TASK_TIMEOUT", "600"))
 OPENCLAW_BIN = os.environ.get("OPENCLAW_BIN", "openclaw")
 
+# The dispatcher itself talks to SQLite, not the API. This is only used to
+# tell an agent where its task lives - it has no other way to find out, and
+# a wake message saying "see /tasks/3" is not enough to act on.
+API_BASE = os.environ.get("MISSION_CONTROL_API", "http://127.0.0.1:3001")
+
 # --- schema -----------------------------------------------------------------
 # Identical to the API's. The dispatcher ensures the schema itself on startup so
 # it never crashes with "no such table: tasks" when it boots before the API.
@@ -144,7 +149,18 @@ def spawn_agent(agent, task_id):
     cmd = [
         OPENCLAW_BIN, "agent",
         "--agent", agent,
-        "--message", f"task #{task_id} assigned, see /tasks/{task_id}",
+        # Self-contained on purpose. "see /tasks/3" is a path with no host,
+        # no port and no verb - Emily woke to exactly that, was told by her
+        # instructions to read her payload, had no way to, and quit in 14
+        # seconds having written nothing. The wake message now carries the
+        # whole command.
+        "--message", (f"Task #{task_id} is assigned to you. Read it first with:\n"
+                      f"  curl -s {API_BASE}/tasks/{task_id}\n"
+                      f"The payload holds everything you need. "
+                      f"When you are finished, complete it with:\n"
+                      f"  curl -s -X POST {API_BASE}/tasks/{task_id}/complete "
+                      f"-H 'Content-Type: application/json' "
+                      f"-d '{{\"result\":\"<one line>\",\"cost_actual\":0.0}}'"),
         "--session-id", session_id,
         "--timeout", str(TASK_TIMEOUT),
         "--json",
@@ -177,10 +193,16 @@ def reap_finished(conn):
         del running[agent]
         code = proc.returncode
         try:
-            _, stderr = proc.communicate(timeout=5)
+            stdout, stderr = proc.communicate(timeout=5)
             stderr = (stderr or b"").decode("utf-8", "replace").strip()
+            stdout = (stdout or b"").decode("utf-8", "replace").strip()
         except Exception:
-            stderr = ""
+            stdout = stderr = ""
+        # An agent that exits 0 without completing its task prints its reason
+        # to stdout, not stderr - and that was being discarded, which cost a
+        # round of guessing about a 14-second failure.
+        if stdout:
+            log(f"task #{task_id} ({agent}) said:\n{stdout[-1500:]}")
 
         current = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
         status = current["status"] if current else None

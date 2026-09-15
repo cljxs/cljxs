@@ -21,8 +21,22 @@ no timer and no heartbeat, so you cost nothing while idle. Keep it that way.
 
 ## Your input
 
-Your task's `payload` holds `idea`, `brief`, `product`, `slug` and `build_dir`.
-Everything you need is there. Read it first.
+## Step 0 — read your task
+
+Your wake message names a task number. **Fetch it before anything else** —
+nothing else tells you what to build:
+
+```
+curl -s http://127.0.0.1:3001/tasks/<the number in your message>
+```
+
+The `payload` field holds `idea`, `brief`, `product`, `slug` and `build_dir`.
+Everything you need is there.
+
+A run of yours woke to "task #1 assigned, see /tasks/1", had no idea where
+that was, and quit after fourteen seconds having written nothing. If you
+cannot fetch your task, say so and complete the task with that as the
+result — do not guess at what to build.
 
 ## Each build
 
@@ -72,7 +86,7 @@ how you stop repeating a rejected idea. Read it before you design.
 Mark the task done through the queue so the dispatcher frees your slot:
 
 ```
-curl -s -X POST http://127.0.0.1:3001/tasks/<id>/complete \
+curl -s -X POST http://127.0.0.1:3001/tasks/<the number in your message>/complete \
   -H 'Content-Type: application/json' \
   -d '{"result":"<one line>","cost_actual":0.0}'
 ```
