@@ -56,8 +56,17 @@ def json_blocks(raw):
     return out
 
 
+# systemPromptReport is an INVENTORY of what the agent was offered - every
+# workspace file, skill and tool definition. Scanning it for "name" keys
+# printed the whole catalogue under "tool calls", which is exactly the wall of
+# text this script exists to replace.
+SKIP = ("systemPromptReport", "injectedWorkspaceFiles", "skills", "contextBudgetStatus")
+
+
 def dig(node, want, out, path=""):
     """Every dict anywhere below `node` carrying any key in `want`."""
+    if any(f".{s}" in path or path.startswith(s) for s in SKIP):
+        return
     if isinstance(node, dict):
         if any(k in node for k in want):
             out.append((path, node))
@@ -97,7 +106,36 @@ def main():
     print(f"tool calls   {ts.get('calls')}   failures={ts.get('failures')}   "
           f"tools={', '.join(ts.get('tools') or []) or 'none'}")
 
+    # How big is the toolset the agent was handed? This is the number that
+    # tells you whether a tools.allow restriction actually took effect - the
+    # config command can report success and change nothing.
+    tools = (((d.get("systemPromptReport") or {}).get("tools")) or {})
+    entries = tools.get("entries") or []
+    schema_chars = tools.get("schemaChars")
+    if entries or schema_chars:
+        names = [e.get("name") for e in entries if isinstance(e, dict)]
+        print(f"toolset      {len(names)} tools offered, {schema_chars} chars of schema")
+        loud = [n for n in names if n in (
+            "sessions_spawn", "subagents", "progress_card", "dashboard",
+            "image_generate", "music_generate", "video_generate", "conversations_send")]
+        if loud:
+            print(f"             still carrying: {', '.join(loud)}")
+            print( "             ^ a delegation/UI tool in a timer-driven agent is how a")
+            print( "               cycle ends up 'started' instead of done")
+    skills = ((d.get("systemPromptReport") or {}).get("skills")) or {}
+    if skills.get("entries"):
+        print(f"skills       {len(skills['entries'])} loaded, "
+              f"{skills.get('promptChars')} chars")
+
     said, seen = [], set()
+    # The agent's own closing words are the single most useful field in here -
+    # it is what showed the `<path>` placeholder being copied out literally,
+    # and what showed a cycle announcing it "has started" and then exiting.
+    for k in ("finalAssistantVisibleText", "finalAssistantRawText"):
+        v = d.get(k)
+        if isinstance(v, str) and v.strip() and v not in seen:
+            seen.add(v)
+            said.append(v.strip())
     holders = []
     dig(d, ("text", "content", "message"), holders)
     for _, node in holders:

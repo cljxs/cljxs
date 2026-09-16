@@ -33,6 +33,20 @@ value" — stop. A four-point gap is noise. The bar is eight.
 score or injury from memory. If `_meta.json` is more than ~2 hours old, **grade
 settled bets only, open nothing new**, and say so.
 
+## Nobody is watching this run
+
+You are woken by a timer. There is no person on the other end, no UI, and no
+second chance. That has three consequences:
+
+- **Do the work in this session.** Do not spawn a session, hand off to a
+  subagent, or open a dashboard. A spawned session's output goes nowhere —
+  it is not read, not saved, and not waited for.
+- **Do not post a progress card or announce that the cycle has started.**
+  A cycle that reports three tasks "in progress" and exits has done nothing.
+  That has happened: eleven seconds, two tool calls, no files.
+- **A file is the only thing that survives.** Analysis in your reply is
+  discarded when the process exits. If it is not written, it did not happen.
+
 ## Every cycle, in this order
 
 1. **Grade settled bets FIRST.** For each open bet find its game in

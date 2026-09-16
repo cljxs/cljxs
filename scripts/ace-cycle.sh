@@ -27,8 +27,24 @@ PY
 )
 STARTED=$(date +%s)
 
+# "scheduled cycle" was the entire message. Handed that, and a toolset that
+# includes progress_card and sessions_spawn, the agent posted a progress card
+# listing three tasks, spawned a child session, announced that the cycle "has
+# started" and that you could "follow the progress as the tasks are
+# completed", and exited after 11 seconds. Nothing was ever going to complete:
+# the spawn was fire-and-forget.
+#
+# So the message says what a cycle is. No delegating, no starting - doing.
 openclaw agent --agent ace \
-  --message "scheduled cycle" \
+  --message "Scheduled cycle. Do the whole cycle yourself, now, in this session.
+
+Do NOT spawn a session, delegate to a subagent, open a dashboard or post a
+progress card. There is nobody watching this run and nothing will pick up work
+you hand off - a spawned session's output is discarded. Announcing that the
+cycle has started is not doing it.
+
+Work through the steps in AGENTS.md in order, writing each file as you go,
+and finish by running: python3 ../../scripts/signoff.py ace" \
   --session-id "wake-ace-$STARTED" \
   --timeout 600 --json
 # The agent's exit code is deliberately not checked. It exits 0 for "I said
