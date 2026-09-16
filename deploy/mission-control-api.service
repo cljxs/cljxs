@@ -1,7 +1,7 @@
 [Unit]
-Description=Mission Control API (agent task queue)
+Description=Mission Control API (agent task queue + dashboard)
 Documentation=https://github.com/cljxs/cljxs
-After=network-online.target
+After=network-online.target tailscaled.service
 Wants=network-online.target
 
 [Service]
@@ -11,11 +11,11 @@ User=root
 Environment=HOME=/root
 Environment=NODE_ENV=production
 Environment=PORT=3001
-# Loopback only. Change to 0.0.0.0 ONLY if you deliberately want this
-# reachable from outside the box, and open the firewall to match.
-Environment=HOST=127.0.0.1
 WorkingDirectory=/root/ecosystem/mission-control-api
-ExecStart=/usr/bin/node /root/ecosystem/mission-control-api/server.js
+# HOST is chosen at start: this machine's Tailscale address if Tailscale is up,
+# loopback otherwise. Never 0.0.0.0 - the API has unauthenticated write
+# endpoints that queue paid agent work.
+ExecStart=/root/ecosystem/scripts/mission-control-start.sh
 Restart=always
 RestartSec=3
 StandardOutput=journal
