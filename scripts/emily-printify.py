@@ -317,15 +317,21 @@ def cmd_draft(a):
     exist on disk, and the blueprint/provider/variants were chosen once. There
     is no judgement left, which is exactly why it should not be an agent's job.
     """
-    here = Path(__file__).resolve().parent.parent
-    d = Path(a.build_dir)
-    if not d.is_absolute():
-        for base in (here / "agents" / "emily", here):
-            if (base / a.build_dir).is_dir():
-                d = base / a.build_dir
-                break
-    if not d.is_dir():
+    # Uses the same resolver as `status`. These were two separate loops, and
+    # draft's did not look in agents/emily/builds - so `status` listed
+    # crisp-air-hiking-sticker and `draft crisp-air-hiking-sticker` replied
+    # "no such build folder" for the folder it had just printed.
+    d = _resolve_build(a.build_dir)
+    if d is None:
+        root = _builds_root()
+        have = sorted(x.name for x in root.iterdir() if x.is_dir()) if root.is_dir() else []
         print(f"no such build folder: {a.build_dir}", file=sys.stderr)
+        if have:
+            print(f"builds in {root}:", file=sys.stderr)
+            for n in have:
+                print(f"  {n}", file=sys.stderr)
+        else:
+            print(f"there are no build folders in {root}", file=sys.stderr)
         sys.exit(1)
 
     try:
