@@ -11,15 +11,15 @@ Printify dashboard, which pushes the listing to your connected Etsy shop.
 Subcommands:
   check                         verify the token and list connected shops
   blueprints --search poster    find a product type
-  providers  <blueprint_id>     print providers for that product
-  variants   <bp_id> <pp_id>    sizes/colours and their variant ids
-  upload     <file>             upload artwork, returns an image id
+  providers  564                print providers for that product
+  variants   564 27             sizes/colours and their variant ids
+  upload     design.png         upload artwork, returns an image id
   create     --spec spec.json   create the product, UNPUBLISHED
 
   suggest --product sticker     find candidate blueprints for a product type
   pick --product sticker \\        remember a blueprint/provider once, by hand
-       --blueprint 123 --provider 45
-  draft builds/<slug>           build folder -> UNPUBLISHED product, no judgement
+       --blueprint 564 --provider 27
+  draft builds/my-slug          build folder -> UNPUBLISHED product, no judgement
 
 Standard library only.
 """
@@ -102,12 +102,21 @@ def cmd_blueprints(a):
     hits = [b for b in bps if term in b.get("title", "").lower()] if term else bps
     for b in hits[:a.limit]:
         print(f"  {b['id']:>6}  {b['title']}")
-    print(f"\n{len(hits)} match(es). Use the id with: providers <id>")
+    nxt = hits[0]["id"] if hits else None
+    print(f"\n{len(hits)} match(es).")
+    if nxt:
+        print(f"Next, find who prints it:\n"
+              f"  emily-printify.py providers {nxt}")
 
 
 def cmd_providers(a):
-    for p in call(f"/catalog/blueprints/{a.blueprint_id}/print_providers.json"):
+    ps = call(f"/catalog/blueprints/{a.blueprint_id}/print_providers.json")
+    for p in ps:
         print(f"  {p['id']:>6}  {p['title']}")
+    if ps:
+        print(f"\nPick one, then save the pair (once, ever):\n"
+              f"  emily-printify.py pick --product sticker "
+              f"--blueprint {a.blueprint_id} --provider {ps[0]['id']}")
 
 
 def cmd_variants(a):
