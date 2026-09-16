@@ -547,12 +547,24 @@ const kb = n => n >= 1048576 ? (n/1048576).toFixed(1)+' MB' : Math.round(n/1024)
 // sellable, so it gets said out loud rather than left to be discovered.
 function buildPills(b){
   const p = [];
-  if (b.status === 'ready_for_review')  p.push(['ok','ready for review']);
+  // `published` is read back from Printify, so it outranks whatever status
+  // the build file happens to carry.
+  if (b.published)                      p.push(['ok','on sale']);
+  else if (b.status === 'ready_for_review')  p.push(['ok','ready for review']);
   else if (b.status === 'ready_local')  p.push(['','local only']);
   else if (b.status === 'in_progress')  p.push(['','building…']);
   else p.push(['', String(b.status).replace(/_/g,' ')]);
   if (b.art_mode === 'placeholder') p.push(['warn','placeholder art']);
   if (b.product_type) p.push(['', b.product_type]);
+  if (b.price_low != null){
+    const hi = (b.price_high != null && b.price_high !== b.price_low)
+      ? `–$${Number(b.price_high).toFixed(2)}` : '';
+    p.push(['', `$${Number(b.price_low).toFixed(2)}${hi}`]);
+  }
+  // A drafted product with nothing but the default price is the one state
+  // that looks finished and is not.
+  if (!b.published && b.printify && b.price_low != null && b.price_low < 1)
+    p.push(['warn','prices not set']);
   return p.map(([c,t]) => `<span class="pill ${c}">${esc(t)}</span>`).join('');
 }
 
@@ -573,6 +585,7 @@ async function loadBuilds(){
     $('buildsCard').style.display = 'block';
     const c = d.counts || {};
     $('buildsCount').textContent = ` · ${c.total} build${c.total===1?'':'s'}`
+      + (c.published ? `, ${c.published} on sale` : '')
       + (c.ready_for_review ? `, ${c.ready_for_review} ready for review` : '');
     $('builds').innerHTML = `<div class="gal">` + builds.map(b => {
       const cover = b.images[0];

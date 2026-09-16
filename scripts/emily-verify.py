@@ -91,7 +91,7 @@ def main():
             status = str(b.get("status") or "")
             if not status:
                 problems.append("build.json has no status")
-            elif status not in ("ready_local", "ready_for_review"):
+            elif status not in ("ready_local", "ready_for_review", "published"):
                 notes.append(f"status '{status}' (expected ready_local or ready_for_review)")
             else:
                 notes.append(f"status {status}")

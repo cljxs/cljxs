@@ -86,6 +86,16 @@ function describe(slug) {
     tags: Array.isArray(listing.tags) ? listing.tags.slice(0, 13) : [],
     substitutions: build.substitutions || build.ip_substitutions || null,
     printify: build.printify_product_id || build.printify || null,
+    // Whether it is on sale is read back from Printify by
+    // `emily-printify.py status`, not recorded by hand - a build sat at
+    // published:false while the product was live and the gallery went on
+    // showing READY FOR REVIEW for something a customer could buy.
+    published: build.published === true,
+    etsy_url: build.etsy_url || null,
+    price_low: build.price_low ?? null,
+    price_high: build.price_high ?? null,
+    mockup_count: build.mockup_count ?? null,
+    published_checked_at: build.published_checked_utc || null,
     images,
     file_count: entries.filter(e => e.isFile()).length,
     bytes: images.reduce((n, i) => n + i.bytes, 0),
@@ -120,7 +130,8 @@ function register(app) {
       available: true,
       counts: {
         total: builds.length,
-        ready_for_review: builds.filter(b => b.status === 'ready_for_review').length,
+        published: builds.filter(b => b.published).length,
+        ready_for_review: builds.filter(b => b.status === 'ready_for_review' && !b.published).length,
         ready_local: builds.filter(b => b.status === 'ready_local').length,
         placeholder: builds.filter(b => b.art_mode === 'placeholder').length,
       },

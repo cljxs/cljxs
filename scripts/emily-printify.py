@@ -350,6 +350,114 @@ def cmd_draft(a):
     }, indent=2))
 
 
+def _builds_root():
+    here = Path(__file__).resolve().parent.parent
+    return here / "agents" / "emily" / "builds"
+
+
+def _resolve_build(arg):
+    d = Path(arg)
+    if d.is_absolute() and d.is_dir():
+        return d
+    here = Path(__file__).resolve().parent.parent
+    for base in (here / "agents" / "emily", here, _builds_root()):
+        if (base / arg).is_dir():
+            return base / arg
+    return None
+
+
+def _live_state(shop_id, pid):
+    """What Printify says about this product right now.
+
+    Whether a listing is live is a fact the shop already knows. Asking a person
+    to remember to record it - or an agent to claim it - is how build.json sat
+    at published:false while the product was on sale, and the gallery went on
+    showing READY FOR REVIEW for something a customer could buy.
+    """
+    prod = call(f"/shops/{shop_id}/products/{pid}.json")
+    ext = prod.get("external") or {}
+    handle = ext.get("handle") or ""
+    prices = sorted({v.get("price") for v in (prod.get("variants") or [])
+                     if v.get("is_enabled") and v.get("price")})
+    return {
+        "title": prod.get("title"),
+        "visible": bool(prod.get("visible")),
+        "locked": bool(prod.get("is_locked")),
+        "published": bool(handle),
+        "etsy_url": handle or None,
+        "variants_enabled": sum(1 for v in (prod.get("variants") or []) if v.get("is_enabled")),
+        "mockups": len(prod.get("images") or []),
+        "price_low": (prices[0] / 100) if prices else None,
+        "price_high": (prices[-1] / 100) if prices else None,
+    }
+
+
+def cmd_status(a):
+    """Ask Printify what actually happened to each drafted product, and record
+    it. Nothing here is a judgement call, so nothing here asks anyone."""
+    shop_id = os.environ.get("PRINTIFY_SHOP_ID")
+    if not shop_id:
+        print("PRINTIFY_SHOP_ID is not set - run emily-printify.py check.", file=sys.stderr)
+        sys.exit(2)
+
+    if a.build_dir:
+        dirs = [_resolve_build(a.build_dir)]
+        if dirs[0] is None:
+            print(f"no such build folder: {a.build_dir}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        root = _builds_root()
+        dirs = sorted([d for d in root.iterdir() if d.is_dir()]) if root.is_dir() else []
+    if not dirs:
+        print("no builds found.")
+        return 0
+
+    changed = 0
+    for d in dirs:
+        try:
+            build = json.loads((d / "build.json").read_text())
+        except Exception:
+            continue
+        pid = build.get("printify_product_id")
+        if not pid:
+            print(f"{d.name:<34} no Printify draft yet "
+                  f"(run: emily-printify.py draft {d.name})")
+            continue
+
+        live = _live_state(build.get("printify_shop_id") or shop_id, pid)
+        was = bool(build.get("published"))
+        build.update({
+            "published": live["published"],
+            "etsy_url": live["etsy_url"],
+            "printify_visible": live["visible"],
+            "mockup_count": live["mockups"],
+            "price_low": live["price_low"],
+            "price_high": live["price_high"],
+            "published_checked_utc": _now(),
+        })
+        if live["published"]:
+            build["status"] = "published"
+        (d / "build.json").write_text(json.dumps(build, indent=1) + "\n")
+        if live["published"] != was:
+            changed += 1
+
+        price = ("-" if live["price_low"] is None
+                 else f"${live['price_low']:.2f}"
+                 + (f"-${live['price_high']:.2f}" if live["price_high"] != live["price_low"] else ""))
+        mark = "LIVE " if live["published"] else "draft"
+        print(f"{d.name:<34} {mark}  {live['variants_enabled']:>2} variants  "
+              f"{price:<14} {live['mockups']:>2} mockups")
+        if live["etsy_url"]:
+            print(f"{'':<34}        {live['etsy_url']}")
+        elif live["price_low"] is not None and live["price_low"] < 1:
+            print(f"{'':<34}        prices look unset - set them in Printify before publishing")
+
+    if changed:
+        print(f"\n{changed} build(s) changed state. The gallery reads build.json, "
+              f"so it will catch up on its next load.")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="Emily's Printify hands (no publish command by design)")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -376,6 +484,9 @@ def main():
     p.add_argument("--blueprint", required=True); p.add_argument("--provider", required=True)
     p.add_argument("--variants", default=""); p.add_argument("--limit", type=int, default=12)
     p.set_defaults(fn=cmd_pick)
+
+    p = sub.add_parser("status"); p.add_argument("build_dir", nargs="?")
+    p.set_defaults(fn=cmd_status)
 
     p = sub.add_parser("draft"); p.add_argument("build_dir")
     p.add_argument("--product", default=""); p.set_defaults(fn=cmd_draft)
