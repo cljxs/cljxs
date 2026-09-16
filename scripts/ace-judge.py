@@ -58,15 +58,48 @@ def load_candidates():
     return doc, rows
 
 
+def cycle_started():
+    try:
+        return int((AGENT / "state" / ".cycle-started").read_text().strip())
+    except Exception:
+        return 0
+
+
 def load_ledger():
-    if LEDGER.exists():
-        try:
-            return json.loads(LEDGER.read_text())
-        except Exception:
-            pass
+    """The ledger for THIS cycle, always a dict with a candidates list.
+
+    Two things it has to survive. Ace once wrote ledger.json as a bare JSON
+    array, and reading that straight back crashed this script on .get(). And a
+    ledger left by an earlier cycle must not be appended to - yesterday's
+    passes are not this afternoon's, and the file would keep rows for games
+    that have already finished.
+    """
     now = et_time.eastern_now()
-    return {"day": et_time.day(now), "slot": et_time.slot("ace", now),
-            "verdict": None, "candidates": []}
+    fresh = {"day": et_time.day(now), "slot": et_time.slot("ace", now),
+             "verdict": None, "candidates": []}
+    if not LEDGER.exists():
+        return fresh
+    started = cycle_started()
+    if started and LEDGER.stat().st_mtime < started:
+        return fresh                                  # left by an earlier cycle
+    try:
+        doc = json.loads(LEDGER.read_text())
+    except Exception:
+        return fresh
+    if isinstance(doc, list):                         # a bare array of rows
+        fresh["candidates"] = doc
+        return fresh
+    if not isinstance(doc, dict):
+        return fresh
+    doc.setdefault("candidates", [])
+    if not isinstance(doc["candidates"], list):
+        doc["candidates"] = []
+    doc.setdefault("day", fresh["day"])
+    doc.setdefault("slot", fresh["slot"])
+    # A ledger from a different slot is a different cycle's work.
+    if doc.get("day") != fresh["day"] or doc.get("slot") != fresh["slot"]:
+        return fresh
+    return doc
 
 
 def save(led):

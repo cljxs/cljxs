@@ -21,6 +21,10 @@ except Exception:
 PY
 )
 STARTED=$(date +%s)
+# signoff.py reads this so it applies the same "written by THIS run" rule
+# the verifier does. Without it the two disagreed, and the agent believed
+# the one that told it there was nothing left to do.
+mkdir -p "$AGENT/state" && printf '%s\n' "$STARTED" > "$AGENT/state/.cycle-started"
 
 openclaw agent --agent belfort \
   --message "scheduled cycle" \

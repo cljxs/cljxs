@@ -73,6 +73,24 @@ AGENTS = {
 }
 
 
+def cycle_started(agent_dir):
+    """When this cycle began, written by <agent>-cycle.sh at wake.
+
+    Without it every check here ran with staleness disabled, so a re-run of a
+    slot whose files already existed reported "All deliverables present" and
+    the agent correctly stopped - while the cycle verifier, which IS given the
+    epoch, failed the same run for writing nothing. Two checks, opposite
+    verdicts, and the agent believed the one that said it was finished."""
+    try:
+        return int((agent_dir / "state" / ".cycle-started").read_text().strip())
+    except Exception:
+        return 0
+
+
+def stale(path, started):
+    return bool(started) and path.stat().st_mtime < started
+
+
 def age(path):
     secs = (datetime.now(timezone.utc).timestamp() - path.stat().st_mtime)
     if secs < 90:
@@ -106,7 +124,7 @@ def main():
     base = ROOT / "agents" / agent
     # Optional: epoch this cycle started, so files left by an earlier run are
     # reported as missing rather than counted.
-    started = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+    started = int(sys.argv[2]) if len(sys.argv) > 2 else cycle_started(base)
 
     lines, missing = [], []
     for label, kind, rel, extra in AGENTS[agent]:
@@ -124,6 +142,13 @@ def main():
 
         if not path.exists():
             lines.append(f"{label}: MISSING - {rel} does not exist")
+            missing.append(label)
+            continue
+
+        if stale(path, started):
+            lines.append(f"{label}: NOT WRITTEN THIS CYCLE - {rel} was last touched "
+                         f"{age(path)}, before this cycle started. A file left by an "
+                         f"earlier run is not this run's work.")
             missing.append(label)
             continue
 

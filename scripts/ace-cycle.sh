@@ -26,6 +26,10 @@ except Exception:
 PY
 )
 STARTED=$(date +%s)
+# signoff.py reads this so it applies the same "written by THIS run" rule
+# the verifier does. Without it the two disagreed, and the agent believed
+# the one that told it there was nothing left to do.
+mkdir -p "$AGENT/state" && printf '%s\n' "$STARTED" > "$AGENT/state/.cycle-started"
 
 # "scheduled cycle" was the entire message. Handed that, and a toolset that
 # includes progress_card and sessions_spawn, the agent posted a progress card
