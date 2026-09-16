@@ -126,6 +126,15 @@ def check_ledger(problems, notes, started):
                         f"numbers - 104, never +104, which is not valid JSON.")
         return
 
+    # A bare JSON array is a valid ledger of rows but carries no day, slot or
+    # verdict - and calling .get() on it is what crashed this verifier. rows_of
+    # already tolerated both shapes; the metadata read below did not.
+    meta = ledger if isinstance(ledger, dict) else {}
+    if not isinstance(ledger, dict):
+        notes.append("ledger.json is a bare array, so it has no day, slot or verdict "
+                     "line - the village shows the verdict, so write it with "
+                     "`ace-judge.py verdict \"...\"`, which produces the right shape")
+
     judged = rows_of(ledger)
     if not judged:
         problems.append("state/ledger.json has no candidates - a cycle that looked at "
@@ -158,7 +167,7 @@ def check_ledger(problems, notes, started):
         notes.append(f"{len(missing_why)} passed row(s) carry no why_not reason - "
                      f"the reason is the point of the row")
 
-    if not str(ledger.get("verdict") or "").strip():
+    if not str(meta.get("verdict") or "").strip():
         notes.append("ledger has no verdict line - that is the sentence the village shows")
 
     notes.append(f"ledger: {len(judged)} judged, {len(matched)} joined to the board, "
@@ -260,4 +269,14 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A crash here is worse than a failed check: systemd shows exit 1 either
+    # way, but a traceback hides every other result the cycle produced. This
+    # one hid a whole run behind `'list' object has no attribute 'get'`.
+    try:
+        sys.exit(main())
+    except Exception:
+        import traceback
+        print("ace-verify: CRASHED - the checks did not complete, so nothing below "
+              "was verified. This is a bug in the verifier, not in the cycle.")
+        traceback.print_exc()
+        sys.exit(1)

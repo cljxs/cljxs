@@ -186,4 +186,13 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A crash here is worse than a failed check: systemd shows exit 1 either
+    # way, but a traceback hides every other result the cycle produced.
+    try:
+        sys.exit(main())
+    except Exception:
+        import traceback
+        print("belfort-verify: CRASHED - the checks did not complete, so nothing below "
+              "was verified. This is a bug in the verifier, not in the cycle.")
+        traceback.print_exc()
+        sys.exit(1)
