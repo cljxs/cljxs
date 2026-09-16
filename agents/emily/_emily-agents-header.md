@@ -41,18 +41,35 @@ result — do not guess at what to build.
 ## Each build
 
 1. **Read the brief.** If it needs trademarked IP, substitute and note it.
-2. **Make the assets** into `builds/<slug>/`:
-   - `design.png` — the print-ready artwork
-   - `cover.png` — the main listing image
-   - `mockup-1.png`, `mockup-2.png` (a third if it helps)
-   Use the helper, which never writes a blank file:
+2. **The artwork already exists.** `design.png` was generated from your brief
+   before you were woken, and it is sitting in your build folder. Look at it:
+
+   ```
+   ls -la builds/<slug>/
+   ```
+
+   **Never create a `.png` yourself.** A run of yours wrote 49-byte text files
+   named `design.png` and `cover.png`, logged their byte counts, and recorded
+   `"art_generated": "yes"`. A file you typed is not an image; naming it `.png`
+   only makes it a text file that lies about what it is.
+
+   If you want different art, or you need a `cover.png` or mockups, the ONLY
+   way to make one is this command — it is the thing that actually calls an
+   image model:
+
    ```
    python3 ../../scripts/emily-assets.py --prompt "<vivid art direction>" \
-     --out builds/<slug>/design.png --size 1024
+     --out builds/<slug>/cover.png --size 1024
    ```
-   It reports `"mode":"generated"` (real art) or `"mode":"placeholder"`
-   (geometric stand-in because no image key is set). **Record which** in your
-   report — a placeholder build is not ready to publish.
+
+   It reports `"mode":"generated"` (real art) or `"mode":"placeholder"` (a
+   geometric stand-in, because no image key was set). **Record which one** in
+   your report — a placeholder build is not sellable.
+
+   The checker rejects any `.png` under 2KB, so a hand-written file fails the
+   build no matter what you write about it.
+
+
 3. **Write the listing copy** to `builds/<slug>/listing.json`:
    `title` (≤140 chars), `description`, `tags` (13 max, ≤20 chars each),
    `materials`, `price_suggestion`, `product_type`.
