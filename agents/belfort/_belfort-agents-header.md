@@ -119,13 +119,23 @@ precision.
 
 ## Finishing
 
-End every cycle with these three lines, naming files you actually wrote:
+Run this last:
 
 ```
-STATE:  state/portfolio.json  cycle_count=<the number `mark` printed>
-REPORT: reports/YYYY-MM-DD-<open|close>.md
-MEMORY: <the exact line you appended>
+python3 ../../scripts/signoff.py belfort
 ```
 
-If you cannot write all three truthfully, go back and do the missing one. A
-cycle where you passed on everything still writes all three.
+It reads the files on disk and prints your sign-off. **Paste exactly what it
+prints.** Do not write those lines yourself.
+
+If it prints `MISSING`, that file is not there. Go and write it, then run it
+again. The cycle is finished when this exits without `MISSING` — not when you
+have described what you would have written.
+
+There is no template here any more because a cycle copied the last one out
+literally: it signed off with the placeholder text still in place, under a
+heading called "Files Written", saying "database updates and cycle logs
+generated as per the requirements". Not one file had been written.
+
+A cycle where you passed on everything still writes everything. "No setup worth
+7+" is a result, not a reason to skip the paperwork.

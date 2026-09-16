@@ -119,16 +119,23 @@ winning day.** Log it and stop.
 
 ## Finishing
 
-End every cycle with these four lines, naming files you actually wrote:
+Run this last:
 
 ```
-STATE:  state/bankroll.json  cycle_count=<the incremented number>
-LEDGER: state/ledger.json  judged=<how many rows you judged>
-REPORT: reports/<the report_name from _meta.json>
-MEMORY: <the exact line you appended>
+python3 ../../scripts/signoff.py ace
 ```
 
-If you cannot write all four truthfully, go back and do the missing one. A
-cycle where you passed on everything still writes all four — "nothing to do"
-is a result, not a reason to skip the paperwork. The ledger is the line most
-often dropped, and it is the one the user actually looks at.
+It reads the files on disk and prints your sign-off. **Paste exactly what it
+prints.** Do not write those lines yourself.
+
+If it prints `MISSING`, that file is not there. Go and write it, then run it
+again. The cycle is finished when this exits without `MISSING` — not when you
+have described what you would have written.
+
+There is no template here any more because a cycle copied the last one out
+literally: it signed off with the placeholder text still in place, under a
+heading called "Files Written", saying "database updates and cycle logs
+generated as per the requirements". Not one file had been written.
+
+A cycle where you passed on every game still writes everything. "Nothing to
+bet" is a result, not a reason to skip the paperwork.

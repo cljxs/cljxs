@@ -84,7 +84,11 @@ def main():
         print(f"no complete JSON block in the journal for {unit}. Raw tail:\n")
         print("\n".join(raw.splitlines()[-40:]))
         return 0
-    d = max(blocks, key=lambda b: len(json.dumps(b)))
+    # The LAST agent block, not the biggest. Picking the biggest showed the
+    # previous night's cycle - it listed more games, so its JSON was longer -
+    # while the run being investigated sat further down, unread.
+    agent_blocks = [b for b in blocks if "toolSummary" in b or "completion" in b]
+    d = (agent_blocks or blocks)[-1]
 
     print(f"=== {agent}: last cycle " + "=" * 40)
     comp, ts = d.get("completion") or {}, d.get("toolSummary") or {}
