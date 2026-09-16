@@ -296,6 +296,29 @@ function makeTextures(s) {
     g.generateTexture(`path${v}`, T, T); g.destroy();
   }
 
+  /* --- cobbled plaza. The square was the same dirt as the lanes, so the
+   * middle of the village read as a wide road rather than a place. --- */
+  for (let v = 0; v < 3; v++) {
+    const r = rng(5200 + v * 37);
+    g = s.add.graphics();
+    // Warm sandstone, not grey. The first attempt used cold greys at 8px and
+    // the square read as a concrete slab dropped into a field.
+    px(g, 0, 0, T, T, 0x9c8a6d);
+    for (let row = 0; row < 6; row++) {
+      const off = row % 2 ? 3 : 0;
+      for (let col = -1; col < 7; col++) {
+        const cx2 = col * 6 + off, cy = row * 6;
+        const tone = [0xc4ae86, 0xb8a179, 0xcdb891, 0xad9770][Math.floor(r() * 4)];
+        px(g, cx2 + 1, cy + 1, 4, 4, tone);
+        px(g, cx2 + 1, cy + 1, 4, 1, 0xdcc9a6, .45);
+        px(g, cx2 + 1, cy + 4, 4, 1, 0x7d6c52, .3);
+      }
+    }
+    speckle(g, r, T, T, 0x8a7a5e, 10);
+    speckle(g, r, T, T, 0xd8c6a4, 6);
+    g.generateTexture(`cobble${v}`, T, T); g.destroy();
+  }
+
   /* --- path edges -------------------------------------------------------
    * Grass fringe that hangs over the paving. Drawn ON TOP of a path tile
    * wherever its neighbour is grass. The dead-straight boundary between path
@@ -355,21 +378,28 @@ function makeTextures(s) {
   for (let v = 0; v < 3; v++) {
     const r = rng(2200 + v * 91);
     g = s.add.graphics();
-    const TW = 48, TH = 72, cx = TW / 2;
-    px(g, cx - 4, 44, 8, 26, PAL.wood[0]);              // trunk, dark side
-    px(g, cx - 4, 44, 5, 26, PAL.wood[1]);              // lit side
-    px(g, cx - 2, 50, 1, 14, PAL.wood[2], .7);          // bark line
-    const blobs = [[cx, 30, 21, 15], [cx - 9, 22, 15, 13], [cx + 9, 23, 14, 12], [cx, 15, 17, 12]];
-    blobs.forEach(([bx, by, bw, bh]) => {
-      g.fillStyle(PAL.leaf[1], 1); g.fillEllipse(bx, by, bw * 2, bh * 2);
+    const TW = 62, TH = 86, cx = TW / 2;
+    px(g, cx - 5, 56, 10, 30, PAL.wood[0]);             // trunk, dark side
+    px(g, cx - 5, 56, 6, 30, PAL.wood[1]);              // lit side
+    px(g, cx - 3, 62, 1, 18, PAL.wood[2], .7);          // bark line
+    px(g, cx - 9, 80, 18, 6, PAL.wood[0]);              // root flare
+    // Seven overlapping blobs instead of four, then lit tops, then an
+    // underside shade. A canopy needs layers or it reads as a lollipop.
+    const blobs = [[cx, 38, 24, 16], [cx - 14, 30, 17, 14], [cx + 14, 31, 16, 13],
+                   [cx - 7, 22, 17, 14], [cx + 8, 21, 16, 13], [cx, 14, 15, 11],
+                   [cx - 18, 40, 12, 10]];
+    blobs.forEach(([bx, by, bw, bh]) => { g.fillStyle(PAL.leaf[1], 1); g.fillEllipse(bx, by, bw * 2, bh * 2); });
+    blobs.forEach(([bx, by, bw, bh], i) => {
+      if (i % 3 === 2) return;
+      g.fillStyle(PAL.leaf[2], 1); g.fillEllipse(bx - 3, by - 5, bw * 1.5, bh * 1.25);
     });
-    blobs.forEach(([bx, by, bw, bh], i) => {            // lit tops
-      if (i % 2) return;
-      g.fillStyle(PAL.leaf[2], 1); g.fillEllipse(bx - 2, by - 4, bw * 1.5, bh * 1.3);
+    [[cx - 8, 13], [cx + 6, 17], [cx - 16, 32]].forEach(([hx, hy]) => {
+      g.fillStyle(PAL.leaf[3], .85); g.fillEllipse(hx, hy, 13, 9);
     });
-    g.fillStyle(PAL.leaf[3], .9); g.fillEllipse(cx - 6, 14, 14, 10);
-    g.fillStyle(PAL.leaf[0], .5); g.fillEllipse(cx + 6, 34, 22, 12);   // underside shade
-    speckle(g, r, TW, 44, PAL.leaf[3], 8);
+    g.fillStyle(PAL.leaf[0], .45); g.fillEllipse(cx + 8, 46, 30, 15);   // underside
+    g.fillStyle(PAL.leaf[0], .35); g.fillEllipse(cx - 14, 46, 22, 12);
+    speckle(g, r, TW, 56, PAL.leaf[3], 12);
+    speckle(g, r, TW, 56, PAL.leaf[0], 10);
     g.generateTexture(`tree${v}`, TW, TH); g.destroy();
   }
 
@@ -585,7 +615,9 @@ function create() {
   const at = (grid, x, y) => (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) ? false : grid[y][x];
 
   for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) {
+    const plaza = x >= 16 && x <= 21 && y >= 11 && y <= 17;
     if (WET[y][x])        ground.draw(`water${pick(0, 2)}`, x * T, y * T);
+    else if (plaza)       ground.draw(`cobble${pick(0, 3)}`, x * T, y * T);
     else if (PAVED[y][x]) ground.draw(`path${pick(0, 4)}`, x * T, y * T);
     else                  ground.draw(`grass${pick(0, 4)}`, x * T, y * T);
   }
