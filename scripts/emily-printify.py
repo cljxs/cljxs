@@ -371,6 +371,13 @@ def main():
     p.add_argument("--product", default=""); p.set_defaults(fn=cmd_draft)
 
     a = ap.parse_args()
+    # Load credentials.env here, for every subcommand, not lazily inside
+    # token(). "draft" reads PRINTIFY_SHOP_ID before it makes any API call, so
+    # it saw an environment nothing had populated yet and reported the shop id
+    # missing while it sat in the file. The whole point of this script is that
+    # the credentials file is the source of truth; reading it once, up front,
+    # is what makes that true.
+    load_credentials()
     return a.fn(a) or 0
 
 
