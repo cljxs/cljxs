@@ -39,6 +39,8 @@ mkdir -p "$AGENT/state" && printf '%s\n' "$STARTED" > "$AGENT/state/.cycle-start
 # the spawn was fire-and-forget.
 #
 # So the message says what a cycle is. No delegating, no starting - doing.
+LOG="$(mktemp)"
+trap 'rm -f "$LOG"' EXIT
 openclaw agent --agent ace \
   --message "Scheduled cycle. Do the whole cycle yourself, now, in this session.
 
@@ -50,12 +52,19 @@ cycle has started is not doing it.
 Work through the steps in AGENTS.md in order, writing each file as you go,
 and finish by running: python3 ../../scripts/signoff.py ace" \
   --session-id "wake-ace-$STARTED" \
-  --timeout 300 --json
+  --timeout 300 --json 2>&1 | tee "$LOG"
 # 300, not 600. A healthy cycle is 20-60 seconds. One runaway ran 153 seconds
 # and cost $0.19 - forty times normal - rewriting the same file 43 times. The
 # cause of that loop is fixed, but a timeout is the only bound that does not
 # depend on the model noticing it is stuck.
 # The agent's exit code is deliberately not checked. It exits 0 for "I said
 # some words", which is the thing that cannot be trusted. The verifier judges.
+
+# A billing or auth failure means no model ran at all. Say so and stop:
+# the verifier would otherwise report missing files, which are a
+# consequence of that and send the next hour down the wrong path.
+if ! python3 "$ROOT/scripts/check-provider-error.py" "$LOG"; then
+  exit 1
+fi
 
 exec python3 "$ROOT/scripts/ace-verify.py" "$MEM_BEFORE" "$CYCLES_BEFORE" "$STARTED"

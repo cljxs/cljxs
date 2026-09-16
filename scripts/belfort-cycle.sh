@@ -26,12 +26,21 @@ STARTED=$(date +%s)
 # the one that told it there was nothing left to do.
 mkdir -p "$AGENT/state" && printf '%s\n' "$STARTED" > "$AGENT/state/.cycle-started"
 
+LOG="$(mktemp)"
+trap 'rm -f "$LOG"' EXIT
 openclaw agent --agent belfort \
   --message "scheduled cycle" \
   --session-id "wake-belfort-$STARTED" \
-  --timeout 600 --json
+  --timeout 600 --json 2>&1 | tee "$LOG"
 # The agent's own exit code is deliberately not checked here. It exits 0 for
 # "I said some words", which is exactly the thing that cannot be trusted.
 # The verifier is the judge.
+
+# A billing or auth failure means no model ran at all. Say so and stop:
+# the verifier would otherwise report missing files, which are a
+# consequence of that and send the next hour down the wrong path.
+if ! python3 "$ROOT/scripts/check-provider-error.py" "$LOG"; then
+  exit 1
+fi
 
 exec python3 "$ROOT/scripts/belfort-verify.py" "$MEM_BEFORE" "$CYCLES_BEFORE" "$STARTED"
