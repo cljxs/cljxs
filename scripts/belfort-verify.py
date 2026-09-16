@@ -94,6 +94,21 @@ def reconcile(p, problems):
                         f"is removed by `sell`, not zeroed")
 
 
+def expected_report(agent_name, agent_dir):
+    """The report filename this cycle owes, taken from the fetcher's _meta.json
+    where it exists so both sides read one value, computed only as a fallback."""
+    try:
+        meta = json.loads((agent_dir / "data" / "_meta.json").read_text())
+        name = meta.get("report_name")
+        if name:
+            return agent_dir / "reports" / name, str(meta.get("slot") or "").strip() or "this"
+    except Exception:
+        pass
+    now = et_time.eastern_now()
+    slot = et_time.slot(agent_name, now)
+    return agent_dir / "reports" / et_time.report_name(agent_name, now), slot
+
+
 def main():
     mem_before = int(sys.argv[1]) if len(sys.argv) > 1 else 0
     cycles_before = int(sys.argv[2]) if len(sys.argv) > 2 else -1
@@ -120,11 +135,14 @@ def main():
         problems.append(f"portfolio.json was last written {age}s ago, before this "
                         "cycle started - this run did not touch it")
 
-    day = eastern_now().strftime("%Y-%m-%d")
-    want = et_time.slot("belfort")
-    report = AGENT / "reports" / f"{day}-{want}.md"
+    # Prefer the name the fetcher stamped, so a run that straddles a slot
+    # boundary is judged against the name it was actually given.
+    report, want = expected_report("belfort", AGENT)
     if not report.exists():
-        others = sorted(x.name for x in (AGENT / "reports").glob(f"{day}-*.md")) \
+        # Everything already filed for this date, whatever slot it claims -
+        # that is how the wrongly-named report gets surfaced rather than just
+        # reported missing.
+        others = sorted(x.name for x in (AGENT / "reports").glob(f"{report.name[:10]}-*.md")) \
             if (AGENT / "reports").is_dir() else []
         extra = f" (found {', '.join(others)})" if others else ""
         problems.append(f"no reports/{report.name} for this wake{extra} - the "

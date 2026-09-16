@@ -165,6 +165,21 @@ def check_ledger(problems, notes, started):
                  f"{len(base_keys) - len(matched)} left unjudged")
 
 
+def expected_report(agent_name, agent_dir):
+    """The report filename this cycle owes, taken from the fetcher's _meta.json
+    where it exists so both sides read one value, computed only as a fallback."""
+    try:
+        meta = json.loads((agent_dir / "data" / "_meta.json").read_text())
+        name = meta.get("report_name")
+        if name:
+            return agent_dir / "reports" / name, str(meta.get("slot") or "").strip() or "this"
+    except Exception:
+        pass
+    now = et_time.eastern_now()
+    slot = et_time.slot(agent_name, now)
+    return agent_dir / "reports" / et_time.report_name(agent_name, now), slot
+
+
 def main():
     mem_before = int(sys.argv[1]) if len(sys.argv) > 1 else 0
     cycles_before = int(sys.argv[2]) if len(sys.argv) > 2 else -1
@@ -195,10 +210,16 @@ def main():
 
     check_ledger(problems, notes, started)
 
-    day, want = eastern_now().strftime("%Y-%m-%d"), et_time.slot("ace")
-    report = AGENT / "reports" / f"{day}-{want}.md"
+    # Prefer the name the fetcher already stamped. Computing it again here
+    # would usually agree - but a run started near a slot boundary (a manual
+    # test at 11:59 ET, say) would be handed "morning" and judged against
+    # "afternoon", and the agent would be failed for obeying its instructions.
+    report, want = expected_report("ace", AGENT)
     if not report.exists():
-        others = sorted(x.name for x in (AGENT / "reports").glob(f"{day}-*.md")) \
+        # Everything already filed for this date, whatever slot it claims -
+        # that is how the wrongly-named report gets surfaced rather than just
+        # reported missing.
+        others = sorted(x.name for x in (AGENT / "reports").glob(f"{report.name[:10]}-*.md")) \
             if (AGENT / "reports").is_dir() else []
         extra = f" (found {', '.join(others)})" if others else ""
         problems.append(f"no reports/{report.name} for this wake{extra} - the {want} "
