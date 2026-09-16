@@ -208,6 +208,28 @@
 
 const T = 32;                 // tile size
 const MAP_W = 38, MAP_H = 23; // tiles
+
+// Hand-placed house plots rather than `col = i % 5`. A grid puts every house on
+// the same baseline at the same spacing, which reads as a row of identical
+// buildings - the one thing a neighbourhood never looks like. These sit at
+// different depths, in loose clusters, some set back from the lane and some
+// close to it. `flip` mirrors a house so its neighbour is not a photocopy.
+// Module scope because the ground painter needs them too, to run a garden path
+// from each door out to the lane before anything is drawn.
+const PLOTS = [
+  { x: 2.5,  y: 4.5,  flip: false },
+  { x: 8.6,  y: 7.6,  flip: true  },
+  { x: 13.8, y: 3.2,  flip: false },
+  { x: 23.6, y: 6.2,  flip: true  },
+  { x: 29.8, y: 2.6,  flip: false },
+  { x: 26.4, y: 17.6, flip: true  },
+  { x: 11.6, y: 18.6, flip: false },
+  { x: 33.4, y: 8.6,  flip: true  },
+];
+
+// The pond, one x-span per row. A rectangle of water in a field looks like a
+// swimming pool; the point of listing rows is that the edge can wander.
+const POND = { 16: [4, 7], 17: [3, 8], 18: [2, 9], 19: [1, 9], 20: [1, 8], 21: [2, 7], 22: [3, 6] };
 const W = MAP_W * T, H = MAP_H * T;
 
 let DATA = { agents: [], kpis: {}, health: {} };
@@ -367,6 +389,45 @@ function makeTextures(s) {
     }
     g.generateTexture(`shore-${side}`, T, T); g.destroy();
   });
+
+  // Land wedges for a water tile with two adjacent land sides. Tile steps read
+  // as a staircase at 32px however carefully the outline is drawn; rounding the
+  // inside of each corner is what turns the steps into a bank.
+  [['nw', 0, 0], ['ne', T, 0], ['sw', 0, T], ['se', T, T]].forEach(([name, ox, oy]) => {
+    g = s.add.graphics();
+    const R = 15;
+    for (let y = 0; y < T; y++) for (let x = 0; x < T; x++) {
+      const d = Math.hypot(x + .5 - ox, y + .5 - oy);
+      if (d < R - 3)      px(g, x, y, 1, 1, 0xcbb389);              // dry sand
+      else if (d < R)     px(g, x, y, 1, 1, 0xb9a078);              // wet sand
+      else if (d < R + 1) px(g, x, y, 1, 1, PAL.water[3], .65);     // foam
+    }
+    g.generateTexture(`wcorn-${name}`, T, T); g.destroy();
+  });
+
+  // Lily pads and reeds. Open water with nothing on it reads as a hole in the
+  // map; two or three floating things give it a surface.
+  for (let v = 0; v < 2; v++) {
+    const r = rng(9400 + v * 13);
+    g = s.add.graphics();
+    for (let i = 0; i < 3; i++) {
+      const lx = 4 + Math.floor(r() * 16), ly = 4 + Math.floor(r() * 14), rad = 4 + Math.floor(r() * 3);
+      g.fillStyle(0x1f5c2c, .35); g.fillEllipse(lx, ly + 2, rad * 2.2, rad * 1.5);
+      g.fillStyle(0x3f9b50, 1);   g.fillEllipse(lx, ly, rad * 2, rad * 1.4);
+      g.fillStyle(0x5fbd6e, 1);   g.fillEllipse(lx - 1, ly - 1, rad, rad * .7);
+      px(g, lx + rad - 2, ly - 1, 2, 2, 0x1f5c2c);        // the notch
+    }
+    if (v === 0) { px(g, 20, 6, 2, 2, 0xf6f1e4); px(g, 21, 5, 1, 1, 0xf2d06a); }  // a flower
+    g.generateTexture(`lily${v}`, 28, 24); g.destroy();
+  }
+
+  g = s.add.graphics();                                   // reeds
+  [[3, 14], [7, 10], [11, 15], [15, 9], [19, 13]].forEach(([rx, ry], i) => {
+    px(g, rx, ry, 1, 22 - ry, 0x4e7a33);
+    px(g, rx + 1, ry + 2, 1, 20 - ry, 0x6b9a48);
+    if (i % 2) px(g, rx - 1, ry - 3, 3, 4, 0x7a5230);     // seed head
+  });
+  g.generateTexture('reeds', 22, 24); g.destroy();
 
   /* --- a soft shadow, reused under everything that stands up --- */
   g = s.add.graphics();
@@ -610,7 +671,22 @@ function create() {
   for (let x = 0; x < MAP_W; x++) { PAVED[ROAD_Y][x] = true; PAVED[ROAD_Y + 1][x] = true; }
   for (let y = ROAD_Y; y < MAP_H - 2; y++) { PAVED[y][18] = true; PAVED[y][19] = true; }
   for (let y = 11; y < 18; y++) for (let x = 16; x < 22; x++) PAVED[y][x] = true;
-  for (let y = 18; y < 21; y++) for (let x = 2; x < 8; x++) { WET[y][x] = true; PAVED[y][x] = false; }
+  for (const [ys, [x0, x1]] of Object.entries(POND)) {
+    const y = Number(ys);
+    for (let x = x0; x <= x1; x++) { WET[y][x] = true; PAVED[y][x] = false; }
+  }
+
+  // A garden path from each occupied door out to the lane. Without one the
+  // houses sit on grass with no way in, which is what made them read as
+  // scenery rather than as homes people come and go from.
+  const occupied = Math.min((DATA.agents || []).length, PLOTS.length);
+  for (let i = 0; i < occupied; i++) {
+    const pl = PLOTS[i];
+    const dx = Math.round(pl.x + 2);                 // door tile, house is 4 wide
+    const dy = Math.round(pl.y + 3.7);               // ground just below the door
+    if (dy <= ROAD_Y) for (let y = dy; y <= ROAD_Y; y++) { if (!WET[y][dx]) PAVED[y][dx] = true; }
+    else              for (let y = ROAD_Y + 1; y <= dy; y++) { if (!WET[y][dx]) PAVED[y][dx] = true; }
+  }
 
   const at = (grid, x, y) => (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) ? false : grid[y][x];
 
@@ -636,6 +712,14 @@ function create() {
       if (at(WET, x + 1, y)) ground.draw('shore-e', x * T, y * T);
       if (at(WET, x - 1, y)) ground.draw('shore-w', x * T, y * T);
     }
+    if (WET[y][x]) {
+      const N = !at(WET, x, y - 1), S = !at(WET, x, y + 1),
+            Wd = !at(WET, x - 1, y), E = !at(WET, x + 1, y);
+      if (N && Wd) ground.draw('wcorn-nw', x * T, y * T);
+      if (N && E)  ground.draw('wcorn-ne', x * T, y * T);
+      if (S && Wd) ground.draw('wcorn-sw', x * T, y * T);
+      if (S && E)  ground.draw('wcorn-se', x * T, y * T);
+    }
   }
 
   // flowers: decoration only, deterministic, never on paving
@@ -656,7 +740,20 @@ function create() {
   const solids = this.physics.add.staticGroup();
   const blocker = (x, y, w, h) => solids.add(this.add.zone(x, y, w, h).setOrigin(.5));
 
-  blocker(5*T, 19.5*T, 6*T, 3*T);                       // pond
+  // One blocker per row of water, so you cannot walk across the narrow ends
+  // of a pond that is no longer a rectangle.
+  for (const [ys, [x0, x1]] of Object.entries(POND)) {
+    const y = Number(ys), w = x1 - x0 + 1;
+    blocker((x0 + w / 2) * T, (y + .5) * T, w * T, T);
+  }
+
+  // Lily pads sit on the water, so no shadow and no collision - you never walk
+  // there anyway, the pond rows are blockers.
+  [[3.4, 18.6], [6.2, 20.4], [7.6, 17.8], [2.6, 20.8], [5.0, 22.3]]
+    .forEach(([tx, ty], i) => this.add.image(tx * T, ty * T, `lily${i % 2}`)
+      .setOrigin(.5, 1).setDepth(ty * T - 6));
+  [[1.4, 18.2], [9.4, 19.2], [2.2, 22.6], [8.6, 21.6], [0.8, 20.4]]
+    .forEach(([tx, ty]) => this.add.image(tx * T, ty * T, 'reeds').setOrigin(.5, 1).setDepth(ty * T + 4));
 
   // --- scenery ---
   // `shade` puts an ellipse on the ground under a prop. Without it everything
@@ -723,22 +820,6 @@ function create() {
   // Tint multiplies, so an agent wearing its roof colour comes out nearly black.
   // These are the same hues lifted towards white so the little folk stay readable.
   const SHIRTS = [0xff9f9c, 0xa8c8f0, 0xd4ea9f, 0xcbb6e4, 0xf7c9c6, 0xa6e0ec];
-
-  // Hand-placed plots rather than `col = i % 5`. A grid puts every house on the
-  // same baseline at the same spacing, which reads as a row of identical
-  // buildings - the one thing a neighbourhood never looks like. These sit at
-  // different depths, in loose clusters, some set back from the lane and some
-  // close to it. `flip` mirrors a house so its neighbour is not a photocopy.
-  const PLOTS = [
-    { x: 2.5,  y: 4.5,  flip: false },
-    { x: 8.6,  y: 7.6,  flip: true  },
-    { x: 13.8, y: 3.2,  flip: false },
-    { x: 23.6, y: 6.2,  flip: true  },
-    { x: 29.8, y: 2.6,  flip: false },
-    { x: 26.4, y: 17.6, flip: true  },
-    { x: 11.6, y: 18.6, flip: false },
-    { x: 33.4, y: 8.6,  flip: true  },
-  ];
 
   agents.forEach((a, i) => {
     const plot = PLOTS[i % PLOTS.length];
