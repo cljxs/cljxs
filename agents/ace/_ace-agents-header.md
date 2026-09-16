@@ -63,6 +63,11 @@ second chance. That has three consequences:
 
    `candidates.json` already carries the price and the no-vig line for every
    game. That is enough to rule most of them out without opening anything.
+
+   It now lists only games starting within the next 14 hours that have not
+   begun — around eight, not the whole board. `games_outside_window` says how
+   many were held back. You are not missing anything by not looking at them;
+   a game three days out cannot be bet on information that does not exist yet.
 3. **Default to PASS.** Most cycles you bet nothing — the correct outcome.
 4. **Write `state/bankroll.json`** — bankroll, bets, incremented `cycle_count`,
    `last_cycle_utc`. **Before the report, not after.** A cycle once wrote a

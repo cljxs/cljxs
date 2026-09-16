@@ -33,6 +33,17 @@ TIMEOUT = 20
 GAP = 0.4
 DEEP_CAP = 12          # polite cap on per-game context fetches, per sport
 
+# How many games Ace is asked to judge in one cycle, and how far ahead it looks.
+#
+# The fetcher used to hand over every scheduled game on both slates - about 30
+# games, 60 moneyline rows. Judging them cost more tool calls than a five
+# minute cycle has, and Ace timed out mid-run twice. Narrowing the field is
+# mechanical work: a game starting in three days cannot be bet on information
+# that does not exist yet, and one that has started cannot be bet at all. So
+# the field is narrowed here and the judgement is left to Ace.
+BET_WINDOW_HOURS = 14  # far enough to cover tonight's slate, not next weekend
+MAX_GAMES = 8          # 8 games = 16 rows, which a cycle can actually get through
+
 SPORTS = {
     "mlb": {"path": "baseball/mlb", "months": {4, 5, 6, 7, 8, 9, 10}},
     "nfl": {"path": "football/nfl", "months": {9, 10, 11, 12, 1, 2}},
@@ -220,15 +231,36 @@ def build_ledger(day, ctx_dir, slot):
     reasons in state/ledger.json; if it never does, the board still shows what
     was on the slate and what plain code already knew about it.
     """
-    rows = []
+    now = datetime.now(timezone.utc)
+    games = []
     for f in sorted(ctx_dir.glob("*.json")):
         try:
             c = json.loads(f.read_text())
         except Exception:
             continue
+        # Sort by kick-off and keep the nearest few that have not started.
+        try:
+            start = datetime.strptime(c.get("start_utc", ""), "%Y-%m-%dT%H:%MZ") \
+                .replace(tzinfo=timezone.utc)
+        except Exception:
+            start = None
+        started = str(c.get("status") or "").upper() != "STATUS_SCHEDULED"
+        hours = (start - now).total_seconds() / 3600 if start else 999
+        # The clock outranks the status field. ESPN reported STATUS_SCHEDULED
+        # for a game whose listed start was two hours in the past, and Ace's
+        # own bar requires that the game has not started - so a start time that
+        # has passed disqualifies it whatever the status says.
+        if started or hours <= 0 or hours > BET_WINDOW_HOURS:
+            continue
+        games.append((hours, f.name, c))
+    games.sort(key=lambda g: (g[0], g[1]))
+    dropped = max(0, len(games) - MAX_GAMES)
+    games = games[:MAX_GAMES]
+
+    rows = []
+    for _, _, c in games:
         odds = c.get("odds") or {}
         nh, na = odds.get("novig_home_pct"), odds.get("novig_away_pct")
-        started = str(c.get("status") or "").upper() != "STATUS_SCHEDULED"
         # These two keys are the ones build_context actually writes. They were
         # read as home_ml/away_ml, which has never been a key in this file, so
         # every candidate row carried price: null - including the rows Ace was
@@ -242,8 +274,6 @@ def build_ledger(day, ctx_dir, slot):
             t = c.get(side)
             team = (t.get("abbr") or side) if isinstance(t, dict) else (t or side)
             why = []
-            if started:
-                why.append("game already started")
             if pct is None:
                 why.append("no priced line in the context file")
             rows.append({
@@ -268,6 +298,9 @@ def build_ledger(day, ctx_dir, slot):
         "slot": slot,
         "verdict": None,
         "source": "ace-fetch.py - mechanical fields only, awaiting Ace's estimates",
+        "window_hours": BET_WINDOW_HOURS,
+        "games_shown": len(games),
+        "games_outside_window": dropped,
         "candidates": rows,
     }
 
