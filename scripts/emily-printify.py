@@ -269,7 +269,11 @@ def cmd_draft(a):
               f"({design.stat().st_size if design.is_file() else 0} bytes).", file=sys.stderr)
         sys.exit(1)
 
-    product_type = (listing.get("product_type") or a.product or "sticker").lower()
+    # An explicit --product wins over the listing's own product_type, so the
+    # same build can be drafted against a second catalogue entry and the two
+    # profit tables compared side by side. Without this the flag did nothing,
+    # because listing.json always carries a product_type.
+    product_type = (a.product or listing.get("product_type") or "sticker").lower()
     cat = read_catalog().get(product_type)
     if not cat:
         print(f"no catalogue entry for '{product_type}'. Choose one once:\n\n"
@@ -323,6 +327,12 @@ def cmd_draft(a):
         build = json.loads((d / "build.json").read_text())
     except Exception:
         build = {}
+    # Keep every draft made from this build, so comparing two product types
+    # does not lose the first product's id.
+    drafts = build.get("printify_drafts") or []
+    drafts.append({"product_type": product_type, "product_id": pid, "url": url,
+                   "price": price_cents / 100, "drafted_at": _now()})
+    build["printify_drafts"] = drafts
     build.update({
         "status": "ready_for_review",
         "printify_product_id": pid,
