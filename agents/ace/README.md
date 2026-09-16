@@ -32,7 +32,7 @@ Check the agents.list index with `openclaw agents list` before running the
 | | Schedule | Costs |
 |---|---|---|
 | `ace-fetch.timer` | every 30 min, 09:00-23:30 ET, daily | **nothing** - plain Python |
-| `ace-cycle.timer` | 09:00, 15:00, 23:30 ET, daily | **fuel** - 3 AI wakes per day |
+| `ace-cycle.timer` | 15:00, 23:30 ET, daily | **fuel** - 2 AI wakes per day |
 
 ## Data source
 
@@ -52,6 +52,15 @@ ESPN's own model projection are both computed or fetched and then deliberately
 dropped: every report Ace wrote built itself on the model-versus-line
 comparison, which is the one thing its instructions said could never justify a
 bet. A number that can only ever be misused is not context, it is bait.
+
+## Why two wakes, not three
+
+**15:00 ET** is the betting wake and **23:30 ET** is the grading wake. A 09:00
+wake was dropped: the earliest first pitch is around 13:00 ET and most of the
+slate is evening, so at 09:00 no lineup is posted and no scratch is known.
+Ace's bar requires *real information the market has not priced yet*, and that
+information does not exist yet in the morning. It was a third of the fuel
+spent on the wake least able to clear the bar.
 
 ## Checking on it
 

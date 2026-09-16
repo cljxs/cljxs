@@ -1,5 +1,5 @@
 [Unit]
-Description=Ace agent cycle (THIS one costs fuel - 3x per day)
+Description=Ace agent cycle (THIS one costs fuel - 2x per day)
 Documentation=https://github.com/cljxs/cljxs
 
 [Service]

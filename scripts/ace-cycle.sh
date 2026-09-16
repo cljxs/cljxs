@@ -46,7 +46,11 @@ cycle has started is not doing it.
 Work through the steps in AGENTS.md in order, writing each file as you go,
 and finish by running: python3 ../../scripts/signoff.py ace" \
   --session-id "wake-ace-$STARTED" \
-  --timeout 600 --json
+  --timeout 300 --json
+# 300, not 600. A healthy cycle is 20-60 seconds. One runaway ran 153 seconds
+# and cost $0.19 - forty times normal - rewriting the same file 43 times. The
+# cause of that loop is fixed, but a timeout is the only bound that does not
+# depend on the model noticing it is stuck.
 # The agent's exit code is deliberately not checked. It exits 0 for "I said
 # some words", which is the thing that cannot be trusted. The verifier judges.
 
