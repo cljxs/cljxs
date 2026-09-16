@@ -221,9 +221,18 @@ def build_ledger(day, ctx_dir):
         odds = c.get("odds") or {}
         nh, na = odds.get("novig_home_pct"), odds.get("novig_away_pct")
         started = str(c.get("status") or "").upper() != "STATUS_SCHEDULED"
-        for side, pct, ml in (("home", nh, odds.get("home_ml")),
-                              ("away", na, odds.get("away_ml"))):
-            team = c.get(side) or side
+        # These two keys are the ones build_context actually writes. They were
+        # read as home_ml/away_ml, which has never been a key in this file, so
+        # every candidate row carried price: null - including the rows Ace was
+        # told to copy verbatim into its ledger.
+        for side, pct, ml in (("home", nh, odds.get("moneyline_home")),
+                              ("away", na, odds.get("moneyline_away"))):
+            # `home` and `away` are objects: {"abbr": "BUF", "record": "1-0"}.
+            # Formatting one straight into a string produced selections named
+            # "{'abbr': 'BUF', 'record': '1-0'} ML", and `selection` is the key
+            # the ledger merge joins on, so nothing Ace wrote could ever match.
+            t = c.get(side)
+            team = (t.get("abbr") or side) if isinstance(t, dict) else (t or side)
             why = []
             if started:
                 why.append("game already started")

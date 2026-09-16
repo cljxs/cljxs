@@ -7,17 +7,18 @@ Type=oneshot
 User=root
 Environment=HOME=/root
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=ECOSYSTEM_ROOT=/root/ecosystem
 WorkingDirectory=/root/ecosystem
-# Fresh session id per wake; reused sessions cause runaway loops.
-# A cycle that never updates state is a failed cycle, not a successful
-# one. systemd only knows the process exited 0. Both agents have already
-# shipped a run that skipped its state write and was logged as a success.
-ExecStart=/bin/bash -lc 'F=/root/ecosystem/agents/ace/state/bankroll.json; \
-B=$(stat -c %%Y "$F" 2>/dev/null || echo 0); \
-/usr/bin/openclaw agent --agent ace --message "scheduled cycle" --session-id "wake-ace-$(date +%%s)" --timeout 600 --json; \
-A=$(stat -c %%Y "$F" 2>/dev/null || echo 0); \
-if [ "$A" -le "$B" ]; then echo "ACE WROTE NOTHING: $F unchanged - the cycle did not update state"; exit 1; fi; \
-echo "ace updated state ok"'
+# The work is in scripts/ace-cycle.sh: seed the bankroll if it is missing,
+# snapshot MEMORY.md and cycle_count, wake the agent with a fresh session id
+# (a reused one causes runaway loops), then run the verifier.
+#
+# The old guard here only checked that bankroll.json's mtime moved. That is
+# not enough. Ace ran a cycle in 23 seconds, reported no error, and wrote
+# nothing at all - and "wrote nothing" is indistinguishable from "correctly
+# passed on every game", which is what Ace is supposed to do most days.
+# The verifier names the missing deliverable instead.
+ExecStart=/root/ecosystem/scripts/ace-cycle.sh
 TimeoutStartSec=900
 StandardOutput=journal
 StandardError=journal

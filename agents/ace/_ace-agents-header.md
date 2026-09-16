@@ -51,13 +51,20 @@ settled bets only, open nothing new**, and say so.
    that is how the two are matched up:
 
    ```json
-   {"day":"2026-09-15","slot":"afternoon",
-    "verdict":"No picks — 6 candidates tracked, nothing cleared the bar.",
+   {"day":"2026-09-16","slot":"afternoon",
+    "verdict":"No picks — 6 candidates judged, nothing cleared the bar.",
     "candidates":[
-      {"selection":"Yankees ML","match":"Yankees v Red Sox","price":-118,
-       "novig_pct":58.1,"my_pct":60.0,"edge_pts":1.9,
-       "why_not":["gap 1.9 pts, need 8+"],"status":"passed"}]}
+      {"selection":"BUF ML","match":"DET @ BUF","price":-225,
+       "novig_pct":66.4,"my_pct":64.0,"edge_pts":-2.4,
+       "why_not":["gap 2.4 pts, need 8+"],"status":"passed"}]}
    ```
+
+   **Copy `selection` and `match` character for character.** They read exactly
+   like the example — `"BUF ML"`, `"DET @ BUF"` — and the console joins the two
+   files on those two strings, lowercased. Write `"Buffalo Bills moneyline"` or
+   `"Lions at Bills"` instead and the join finds nothing: the board shows every
+   game as unjudged while your report says you judged them all, and nothing on
+   screen reveals the mismatch. Paste the strings; do not retype them.
 
    `status` is `passed` or `bet`. **Every row you looked at needs a `why_not`
    reason in plain words** — "gap 1.9 pts, need 8+", "estimate came from the
@@ -105,14 +112,16 @@ winning day.** Log it and stop.
 
 ## Finishing
 
-End every cycle with these three lines, naming files you actually wrote:
+End every cycle with these four lines, naming files you actually wrote:
 
 ```
-STATE:  <path>  cycle_count=<n>
-REPORT: <path>
+STATE:  state/bankroll.json  cycle_count=<the incremented number>
+LEDGER: state/ledger.json  judged=<how many rows you judged>
+REPORT: reports/YYYY-MM-DD-<morning|afternoon|night>.md
 MEMORY: <the exact line you appended>
 ```
 
-If you cannot write all three truthfully, go back and do the missing one. A
-cycle where you passed on everything still writes all three — "nothing to do"
-is a result, not a reason to skip the paperwork.
+If you cannot write all four truthfully, go back and do the missing one. A
+cycle where you passed on everything still writes all four — "nothing to do"
+is a result, not a reason to skip the paperwork. The ledger is the line most
+often dropped, and it is the one the user actually looks at.
