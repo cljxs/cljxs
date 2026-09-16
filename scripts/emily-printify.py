@@ -68,7 +68,20 @@ def token():
     return t
 
 
-def call(path, body=None, method=None):
+class ApiError(Exception):
+    def __init__(self, code, detail, path):
+        super().__init__(f"HTTP {code} on {path}: {detail}")
+        self.code, self.detail, self.path = code, detail, path
+
+
+def call(path, body=None, method=None, soft=False):
+    """soft=True raises ApiError instead of killing the process.
+
+    Every call used to sys.exit(1) on any HTTP error. That is right for a
+    one-shot command and wrong for a sweep: one stale product id returned 404
+    and took the whole `status` run with it, so the other builds were never
+    looked at and the output said nothing about which product had failed.
+    """
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
         API + path, data=data, method=method or ("POST" if data else "GET"),
@@ -80,7 +93,9 @@ def call(path, body=None, method=None):
             return json.loads(r.read() or b"{}")
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:400]
-        print(f"Printify returned HTTP {e.code}: {detail}", file=sys.stderr)
+        if soft:
+            raise ApiError(e.code, detail, path)
+        print(f"Printify returned HTTP {e.code} on {path}: {detail}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -374,7 +389,7 @@ def _live_state(shop_id, pid):
     at published:false while the product was on sale, and the gallery went on
     showing READY FOR REVIEW for something a customer could buy.
     """
-    prod = call(f"/shops/{shop_id}/products/{pid}.json")
+    prod = call(f"/shops/{shop_id}/products/{pid}.json", soft=True)
     ext = prod.get("external") or {}
     handle = ext.get("handle") or ""
     prices = sorted({v.get("price") for v in (prod.get("variants") or [])
@@ -400,6 +415,19 @@ def cmd_status(a):
         print("PRINTIFY_SHOP_ID is not set - run emily-printify.py check.", file=sys.stderr)
         sys.exit(2)
 
+    try:
+        shops = call("/shops.json", soft=True)
+        names = {str(x.get("id")): x.get("title") for x in shops}
+        if str(shop_id) not in names:
+            print(f"PRINTIFY_SHOP_ID={shop_id} is not one of your shops "
+                  f"({', '.join(f'{k} ({v})' for k, v in names.items()) or 'none connected'}).",
+                  file=sys.stderr)
+            sys.exit(2)
+        print(f"shop {shop_id} ({names[str(shop_id)]})\n")
+    except ApiError as exc:
+        print(f"cannot list shops: {exc}", file=sys.stderr)
+        sys.exit(1)
+
     if a.build_dir:
         dirs = [_resolve_build(a.build_dir)]
         if dirs[0] is None:
@@ -424,7 +452,19 @@ def cmd_status(a):
                   f"(run: emily-printify.py draft {d.name})")
             continue
 
-        live = _live_state(build.get("printify_shop_id") or shop_id, pid)
+        used_shop = build.get("printify_shop_id") or shop_id
+        try:
+            live = _live_state(used_shop, pid)
+        except ApiError as exc:
+            if exc.code == 404:
+                print(f"{d.name:<34} GONE   product {pid} is not in shop {used_shop}")
+                print(f"{'':<34}        it was deleted in Printify, or it belongs to a "
+                      f"different shop than PRINTIFY_SHOP_ID={shop_id}")
+                print(f"{'':<34}        re-create it with: "
+                      f"emily-printify.py draft {d.name}")
+            else:
+                print(f"{d.name:<34} ERROR  {exc}")
+            continue
         was = bool(build.get("published"))
         build.update({
             "published": live["published"],
