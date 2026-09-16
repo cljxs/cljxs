@@ -254,6 +254,62 @@ def cmd_pick(a):
     print("Drafts for this product type are now automatic.")
 
 
+def cmd_prices(a):
+    """Set a price per variant for a product type, once.
+
+    draft used a single price for every variant, so a five-size sticker went
+    up with the same number against every size. Sizes are priced differently;
+    that is the whole reason a listing has them.
+    """
+    cat = read_catalog()
+    entry = cat.get(a.product)
+    if not entry:
+        print(f"no catalogue entry for '{a.product}' yet. Choose the blueprint "
+              f"and provider first:\n\n  emily-printify.py suggest --product {a.product}\n",
+              file=sys.stderr)
+        sys.exit(2)
+
+    ids = entry.get("variant_ids") or []
+    titles = entry.get("variant_titles") or []
+    if not a.price:
+        print(f"'{a.product}' has {len(ids)} variant(s):\n")
+        current = entry.get("prices") or {}
+        for i, vid in enumerate(ids):
+            t = titles[i] if i < len(titles) else f"variant {vid}"
+            now = current.get(str(vid))
+            print(f"  {i+1:>2}. {t:<28} {('$%.2f' % (now/100)) if now else '(unset)'}")
+        print(f"\nSet them in that order:\n"
+              f"  emily-printify.py prices --product {a.product} "
+              f"{' '.join('0.00' for _ in ids)}")
+        return 0
+
+    if len(a.price) != len(ids):
+        print(f"'{a.product}' has {len(ids)} variants and you gave {len(a.price)} "
+              f"prices. One price per variant, in the order listed by:\n"
+              f"  emily-printify.py prices --product {a.product}", file=sys.stderr)
+        sys.exit(1)
+
+    prices = {}
+    for vid, dollars in zip(ids, a.price):
+        cents = int(round(float(dollars) * 100))
+        if cents < 100:
+            print(f"${float(dollars):.2f} is below $1.00 - that is almost certainly a "
+                  f"typo, and Printify's default is what we are trying to replace.",
+                  file=sys.stderr)
+            sys.exit(1)
+        prices[str(vid)] = cents
+
+    entry["prices"] = prices
+    entry["priced_at"] = _now()
+    cat[a.product] = entry
+    CATALOG.write_text(json.dumps(cat, indent=1) + "\n")
+    for i, vid in enumerate(ids):
+        t = titles[i] if i < len(titles) else f"variant {vid}"
+        print(f"  {t:<28} ${prices[str(vid)]/100:.2f}")
+    print(f"\nSaved. Every draft of '{a.product}' from now on uses these.")
+    return 0
+
+
 def cmd_draft(a):
     """Turn a finished build folder into an UNPUBLISHED Printify product.
 
@@ -312,8 +368,19 @@ def cmd_draft(a):
         sys.exit(1)
     print(f"  image {image_id}")
 
-    price_cents = int(round(float(listing.get("price_suggestion") or 0) * 100)) or 599
     variant_ids = cat["variant_ids"]
+
+    # Per-variant prices if they have been set for this product type, and a
+    # single fallback price if not. Sizes are priced differently - putting one
+    # number against all five was the bug this replaces.
+    saved = cat.get("prices") or {}
+    fallback = int(round(float(listing.get("price_suggestion") or 0) * 100)) or 599
+    price_of = {v: int(saved.get(str(v), fallback)) for v in variant_ids}
+    unset = [v for v in variant_ids if str(v) not in saved]
+    if unset:
+        print(f"note: {len(unset)} of {len(variant_ids)} variants have no price set, "
+              f"so they go up at ${fallback/100:.2f}. Set them properly with:\n"
+              f"  emily-printify.py prices --product {product_type}")
 
     spec = {
         "title": str(listing.get("title") or d.name)[:140],
@@ -321,7 +388,7 @@ def cmd_draft(a):
         "tags": [str(t)[:20] for t in (listing.get("tags") or [])][:13],
         "blueprint_id": cat["blueprint_id"],
         "print_provider_id": cat["provider_id"],
-        "variants": [{"id": v, "price": price_cents, "is_enabled": True} for v in variant_ids],
+        "variants": [{"id": v, "price": price_of[v], "is_enabled": True} for v in variant_ids],
         "print_areas": [{
             "variant_ids": variant_ids,
             "placeholders": [{
@@ -331,8 +398,9 @@ def cmd_draft(a):
         }],
     }
 
-    print(f"creating the product ({len(variant_ids)} variants at "
-          f"${price_cents/100:.2f}) ...")
+    lo, hi = min(price_of.values()), max(price_of.values())
+    span = f"${lo/100:.2f}" + (f"-${hi/100:.2f}" if hi != lo else "")
+    print(f"creating the product ({len(variant_ids)} variants at {span}) ...")
     res = call(f"/shops/{shop_id}/products.json", spec)
     pid = res.get("id")
     url = f"https://printify.com/app/store/products/{pid}" if pid else None
@@ -346,7 +414,8 @@ def cmd_draft(a):
     # does not lose the first product's id.
     drafts = build.get("printify_drafts") or []
     drafts.append({"product_type": product_type, "product_id": pid, "url": url,
-                   "price": price_cents / 100, "drafted_at": _now()})
+                   "price_low": lo / 100, "price_high": hi / 100,
+                   "drafted_at": _now()})
     build["printify_drafts"] = drafts
     build.update({
         "status": "ready_for_review",
@@ -524,6 +593,9 @@ def main():
     p.add_argument("--blueprint", required=True); p.add_argument("--provider", required=True)
     p.add_argument("--variants", default=""); p.add_argument("--limit", type=int, default=12)
     p.set_defaults(fn=cmd_pick)
+
+    p = sub.add_parser("prices"); p.add_argument("--product", required=True)
+    p.add_argument("price", nargs="*"); p.set_defaults(fn=cmd_prices)
 
     p = sub.add_parser("status"); p.add_argument("build_dir", nargs="?")
     p.set_defaults(fn=cmd_status)
