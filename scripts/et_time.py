@@ -1,5 +1,5 @@
 """
-ace_time.py — the Eastern clock, in one place.
+et_time.py — the Eastern clock and the wake slots, in one place.
 
 Ace named a report `2026-09-16-afternoon.md` for a wake that happened at
 23:31 Eastern on 2026-09-15. Both halves were wrong, and both are what you
@@ -10,6 +10,10 @@ Slots and dates are deterministic. Neither is a judgement call, so neither
 belongs to a language model. The fetcher writes both into candidates.json
 and Ace reads them; the verifier imports the same two functions, so the name
 it demands and the name Ace is handed can never disagree.
+
+It happened a second time, to a different agent: Belfort filed its 09:35 ET
+open as `2026-09-16-close.md`. Same cause - 09:35 ET is 13:35 UTC, which looks
+like the afternoon. Hence the shared module rather than a per-agent copy.
 
 Underscored filename so it is importable - the scripts around it have
 hyphens and cannot be.
@@ -44,14 +48,27 @@ def day(now=None):
     return (now or eastern_now()).strftime("%Y-%m-%d")
 
 
-def slot(now=None):
-    """Which of the three wakes this is: 09:00, 15:00 or 23:30 ET."""
+# Each agent's wakes, as (hour it stops applying, what that slot is called).
+# Boundaries sit hours away from every actual wake, so an hour of drift in the
+# fallback offset can never select the wrong one.
+ACE = ((12, "morning"), (20, "afternoon"), (24, "night"))       # 09:00 15:00 23:30
+BELFORT = ((12, "open"), (24, "close"))                          # 09:35 15:55
+
+SLOTS = {"ace": ACE, "belfort": BELFORT}
+
+
+def slot(schedule, now=None):
+    """Which wake this is. `schedule` is one of the tuples above, or an agent
+    name."""
+    if isinstance(schedule, str):
+        schedule = SLOTS[schedule]
     h = (now or eastern_now()).hour
-    if h < 12:
-        return "morning"
-    return "afternoon" if h < 20 else "night"
+    for cutoff, name in schedule:
+        if h < cutoff:
+            return name
+    return schedule[-1][1]
 
 
-def report_name(now=None):
+def report_name(schedule, now=None):
     now = now or eastern_now()
-    return f"{day(now)}-{slot(now)}.md"
+    return f"{day(now)}-{slot(schedule, now)}.md"

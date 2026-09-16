@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import ace_time  # noqa: E402
+import et_time  # noqa: E402
 
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
 DATA = ROOT / "agents" / "ace" / "data"
@@ -325,10 +325,10 @@ def main():
 
     # Eastern, not UTC. A 23:30 ET wake happens on the next UTC day, and
     # using that date filed a report under tomorrow's name.
-    now_et = ace_time.eastern_now()
+    now_et = et_time.eastern_now()
     (DATA / "candidates.json").write_text(
-        json.dumps(build_ledger(ace_time.day(now_et), CTX,
-                                ace_time.slot(now_et)), indent=1) + "\n")
+        json.dumps(build_ledger(et_time.day(now_et), CTX,
+                                et_time.slot("ace", now_et)), indent=1) + "\n")
 
     (DATA / "slate.json").write_text(json.dumps({
         "asof_utc": started.strftime("%Y-%m-%d %H:%M:%S"),
@@ -345,9 +345,9 @@ def main():
     (DATA / "_meta.json").write_text(json.dumps({
         "asof_utc": started.strftime("%Y-%m-%d %H:%M:%S"),
         "sports_in_season": season,
-        "day_et": ace_time.day(now_et),
-        "slot": ace_time.slot(now_et),
-        "report_name": ace_time.report_name(now_et),
+        "day_et": et_time.day(now_et),
+        "slot": et_time.slot("ace", now_et),
+        "report_name": et_time.report_name("ace", now_et),
         "games_on_slate": len(slate),
         "context_files_written": deep_written,
         "failures": failures,

@@ -10,7 +10,7 @@ You record decisions in a JSON file.
 | `data/candidates.json` | names that already passed trend + RSI + MACD screens |
 | `data/quotes.json` | price, SMA20, SMA50, RSI14, MACD for all 30 names |
 | `data/news.json` | recent headlines |
-| `data/_meta.json` | when data was fetched, what failed |
+| `data/_meta.json` | when data was fetched, what failed, this wake's `report_name` |
 | `state/portfolio.json` | your cash, positions, trades, cycle count — **read-only to you**, see below |
 
 **If a number is not in a data file, you do not cite it.** Never estimate a
@@ -63,9 +63,12 @@ and do not write that file by hand even to "fix" it.
    state three days stale; had a stop fired, the close would have existed only
    in prose and the next cycle would have marked to market against a position
    already sold.
-5. **Write the report**, named for the slot you are actually in: the 09:35 ET
-   wake is `reports/YYYY-MM-DD-open.md`, the 15:55 ET wake is `-close.md`.
-   Check the clock; a 09:35 run was filed as `-close` once.
+5. **Write the report.** `data/_meta.json` gives you its exact filename in
+   `report_name` — use that string, do not work it out.
+
+   Do not check a clock for this. The clock you can see reads UTC, and the
+   09:35 ET open is 13:35 UTC, which looks like the afternoon: that run was
+   filed as `2026-09-16-close.md` when it was the open.
 6. **Append ONE short line** to `MEMORY.md`. Trim oldest lines past ~2KB.
 
 ## Exit rules — checked every cycle

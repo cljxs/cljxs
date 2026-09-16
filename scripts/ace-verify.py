@@ -32,7 +32,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 # Same two functions the fetcher uses, so the name this demands and the
 # name Ace was handed can never disagree.
-from ace_time import eastern_now, slot  # noqa: E402
+import et_time  # noqa: E402
+from et_time import eastern_now  # noqa: E402
 
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
 AGENT = ROOT / "agents" / "ace"
@@ -194,7 +195,7 @@ def main():
 
     check_ledger(problems, notes, started)
 
-    day, want = eastern_now().strftime("%Y-%m-%d"), slot()
+    day, want = eastern_now().strftime("%Y-%m-%d"), et_time.slot("ace")
     report = AGENT / "reports" / f"{day}-{want}.md"
     if not report.exists():
         others = sorted(x.name for x in (AGENT / "reports").glob(f"{day}-*.md")) \

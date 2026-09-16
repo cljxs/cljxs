@@ -29,6 +29,9 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import et_time  # noqa: E402
+from et_time import eastern_now  # noqa: E402
 
 
 def _shared(name):
@@ -52,20 +55,6 @@ STATE = AGENT / "state" / "portfolio.json"
 # A cent of slack for float rounding across many trades. Anything larger is
 # not rounding, it is a missing entry.
 TOLERANCE = 0.01
-
-
-def eastern_now():
-    """US market clock without a tz library. Eastern is UTC-4 or UTC-5; -4
-    matches the months this runs in, and the slot check below is wide enough
-    that an hour either way cannot pick the wrong one."""
-    return datetime.now(timezone.utc) - timedelta(hours=4)
-
-
-def slot():
-    """Which wake is this? 09:35 ET is the open, 15:55 ET is the close.
-    A 09:35 run was once filed as `-close`, which is why the verifier picks
-    the name rather than trusting the report to."""
-    return "open" if eastern_now().hour < 12 else "close"
 
 
 def num(v, default=0.0):
@@ -132,7 +121,7 @@ def main():
                         "cycle started - this run did not touch it")
 
     day = eastern_now().strftime("%Y-%m-%d")
-    want = slot()
+    want = et_time.slot("belfort")
     report = AGENT / "reports" / f"{day}-{want}.md"
     if not report.exists():
         others = sorted(x.name for x in (AGENT / "reports").glob(f"{day}-*.md")) \

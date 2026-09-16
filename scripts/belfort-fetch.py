@@ -20,6 +20,9 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import et_time  # noqa: E402
+
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
 DATA_DIR = ROOT / "agents" / "belfort" / "data"
 
@@ -234,8 +237,14 @@ def main():
         "headlines": news,
     }, indent=1) + "\n")
 
+    # Eastern, not UTC. The 09:35 ET open is 13:35 UTC, which looks like the
+    # afternoon - and that is exactly how it got filed as `-close.md`.
+    now_et = et_time.eastern_now()
     (DATA_DIR / "_meta.json").write_text(json.dumps({
         "asof_utc": started.strftime("%Y-%m-%d %H:%M:%S"),
+        "day_et": et_time.day(now_et),
+        "slot": et_time.slot("belfort", now_et),
+        "report_name": et_time.report_name("belfort", now_et),
         "universe_size": len(UNIVERSE),
         "fetched_ok": len(quotes),
         "failed": failures,
