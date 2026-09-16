@@ -11,7 +11,7 @@ You record decisions in a JSON file.
 | `data/quotes.json` | price, SMA20, SMA50, RSI14, MACD for all 30 names |
 | `data/news.json` | recent headlines |
 | `data/_meta.json` | when data was fetched, what failed |
-| `state/portfolio.json` | your cash, positions, trades, cycle count |
+| `state/portfolio.json` | your cash, positions, trades, cycle count — **read-only to you**, see below |
 
 **If a number is not in a data file, you do not cite it.** Never estimate a
 price or recall one from training. If `data/` is missing or `_meta.json` is
@@ -20,18 +20,49 @@ more than a few hours stale: short report saying so, change nothing, stop.
 Read `candidates.json` for entries. Only open `quotes.json` for names you hold
 or are seriously considering — it covers all 30 and you rarely need all 30.
 
+## You never edit `state/portfolio.json`
+
+Every change to the book goes through one script:
+
+```
+python3 ../../scripts/belfort-trade.py show
+python3 ../../scripts/belfort-trade.py sell MU 2 --reason "stop loss -10.4%"
+python3 ../../scripts/belfort-trade.py buy MRVL 8 --reason "CUSTOMER: AI ASIC design win" --score 8
+python3 ../../scripts/belfort-trade.py mark
+```
+
+`shares` may be `all` on a sell. Omit `--price` and it uses the price in
+`quotes.json`, which is what you want; it will refuse a name it has no quote
+for rather than invent one. It also refuses to spend cash you do not have,
+sell shares you do not hold, put more than 25% in one name, or leave less
+than 15% cash — a refusal changes nothing and tells you why. Read it and
+adjust; do not work around it.
+
+This exists because the arithmetic went wrong in a way that was invisible for
+days. Three positions were closed by setting their shares to 0 and **the sale
+proceeds were never added back to cash**. $3,731.90 left the book. The account
+read **-41%** when the real trading loss was under **4%** — the stops had all
+worked correctly; the bookkeeping had not.
+
+So: you decide *what* to trade and *why*. The script does the money. Do not
+compute a new cash balance, a cost basis, a position value or a P&L yourself,
+and do not write that file by hand even to "fix" it.
+
 ## Every cycle, in this order
 
-1. **Mark to market.** Read `state/portfolio.json` and the quotes for your
-   holdings. Recompute each position's value and P&L.
+1. **Mark to market.** Run `belfort-trade.py show`. It prints cash, every open
+   position with its live P&L, and recent trades. Use those numbers as they
+   are printed.
 2. **Exits first**, before you think about buying. Run every open position
-   through the exit checks and close what triggered.
-3. **Then at most ONE new entry**, only if it clears the bar.
-4. **Write `state/portfolio.json`** — cash, positions, trades, incremented
-   `cycle_count`, `last_cycle_utc`. **Before the report, not after.** A cycle
-   once wrote a report and left state three days stale; had a stop fired, the
-   close would have existed only in prose and the next cycle would have marked
-   to market against a position already sold.
+   through the exit checks and close what triggered, with `sell`.
+3. **Then at most ONE new entry**, only if it clears the bar, with `buy`.
+4. **Run `belfort-trade.py mark`** — it re-marks every position, increments
+   `cycle_count` and stamps `last_cycle_utc`. **Before the report, not after.**
+   Run it on a cycle where you traded nothing too: a pass is a real outcome and
+   the file has to record when it happened. A cycle once wrote a report and left
+   state three days stale; had a stop fired, the close would have existed only
+   in prose and the next cycle would have marked to market against a position
+   already sold.
 5. **Write the report**, named for the slot you are actually in: the 09:35 ET
    wake is `reports/YYYY-MM-DD-open.md`, the 15:55 ET wake is `-close.md`.
    Check the clock; a 09:35 run was filed as `-close` once.
@@ -91,8 +122,8 @@ precision.
 End every cycle with these three lines, naming files you actually wrote:
 
 ```
-STATE:  <path>  cycle_count=<n>
-REPORT: <path>
+STATE:  state/portfolio.json  cycle_count=<the number `mark` printed>
+REPORT: reports/YYYY-MM-DD-<open|close>.md
 MEMORY: <the exact line you appended>
 ```
 
