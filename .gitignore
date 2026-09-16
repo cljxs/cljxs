@@ -46,6 +46,7 @@ agents/emily/builds/*
 !agents/emily/builds/.gitkeep
 agents/emily/reports/*
 !agents/emily/reports/.gitkeep
+agents/emily/state/printify-catalog.json
 agents/emily/MEMORY.md
 agents/emily/state/lessons.md
 

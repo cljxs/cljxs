@@ -223,7 +223,42 @@ def reap_finished(conn):
             record_event(conn, task_id, "agent_exit", f"exit code {code}, task status {status}")
             log(f"task #{task_id} ({agent}) finished, status={status}")
             if status == "done":
+                finish_completed(conn, task_id, agent)
                 verify_completed(conn, task_id, agent)
+
+
+def finish_completed(conn, task_id, agent):
+    """Let an agent ship a no-AI finishing step that runs before verification.
+
+    Some of what a task needs is mechanical once the agent has done the part
+    that needs judgement - Emily writes the listing copy, and turning that into
+    a Printify draft is three fixed API calls with no decisions in them. Agents
+    skip exactly that kind of work, so it moves here.
+
+    A finisher never fails a task: it runs, it says what happened, and the
+    verifier still has the last word on whether the result is real.
+    """
+    script = ROOT / "scripts" / f"{agent}-finish.py"
+    if not script.is_file():
+        return
+    row = conn.execute("SELECT payload FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    try:
+        payload = json.loads(row["payload"]) if row and row["payload"] else {}
+    except Exception:
+        payload = {}
+    target = payload.get("build_dir") or payload.get("slug")
+    if not target:
+        return
+    try:
+        res = subprocess.run([sys.executable, str(script), str(target)],
+                             cwd=str(ROOT), capture_output=True, text=True, timeout=330)
+    except Exception as exc:
+        log(f"task #{task_id} ({agent}) finisher could not run: {exc}")
+        return
+    out = ((res.stdout or "") + (res.stderr or "")).strip()
+    if out:
+        log(f"task #{task_id} ({agent}) finisher:\n{out[-1500:]}")
+    record_event(conn, task_id, "finished_step", out[:500])
 
 
 def verify_completed(conn, task_id, agent):

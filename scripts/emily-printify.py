@@ -16,6 +16,11 @@ Subcommands:
   upload     <file>             upload artwork, returns an image id
   create     --spec spec.json   create the product, UNPUBLISHED
 
+  suggest --product sticker     find candidate blueprints for a product type
+  pick --product sticker \\        remember a blueprint/provider once, by hand
+       --blueprint 123 --provider 45
+  draft builds/<slug>           build folder -> UNPUBLISHED product, no judgement
+
 Standard library only.
 """
 
@@ -26,7 +31,12 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
+
+
+def _now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 API = "https://api.printify.com/v1"
 
@@ -140,6 +150,187 @@ def cmd_create(a):
     }, indent=2))
 
 
+# ---------------------------------------------------------------- catalogue
+#
+# Creating a Printify product is not one call. It needs a blueprint id, a print
+# provider for that blueprint, and the variant ids for the sizes you want -
+# three lookups before the create, each depending on the last. Emily skipped
+# the whole dance and wrote status "ready_local" instead, which is what a cheap
+# model does with multi-step tool work.
+#
+# So the choosing happens once, by a human, and is cached. After that a draft
+# is one command with no judgement in it.
+
+CATALOG = Path(__file__).resolve().parent.parent / "agents" / "emily" / "state" / "printify-catalog.json"
+
+
+def read_catalog():
+    try:
+        return json.loads(CATALOG.read_text())
+    except Exception:
+        return {}
+
+
+def cmd_suggest(a):
+    """Find candidate blueprints for a product type and show what to do next."""
+    bps = call("/catalog/blueprints.json")
+    term = (a.product or "").lower()
+    hits = [b for b in bps if term in b.get("title", "").lower()]
+    if not hits:
+        hits = [b for b in bps if term.rstrip("s") in b.get("title", "").lower()]
+    if not hits:
+        print(f"nothing in the catalogue matches '{a.product}'. "
+              f"Try: blueprints --search <word>")
+        return
+    print(f"Blueprints matching '{a.product}':\n")
+    for b in hits[:a.limit]:
+        print(f"  blueprint {b['id']:>6}  {b['title']}")
+    first = hits[0]
+    print(f"\nPick one, then find a print provider for it:")
+    print(f"  emily-printify.py providers {first['id']}")
+    print(f"\nThen save the pair (it is remembered, you only do this once):")
+    print(f"  emily-printify.py pick --product {a.product} "
+          f"--blueprint {first['id']} --provider <provider_id>")
+
+
+def cmd_pick(a):
+    """Save the blueprint/provider/variants for a product type, once."""
+    variants = call(f"/catalog/blueprints/{a.blueprint}/print_providers/{a.provider}/variants.json")
+    all_v = variants.get("variants") or []
+    if not all_v:
+        print("that blueprint/provider pair has no variants - check the ids.", file=sys.stderr)
+        sys.exit(1)
+
+    if a.variants:
+        wanted = [int(v) for v in a.variants.split(",")]
+        chosen = [v for v in all_v if v["id"] in wanted]
+        if not chosen:
+            print(f"none of {wanted} are variants of this product.", file=sys.stderr)
+            sys.exit(1)
+    else:
+        # Default to every variant. For a sticker that is the size range, which
+        # is what you want on a listing; trim it later with --variants if not.
+        chosen = all_v[:a.limit]
+
+    cat = read_catalog()
+    cat[a.product] = {
+        "blueprint_id": int(a.blueprint),
+        "provider_id": int(a.provider),
+        "variant_ids": [v["id"] for v in chosen],
+        "variant_titles": [v.get("title") for v in chosen][:12],
+        "chosen_at": _now(),
+    }
+    CATALOG.parent.mkdir(parents=True, exist_ok=True)
+    CATALOG.write_text(json.dumps(cat, indent=1) + "\n")
+    print(f"saved '{a.product}' -> blueprint {a.blueprint}, provider {a.provider}, "
+          f"{len(chosen)} variant(s)")
+    for t in cat[a.product]["variant_titles"]:
+        print(f"    {t}")
+    print(f"\nWritten to {CATALOG}")
+    print("Drafts for this product type are now automatic.")
+
+
+def cmd_draft(a):
+    """Turn a finished build folder into an UNPUBLISHED Printify product.
+
+    Everything here is mechanical: the listing copy and the artwork already
+    exist on disk, and the blueprint/provider/variants were chosen once. There
+    is no judgement left, which is exactly why it should not be an agent's job.
+    """
+    here = Path(__file__).resolve().parent.parent
+    d = Path(a.build_dir)
+    if not d.is_absolute():
+        for base in (here / "agents" / "emily", here):
+            if (base / a.build_dir).is_dir():
+                d = base / a.build_dir
+                break
+    if not d.is_dir():
+        print(f"no such build folder: {a.build_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        listing = json.loads((d / "listing.json").read_text())
+    except Exception as exc:
+        print(f"cannot read {d/'listing.json'}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    design = d / "design.png"
+    if not design.is_file() or design.stat().st_size < 2000:
+        print(f"{design} is missing or too small to be artwork "
+              f"({design.stat().st_size if design.is_file() else 0} bytes).", file=sys.stderr)
+        sys.exit(1)
+
+    product_type = (listing.get("product_type") or a.product or "sticker").lower()
+    cat = read_catalog().get(product_type)
+    if not cat:
+        print(f"no catalogue entry for '{product_type}'. Choose one once:\n\n"
+              f"  emily-printify.py suggest --product {product_type}\n",
+              file=sys.stderr)
+        sys.exit(2)
+
+    shop_id = os.environ.get("PRINTIFY_SHOP_ID")
+    if not shop_id:
+        print("PRINTIFY_SHOP_ID is not set - run emily-printify.py check.", file=sys.stderr)
+        sys.exit(2)
+
+    print(f"uploading {design.name} ({design.stat().st_size // 1024} KB) ...")
+    up = call("/uploads/images.json", {
+        "file_name": f"{d.name}.png",
+        "contents": base64.b64encode(design.read_bytes()).decode(),
+    })
+    image_id = up.get("id")
+    if not image_id:
+        print(f"upload returned no image id: {up}", file=sys.stderr)
+        sys.exit(1)
+    print(f"  image {image_id}")
+
+    price_cents = int(round(float(listing.get("price_suggestion") or 0) * 100)) or 599
+    variant_ids = cat["variant_ids"]
+
+    spec = {
+        "title": str(listing.get("title") or d.name)[:140],
+        "description": str(listing.get("description") or ""),
+        "tags": [str(t)[:20] for t in (listing.get("tags") or [])][:13],
+        "blueprint_id": cat["blueprint_id"],
+        "print_provider_id": cat["provider_id"],
+        "variants": [{"id": v, "price": price_cents, "is_enabled": True} for v in variant_ids],
+        "print_areas": [{
+            "variant_ids": variant_ids,
+            "placeholders": [{
+                "position": "front",
+                "images": [{"id": image_id, "x": 0.5, "y": 0.5, "scale": 1, "angle": 0}],
+            }],
+        }],
+    }
+
+    print(f"creating the product ({len(variant_ids)} variants at "
+          f"${price_cents/100:.2f}) ...")
+    res = call(f"/shops/{shop_id}/products.json", spec)
+    pid = res.get("id")
+    url = f"https://printify.com/app/store/products/{pid}" if pid else None
+
+    # Record it where the gallery and the verifier will see it.
+    try:
+        build = json.loads((d / "build.json").read_text())
+    except Exception:
+        build = {}
+    build.update({
+        "status": "ready_for_review",
+        "printify_product_id": pid,
+        "printify_url": url,
+        "printify_shop_id": shop_id,
+        "published": False,
+        "drafted_at": _now(),
+    })
+    (d / "build.json").write_text(json.dumps(build, indent=1) + "\n")
+
+    print(json.dumps({
+        "ok": True, "product_id": pid, "shop_id": shop_id, "published": False,
+        "review_at": url,
+        "note": "Created UNPUBLISHED. Review it in Printify, then publish by hand.",
+    }, indent=2))
+
+
 def main():
     ap = argparse.ArgumentParser(description="Emily's Printify hands (no publish command by design)")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -158,6 +349,17 @@ def main():
     p.set_defaults(fn=cmd_upload)
 
     p = sub.add_parser("create"); p.add_argument("--spec", required=True); p.set_defaults(fn=cmd_create)
+
+    p = sub.add_parser("suggest"); p.add_argument("--product", required=True)
+    p.add_argument("--limit", type=int, default=15); p.set_defaults(fn=cmd_suggest)
+
+    p = sub.add_parser("pick"); p.add_argument("--product", required=True)
+    p.add_argument("--blueprint", required=True); p.add_argument("--provider", required=True)
+    p.add_argument("--variants", default=""); p.add_argument("--limit", type=int, default=12)
+    p.set_defaults(fn=cmd_pick)
+
+    p = sub.add_parser("draft"); p.add_argument("build_dir")
+    p.add_argument("--product", default=""); p.set_defaults(fn=cmd_draft)
 
     a = ap.parse_args()
     return a.fn(a) or 0

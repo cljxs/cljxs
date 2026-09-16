@@ -73,22 +73,24 @@ result — do not guess at what to build.
 3. **Write the listing copy** to `builds/<slug>/listing.json`:
    `title` (≤140 chars), `description`, `tags` (13 max, ≤20 chars each),
    `materials`, `price_suggestion`, `product_type`.
-4. **Create the Printify product, UNPUBLISHED** — only if
-   `state/credentials.env` has `PRINTIFY_API_TOKEN`. If it does not, build
-   everything locally and mark the build `ready_local`, not `ready_for_review`.
+4. **Do NOT touch Printify.** The draft is created for you, by plain code,
+   after you finish — `emily-finish.py` reads the listing and the artwork you
+   left on disk and creates the product UNPUBLISHED. You do not need a
+   blueprint id, a print provider or variant ids, and you should not go
+   looking for them.
 
-   ```
-   python3 ../../scripts/emily-printify.py upload builds/<slug>/design.png
-   python3 ../../scripts/emily-printify.py create --spec builds/<slug>/printify.json
-   ```
+   A run of yours was asked to do this, skipped it, and wrote `ready_local`
+   instead. So it moved out of your hands. Your job is the part that needs
+   judgement: the art direction and the listing copy. Get those right and the
+   rest is mechanical.
 
-   That tool has **no publish command**. You cannot publish, by design. The
-   Etsy listing is created when the user presses Publish in Printify, which
-   pushes to their connected Etsy shop. Do not look for another way to do it
-   and do not ask the user to give you one.
+   You cannot publish, by design — the tool has no publish command. The Etsy
+   listing appears when the user presses Publish in Printify. Do not look for
+   another way and do not ask them for one.
 5. **Write `builds/<slug>/build.json`** with `status`, every file produced and
-   its byte count, whether art was generated or placeholder, and any IP
-   substitutions made.
+   its real byte count, and whether the art was generated or a placeholder.
+   Set `status` to `ready_local`; the finisher changes it to
+   `ready_for_review` once the Printify draft exists.
 6. **Write the report** to `reports/YYYY-MM-DD-<slug>.md` in plain English:
    what you made, the economics, what needs the user's eye before publishing.
 7. **Append ONE line** to `MEMORY.md`. Trim it if it passes ~2KB.
