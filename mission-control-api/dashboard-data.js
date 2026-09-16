@@ -99,6 +99,22 @@ function readPortfolio(agentDir) {
   return p;
 }
 
+// The file an agent touches on EVERY run, including one that deliberately
+// produces nothing else. Checked by mtime because its contents are a one-line
+// summary, not a timestamp.
+const HEARTBEATS = ['state/last-run.txt', 'state/.cycle-started', 'state/last_run.txt'];
+
+function heartbeatAt(agentDir) {
+  let newest = null;
+  for (const rel of HEARTBEATS) {
+    try {
+      const st = fs.statSync(path.join(agentDir, rel));
+      if (!newest || st.mtimeMs > newest) newest = st.mtimeMs;
+    } catch { /* not every agent keeps one */ }
+  }
+  return newest ? new Date(newest).toISOString() : null;
+}
+
 function markToMarket(agentDir, portfolio) {
   const quotes = readJson(path.join(agentDir, 'data', 'quotes.json'));
   const priceOf = sym => {
@@ -152,7 +168,14 @@ function buildAgent(name) {
   const stateRun = portfolio && firstOf(portfolio, ['last_cycle_utc', 'last_run', 'updated_at'], null);
   const stateAge = minutesSince(stateRun);
   const reportAge = minutesSince(report.when);
-  const candidates = [[stateAge, stateRun], [reportAge, report.when]]
+  // Some agents write a report only when they have something to say. Scout is
+  // told to propose nothing when ideas are already piling up, and such a run
+  // writes state/last-run.txt and nothing else - so the two sources above both
+  // pointed at yesterday and the dashboard called a correct pass "1d ago".
+  // The heartbeat file is the one thing every run touches.
+  const beat = heartbeatAt(dir);
+  const beatAge = minutesSince(beat);
+  const candidates = [[stateAge, stateRun], [reportAge, report.when], [beatAge, beat]]
     .filter(([age]) => age !== null)
     .sort((a, b) => a[0] - b[0]);
   const lastRun = candidates.length ? candidates[0][1] : null;
