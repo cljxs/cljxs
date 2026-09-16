@@ -47,11 +47,21 @@ function minutesSince(iso) {
   return Math.max(0, Math.round((Date.now() - t) / 60000));
 }
 
+// A folder containing a RETIRED file is an agent that has been stood down.
+// The folder stays - instructions, reports and history are worth keeping - but
+// it gets no card here and no house in the village. Deleting the file brings
+// it back, which beats editing a hardcoded list in two files and forgetting one.
+function isRetired(name) {
+  try { return fs.statSync(path.join(AGENTS_DIR, name, 'RETIRED')).isFile(); }
+  catch { return false; }
+}
+
 function listAgents() {
   try {
     return fs.readdirSync(AGENTS_DIR, { withFileTypes: true })
       .filter(d => d.isDirectory() && !d.name.startsWith('.'))
       .map(d => d.name)
+      .filter(n => !isRetired(n))
       .sort();
   } catch { return []; }
 }

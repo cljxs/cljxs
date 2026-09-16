@@ -1,0 +1,10 @@
+Timmy is retired. The fund-analyst agent was removed on 2026-09-16: the spec
+called for three GPT-4o wakes a trading day, which measured out at $2.24/day,
+and the reports were not worth that next to Belfort's.
+
+The presence of this file is what retires him. dashboard-data.js skips any
+agent folder containing one, so he keeps no house in the village and no card
+on the Command Deck, while his instructions, reports and history stay on disk
+for reference.
+
+To bring an agent back, delete this file and re-enable its timers.
