@@ -23,7 +23,11 @@ Register FIRST — `openclaw agents add` seeds `AGENTS.md`, so Emily's
 instructions merge in afterwards. **No systemd timer**: that is deliberate.
 
     openclaw agents add emily --workspace /root/ecosystem/agents/emily --non-interactive
-    cd /root/ecosystem/agents/emily && cat _emily-agents-header.md AGENTS.md > .a && mv .a AGENTS.md
+    # merge the instructions on top of the seeded AGENTS.md.
+    # Re-runnable: it REBUILDS AGENTS.md rather than prepending, so editing the
+    # header and running it again does not leave two copies of every rule.
+    # The first run on an already-merged file shows you the seam and asks.
+    /root/ecosystem/scripts/merge-header.sh emily
     cp -n /root/ecosystem/agents/emily/MEMORY.seed.md /root/ecosystem/agents/emily/MEMORY.md
     cp -n /root/ecosystem/agents/emily/state/lessons.seed.md /root/ecosystem/agents/emily/state/lessons.md
     openclaw models auth paste-api-key --provider openrouter --agent emily

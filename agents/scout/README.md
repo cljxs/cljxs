@@ -12,7 +12,11 @@ Two gates, both yours. Scout writes into `state/ideas.json` with
 ## Install
 
     openclaw agents add scout --workspace /root/ecosystem/agents/scout --non-interactive
-    cd /root/ecosystem/agents/scout && cat _scout-agents-header.md AGENTS.md > .a && mv .a AGENTS.md
+    # merge the instructions on top of the seeded AGENTS.md.
+    # Re-runnable: it REBUILDS AGENTS.md rather than prepending, so editing the
+    # header and running it again does not leave two copies of every rule.
+    # The first run on an already-merged file shows you the seam and asks.
+    /root/ecosystem/scripts/merge-header.sh scout
     cp -n /root/ecosystem/agents/scout/MEMORY.seed.md /root/ecosystem/agents/scout/MEMORY.md
     cp -n /root/ecosystem/agents/scout/state/ideas.seed.json /root/ecosystem/agents/scout/state/ideas.json
     openclaw models auth paste-api-key --provider openrouter --agent scout

@@ -11,8 +11,11 @@ Run these in order. Registering FIRST matters: `openclaw agents add` seeds
     # 1. register the agent, pointing its workspace at this folder
     openclaw agents add belfort --workspace /root/ecosystem/agents/belfort --non-interactive
 
-    # 2. merge Belfort's instructions on TOP of the seeded AGENTS.md
-    cd /root/ecosystem/agents/belfort && cat _belfort-agents-header.md AGENTS.md > .a && mv .a AGENTS.md
+    # 2. merge the instructions on top of the seeded AGENTS.md.
+    # Re-runnable: it REBUILDS AGENTS.md rather than prepending, so editing the
+    # header and running it again does not leave two copies of every rule.
+    # The first run on an already-merged file shows you the seam and asks.
+    /root/ecosystem/scripts/merge-header.sh belfort
 
     # 3. seed runtime state (cp -n never overwrites an existing live file)
     cp -n /root/ecosystem/agents/belfort/state/portfolio.seed.json /root/ecosystem/agents/belfort/state/portfolio.json
