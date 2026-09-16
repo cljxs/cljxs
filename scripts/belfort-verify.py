@@ -29,6 +29,22 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+
+
+def _shared(name):
+    """belfort-trade.py has a hyphen in its name, so it cannot be imported by
+    the normal statement. Load it by path instead - the point is that the
+    balance identity has exactly one implementation."""
+    import importlib.util
+    path = Path(__file__).resolve().parent / "belfort-trade.py"
+    spec = importlib.util.spec_from_file_location("belfort_trade", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return getattr(mod, name)
+
+
+book_gap = _shared("book_gap")
+
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
 AGENT = ROOT / "agents" / "belfort"
 STATE = AGENT / "state" / "portfolio.json"
@@ -60,26 +76,17 @@ def num(v, default=0.0):
 
 
 def reconcile(p, problems):
-    """Cash is a closed system. Prove it."""
-    bought = sold = 0.0
-    for t in p.get("trades", []):
-        side = str(t.get("side", "")).upper()
-        notional = num(t.get("notional"), None)
-        if notional is None:
-            notional = num(t.get("shares")) * num(t.get("price"))
-        if side == "BUY":
-            bought += notional
-        elif side == "SELL":
-            sold += notional
-        else:
-            problems.append(f"trade with no recognisable side: {t!r}")
+    """Cash is a closed system. Prove it.
 
-    start = num(p.get("starting_cash"), 10000.0)
-    expected = start - bought + sold
-    actual = num(p.get("cash"))
-    gap = actual - expected
+    The identity itself lives in belfort-trade.py and is imported, not
+    restated: two copies of this formula that drifted apart would be worse
+    than no check, because one of them would go on reporting fine."""
+    gap, bought, sold, expected, actual, unknown = book_gap(p)
+    for t in unknown:
+        problems.append(f"trade with no recognisable side: {t!r}")
 
     if abs(gap) > TOLERANCE:
+        start = num(p.get("starting_cash"), 10000.0)
         problems.append(
             f"THE BOOK DOES NOT BALANCE. starting ${start:,.2f} - bought "
             f"${bought:,.2f} + sold ${sold:,.2f} = ${expected:,.2f}, but cash "

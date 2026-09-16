@@ -69,6 +69,48 @@ def last_price(symbol, fallback=None):
         return fallback
 
 
+def book_gap(p):
+    """Cash is a closed system:  starting - bought + sold == cash.
+
+    Returns (gap, bought, sold, expected, actual). belfort-verify.py imports
+    this rather than restating the formula - two copies that disagree would be
+    worse than no check at all, because one of them would keep saying fine.
+    """
+    bought = sold = 0.0
+    unknown = []
+    for t in p.get("trades", []):
+        side = str(t.get("side", "")).upper()
+        notional = t.get("notional")
+        notional = float(notional) if notional is not None else (
+            float(t.get("shares") or 0) * float(t.get("price") or 0))
+        if side == "BUY":
+            bought += notional
+        elif side == "SELL":
+            sold += notional
+        else:
+            unknown.append(t)
+    start = float(p.get("starting_cash") or 10000.0)
+    expected = start - bought + sold
+    actual = float(p.get("cash") or 0)
+    return actual - expected, bought, sold, expected, actual, unknown
+
+
+def cmd_check(a):
+    """Does the book balance? Exit 0 yes, 1 no. Meant for scripts."""
+    p = load()
+    gap, bought, sold, expected, actual, unknown = book_gap(p)
+    for t in unknown:
+        print(f"trade with no recognisable side: {t!r}", file=sys.stderr)
+    if abs(gap) <= 0.01 and not unknown:
+        print(f"book balances: ${float(p['starting_cash']):,.2f} - ${bought:,.2f} "
+              f"+ ${sold:,.2f} = ${actual:,.2f}")
+        return 0
+    print(f"BOOK DOES NOT BALANCE: expected ${expected:,.2f}, cash reads "
+          f"${actual:,.2f} - ${gap:+,.2f} "
+          f"{'invented' if gap > 0 else 'destroyed'}", file=sys.stderr)
+    return 1
+
+
 def position(p, symbol):
     for pos in p["positions"]:
         if pos.get("symbol", "").upper() == symbol.upper():
@@ -274,6 +316,7 @@ def main():
 
     sub.add_parser("show").set_defaults(fn=cmd_show)
     sub.add_parser("mark").set_defaults(fn=cmd_mark)
+    sub.add_parser("check").set_defaults(fn=cmd_check)
 
     r = sub.add_parser("reset")
     r.add_argument("--confirm", action="store_true")
