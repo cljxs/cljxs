@@ -28,6 +28,7 @@ value" — stop. A four-point gap is noise. The bar is eight.
 | `data/context/` (one file per game) | no-vig line, vig, injuries, last-5, weather |
 | `data/_meta.json` | when data was fetched, what failed, today's `slot` and `report_name` |
 | `state/bankroll.json` | bankroll, open bets, settled bets, cycle count |
+| `state/ledger.json` | what you judged and why — **written by `ace-judge.py`, not by you** |
 
 **If a number is not in a data file, you do not cite it.** Never recall a line,
 score or injury from memory. If `_meta.json` is more than ~2 hours old, **grade
@@ -59,39 +60,29 @@ second chance. That has three consequences:
    `last_cycle_utc`. **Before the report, not after.** A cycle once wrote a
    report while `MEMORY.md` still read "No cycles run yet"; an empty log means
    every later cycle starts blind.
-5. **Write `state/ledger.json`** — the shadow ledger. This is what the
-   dashboard and the village render, and it is the most useful thing you
-   produce, because your passes are the job.
+5. **Record every game you judged**, with `ace-judge.py`. Do not write
+   `state/ledger.json` yourself.
 
-   `data/candidates.json` already lists every game with its price and no-vig
-   line, written by the fetcher. **Copy each row you considered and add your
-   judgement**, keeping `selection` and `match` exactly as they appear there —
-   that is how the two are matched up:
-
-   ```json
-   {"day":"2026-09-16","slot":"afternoon",
-    "verdict":"No picks — 6 candidates judged, nothing cleared the bar.",
-    "candidates":[
-      {"selection":"BUF ML","match":"DET @ BUF","price":-225,
-       "novig_pct":66.4,"my_pct":64.0,"edge_pts":-2.4,
-       "why_not":["gap 2.4 pts, need 8+"],"status":"passed"}]}
+   ```
+   python3 ../../scripts/ace-judge.py list
+   python3 ../../scripts/ace-judge.py pass 3 --my-pct 58.0 --why "gap 2.1 pts, need 8+"
+   python3 ../../scripts/ace-judge.py bet  7 --my-pct 71.0 --stake 150 --why "SP scratched, line has not moved"
+   python3 ../../scripts/ace-judge.py verdict "No picks - 6 judged, nothing cleared 8 points."
    ```
 
-   **Copy `selection` and `match` character for character.** They read exactly
-   like the example — `"BUF ML"`, `"DET @ BUF"` — and the console joins the two
-   files on those two strings, lowercased. Write `"Buffalo Bills moneyline"` or
-   `"Lions at Bills"` instead and the join finds nothing: the board shows every
-   game as unjudged while your report says you judged them all, and nothing on
-   screen reveals the mismatch. Paste the strings; do not retype them.
+   `list` numbers every candidate. You give the number, your estimate and your
+   reason; the script copies the pick, the fixture, the price and the no-vig
+   line across untouched. `--why` is required — the reason is the whole point
+   of the row, because your passes are the job.
 
-   `status` is `passed` or `bet`. **Every row you looked at needs a `why_not`
-   reason in plain words** — "gap 1.9 pts, need 8+", "estimate came from the
-   no context file read", "start time has passed". A row
-   you never judged stays out; the board marks those `unjudged` on its own,
-   which is honest and tells the user what you skipped.
+   This ledger is what the dashboard and the village render. A cycle once
+   spent 43 turns and $0.19 trying to write it by hand, produced six rows with
+   `selection` set to the fixture string — `"CHW @ CLE"` instead of
+   `"CHW ML"` — and none of them matched, so the board showed every game as
+   unjudged. That is why you no longer type those strings.
 
-   Write prices as plain numbers: `104`, not `+104` — JSON has no leading
-   plus, and a file that will not parse shows the user nothing.
+   Games you never looked at stay out. The board marks them `unjudged` on its
+   own, which is honest and tells the user what you skipped.
 
 6. **Write the report.** `data/_meta.json` gives you its exact filename in
    `report_name` — use that string, do not work it out. `candidates.json`

@@ -32,6 +32,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
+CANDIDATES = ROOT / "agents" / "ace" / "data" / "candidates.json"
+
+
+def jkey(r):
+    """Exactly the key mission-control-api/ace.js joins on."""
+    return f"{str(r.get('selection') or '').lower()}|{str(r.get('match') or '').lower()}"
 
 # What each agent must have produced, in the order it should be reported.
 # (label, kind, relative path, extra)
@@ -141,10 +147,54 @@ def main():
                 continue
             rows = doc if isinstance(doc, list) else (doc.get("candidates") or [])
             judged = [r for r in rows if r.get("status") in ("passed", "bet")]
-            lines.append(f"{label}: {rel}  judged={len(judged)} of {len(rows)} rows  "
-                         f"({age(path)})")
-            if not judged:
+
+            # Say WHAT IS WRONG, not just that something is. A bare "MISSING"
+            # sent one cycle into 43 turns of rewriting this file in different
+            # shapes, 36 tool failures and $0.19, ending with a proposal to
+            # "reformat it in a way that may trick the system into recognizing
+            # the change". It was never going to guess its way out.
+            if not rows:
+                lines.append(f"{label}: EMPTY - {rel} parses but has no rows. "
+                             f"Add one with: python3 ../../scripts/ace-judge.py "
+                             f"pass 1 --my-pct 55 --why \"your reason\"")
                 missing.append(label)
+            elif not judged:
+                seen = sorted({str(r.get("status")) for r in rows})
+                lines.append(
+                    f"{label}: NOT COUNTED - {rel} has {len(rows)} rows, but none has "
+                    f"status \"passed\" or \"bet\". Found: {', '.join(seen)}. "
+                    f"Do not hand-edit this file - use "
+                    f"`python3 ../../scripts/ace-judge.py pass <n> --my-pct <n> "
+                    f"--why \"...\"`, which writes the row correctly.")
+                missing.append(label)
+            else:
+                # The join is the thing nobody can see by looking at the file.
+                # NB: not `base` - that is the agent directory in this loop.
+                joined, board = None, []
+                try:
+                    doc2 = json.loads(CANDIDATES.read_text())
+                    board = doc2 if isinstance(doc2, list) else (doc2.get("candidates") or [])
+                    bk = {jkey(r) for r in board}
+                    joined = sum(1 for r in judged if jkey(r) in bk)
+                except Exception:
+                    pass
+                if joined == 0:
+                    bad = judged[0]
+                    ex = board[0] if board else {}
+                    lines.append(
+                        f"{label}: WILL NOT SHOW - {len(judged)} rows, none matching "
+                        f"candidates.json, so the board renders every game as unjudged.\n"
+                        f"        yours:    selection={bad.get('selection')!r} "
+                        f"match={bad.get('match')!r}\n"
+                        f"        expected: selection={ex.get('selection')!r} "
+                        f"match={ex.get('match')!r}\n"
+                        f"        `selection` is the pick, `match` is the fixture - they are "
+                        f"not the same string. ace-judge.py copies both for you.")
+                    missing.append(label)
+                else:
+                    extra = f", {joined} on the board" if joined is not None else ""
+                    lines.append(f"{label}: {rel}  judged={len(judged)} of {len(rows)} rows"
+                                 f"{extra}  ({age(path)})")
 
         elif kind == "memory":
             text = path.read_text().strip()
