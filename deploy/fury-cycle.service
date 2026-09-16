@@ -1,0 +1,28 @@
+[Unit]
+Description=Fury daily briefing (plain code - costs nothing)
+Documentation=https://github.com/cljxs/cljxs
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WorkingDirectory=/root/ecosystem/agents/fury
+# No model wake. Fury the agent was asked five times, in five wordings, to
+# write this briefing to a file. Every run made one tool call, composed a good
+# briefing into its reply and saved nothing - including the run where the file
+# was already on disk with the headings in place and it only had to fill them
+# in. The fifth attempt is not the one that works.
+#
+# Everything the briefing needs was already in fury-collect.py's own output:
+# every agent's state, last run, memory line, the failures, the queue. The
+# model was only turning known facts into sentences. So the script does that
+# itself - correct every morning, never silently missing, and free.
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/fury-collect.py
+# The script writes the briefing last, so its absence means the script died.
+ExecStartPost=/bin/bash -lc 'B=/root/ecosystem/agents/fury/reports/$(date -u +%%F).md; \
+if [ ! -s "$B" ]; then echo "FURY: $B missing or empty - fury-collect.py failed"; exit 1; fi; \
+echo "fury briefing ok: $(wc -l < "$B") lines"'
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal

@@ -1,0 +1,29 @@
+[Unit]
+Description=Belfort agent cycle (THIS one costs fuel - runs twice per trading day)
+Documentation=https://github.com/cljxs/cljxs
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=ECOSYSTEM_ROOT=/root/ecosystem
+WorkingDirectory=/root/ecosystem
+# The work is in scripts/belfort-cycle.sh: snapshot MEMORY.md and cycle_count,
+# wake the agent with a fresh session id (a reused one causes runaway loops),
+# then run the verifier.
+#
+# The verifier is the point. systemd only sees an exit code, which cannot
+# distinguish a cycle that closed two positions and filed a report from one
+# that printed its reasoning into the chat and quit. This agent has already
+# shipped that failure and it was logged as a success.
+#
+# It also reconciles the book: starting_cash - bought + sold must equal cash.
+# The account once read -41% when the real trading loss was under 4%, because
+# three positions were closed by zeroing their shares without ever crediting
+# the proceeds. This check fails that cycle the day it happens instead of
+# letting it sit unnoticed for a week.
+ExecStart=/root/ecosystem/scripts/belfort-cycle.sh
+TimeoutStartSec=900
+StandardOutput=journal
+StandardError=journal

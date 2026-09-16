@@ -1,0 +1,16 @@
+[Unit]
+Description=Wake Ace three times a day
+
+[Timer]
+# Times are US/Eastern because they track US sports schedules, not the user's
+# clock. In US/Central these fire at 08:00, 14:00 and 22:30.
+# Morning (slate posted), afternoon (lineups/injuries firm up), late night
+# (grade what settled). Three wakes a day is what costs money - keep it there.
+OnCalendar=*-*-* 09:00 America/New_York
+OnCalendar=*-*-* 15:00 America/New_York
+OnCalendar=*-*-* 23:30 America/New_York
+Persistent=false
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target
