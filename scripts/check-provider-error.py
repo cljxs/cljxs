@@ -21,9 +21,15 @@ from pathlib import Path
 
 # Ordered: the first match wins, so put the specific ones first.
 # (pattern, title, subtitle, what to do about it)
+#
+# The HTTP codes MUST carry context. A bare \b401\b matched `"schemaChars":
+# 401,` in a tool-schema dump and reported a perfectly good API key as
+# rejected - which would have had someone re-entering a working credential.
+# Numbers that size are everywhere in this log; only "status 401" is evidence.
 SIGNS = [
     (r"billing error|insufficient balance|run out of credits|quota exceeded|"
-     r"insufficient_quota|payment required|\b402\b",
+     r"insufficient_quota|payment required|"
+     r"(?:status|code|http)\D{0,8}402\b",
      "OUT OF CREDIT", "this is the provider, not the agent",
      "The provider refused the request because the account has no balance.\n"
      "  Top up:  https://openrouter.ai/credits\n"
@@ -31,12 +37,17 @@ SIGNS = [
      "  model was asked anything, so the cycle wrote nothing for want of an\n"
      "  answer, not for want of trying. Every other paid agent is failing the\n"
      "  same way right now; Fury is not, because it runs no model."),
-    (r"invalid api key|incorrect api key|unauthorized|authentication.{0,20}fail|\b401\b",
+    (r"invalid api key|incorrect api key|no auth credentials|"
+     r"unauthorized\D{0,40}(?:api|key|token|credential)|"
+     r"(?:api|key|token|credential)\D{0,40}unauthorized|"
+     r"authentication.{0,20}fail|"
+     r"(?:status|code|http)\D{0,8}401\b",
      "KEY REJECTED", "this is configuration, not the agent",
      "The provider rejected the API key.\n"
      "  Check it:  python3 scripts/check-credentials.py\n"
      "  Re-set it: python3 scripts/set-credential.py OPENROUTER_API_KEY"),
-    (r"rate.?limit|too many requests|\b429\b",
+    (r"rate.?limit|too many requests|"
+     r"(?:status|code|http)\D{0,8}429\b",
      "RATE LIMITED", "this is the provider, not the agent",
      "The provider is rate limiting this key. The next scheduled wake will\n"
      "  probably succeed; nothing to fix here."),
