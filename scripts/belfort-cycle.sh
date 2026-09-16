@@ -11,6 +11,25 @@ set -u
 ROOT="${ECOSYSTEM_ROOT:-/root/ecosystem}"
 AGENT="$ROOT/agents/belfort"
 
+# Instruction changes only reach the agent when AGENTS.md is rebuilt from the
+# header, which happens in deploy.sh. Pull without it and the agent keeps
+# running last week's rules while the repo says otherwise - which is exactly
+# how belfort spent a cycle hand-writing a file its instructions had already
+# told it to stop writing. So: if the header is newer, rebuild it here.
+# Only when AGENTS.md already carries the markers, so no seam has to be
+# guessed unattended.
+HEADER="$AGENT/_belfort-agents-header.md"
+if [ -f "$HEADER" ] && [ "$HEADER" -nt "$AGENT/AGENTS.md" ]; then
+  if grep -q "BEGIN belfort-header" "$AGENT/AGENTS.md" 2>/dev/null; then
+    echo "belfort-cycle: instructions changed, rebuilding AGENTS.md"
+    "$ROOT/scripts/merge-header.sh" belfort || echo "  !! rebuild failed - the agent is running stale instructions"
+  else
+    echo "  !! $HEADER is newer than AGENTS.md and AGENTS.md has no markers."
+    echo "     The agent is running stale instructions. Run once, by hand:"
+    echo "       $ROOT/scripts/merge-header.sh belfort"
+  fi
+fi
+
 MEM_BEFORE=$(stat -c %s "$AGENT/MEMORY.md" 2>/dev/null || echo 0)
 CYCLES_BEFORE=$(python3 - "$AGENT/state/portfolio.json" <<'PY' 2>/dev/null || echo -1
 import json, sys

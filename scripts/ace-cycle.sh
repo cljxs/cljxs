@@ -16,6 +16,25 @@ if [ ! -f "$AGENT/state/bankroll.json" ] && [ -f "$AGENT/state/bankroll.seed.jso
   echo "ace-cycle: seeded state/bankroll.json (it was missing)"
 fi
 
+# Instruction changes only reach the agent when AGENTS.md is rebuilt from the
+# header, which happens in deploy.sh. Pull without it and the agent keeps
+# running last week's rules while the repo says otherwise - which is exactly
+# how ace spent a cycle hand-writing a file its instructions had already
+# told it to stop writing. So: if the header is newer, rebuild it here.
+# Only when AGENTS.md already carries the markers, so no seam has to be
+# guessed unattended.
+HEADER="$AGENT/_ace-agents-header.md"
+if [ -f "$HEADER" ] && [ "$HEADER" -nt "$AGENT/AGENTS.md" ]; then
+  if grep -q "BEGIN ace-header" "$AGENT/AGENTS.md" 2>/dev/null; then
+    echo "ace-cycle: instructions changed, rebuilding AGENTS.md"
+    "$ROOT/scripts/merge-header.sh" ace || echo "  !! rebuild failed - the agent is running stale instructions"
+  else
+    echo "  !! $HEADER is newer than AGENTS.md and AGENTS.md has no markers."
+    echo "     The agent is running stale instructions. Run once, by hand:"
+    echo "       $ROOT/scripts/merge-header.sh ace"
+  fi
+fi
+
 MEM_BEFORE=$(stat -c %s "$AGENT/MEMORY.md" 2>/dev/null || echo 0)
 CYCLES_BEFORE=$(python3 - "$AGENT/state/bankroll.json" <<'PY' 2>/dev/null || echo -1
 import json, sys
