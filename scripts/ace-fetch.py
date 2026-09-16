@@ -18,6 +18,9 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ace_time  # noqa: E402
+
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
 DATA = ROOT / "agents" / "ace" / "data"
 CTX = DATA / "context"
@@ -197,7 +200,7 @@ def build_context(sport, path, event):
 
 # ------------------------------------------------------------ shadow ledger
 
-def build_ledger(day, ctx_dir):
+def build_ledger(day, ctx_dir, slot):
     """Every game that could still be bet, with the mechanical verdict already
     filled in.
 
@@ -255,7 +258,9 @@ def build_ledger(day, ctx_dir):
     return {
         "asof_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         "day": day,
-        "slot": None,
+        # Filled in here so Ace never computes it. It got this wrong from a
+        # UTC clock and filed a 23:31 ET run as "2026-09-16-afternoon.md".
+        "slot": slot,
         "verdict": None,
         "source": "ace-fetch.py - mechanical fields only, awaiting Ace's estimates",
         "candidates": rows,
@@ -313,9 +318,12 @@ def main():
         log("nothing fetched — leaving previous data files untouched")
         return 1
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # Eastern, not UTC. A 23:30 ET wake happens on the next UTC day, and
+    # using that date filed a report under tomorrow's name.
+    now_et = ace_time.eastern_now()
     (DATA / "candidates.json").write_text(
-        json.dumps(build_ledger(today, CTX), indent=1) + "\n")
+        json.dumps(build_ledger(ace_time.day(now_et), CTX,
+                                ace_time.slot(now_et)), indent=1) + "\n")
 
     (DATA / "slate.json").write_text(json.dumps({
         "asof_utc": started.strftime("%Y-%m-%d %H:%M:%S"),
@@ -332,6 +340,9 @@ def main():
     (DATA / "_meta.json").write_text(json.dumps({
         "asof_utc": started.strftime("%Y-%m-%d %H:%M:%S"),
         "sports_in_season": season,
+        "day_et": ace_time.day(now_et),
+        "slot": ace_time.slot(now_et),
+        "report_name": ace_time.report_name(now_et),
         "games_on_slate": len(slate),
         "context_files_written": deep_written,
         "failures": failures,

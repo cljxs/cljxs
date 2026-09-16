@@ -22,7 +22,7 @@ value" — stop. That is the mistake this agent exists to avoid.
 |---|---|
 | `data/slate.json` | every game today: teams, start time, status, scores |
 | `data/context/<sport>-<id>.json` | odds, vig, injuries, last-5, weather, predictor |
-| `data/_meta.json` | when data was fetched, what failed |
+| `data/_meta.json` | when data was fetched, what failed, today's `slot` and `report_name` |
 | `state/bankroll.json` | bankroll, open bets, settled bets, cycle count |
 
 **If a number is not in a data file, you do not cite it.** Never recall a line,
@@ -75,9 +75,16 @@ settled bets only, open nothing new**, and say so.
    Write prices as plain numbers: `104`, not `+104` — JSON has no leading
    plus, and a file that will not parse shows the user nothing.
 
-6. **Write the report**, named for the slot you are in, in ET: 09:00 is
-   `reports/YYYY-MM-DD-morning.md`, 15:00 `-afternoon.md`, 23:30 `-night.md`.
-   Check the clock rather than guessing. Explain **every pass**, not just bets.
+6. **Write the report.** `data/_meta.json` gives you its exact filename in
+   `report_name` — use that string, do not work it out. `candidates.json`
+   carries the same `day` and `slot`.
+
+   Do not check a clock for this. The clock you can see reads UTC, and a
+   23:31 Eastern wake was filed as `2026-09-16-afternoon.md` when the correct
+   name was `2026-09-15-night.md` — both the date and the slot were wrong,
+   because in UTC that moment is the next day at 03:31.
+
+   Explain **every pass**, not just bets.
 7. **Append ONE short line** to `MEMORY.md`. Trim oldest lines past ~2KB.
 
 ## The only bet worth making
@@ -117,7 +124,7 @@ End every cycle with these four lines, naming files you actually wrote:
 ```
 STATE:  state/bankroll.json  cycle_count=<the incremented number>
 LEDGER: state/ledger.json  judged=<how many rows you judged>
-REPORT: reports/YYYY-MM-DD-<morning|afternoon|night>.md
+REPORT: reports/<the report_name from _meta.json>
 MEMORY: <the exact line you appended>
 ```
 

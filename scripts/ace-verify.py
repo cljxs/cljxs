@@ -29,6 +29,11 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Same two functions the fetcher uses, so the name this demands and the
+# name Ace was handed can never disagree.
+from ace_time import eastern_now, slot  # noqa: E402
+
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
 AGENT = ROOT / "agents" / "ace"
 BANK = AGENT / "state" / "bankroll.json"
@@ -36,21 +41,6 @@ LEDGER = AGENT / "state" / "ledger.json"
 CANDIDATES = AGENT / "data" / "candidates.json"
 
 TOLERANCE = 0.01
-
-
-def eastern_now():
-    """US sports clock without a tz library. Eastern is UTC-4 or UTC-5; the
-    slot boundaries below are hours wide, so an hour of drift cannot pick the
-    wrong one."""
-    return datetime.now(timezone.utc) - timedelta(hours=4)
-
-
-def slot():
-    """09:00 ET is morning, 15:00 afternoon, 23:30 night."""
-    h = eastern_now().hour
-    if h < 12:
-        return "morning"
-    return "afternoon" if h < 20 else "night"
 
 
 def num(v, default=0.0):
