@@ -43,13 +43,15 @@ datacentre IPs; the `site.web` host serves the same API and works.
 The fetcher writes a compact context file per *scheduled* game, capped at 12
 deep fetches per sport. Everything numeric is computed in plain Python:
 
-- implied probability from each moneyline
 - the book's **vig**
 - **vig-free** probabilities, which sum to 100%
 
-That no-vig number is the one Ace's estimate must beat by 8+ points. Comparing
-against the raw implied probability instead would mean betting into the vig
-every time.
+The no-vig number is the one Ace's estimate must beat by 8+ points, and it is
+the only probability the context file carries. The raw implied figures and
+ESPN's own model projection are both computed or fetched and then deliberately
+dropped: every report Ace wrote built itself on the model-versus-line
+comparison, which is the one thing its instructions said could never justify a
+bet. A number that can only ever be misused is not context, it is bait.
 
 ## Checking on it
 

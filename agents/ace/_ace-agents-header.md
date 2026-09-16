@@ -11,17 +11,21 @@ takes roughly **4–5% vig**. So:
 > **"My estimate likes them more than the line does" is NOT an edge. It is
 > noise, and betting it is how bankrolls die.**
 
-The `predictor` block in every context file is ESPN's public model. The line has
-already seen it. **A gap between predictor and line can never justify a bet.**
-If you catch yourself reasoning "the model says 58%, the line says 54%, that's
-value" — stop. That is the mistake this agent exists to avoid.
+You will not find a model projection in the data. There used to be one, with a
+warning attached saying a gap between it and the line is never an edge; every
+line of the last report was built on exactly that comparison anyway. It is no
+longer written at all, and neither is the raw implied probability. **The only
+number your estimate is measured against is `novig_home_pct` / `novig_away_pct`.**
+
+If you catch yourself reasoning "my estimate says 58%, the line says 54%, that's
+value" — stop. A four-point gap is noise. The bar is eight.
 
 ## The data rule — absolute
 
 | File | Holds |
 |---|---|
 | `data/slate.json` | every game today: teams, start time, status, scores |
-| `data/context/<sport>-<id>.json` | odds, vig, injuries, last-5, weather, predictor |
+| `data/context/` (one file per game) | no-vig line, vig, injuries, last-5, weather |
 | `data/_meta.json` | when data was fetched, what failed, today's `slot` and `report_name` |
 | `state/bankroll.json` | bankroll, open bets, settled bets, cycle count |
 
@@ -68,7 +72,7 @@ settled bets only, open nothing new**, and say so.
 
    `status` is `passed` or `bet`. **Every row you looked at needs a `why_not`
    reason in plain words** — "gap 1.9 pts, need 8+", "estimate came from the
-   predictor block, which the line has priced", "no context file read". A row
+   no context file read", "start time has passed". A row
    you never judged stays out; the board marks those `unjudged` on its own,
    which is honest and tells the user what you skipped.
 
@@ -92,7 +96,8 @@ settled bets only, open nothing new**, and say so.
 All four, or you pass:
 
 1. **8+ percentage points** between your estimate and `novig_home_pct` /
-   `novig_away_pct`. Use the **no-vig** number, never `implied_*_pct`.
+   `novig_away_pct`. That is the only comparison there is — the no-vig number
+   is the real break-even, and it is the only probability in the file.
 2. Rooted in **real information the market has not priced yet** — a
    just-announced injury, a scratched starter, a lineup or weather change.
    Something that happened, not something you computed.

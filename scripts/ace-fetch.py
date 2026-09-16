@@ -125,21 +125,27 @@ def build_context(sport, path, event):
             "over_under": o.get("overUnder"),
             "spread": o.get("spread"),
             "moneyline_home": hm, "moneyline_away": am,
-            "implied_home_pct": r1(ph), "implied_away_pct": r1(pa),
             "novig_home_pct": r1(nh), "novig_away_pct": r1(na),
             "vig_pct": r1(vig),
-            "_note": "Compare your estimate against novig_*_pct, not implied_*_pct.",
+            "_note": "novig_*_pct is the real break-even. It is the ONLY number "
+                     "your estimate is compared against.",
         }
+        # implied_*_pct used to be written here alongside the no-vig numbers,
+        # and every report built itself on the implied figure instead - it is
+        # the bigger, more confident-looking number, and it sits right next to
+        # the one that matters. Betting against implied means betting into the
+        # vig on every wager. The raw probabilities are still computed above,
+        # because vig_pct needs them; they just do not leave this function.
 
-    # ESPN's own model. Deliberately labelled: a gap between this and the
-    # line is NOT an edge, it is the single most common way to lose money.
-    pred = summary.get("predictor") or {}
-    predictor = {
-        "home_pct": (pred.get("homeTeam") or {}).get("gameProjection"),
-        "away_pct": (pred.get("awayTeam") or {}).get("gameProjection"),
-        "_warning": "ESPN's public model. The line already prices models like "
-                    "this. A gap here is NOT an edge and must never justify a bet.",
-    } if pred else {}
+    # ESPN's predictor used to be written here, carrying a warning that a gap
+    # between it and the line is never an edge. The warning did not work: every
+    # line of the last report read "Predictor: home win 72.5% vs line implied
+    # 70.4%", which is the exact comparison the warning forbade, structured as
+    # the whole analysis.
+    #
+    # There is no case where that number may legitimately drive a decision -
+    # the book has already priced public models like it - so it is not written
+    # at all. A field that can only ever be misused is not context, it is bait.
 
     # injuries: name + status only, capped
     injuries = []
@@ -186,7 +192,6 @@ def build_context(sport, path, event):
         "away": {"abbr": (away.get("team") or {}).get("abbreviation"),
                  "record": ((away.get("records") or [{}])[0]).get("summary")},
         "odds": odds,
-        "predictor": predictor,
         "injuries": injuries,
         "last_five": last5,
         "against_the_spread": ats,
