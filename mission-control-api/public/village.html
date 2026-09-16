@@ -225,123 +225,337 @@ const cls = v => (v === null || v === undefined) ? 'flat' : v > 0 ? 'up' : v < 0
 const ago = m => (m === null || m === undefined) ? 'never' : m < 1 ? 'just now'
   : m < 60 ? m + 'm ago' : m < 1440 ? Math.floor(m/60) + 'h ago' : Math.floor(m/1440) + 'd ago';
 
-/* ---------------- procedural pixel art ---------------- */
+/* ---------------- procedural pixel art ----------------
+ * Still no image files and nothing to buy. What changed is how much work
+ * the generator does: flat fills became tonal bands, hard tile seams became
+ * irregular fringes, and everything that sits on the ground now casts a
+ * shadow. The old version drew one colour per surface, which is what made it
+ * read as a diagram rather than a place.
+ * ----------------------------------------------------------------------- */
 
-function px(g, x, y, w, h, color) { g.fillStyle(color, 1); g.fillRect(x, y, w, h); }
+function px(g, x, y, w, h, color, alpha) { g.fillStyle(color, alpha === undefined ? 1 : alpha); g.fillRect(x, y, w, h); }
+
+// Deterministic noise, so the village looks the same on every reload. A
+// village that reshuffles its grass every refresh feels broken.
+function rng(seed) {
+  let s = seed >>> 0 || 1;
+  return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+}
+
+// Scatter n single pixels of `color` across a w×h area.
+function speckle(g, r, w, h, color, n, size) {
+  for (let i = 0; i < n; i++) {
+    const sz = size || 1;
+    px(g, Math.floor(r() * (w - sz)), Math.floor(r() * (h - sz)), sz, sz, color);
+  }
+}
+
+const PAL = {
+  grass:  [0x4c8a3a, 0x5c9c44, 0x6db052, 0x84c765],
+  path:   [0xbe9c66, 0xd0ac75, 0xdcbd8b, 0xe9d2a8],
+  water:  [0x2b6396, 0x3a7fb8, 0x53a0d6, 0x9ad6ef],
+  wood:   [0x5f4026, 0x7d5533, 0x9b6f45, 0xbc8d5e],
+  stone:  [0x6f7480, 0x898f9b, 0xa6acb8, 0xc6ccd6],
+  leaf:   [0x24632f, 0x2f7d3d, 0x3f9b50, 0x5fbd6e],
+};
 
 function makeTextures(s) {
-  // --- grass, with a few deterministic tufts so it isn't flat ---
-  let g = s.add.graphics();
-  px(g, 0, 0, T, T, 0x5a9e4b);
-  const tufts = [[5,7],[19,4],[11,20],[25,15],[2,25],[28,26]];
-  tufts.forEach(([a,b], i) => px(g, a, b, 2, i % 2 ? 3 : 2, i % 2 ? 0x4e8c42 : 0x6bb15a));
-  g.generateTexture('grass', T, T); g.destroy();
+  let g;
 
-  // --- dirt path ---
+  /* --- ground: four grass variants so no seam repeats next to itself --- */
+  for (let v = 0; v < 4; v++) {
+    const r = rng(9001 + v * 77);
+    g = s.add.graphics();
+    px(g, 0, 0, T, T, PAL.grass[1]);
+    // broad tonal patches first, then blades on top. One flat green was the
+    // single biggest reason the old ground looked like graph paper.
+    for (let i = 0; i < 5; i++) {
+      const w = 6 + Math.floor(r() * 12), h = 4 + Math.floor(r() * 8);
+      px(g, Math.floor(r() * (T - w)), Math.floor(r() * (T - h)), w, h, PAL.grass[r() < .5 ? 0 : 2], .5);
+    }
+    for (let i = 0; i < 14; i++) {
+      const x = Math.floor(r() * T), y = Math.floor(r() * (T - 3));
+      px(g, x, y, 1, 2 + Math.floor(r() * 2), PAL.grass[3], .75);
+    }
+    speckle(g, r, T, T, PAL.grass[0], 10);
+    g.generateTexture(`grass${v}`, T, T); g.destroy();
+  }
+
+  /* --- dirt path, four variants with gravel --- */
+  for (let v = 0; v < 4; v++) {
+    const r = rng(4400 + v * 31);
+    g = s.add.graphics();
+    px(g, 0, 0, T, T, PAL.path[1]);
+    for (let i = 0; i < 4; i++) {
+      const w = 8 + Math.floor(r() * 14), h = 5 + Math.floor(r() * 9);
+      px(g, Math.floor(r() * (T - w)), Math.floor(r() * (T - h)), w, h, PAL.path[r() < .5 ? 0 : 2], .45);
+    }
+    speckle(g, r, T, T, PAL.path[3], 12);
+    speckle(g, r, T, T, PAL.path[0], 14);
+    for (let i = 0; i < 3; i++) px(g, Math.floor(r()*(T-3)), Math.floor(r()*(T-2)), 2 + Math.floor(r()*2), 2, PAL.stone[1], .6);
+    g.generateTexture(`path${v}`, T, T); g.destroy();
+  }
+
+  /* --- path edges -------------------------------------------------------
+   * Grass fringe that hangs over the paving. Drawn ON TOP of a path tile
+   * wherever its neighbour is grass. The dead-straight boundary between path
+   * and grass was the clearest tell that this was rectangles, not a place. */
+  const EDGE = ['n', 's', 'w', 'e'];
+  EDGE.forEach((side, i) => {
+    const r = rng(7700 + i * 53);
+    g = s.add.graphics();
+    for (let t = 0; t < T; t++) {
+      const d = 3 + Math.floor(r() * 5);                 // how far the grass creeps in
+      if (side === 'n') { px(g, t, 0, 1, d, PAL.grass[1]); px(g, t, d, 1, 1, PAL.grass[0], .5); }
+      if (side === 's') { px(g, t, T - d, 1, d, PAL.grass[1]); px(g, t, T - d - 1, 1, 1, PAL.grass[0], .5); }
+      if (side === 'w') { px(g, 0, t, d, 1, PAL.grass[1]); px(g, d, t, 1, 1, PAL.grass[0], .5); }
+      if (side === 'e') { px(g, T - d, t, d, 1, PAL.grass[1]); px(g, T - d - 1, t, 1, 1, PAL.grass[0], .5); }
+    }
+    g.generateTexture(`edge-${side}`, T, T); g.destroy();
+  });
+
+  /* --- water: depth bands plus a foam rim --- */
+  for (let v = 0; v < 2; v++) {
+    const r = rng(3100 + v * 17);
+    g = s.add.graphics();
+    px(g, 0, 0, T, T, PAL.water[1]);
+    for (let i = 0; i < 4; i++) {
+      const w = 10 + Math.floor(r() * 14);
+      px(g, Math.floor(r() * (T - w)), Math.floor(r() * T), w, 3, PAL.water[0], .5);
+    }
+    for (let i = 0; i < 3; i++) {
+      const w = 6 + Math.floor(r() * 10);
+      px(g, Math.floor(r() * (T - w)), Math.floor(r() * T), w, 2, PAL.water[2], .8);
+    }
+    px(g, 4, 6, 8, 1, PAL.water[3], .9); px(g, 18, 21, 7, 1, PAL.water[3], .8);
+    g.generateTexture(`water${v}`, T, T); g.destroy();
+  }
+  // shoreline: wet sand + foam, drawn over the grass side of a water edge
+  ['n','s','w','e'].forEach((side, i) => {
+    const r = rng(6100 + i * 23);
+    g = s.add.graphics();
+    for (let t = 0; t < T; t++) {
+      const d = 4 + Math.floor(r() * 4);
+      const band = (a, b, w, h) => { px(g, a, b, w, h, 0xcbb389); };
+      if (side === 'n') { band(t, 0, 1, d); px(g, t, d, 1, 1, PAL.water[3], .7); }
+      if (side === 's') { band(t, T - d, 1, d); px(g, t, T - d - 1, 1, 1, PAL.water[3], .7); }
+      if (side === 'w') { band(0, t, d, 1); px(g, d, t, 1, 1, PAL.water[3], .7); }
+      if (side === 'e') { band(T - d, t, d, 1); px(g, T - d - 1, t, 1, 1, PAL.water[3], .7); }
+    }
+    g.generateTexture(`shore-${side}`, T, T); g.destroy();
+  });
+
+  /* --- a soft shadow, reused under everything that stands up --- */
   g = s.add.graphics();
-  px(g, 0, 0, T, T, 0xc2a878);
-  [[4,6],[17,10],[9,22],[26,18],[21,27]].forEach(([a,b],i)=>px(g,a,b,3,2, i%2?0xb39a6b:0xd0b98c));
-  g.generateTexture('path', T, T); g.destroy();
+  g.fillStyle(0x000000, .22); g.fillEllipse(32, 8, 60, 14);
+  g.fillStyle(0x000000, .14); g.fillEllipse(32, 8, 64, 16);
+  g.generateTexture('shadow', 64, 16); g.destroy();
 
-  // --- water ---
-  g = s.add.graphics();
-  px(g, 0, 0, T, T, 0x3f7fb5);
-  px(g, 3, 8, 12, 2, 0x5b9ed0); px(g, 18, 19, 10, 2, 0x5b9ed0);
-  g.generateTexture('water', T, T); g.destroy();
+  /* --- trees: three shapes, layered canopy, shaded trunk --- */
+  for (let v = 0; v < 3; v++) {
+    const r = rng(2200 + v * 91);
+    g = s.add.graphics();
+    const TW = 48, TH = 72, cx = TW / 2;
+    px(g, cx - 4, 44, 8, 26, PAL.wood[0]);              // trunk, dark side
+    px(g, cx - 4, 44, 5, 26, PAL.wood[1]);              // lit side
+    px(g, cx - 2, 50, 1, 14, PAL.wood[2], .7);          // bark line
+    const blobs = [[cx, 30, 21, 15], [cx - 9, 22, 15, 13], [cx + 9, 23, 14, 12], [cx, 15, 17, 12]];
+    blobs.forEach(([bx, by, bw, bh]) => {
+      g.fillStyle(PAL.leaf[1], 1); g.fillEllipse(bx, by, bw * 2, bh * 2);
+    });
+    blobs.forEach(([bx, by, bw, bh], i) => {            // lit tops
+      if (i % 2) return;
+      g.fillStyle(PAL.leaf[2], 1); g.fillEllipse(bx - 2, by - 4, bw * 1.5, bh * 1.3);
+    });
+    g.fillStyle(PAL.leaf[3], .9); g.fillEllipse(cx - 6, 14, 14, 10);
+    g.fillStyle(PAL.leaf[0], .5); g.fillEllipse(cx + 6, 34, 22, 12);   // underside shade
+    speckle(g, r, TW, 44, PAL.leaf[3], 8);
+    g.generateTexture(`tree${v}`, TW, TH); g.destroy();
+  }
 
-  // --- tree (2 tiles tall) ---
-  g = s.add.graphics();
-  px(g, 13, 40, 6, 20, 0x7a5230);
-  px(g, 4, 8, 24, 30, 0x2f7d3d);
-  px(g, 8, 2, 16, 12, 0x3d9950);
-  px(g, 10, 12, 6, 6, 0x53b566);
-  g.generateTexture('tree', 32, 60); g.destroy();
-
-  // --- hero, 2-frame walk, three facings ---
+  /* --- hero, 2-frame walk, three facings --- */
   const hero = (name, facing, frame) => {
     const gg = s.add.graphics();
-    const skin = 0xf0c9a0, shirt = facing === 'up' ? 0x3d5a99 : 0x4b6cb7, hair = 0x3a2a1d;
-    // legs (the frame difference)
+    const skin = 0xf2cfa6, shirt = facing === 'up' ? 0x3d5a99 : 0x4b6cb7, hair = 0x3a2a1d;
+    px(gg, 4, 25, 16, 3, 0x000000, .18);                 // contact shadow
     if (frame === 0) { px(gg, 7, 20, 4, 6, 0x2c3550); px(gg, 13, 20, 4, 6, 0x2c3550); }
     else { px(gg, 5, 20, 4, 6, 0x2c3550); px(gg, 15, 20, 4, 6, 0x2c3550); }
-    px(gg, 6, 11, 12, 10, shirt);                       // body
-    if (facing !== 'up') { px(gg, 8, 4, 8, 8, skin); }  // face
-    else { px(gg, 8, 4, 8, 8, hair); }
-    px(gg, 7, 2, 10, 4, hair);                          // hair
+    px(gg, 6, 11, 12, 10, shirt);
+    px(gg, 6, 11, 3, 10, 0x000000, .12);                 // body shading
+    if (facing !== 'up') px(gg, 8, 4, 8, 8, skin); else px(gg, 8, 4, 8, 8, hair);
+    px(gg, 7, 2, 10, 4, hair);
+    px(gg, 7, 2, 10, 1, 0x4a3725);
     if (facing === 'down') { px(gg, 9, 8, 2, 2, 0x22303f); px(gg, 13, 8, 2, 2, 0x22303f); }
     if (facing === 'side') { px(gg, 12, 8, 2, 2, 0x22303f); }
     gg.generateTexture(name, 24, 28); gg.destroy();
   };
   ['down','up','side'].forEach(f => { hero(`hero-${f}-0`, f, 0); hero(`hero-${f}-1`, f, 1); });
 
-  // --- buildings: 128x116, one colourway per agent slot ---
-  const ROOFS = [0xc0504d, 0x4f81bd, 0x9bbb59, 0x8064a2, 0xd99694, 0x4bacc6];
-  ROOFS.forEach((roof, i) => {
+  /* --- buildings: shingled roof, framed windows, stone footing --- */
+  const ROOFS = [
+    [0x8f3b38, 0xb5504c, 0xcf6a64], [0x2f5b8a, 0x4272ab, 0x5e91c8],
+    [0x5f7a34, 0x7d9c46, 0x9bbb5e], [0x54406f, 0x6f568f, 0x8d74ad],
+    [0x9a5148, 0xbd6c60, 0xd68a7c], [0x2d7f8c, 0x3f9dab, 0x5bbccb],
+  ];
+  ROOFS.forEach(([dark, mid, light], i) => {
     const gg = s.add.graphics();
     const HW = 128, HH = 116;
-    px(gg, 4, 38, HW - 8, HH - 38, 0xe8dcc0);          // walls
-    px(gg, 4, 38, HW - 8, 5, 0xcbbb9a);
-    px(gg, 4, HH - 6, HW - 8, 6, 0xd6c8a8);            // skirting
-    // pitched roof: ridge at the top, widening to the eaves
-    for (let r = 0; r < 13; r++) {
-      const half = 9 + r * 4.62, y = 4 + r * 2.6;
-      px(gg, 64 - half, y, half * 2, 4, roof);
+    const wr = rng(8800 + i * 13);
+    px(gg, 6, 36, HW - 12, HH - 40, 0xe4d5b4);          // plaster
+    px(gg, 6, 36, 10, HH - 40, 0xcfbd96);               // left wall in shade
+    px(gg, HW - 16, 36, 10, HH - 40, 0xf4ebd4);         // right wall lit
+    for (let n = 0; n < 60; n++) {                       // plaster grain
+      const w2 = 2 + Math.floor(wr() * 5);
+      px(gg, 8 + Math.floor(wr() * (HW - 18)), 40 + Math.floor(wr() * (HH - 50)),
+         w2, 1, wr() < .5 ? 0xd3c2a0 : 0xf0e5ca, .5);
     }
-    px(gg, 0, 34, HW, 7, roof);                        // eaves
-    px(gg, 0, 34, HW, 1, 0x00000026);
-    px(gg, 60, 6, 8, 14, 0x8a6a4a);                    // chimney
-    px(gg, 58, 4, 12, 5, 0x6f5238);
-    px(gg, 52, 70, 24, 46, 0x7a5230);                  // door
-    px(gg, 52, 70, 24, 3, 0x5d3e24);
-    px(gg, 70, 92, 4, 4, 0xffd76e);                    // handle
-    [18, 86].forEach(wx => {                           // windows
-      px(gg, wx, 52, 24, 20, 0x9fd3e8);
-      px(gg, wx, 52, 24, 3, 0x6a5b45);
-      px(gg, wx + 11, 52, 2, 20, 0x6a5b45);
-      px(gg, wx, 61, 24, 2, 0x6a5b45);
-      px(gg, wx - 2, 72, 28, 3, 0xcbbb9a);             // sill
+    [10, 62, 108].forEach(bx => px(gg, bx, 40, 4, HH - 48, 0x9c7f55, .5));  // corner posts
+    px(gg, 6, 40, HW - 12, 3, 0x9c7f55, .45);            // header beam
+    px(gg, 4, HH - 10, HW - 8, 10, PAL.stone[1]);        // stone footing
+    for (let sx = 4; sx < HW - 8; sx += 11) px(gg, sx, HH - 10, 9, 4, PAL.stone[2]);
+    for (let sx = 9; sx < HW - 8; sx += 11) px(gg, sx, HH - 6, 9, 5, PAL.stone[0]);
+
+    // Pitched roof in shingle courses. Each course is drawn dark, then a row
+    // of lighter tabs with a gap between them, then a hard shadow line under
+    // it - that last line is what makes a course read as overlapping the one
+    // below instead of as a stripe.
+    for (let r = 0; r < 13; r++) {
+      const half = 10 + r * 4.55, y = 4 + r * 2.6, x0 = 64 - half, w = half * 2;
+      px(gg, x0, y, w, 4, dark);
+      for (let sx = x0 + (r % 2 ? 0 : 5); sx < x0 + w - 4; sx += 10)
+        px(gg, sx, y, 6, 3, r < 4 ? light : mid);
+      px(gg, x0, y + 3, w, 1, 0x000000, .20);
+      px(gg, x0, y, 2, 4, 0x000000, .16);                // left rake in shade
+      px(gg, x0 + w - 2, y, 2, 4, light, .35);           // right rake catches light
+    }
+    px(gg, 0, 33, HW, 9, mid);                           // eaves board
+    px(gg, 0, 33, HW, 2, light);
+    px(gg, 0, 40, HW, 2, dark);
+    px(gg, 0, 42, HW, 4, 0x000000, .26);                 // shadow the roof throws
+    px(gg, 0, 46, HW, 3, 0x000000, .12);
+    px(gg, 58, 2, 12, 18, 0x7d5a3c);                     // chimney
+    px(gg, 58, 2, 12, 3, 0x9a7250);
+    px(gg, 58, 2, 3, 18, 0x60442c);
+    for (let by = 6; by < 20; by += 4) px(gg, 58, by, 12, 1, 0x000000, .18);
+    px(gg, 50, 68, 28, 48, PAL.wood[1]);                 // door
+    px(gg, 50, 68, 28, 3, PAL.wood[0]);
+    px(gg, 53, 74, 22, 16, PAL.wood[0], .35);            // upper panel
+    px(gg, 53, 94, 22, 16, PAL.wood[0], .35);            // lower panel
+    px(gg, 72, 92, 4, 4, 0xffd76e);                      // handle
+    px(gg, 46, HH - 4, 36, 4, PAL.stone[2]);             // doorstep
+    [16, 84].forEach(wx => {                             // windows
+      px(gg, wx - 3, 48, 30, 28, PAL.wood[1]);           // frame
+      px(gg, wx, 51, 24, 22, 0x9fd3e8);
+      px(gg, wx, 51, 24, 8, 0xc2e6f4);                   // sky reflection
+      px(gg, wx + 11, 51, 2, 22, PAL.wood[0]);
+      px(gg, wx, 60, 24, 2, PAL.wood[0]);
+      px(gg, wx - 5, 74, 34, 4, 0xcbb894);               // sill
     });
     gg.generateTexture(`house-${i}`, HW, HH); gg.destroy();
   });
 
-  // --- decoration ---
-  let d = s.add.graphics();                            // bush
-  px(d, 3, 6, 20, 11, 0x2f7d3d); px(d, 7, 2, 12, 8, 0x3d9950); px(d, 10, 5, 5, 4, 0x53b566);
-  d.generateTexture('bush', 26, 18); d.destroy();
+  /* --- decoration --- */
+  let d = s.add.graphics();                              // bush
+  d.fillStyle(0x000000, .18); d.fillEllipse(15, 20, 26, 6);
+  d.fillStyle(PAL.leaf[1], 1); d.fillEllipse(15, 13, 26, 16);
+  d.fillStyle(PAL.leaf[2], 1); d.fillEllipse(12, 9, 18, 12);
+  d.fillStyle(PAL.leaf[3], .9); d.fillEllipse(10, 7, 8, 5);
+  [[7,12],[19,10],[13,16]].forEach(([a,b]) => px(d, a, b, 2, 2, 0xe0556a));  // berries
+  d.generateTexture('bush', 30, 24); d.destroy();
 
-  d = s.add.graphics();                                // rock
-  px(d, 2, 6, 16, 8, 0x8d8f96); px(d, 5, 3, 10, 6, 0xa8abb2); px(d, 7, 5, 4, 3, 0xc2c5cb);
-  d.generateTexture('rock', 20, 15); d.destroy();
+  d = s.add.graphics();                                  // rock
+  d.fillStyle(0x000000, .18); d.fillEllipse(12, 17, 22, 5);
+  px(d, 2, 7, 20, 9, PAL.stone[0]);
+  px(d, 4, 4, 15, 8, PAL.stone[1]);
+  px(d, 6, 5, 8, 4, PAL.stone[2]);
+  px(d, 8, 6, 3, 2, PAL.stone[3]);
+  d.generateTexture('rock', 24, 20); d.destroy();
 
-  d = s.add.graphics();                                // fence section
-  px(d, 2, 4, 4, 18, 0x9b7b52); px(d, 26, 4, 4, 18, 0x9b7b52);
-  px(d, 0, 8, 32, 3, 0xb08f60); px(d, 0, 15, 32, 3, 0xb08f60);
-  d.generateTexture('fence', 32, 24); d.destroy();
+  d = s.add.graphics();                                  // fence
+  [2, 26].forEach(fx => { px(d, fx, 3, 5, 20, PAL.wood[1]); px(d, fx, 3, 2, 20, PAL.wood[2]); px(d, fx, 3, 5, 2, PAL.wood[3]); });
+  px(d, 0, 7, T, 4, PAL.wood[2]); px(d, 0, 7, T, 1, PAL.wood[3]);
+  px(d, 0, 15, T, 4, PAL.wood[2]); px(d, 0, 15, T, 1, PAL.wood[3]);
+  px(d, 0, 22, T, 2, 0x000000, .15);
+  d.generateTexture('fence', T, 26); d.destroy();
 
-  d = s.add.graphics();                                // lamp post
-  px(d, 5, 12, 4, 30, 0x4a4f5c);
-  px(d, 2, 4, 10, 9, 0xffe9a8); px(d, 1, 2, 12, 3, 0x4a4f5c);
-  d.generateTexture('lamp', 14, 44); d.destroy();
+  d = s.add.graphics();                                  // lamp post
+  px(d, 2, 44, 12, 3, 0x000000, .18);
+  px(d, 6, 14, 4, 31, 0x3c414c);
+  px(d, 6, 14, 2, 31, 0x555b68);
+  px(d, 3, 5, 10, 10, 0xffe9a8);
+  px(d, 5, 7, 6, 5, 0xfff6d6);
+  px(d, 2, 3, 12, 3, 0x3c414c); px(d, 4, 0, 8, 3, 0x3c414c);
+  d.generateTexture('lamp', 16, 48); d.destroy();
 
-  d = s.add.graphics();                                // flower bed
-  px(d, 0, 6, 34, 10, 0x6b4a2e);
-  [[3,7],[11,5],[19,8],[27,6]].forEach(([a,b],j)=>px(d,a,b,4,4,[0xe8798f,0xf2e06a,0xffffff,0xb48be0][j]));
-  d.generateTexture('bed', 34, 18); d.destroy();
+  d = s.add.graphics();                                  // flower bed
+  px(d, 0, 8, 36, 10, 0x6b4a2e);
+  px(d, 0, 8, 36, 2, 0x835b39);
+  const fr = rng(555);
+  for (let i = 0; i < 9; i++) {
+    const fx2 = 2 + Math.floor(fr() * 32), fy = 5 + Math.floor(fr() * 8);
+    px(d, fx2, fy + 3, 1, 4, 0x3f7d3a);
+    px(d, fx2 - 1, fy, 3, 3, [0xe8798f, 0xf2e06a, 0xffffff, 0xb48be0, 0xf09a4a][i % 5]);
+  }
+  d.generateTexture('bed', 36, 20); d.destroy();
 
-  d = s.add.graphics();                                // town notice board
-  px(d, 6, 46, 7, 26, 0x7a5230); px(d, 89, 46, 7, 26, 0x7a5230);
-  px(d, 0, 4, 102, 46, 0xd9c9a3);
-  px(d, 0, 4, 102, 5, 0x8a7a5c); px(d, 0, 45, 102, 5, 0x8a7a5c);
-  px(d, 0, 4, 5, 46, 0x8a7a5c); px(d, 97, 4, 5, 46, 0x8a7a5c);
-  px(d, 4, 0, 94, 5, 0x6f5238);
-  d.generateTexture('board', 102, 74); d.destroy();
+  d = s.add.graphics();                                  // barrel
+  px(d, 1, 24, 18, 3, 0x000000, .18);
+  px(d, 2, 4, 16, 21, PAL.wood[1]);
+  px(d, 2, 4, 5, 21, PAL.wood[2]);
+  px(d, 14, 4, 4, 21, PAL.wood[0]);
+  px(d, 1, 8, 18, 3, 0x6b6f78); px(d, 1, 18, 18, 3, 0x6b6f78);
+  px(d, 3, 2, 14, 4, PAL.wood[3]);
+  d.generateTexture('barrel', 20, 28); d.destroy();
 
-  // --- signpost ---
-  g = s.add.graphics();
-  px(g, 7, 10, 3, 14, 0x7a5230);
-  px(g, 0, 2, 17, 9, 0xd9c9a3);
-  px(g, 0, 2, 17, 2, 0xb9a888);
-  g.generateTexture('sign', 17, 24); g.destroy();
+  d = s.add.graphics();                                  // crate
+  px(d, 1, 21, 20, 3, 0x000000, .18);
+  px(d, 1, 3, 20, 19, PAL.wood[2]);
+  px(d, 1, 3, 20, 3, PAL.wood[3]);
+  px(d, 1, 3, 3, 19, PAL.wood[3]);
+  px(d, 1, 11, 20, 2, PAL.wood[0]); px(d, 10, 3, 2, 19, PAL.wood[0]);
+  d.generateTexture('crate', 22, 26); d.destroy();
+
+  d = s.add.graphics();                                  // market stall
+  px(d, 2, 52, 60, 4, 0x000000, .18);
+  px(d, 6, 26, 5, 28, PAL.wood[1]); px(d, 53, 26, 5, 28, PAL.wood[1]);
+  px(d, 4, 30, 56, 10, PAL.wood[2]);                     // counter
+  px(d, 4, 30, 56, 2, PAL.wood[3]);
+  for (let i = 0; i < 8; i++) px(d, 2 + i * 8, 6, 8, 18, i % 2 ? 0xe8e2d2 : 0xd8574f);  // awning
+  px(d, 0, 22, 64, 4, 0xb5504c);
+  px(d, 0, 4, 64, 4, 0x8f3b38);
+  [[12,42],[24,42],[36,42],[48,42]].forEach(([a,b],i) =>
+    px(d, a, b, 8, 6, [0xe0556a, 0xf2a03c, 0x7fbf4a, 0xd9c24a][i]));   // produce
+  d.generateTexture('stall', 64, 58); d.destroy();
+
+  d = s.add.graphics();                                  // town notice board
+  px(d, 4, 74, 96, 4, 0x000000, .18);
+  px(d, 6, 46, 8, 28, PAL.wood[1]); px(d, 88, 46, 8, 28, PAL.wood[1]);
+  px(d, 6, 46, 3, 28, PAL.wood[2]); px(d, 88, 46, 3, 28, PAL.wood[2]);
+  px(d, 0, 4, 102, 46, 0xe0d0aa);                        // board face
+  px(d, 3, 7, 96, 40, 0xd3c098, .6);                     // weathered inset
+  px(d, 0, 4, 102, 5, PAL.wood[1]); px(d, 0, 45, 102, 5, PAL.wood[1]);
+  px(d, 0, 4, 5, 46, PAL.wood[1]); px(d, 97, 4, 5, 46, PAL.wood[1]);
+  px(d, 0, 4, 102, 2, PAL.wood[2]);
+  px(d, 4, 0, 94, 6, 0x8f3b38);                          // little shingle cap
+  px(d, 4, 0, 94, 2, 0xb5504c);
+  d.generateTexture('board', 102, 78); d.destroy();
+
+  d = s.add.graphics();                                  // signpost
+  px(d, 3, 24, 12, 3, 0x000000, .18);
+  px(d, 7, 10, 4, 15, PAL.wood[1]); px(d, 7, 10, 2, 15, PAL.wood[2]);
+  px(d, 0, 2, 18, 10, 0xe0d0aa);
+  px(d, 0, 2, 18, 2, PAL.wood[2]); px(d, 0, 10, 18, 2, PAL.wood[0]);
+  d.generateTexture('sign', 18, 28); d.destroy();
+
+  d = s.add.graphics();                                  // well
+  px(d, 2, 40, 40, 4, 0x000000, .18);
+  px(d, 4, 22, 36, 20, PAL.stone[0]);
+  for (let sy = 22; sy < 42; sy += 6)
+    for (let sx = 4; sx < 40; sx += 9) px(d, sx + (sy % 12 ? 0 : 4), sy, 8, 5, PAL.stone[1]);
+  px(d, 8, 24, 28, 8, 0x1b2430);                         // the shaft
+  px(d, 10, 2, 4, 22, PAL.wood[1]); px(d, 30, 2, 4, 22, PAL.wood[1]);
+  px(d, 4, 0, 36, 6, 0x8f3b38); px(d, 4, 0, 36, 2, 0xb5504c);
+  d.generateTexture('well', 44, 46); d.destroy();
 }
 
 /* ---------------- scene ---------------- */
@@ -354,22 +568,51 @@ function create() {
   npcs = [];
 
   const ground = this.add.renderTexture(0, 0, W, H).setOrigin(0).setDepth(0);
-  for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) ground.draw('grass', x * T, y * T);
+  const gr = rng(31337);
+  const pick = (base, n) => base + Math.floor(gr() * n);
 
   const ROAD_Y = 13;
-  for (let x = 0; x < MAP_W; x++) { ground.draw('path', x*T, ROAD_Y*T); ground.draw('path', x*T, (ROAD_Y+1)*T); }
-  for (let y = ROAD_Y; y < MAP_H - 2; y++) { ground.draw('path', 18*T, y*T); ground.draw('path', 19*T, y*T); }
-  // town square: a paved plaza where the roads meet
-  for (let y = 11; y < 18; y++) for (let x = 16; x < 22; x++) ground.draw('path', x*T, y*T);
+  // Work out what every tile IS before drawing any of it. The edge fringes
+  // below need to know a tile's neighbours, which the old draw-as-you-go
+  // loop could not answer.
+  const PAVED = [], WET = [];
+  for (let y = 0; y < MAP_H; y++) { PAVED[y] = []; WET[y] = []; for (let x = 0; x < MAP_W; x++) { PAVED[y][x] = false; WET[y][x] = false; } }
+  for (let x = 0; x < MAP_W; x++) { PAVED[ROAD_Y][x] = true; PAVED[ROAD_Y + 1][x] = true; }
+  for (let y = ROAD_Y; y < MAP_H - 2; y++) { PAVED[y][18] = true; PAVED[y][19] = true; }
+  for (let y = 11; y < 18; y++) for (let x = 16; x < 22; x++) PAVED[y][x] = true;
+  for (let y = 18; y < 21; y++) for (let x = 2; x < 8; x++) { WET[y][x] = true; PAVED[y][x] = false; }
 
-  for (let y = 18; y < 21; y++) for (let x = 2; x < 8; x++) ground.draw('water', x*T, y*T);
+  const at = (grid, x, y) => (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) ? false : grid[y][x];
+
+  for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) {
+    if (WET[y][x])        ground.draw(`water${pick(0, 2)}`, x * T, y * T);
+    else if (PAVED[y][x]) ground.draw(`path${pick(0, 4)}`, x * T, y * T);
+    else                  ground.draw(`grass${pick(0, 4)}`, x * T, y * T);
+  }
+
+  // Fringes last, over the top. A path tile whose neighbour is grass gets
+  // grass hanging over that side; a grass tile next to water gets a shoreline.
+  for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) {
+    if (PAVED[y][x]) {
+      if (!at(PAVED, x, y - 1) && !at(WET, x, y - 1)) ground.draw('edge-n', x * T, y * T);
+      if (!at(PAVED, x, y + 1) && !at(WET, x, y + 1)) ground.draw('edge-s', x * T, y * T);
+      if (!at(PAVED, x - 1, y) && !at(WET, x - 1, y)) ground.draw('edge-w', x * T, y * T);
+      if (!at(PAVED, x + 1, y) && !at(WET, x + 1, y)) ground.draw('edge-e', x * T, y * T);
+    } else if (!WET[y][x]) {
+      if (at(WET, x, y + 1)) ground.draw('shore-s', x * T, y * T);
+      if (at(WET, x, y - 1)) ground.draw('shore-n', x * T, y * T);
+      if (at(WET, x + 1, y)) ground.draw('shore-e', x * T, y * T);
+      if (at(WET, x - 1, y)) ground.draw('shore-w', x * T, y * T);
+    }
+  }
 
   // flowers: decoration only, deterministic, never on paving
   const fl = this.add.graphics();
-  px(fl, 2, 2, 2, 2, 0xf2e06a); px(fl, 0, 4, 2, 2, 0xffffff); px(fl, 5, 5, 2, 2, 0xe8798f);
-  fl.generateTexture('flowers', 8, 8); fl.destroy();
-  let seed = 20260914;
-  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  px(fl, 2, 3, 1, 3, 0x3f7d3a); px(fl, 1, 1, 3, 3, 0xf2e06a);
+  px(fl, 7, 5, 1, 3, 0x3f7d3a); px(fl, 6, 3, 3, 3, 0xffffff);
+  px(fl, 11, 4, 1, 3, 0x3f7d3a); px(fl, 10, 2, 3, 3, 0xe8798f);
+  fl.generateTexture('flowers', 14, 10); fl.destroy();
+  const rnd = rng(20260914);
   for (let i = 0; i < 130; i++) {
     const tx = Math.floor(rnd() * MAP_W), ty = Math.floor(rnd() * MAP_H);
     const paved = (ty >= ROAD_Y && ty <= ROAD_Y + 1) || (tx >= 18 && tx <= 19 && ty >= ROAD_Y)
@@ -384,7 +627,13 @@ function create() {
   blocker(5*T, 19.5*T, 6*T, 3*T);                       // pond
 
   // --- scenery ---
-  const place = (key, tx, ty, depthPad, solid) => {
+  // `shade` puts an ellipse on the ground under a prop. Without it everything
+  // looks pasted on top of the grass rather than standing in it.
+  const place = (key, tx, ty, depthPad, solid, shade) => {
+    if (shade) {
+      const sh = this.add.image(tx * T, ty * T - 2, 'shadow').setOrigin(.5, .5);
+      sh.setScale(shade, shade * .8).setDepth(ty * T - 1).setAlpha(.55);
+    }
     const img = this.add.image(tx * T, ty * T, key).setOrigin(.5, 1);
     img.setDepth(ty * T + (depthPad || 0));
     if (solid) blocker(img.x, img.y - 8, img.width * 0.7, 14);
@@ -393,13 +642,13 @@ function create() {
 
   [[1,3],[4,1],[9,2],[14,1],[20,2],[25,1],[30,3],[35,1],[36,7],[0,9],
    [2,16],[8,17],[12,21],[15,18],[23,19],[27,22],[31,17],[35,20],[37,12],[24,2]]
-    .forEach(([tx,ty]) => place('tree', tx, ty, 40, true));
+    .forEach(([tx,ty], i) => place(`tree${i % 3}`, tx, ty, 40, true, .78));
 
   [[6,11],[12,11],[23,11],[29,11],[33,12],[3,12],[10,17],[14,20],[22,20],[28,18],[32,21],[16,20]]
-    .forEach(([tx,ty]) => place('bush', tx, ty, 8, false));
+    .forEach(([tx,ty]) => place('bush', tx, ty, 8, false, .42));
 
   [[7,16],[21,19],[30,16],[13,12],[26,12],[34,18]]
-    .forEach(([tx,ty]) => place('rock', tx, ty, 6, true));
+    .forEach(([tx,ty]) => place('rock', tx, ty, 6, true, .34));
 
   // fence runs along the bottom edge of the north gardens
   [[2,11],[3,11],[4,11],[8,11],[9,11],[10,11],[25,11],[26,11],[27,11],[31,11],[32,11]]
@@ -411,6 +660,15 @@ function create() {
 
   [[5.5,12.4],[11.5,12.4],[28.5,12.4],[34.5,12.4]]
     .forEach(([tx,ty]) => place('bed', tx, ty, 4, false));
+
+  // The plaza had nothing in it. A well at the crossroads, stalls beside the
+  // road and stacked goods against the walls give the eye somewhere to land.
+  place('well', 19, 16.4, 20, true, .62);
+  [[16.7, 12.6], [21.3, 12.6]].forEach(([tx, ty]) => place('stall', tx, ty, 18, true, .7));
+  [[15.4, 15.2], [22.6, 15.6], [8.6, 12.4], [26.4, 12.4]]
+    .forEach(([tx,ty], i) => place(i % 2 ? 'barrel' : 'crate', tx, ty, 6, true, .32));
+  [[13.4, 16.4], [24.6, 17.4], [6.4, 16.2], [30.4, 15.4], [11.4, 12.3], [31.4, 12.3]]
+    .forEach(([tx,ty]) => place('sign', tx, ty, 6, false, .22));
 
   // --- town square notice board ---
   const board = this.add.image(19 * T, 12.6 * T, 'board').setOrigin(.5, 1).setDepth(12.6 * T + 40);
