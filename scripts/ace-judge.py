@@ -14,6 +14,8 @@ doing the copying. So the copying happens here:
 
     ace-judge.py list                       what is on the board, numbered
     ace-judge.py pass 3 --my-pct 58.0 --why "gap 2.1 pts, need 8+"
+    ace-judge.py pass 1-6,9 --why "no edge on the no-vig line"   one call, seven rows
+    ace-judge.py rest --why "did not clear 8 points"             sweeps the remainder
     ace-judge.py bet  7 --my-pct 71.0 --stake 150 --why "SP scratched an hour ago"
     ace-judge.py verdict "No picks - 6 judged, nothing cleared 8 points."
     ace-judge.py show
@@ -108,6 +110,43 @@ def save(led):
     LEDGER.write_text(json.dumps(led, indent=1) + "\n")
 
 
+def parse_numbers(spec, total):
+    """"3", "1-6", "1-6,9,12" -> [3] / [1..6] / [1..6, 9, 12].
+
+    One judgement per tool call meant 60 candidates cost 60 round trips, and a
+    cycle spent 184 calls and hit its timeout still working. Rows that share a
+    reason - which is most of them, since most games simply do not clear the
+    bar - should cost one call."""
+    out = []
+    for part in str(spec).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part[1:]:
+            a, b = part.split("-", 1)
+            try:
+                lo, hi = int(a), int(b)
+            except ValueError:
+                return None, f"{part!r} is not a number or a range like 4-9"
+            if lo > hi:
+                lo, hi = hi, lo
+            out.extend(range(lo, hi + 1))
+        else:
+            try:
+                out.append(int(part))
+            except ValueError:
+                return None, f"{part!r} is not a number or a range like 4-9"
+    seen, uniq = set(), []
+    for n in out:
+        if n in seen:
+            continue
+        seen.add(n)
+        if not 1 <= n <= total:
+            return None, f"there is no candidate {n} - the list has {total}"
+        uniq.append(n)
+    return uniq, None
+
+
 def key(r):
     return f"{str(r.get('selection') or '').lower()}|{str(r.get('match') or '').lower()}"
 
@@ -132,39 +171,53 @@ def cmd_list(a):
 
 def record(a, status):
     _, rows = load_candidates()
-    n = a.number
-    if not 1 <= n <= len(rows):
-        print(f"there is no candidate {n} - the list has {len(rows)}. "
-              f"Run `ace-judge.py list` to see them.", file=sys.stderr)
+    nums, err = parse_numbers(a.number, len(rows))
+    if err:
+        print(f"{err}. Run `ace-judge.py list` to see them.", file=sys.stderr)
         return 1
-    src = rows[n - 1]
-
+    if not nums:
+        print("no candidates given.", file=sys.stderr)
+        return 1
     if not a.why:
         print("--why is required. The reason IS the row - a verdict with no reason "
               "tells the user nothing about why you passed.", file=sys.stderr)
         return 1
-
-    row = {k: src.get(k) for k in CARRY}
-    row["my_pct"] = a.my_pct
-    novig = src.get("novig_pct")
-    if a.my_pct is not None and novig is not None:
-        row["edge_pts"] = round(float(a.my_pct) - float(novig), 1)
-    row["why_not"] = [a.why]
-    row["status"] = status
     if status == "bet":
+        if len(nums) > 1:
+            print("bet one at a time. A stake is a decision per game, and the flat "
+                  "1.5% rule means they are not interchangeable.", file=sys.stderr)
+            return 1
         if a.stake is None:
             print("a bet needs --stake.", file=sys.stderr)
             return 1
-        row["stake"] = float(a.stake)
 
     led = load_ledger()
-    led["candidates"] = [r for r in led.get("candidates", []) if key(r) != key(row)]
-    led["candidates"].append(row)
+    done = []
+    for n in nums:
+        src = rows[n - 1]
+        row = {k: src.get(k) for k in CARRY}
+        row["my_pct"] = a.my_pct
+        novig = src.get("novig_pct")
+        if a.my_pct is not None and novig is not None:
+            row["edge_pts"] = round(float(a.my_pct) - float(novig), 1)
+        row["why_not"] = [a.why]
+        row["status"] = status
+        if status == "bet":
+            row["stake"] = float(a.stake)
+        led["candidates"] = [r for r in led.get("candidates", []) if key(r) != key(row)]
+        led["candidates"].append(row)
+        done.append(row)
     save(led)
 
-    edge = f", edge {row['edge_pts']:+.1f} pts" if row.get("edge_pts") is not None else ""
-    print(f"{status.upper()}: {row['selection']} ({row['match']}) at {row['price']}"
-          f"{edge} - {a.why}")
+    if len(done) == 1:
+        r = done[0]
+        edge = f", edge {r['edge_pts']:+.1f} pts" if r.get("edge_pts") is not None else ""
+        print(f"{status.upper()}: {r['selection']} ({r['match']}) at {r['price']}"
+              f"{edge} - {a.why}")
+    else:
+        print(f"{status.upper()} x{len(done)}: "
+              + ", ".join(r["selection"] for r in done[:8])
+              + (" ..." if len(done) > 8 else "") + f" - {a.why}")
     print(f"ledger now has {len(led['candidates'])} judged rows.")
     return 0
 
@@ -175,6 +228,24 @@ def cmd_pass(a):
 
 def cmd_bet(a):
     return record(a, "bet")
+
+
+def cmd_rest(a):
+    """Judge every remaining candidate with one shared reason.
+
+    Only for a reason that is honestly true of all of them - "did not clear the
+    bar on the no-vig line" is; "read the context file" is not. Games you never
+    actually looked at are better left out: the board marks those `unjudged` on
+    its own, which tells the user what was skipped."""
+    _, rows = load_candidates()
+    led = load_ledger()
+    have = {key(r) for r in led.get("candidates", [])}
+    todo = [i + 1 for i, r in enumerate(rows) if key(r) not in have]
+    if not todo:
+        print("every candidate is already judged.")
+        return 0
+    a.number = ",".join(str(n) for n in todo)
+    return record(a, "passed")
 
 
 def cmd_verdict(a):
@@ -208,11 +279,17 @@ def main():
 
     for name, fn in (("pass", cmd_pass), ("bet", cmd_bet)):
         s = sub.add_parser(name)
-        s.add_argument("number", type=int)
+        s.add_argument("number")          # "3", "1-6", "1-6,9,12"
         s.add_argument("--my-pct", type=float, dest="my_pct")
         s.add_argument("--why", default="")
         s.add_argument("--stake", type=float)
         s.set_defaults(fn=fn)
+
+    r = sub.add_parser("rest")
+    r.add_argument("--my-pct", type=float, dest="my_pct")
+    r.add_argument("--why", default="")
+    r.add_argument("--stake", type=float)
+    r.set_defaults(fn=cmd_rest)
 
     v = sub.add_parser("verdict")
     v.add_argument("text")

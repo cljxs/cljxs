@@ -47,42 +47,51 @@ second chance. That has three consequences:
   That has happened: eleven seconds, two tool calls, no files.
 - **A file is the only thing that survives.** Analysis in your reply is
   discarded when the process exits. If it is not written, it did not happen.
+- **You have about five minutes and roughly twenty tool calls.** A healthy
+  cycle is nearer ten. If you are past forty you are doing something one call
+  at a time that a batch would do — go back and read step 5.
 
 ## Every cycle, in this order
 
 1. **Grade settled bets FIRST.** For each open bet find its game in
    `slate.json`. If `STATUS_FINAL`, compute win/loss, update `bankroll`, move it
    to `settled_bets` with the result and one line on what you learned.
-2. **Study up.** For any game you are considering, **read its context file
-   first**. No context file, no bet. No exceptions.
+2. **Study up — narrowly.** Read the context file for a game **only if you are
+   seriously considering betting it**: three or four a cycle, not the whole
+   slate. No context file, no bet, no exceptions — but reading all of them is
+   how a cycle runs out of time before it writes anything.
+
+   `candidates.json` already carries the price and the no-vig line for every
+   game. That is enough to rule most of them out without opening anything.
 3. **Default to PASS.** Most cycles you bet nothing — the correct outcome.
 4. **Write `state/bankroll.json`** — bankroll, bets, incremented `cycle_count`,
    `last_cycle_utc`. **Before the report, not after.** A cycle once wrote a
    report while `MEMORY.md` still read "No cycles run yet"; an empty log means
    every later cycle starts blind.
-5. **Record every game you judged**, with `ace-judge.py`. Do not write
+5. **Record what you judged**, with `ace-judge.py`. Do not write
    `state/ledger.json` yourself.
 
    ```
    python3 ../../scripts/ace-judge.py list
-   python3 ../../scripts/ace-judge.py pass 3 --my-pct 58.0 --why "gap 2.1 pts, need 8+"
-   python3 ../../scripts/ace-judge.py bet  7 --my-pct 71.0 --stake 150 --why "SP scratched, line has not moved"
-   python3 ../../scripts/ace-judge.py verdict "No picks - 6 judged, nothing cleared 8 points."
+   python3 ../../scripts/ace-judge.py pass 1-6,9 --why "no edge on the no-vig line"
+   python3 ../../scripts/ace-judge.py pass 14 --my-pct 71.0 --why "SP scratched, line has not moved"
+   python3 ../../scripts/ace-judge.py bet  14 --my-pct 71.0 --stake 150 --why "..."
+   python3 ../../scripts/ace-judge.py rest --why "did not clear 8 points"
+   python3 ../../scripts/ace-judge.py verdict "No picks - nothing cleared 8 points."
    ```
 
-   `list` numbers every candidate. You give the number, your estimate and your
+   **Judge in batches.** `pass` takes a range or a list, so every game sharing a
+   reason costs one call, and `rest` sweeps everything you have not named. A
+   cycle once spent **184 tool calls** judging one game at a time and hit its
+   timeout still working. Three or four calls covers a whole slate.
+
+   `list` numbers every candidate. You give numbers, your estimate and your
    reason; the script copies the pick, the fixture, the price and the no-vig
-   line across untouched. `--why` is required — the reason is the whole point
-   of the row, because your passes are the job.
+   line across untouched. `--why` is required — the reason is the whole point of
+   the row, because your passes are the job.
 
-   This ledger is what the dashboard and the village render. A cycle once
-   spent 43 turns and $0.19 trying to write it by hand, produced six rows with
-   `selection` set to the fixture string — `"CHW @ CLE"` instead of
-   `"CHW ML"` — and none of them matched, so the board showed every game as
-   unjudged. That is why you no longer type those strings.
-
-   Games you never looked at stay out. The board marks them `unjudged` on its
-   own, which is honest and tells the user what you skipped.
+   Use `rest` only for a reason honestly true of every remaining game. "Did not
+   clear the bar on the no-vig line" is. "Read the context file" is not.
 
 6. **Write the report.** `data/_meta.json` gives you its exact filename in
    `report_name` — use that string, do not work it out. `candidates.json`
