@@ -38,10 +38,14 @@ FIXTURES = ROOT / "tests" / "fixtures"
 # the timestamp test meaningless. Each capture proves it is the thing it
 # claims to be before it is allowed to overwrite anything.
 CAPTURES = [
-    ("config-unset.txt",
-     ["openclaw", "config", "get", "agents.defaults.nothingIsSetHere"],
-     r"unset|not set|no value",
-     "how openclaw reports a path with no authored value"),
+    # config-unset.txt is deliberately NOT re-captured. openclaw distinguishes
+    # "valid but unset" from "unknown path", and only the first is the format
+    # signoff-style parsing has to survive. Naming a fake path gets the second
+    # ("Unknown config path"), so this used to skip on every run and read as a
+    # failure. Capturing the real one needs a path that is in the schema and
+    # has no authored value - a moving target, since setting one is exactly
+    # what we do to them. The committed fixture is real, taken from
+    # agents.defaults.timeoutSeconds before it was set to 300.
     ("config-timeout-300.txt",
      ["openclaw", "config", "get", "agents.defaults.timeoutSeconds"],
      r"^\s*\d+\s*$",
