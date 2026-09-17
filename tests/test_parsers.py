@@ -17,6 +17,7 @@ import importlib.util
 import json
 import os
 import re
+import struct
 import subprocess
 import sys
 import tempfile
@@ -720,3 +721,157 @@ class WhatCountsAsJudged(unittest.TestCase):
                 self.assertNotRegex(
                     src, r'status\"?\)\s*in\s*\(\"passed\"',
                     f"{f} has grown its own copy of the judged predicate again")
+
+
+class BackgroundKnockout(unittest.TestCase):
+    """A sticker is die-cut so an opaque square is fine. A garment prints the
+    background as a visible rectangle - a white box on a black tee. Nothing
+    Emily generates has an alpha channel, so this is the one step between her
+    art and anything wearable.
+    """
+
+    def setUp(self):
+        self.ko = load("knockout", "knockout.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def solid(self, w, h, fn):
+        px = bytearray()
+        for y in range(h):
+            for x in range(w):
+                px += bytes(fn(x, y)) + b"\xff"
+        return px
+
+    def png(self, name, w, h, fn):
+        p = self.d / name
+        self.ko.encode(p, w, h, self.solid(w, h, fn))
+        return p
+
+    # --- the reason it floods rather than thresholds ------------------------
+
+    def test_background_colour_inside_the_art_survives(self):
+        """THE design decision. A white highlight inside a dark shape is the
+        same colour as the background; a global threshold erases it and leaves
+        a hole you only see on the printed garment."""
+        W = H = 64
+
+        def art(x, y):
+            dx, dy = x - W / 2, y - H / 2
+            in_disc = dx * dx + dy * dy < 22 * 22
+            in_eye = (x - 26) ** 2 + (y - 26) ** 2 < 4 * 4
+            return (255, 255, 255) if (not in_disc or in_eye) else (20, 20, 20)
+
+        p = self.png("eye.png", W, H, art)
+        w, h, px = self.ko.decode(p)
+        self.ko.knockout(w, h, px)
+        a = lambda x, y: px[(y * w + x) * 4 + 3]
+        self.assertEqual(a(0, 0), 0, "the corner is background and must go")
+        self.assertEqual(a(32, 32), 255, "the disc is art")
+        self.assertEqual(a(26, 26), 255, "the white eye is enclosed - it must stay")
+
+    def test_it_writes_a_real_alpha_channel(self):
+        p = self.png("x.png", 32, 32, lambda x, y: (255, 255, 255) if x < 24 else (10, 10, 10))
+        w, h, px = self.ko.decode(p)
+        self.ko.knockout(w, h, px)
+        out = self.d / "out.png"
+        self.ko.encode(out, w, h, px)
+        colour_type = out.read_bytes()[25]
+        self.assertEqual(colour_type, 6, "PNG colour type must be 6 (RGBA), not 2 (RGB)")
+
+    # --- guards: it refuses rather than writing a plausible wrong file ------
+
+    def test_an_image_that_is_all_background_is_refused(self):
+        p = self.png("blank.png", 32, 32, lambda x, y: (255, 255, 255))
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knockout.py"),
+                            str(p), str(self.d / "no.png")],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("the artwork itself matched the background", r.stderr)
+        self.assertFalse((self.d / "no.png").exists(), "nothing should be written")
+
+    def test_art_with_no_flat_background_is_refused(self):
+        # A gradient everywhere: no border colour to fill from.
+        p = self.png("grad.png", 48, 48, lambda x, y: (x * 5 % 256, y * 5 % 256, 128))
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knockout.py"),
+                            str(p), str(self.d / "no.png")],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no flat background", r.stderr)
+        self.assertFalse((self.d / "no.png").exists())
+
+    def test_art_that_runs_off_the_edge_is_refused(self):
+        """The best case the border guard catches. When the design bleeds to
+        one side, the most common border colour is the ARTWORK - so a naive
+        knockout removes the design and keeps the background. Inverted, and
+        it would look fine in a thumbnail."""
+        p = self.png("bleed.png", 96, 96,
+                     lambda x, y: (20, 90, 160) if x < 70 else (250, 250, 250))
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knockout.py"),
+                            str(p), str(self.d / "no.png")],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no flat background", r.stderr)
+        self.assertFalse((self.d / "no.png").exists())
+
+    def test_a_jpeg_is_named_as_such(self):
+        p = self.d / "photo.jpg"
+        p.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 64)
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knockout.py"),
+                            str(p), str(self.d / "no.png")],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("JPEG", r.stderr)
+
+    # --- the decoder paths the docstring claims ----------------------------
+
+    def test_round_trip_is_lossless(self):
+        px = self.solid(16, 16, lambda x, y: (x * 16 % 256, y * 16 % 256, 77))
+        p = self.d / "rt.png"
+        self.ko.encode(p, 16, 16, px)
+        w, h, back = self.ko.decode(p)
+        self.assertEqual((w, h), (16, 16))
+        self.assertEqual(bytes(back), bytes(px))
+
+    def test_it_reads_emilys_own_placeholder(self):
+        # colour type 2, written by emily-assets.py - the real input.
+        out = self.d / "ph.png"
+        r = subprocess.run([sys.executable, str(SCRIPTS / "emily-assets.py"),
+                            "--prompt", "a fox", "--out", str(out),
+                            "--size", "64", "--placeholder-only"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(out.read_bytes()[25], 2, "placeholder should be RGB, no alpha")
+        w, h, px = self.ko.decode(out)
+        self.assertEqual((w, h), (64, 64))
+
+    def test_greyscale_and_palette_decode(self):
+        def build(colour_type, body_rows, palette=None):
+            def chunk(tag, b):
+                import zlib as z
+                return (struct.pack(">I", len(b)) + tag + b
+                        + struct.pack(">I", z.crc32(tag + b) & 0xFFFFFFFF))
+            import zlib as z
+            raw = b"".join(b"\x00" + r for r in body_rows)
+            png = b"\x89PNG\r\n\x1a\n"
+            png += chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 2, 8, colour_type, 0, 0, 0))
+            if palette:
+                png += chunk(b"PLTE", palette)
+            png += chunk(b"IDAT", z.compress(raw))
+            png += chunk(b"IEND", b"")
+            return png
+
+        grey = self.d / "grey.png"
+        grey.write_bytes(build(0, [bytes([0, 64, 128, 255])] * 2))
+        w, h, px = self.ko.decode(grey)
+        self.assertEqual((w, h), (4, 2))
+        self.assertEqual((px[0], px[1], px[2], px[3]), (0, 0, 0, 255))
+
+        pal = self.d / "pal.png"
+        pal.write_bytes(build(3, [bytes([0, 1, 0, 1])] * 2,
+                              palette=bytes([255, 0, 0, 0, 0, 255])))
+        w, h, px = self.ko.decode(pal)
+        self.assertEqual((px[0], px[1], px[2]), (255, 0, 0))
+        self.assertEqual((px[4], px[5], px[6]), (0, 0, 255))
