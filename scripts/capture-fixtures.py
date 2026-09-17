@@ -100,8 +100,24 @@ def redact(text, secrets):
     return text
 
 
+def normalize(argv):
+    """iOS Smart Punctuation rewrites `--write` as `\u2014write` before it ever
+    reaches the shell. The flag is then silently unrecognised and the script
+    reports that it wrote nothing, which reads as a bug in the script. Accept
+    the dash the phone actually sends."""
+    out = []
+    for a in argv:
+        for dash in ("\u2014", "\u2013", "\u2212"):        # em, en, minus
+            if a.startswith(dash):
+                a = "--" + a[len(dash):]
+                break
+        out.append(a)
+    return out
+
+
 def main():
-    write = "--write" in sys.argv
+    argv = normalize(sys.argv[1:])
+    write = "--write" in argv
     secrets = known_secrets()
     print(f"{len(secrets)} credential value(s) known and will be masked literally.\n")
 
