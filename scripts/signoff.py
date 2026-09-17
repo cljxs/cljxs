@@ -33,6 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import et_time  # noqa: E402
+import remember  # noqa: E402
 
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
 CANDIDATES = ROOT / "agents" / "ace" / "data" / "candidates.json"
@@ -254,12 +255,16 @@ def main():
                                  f"{extra}  ({age(path)})")
 
         elif kind == "memory":
-            text = path.read_text().strip()
-            last = text.splitlines()[-1].strip() if text else ""
-            if not last:
-                lines.append(f"{label}: MISSING - {rel} is empty")
+            # The same rule the verifier applies. This used to ask only whether
+            # the last line was non-empty, so a cycle that recorded nothing new
+            # still signed off clean and then failed verification.
+            ok, why = remember.written_this_cycle(path, started)
+            if not ok:
+                lines.append(f"{label}: MISSING - {why}")
                 missing.append(label)
             else:
+                text = path.read_text().strip()
+                last = text.splitlines()[-1].strip()
                 lines.append(f"{label}: {last[:160]}  ({age(path)})")
 
     print("\n".join(lines))

@@ -363,3 +363,92 @@ class HeadersNameRealCommands(unittest.TestCase):
                                       f"but it accepts: {', '.join(sorted(subs))}")
                     checked += 1
         self.assertGreater(checked, 0, "no commands were checked - is CMD_RE matching?")
+
+
+class MemoryRecording(unittest.TestCase):
+    """Ace ran a clean cycle on 2026-09-17 - 32 calls, no failures, all four
+    deliverables - and the unit reported failure because MEMORY.md went from
+    258 bytes to 175.
+
+    Three rules disagreed about one fact:
+        instructions    append one line, trim oldest past ~2KB
+        the verifiers   fail if the file did not grow
+        signoff.py      pass if the last line is non-empty
+
+    The first two cannot both hold. The first legitimate trim at the cap would
+    have failed every cycle from then on, for ace, belfort and emily alike.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.agent = Path(self.tmp.name)
+        self.mem = self.agent / "MEMORY.md"
+        self.remember = load("remember", "remember.py")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_appending_keeps_what_was_there(self):
+        self.mem.write_text("- 2026-09-15 an older note\n")
+        self.remember.remember(self.agent, "a newer note")
+        text = self.mem.read_text()
+        self.assertIn("an older note", text)
+        self.assertIn("a newer note", text)
+
+    def test_the_line_is_dated(self):
+        self.remember.remember(self.agent, "something")
+        self.assertRegex(self.mem.read_text().strip(), r"^- \d{4}-\d{2}-\d{2} something$")
+
+    def test_an_empty_line_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.remember.remember(self.agent, "   ")
+
+    def test_trimming_drops_the_oldest_and_keeps_the_newest(self):
+        self.mem.write_text("".join(f"- 2026-09-0{i%9+1} line number {i} padding padding "
+                                    f"padding padding padding\n" for i in range(60)))
+        before = self.mem.stat().st_size
+        self.assertGreater(before, self.remember.MAX_BYTES)
+        _, trimmed = self.remember.remember(self.agent, "the newest note")
+        text = self.mem.read_text()
+        self.assertGreater(trimmed, 0)
+        self.assertLessEqual(len(text.encode()), self.remember.MAX_BYTES)
+        self.assertIn("the newest note", text)
+        self.assertNotIn("line number 0 ", text)
+
+    def test_a_trim_that_SHRINKS_the_file_still_counts_as_recorded(self):
+        # THE LANDMINE. Byte growth was the old test, so this exact case - the
+        # cycle that records correctly and trims at the cap - was a guaranteed
+        # failure for every cycle after the file first filled up.
+        self.mem.write_text("".join(f"- 2026-09-01 padding line {i} "
+                                    f"{'x' * 60}\n" for i in range(50)))
+        before = self.mem.stat().st_size
+        started = int(self.mem.stat().st_mtime) - 5
+        self.remember.remember(self.agent, "recorded properly")
+        after = self.mem.stat().st_size
+        self.assertLess(after, before, "this test is pointless unless the file shrank")
+        ok, why = self.remember.written_this_cycle(self.mem, started)
+        self.assertTrue(ok, f"a trim at the cap must not read as a failed cycle: {why}")
+
+    def test_a_file_untouched_by_this_run_does_not_count(self):
+        self.mem.write_text("- 2026-09-15 written long ago\n")
+        started = int(self.mem.stat().st_mtime) + 600
+        ok, why = self.remember.written_this_cycle(self.mem, started)
+        self.assertFalse(ok)
+        self.assertIn("recorded nothing", why)
+
+    def test_missing_and_empty_are_reported_apart(self):
+        ok, why = self.remember.written_this_cycle(self.mem, 0)
+        self.assertFalse(ok)
+        self.assertIn("does not exist", why)
+        self.mem.write_text("   \n")
+        ok, why = self.remember.written_this_cycle(self.mem, 0)
+        self.assertFalse(ok)
+        self.assertIn("is empty", why)
+
+    def test_it_works_for_the_agents_that_record_elsewhere(self):
+        # scout and fury record into state/last-run.txt, not MEMORY.md.
+        other = self.agent / "state" / "last-run.txt"
+        other.parent.mkdir()
+        other.write_text("cycle ok\n")
+        ok, _ = self.remember.written_this_cycle(other, int(other.stat().st_mtime) - 5)
+        self.assertTrue(ok)

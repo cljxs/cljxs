@@ -93,7 +93,7 @@ result — do not guess at what to build.
    `ready_for_review` once the Printify draft exists.
 6. **Write the report** to `reports/YYYY-MM-DD-<slug>.md` in plain English:
    what you made, the economics, what needs the user's eye before publishing.
-7. **Append ONE line** to `MEMORY.md`. Trim it if it passes ~2KB.
+7. **Record one line** with: `python3 ../../scripts/remember.py emily "<one short line>"` - it appends and trims for you. Never edit `MEMORY.md` by hand: overwriting it loses every earlier cycle, and that is what made a clean cycle report failure.
 
 ## When the user approves or rejects
 

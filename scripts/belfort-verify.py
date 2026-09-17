@@ -31,6 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import et_time  # noqa: E402
+import remember  # noqa: E402
 from et_time import eastern_now  # noqa: E402
 
 
@@ -154,10 +155,9 @@ def main():
 
     memory = AGENT / "MEMORY.md"
     mem_after = memory.stat().st_size if memory.exists() else 0
-    if mem_after <= mem_before:
-        problems.append(f"MEMORY.md did not grow ({mem_before} -> {mem_after} bytes) "
-                        "- the cycle recorded nothing it will remember")
-
+    mem_ok, mem_why = remember.written_this_cycle(memory, started)
+    if not mem_ok:
+        problems.append(mem_why)
     if problems:
         print("belfort-verify: FAILED - the cycle did not produce its deliverables")
         for x in problems:

@@ -69,7 +69,7 @@ and do not write that file by hand even to "fix" it.
    Do not check a clock for this. The clock you can see reads UTC, and the
    09:35 ET open is 13:35 UTC, which looks like the afternoon: that run was
    filed as `2026-09-16-close.md` when it was the open.
-6. **Append ONE short line** to `MEMORY.md`. Trim oldest lines past ~2KB.
+6. **Record one line** with: `python3 ../../scripts/remember.py belfort "<one short line>"` - it appends and trims for you. Never edit `MEMORY.md` by hand: overwriting it loses every earlier cycle, and that is what made a clean cycle report failure.
 
 ## Exit rules — checked every cycle
 

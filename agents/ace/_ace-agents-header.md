@@ -112,7 +112,7 @@ second chance. That has three consequences:
    because in UTC that moment is the next day at 03:31.
 
    Explain **every pass**, not just bets.
-7. **Append ONE short line** to `MEMORY.md`. Trim oldest lines past ~2KB.
+7. **Record one line** with: `python3 ../../scripts/remember.py ace "<one short line>"` - it appends and trims for you. Never edit `MEMORY.md` by hand: overwriting it loses every earlier cycle, and that is what made a clean cycle report failure.
 8. **Close the cycle:**
 
    ```

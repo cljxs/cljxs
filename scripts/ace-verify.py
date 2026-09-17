@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # Same two functions the fetcher uses, so the name this demands and the
 # name Ace was handed can never disagree.
 import et_time  # noqa: E402
+import remember  # noqa: E402
 from et_time import eastern_now  # noqa: E402
 
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
@@ -238,8 +239,12 @@ def main():
 
     memory = AGENT / "MEMORY.md"
     mem_after = memory.stat().st_size if memory.exists() else 0
-    if mem_after <= mem_before:
-        problems.append(f"MEMORY.md did not grow ({mem_before} -> {mem_after} bytes)")
+    # Not byte growth: a trim at the 2KB cap shrinks the file while recording
+    # perfectly well, and that turned a clean cycle into a reported failure.
+    # remember.written_this_cycle is the one rule signoff.py uses too.
+    mem_ok, mem_why = remember.written_this_cycle(memory, started)
+    if not mem_ok:
+        problems.append(mem_why)
 
     if problems:
         print("ace-verify: FAILED - the cycle did not produce its deliverables")
