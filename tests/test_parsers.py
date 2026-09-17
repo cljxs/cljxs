@@ -286,19 +286,24 @@ class ReportNameAgreement(unittest.TestCase):
         path, _slot = self.verify.expected_report("belfort", self.agent)
         return found is not None, Path(path).is_file()
 
-    def test_they_agree_when_the_fetcher_stamped_a_name(self):
+    def test_they_agree_when_the_report_is_there(self):
+        # The name comes from the clock now, not the stamp, so the test has to
+        # ask for it rather than hardcode a slot - hardcoding one made this
+        # fail at 11am and pass at 4pm.
+        want, _ = et_time.expected_report(self.agent, "belfort")
         (self.agent / "data" / "_meta.json").write_text(
-            json.dumps({"report_name": "2026-09-17-close.md", "slot": "close"}))
-        (self.agent / "reports" / "2026-09-17-close.md").write_text("# close\n")
+            json.dumps({"report_name": want, "slot": _}))
+        (self.agent / "reports" / want).write_text("# report\n")
         a, b = self.verdicts()
-        self.assertEqual(a, b, "stamped name: both sides should see the report")
+        self.assertEqual(a, b, "both sides should see the report")
         self.assertTrue(a)
 
-    def test_they_agree_when_the_stamped_report_is_genuinely_absent(self):
+    def test_they_agree_when_the_report_is_genuinely_absent(self):
+        want, slot_ = et_time.expected_report(self.agent, "belfort")
         (self.agent / "data" / "_meta.json").write_text(
-            json.dumps({"report_name": "2026-09-17-close.md", "slot": "close"}))
+            json.dumps({"report_name": want, "slot": slot_}))
         a, b = self.verdicts()
-        self.assertEqual(a, b, "stamped name, no file: both sides should see it missing")
+        self.assertEqual(a, b, "no file: both sides should see it missing")
         self.assertFalse(a)
 
     def test_they_agree_with_no_meta_at_all(self):
@@ -472,19 +477,20 @@ class VerifierMessages(unittest.TestCase):
                 self.assertNotIn('or "this"', (SCRIPTS / f).read_text(),
                                  f"{f} still falls back to a slot called 'this'")
 
-    def test_expected_report_reports_an_absent_slot_as_none(self):
-        # A well-formed name with no slot key. This used to be written with
-        # report_name "2026-09-17-cycle-report.md", which the stamp guard now
-        # rejects outright - so the case has to be built from a name the
-        # fetcher could really have written, or it tests the guard instead.
+    def test_a_slotted_agent_always_gets_a_real_slot_name(self):
+        # The fallback used to be the word "this", which the verifier then
+        # printed as a slot: "the this slot files as `-this.md`". A slotted
+        # agent now resolves from the clock, so the slot is always one of its
+        # own and never a word from a sentence.
         tmp = tempfile.TemporaryDirectory()
         agent = Path(tmp.name)
         (agent / "data").mkdir()
-        (agent / "data" / "_meta.json").write_text(
-            json.dumps({"report_name": "2026-09-17-open.md"}))
-        name, slot_ = et_time.expected_report(agent, "belfort")
-        self.assertEqual(name, "2026-09-17-open.md")
-        self.assertIsNone(slot_, "an absent slot must be None, not a word")
+        (agent / "data" / "_meta.json").write_text(json.dumps({"report_name": "x.md"}))
+        for name, slots in (("belfort", {"open", "close"}),
+                            ("ace", {"afternoon", "night"})):
+            with self.subTest(agent=name):
+                _, slot_ = et_time.expected_report(agent, name)
+                self.assertIn(slot_, slots)
         tmp.cleanup()
 
 
@@ -580,3 +586,58 @@ class SignoffWithoutAnEpoch(unittest.TestCase):
         (self.agent / "state" / ".cycle-started").write_text(str(int(time.time()) - 60))
         r = self.run_signoff()
         self.assertNotIn(".cycle-started is missing", r.stdout)
+
+
+class TheClockDecidesNotTheStamp(unittest.TestCase):
+    """Belfort's 14:12 UTC cycle - 10:12 ET, the open slot - wrote
+    2026-09-17-close.md, and belfort-verify PASSED it, reporting that name.
+    The only place it could have read that name is data/_meta.json, which the
+    fetcher had stamped `open` and re-stamped `open` half an hour later.
+
+    Checking the stamp's shape was not enough: `close` is a real belfort slot,
+    just the wrong half of the day. A file inside the workspace of the agent
+    being graded cannot decide what it is graded on.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.agent = Path(self.tmp.name)
+        (self.agent / "data").mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def stamp(self, **meta):
+        (self.agent / "data" / "_meta.json").write_text(json.dumps(meta))
+
+    def test_the_exact_case_that_passed_and_should_not_have(self):
+        morning = datetime(2026, 9, 17, 10, 12, tzinfo=timezone.utc)   # open
+        self.stamp(report_name="2026-09-17-close.md", slot="close")
+        name, slot_ = et_time.expected_report(self.agent, "belfort", now=morning)
+        self.assertEqual(name, "2026-09-17-open.md")
+        self.assertEqual(slot_, "open")
+
+    def test_a_stamp_that_agrees_with_the_clock_changes_nothing(self):
+        afternoon = datetime(2026, 9, 17, 15, 55, tzinfo=timezone.utc)  # close
+        self.stamp(report_name="2026-09-17-close.md", slot="close")
+        name, _ = et_time.expected_report(self.agent, "belfort", now=afternoon)
+        self.assertEqual(name, "2026-09-17-close.md")
+
+    def test_no_stamp_at_all_is_fine(self):
+        morning = datetime(2026, 9, 17, 10, 12, tzinfo=timezone.utc)
+        name, _ = et_time.expected_report(self.agent, "belfort", now=morning)
+        self.assertEqual(name, "2026-09-17-open.md")
+
+    def test_the_cycle_start_epoch_beats_the_wall_clock(self):
+        # A cycle that starts in one slot must be graded on that slot even if
+        # it is still running when the boundary passes.
+        started = datetime(2026, 9, 17, 10, 12, tzinfo=timezone.utc).timestamp()
+        name, _ = et_time.expected_report(self.agent, "belfort", started=started)
+        self.assertEqual(name, "2026-09-17-open.md")
+
+    def test_ace_is_covered_too(self):
+        night = datetime(2026, 9, 16, 23, 30, tzinfo=timezone.utc)
+        self.stamp(report_name="2026-09-16-afternoon.md", slot="afternoon")
+        name, slot_ = et_time.expected_report(self.agent, "ace", now=night)
+        self.assertEqual(name, "2026-09-16-night.md")
+        self.assertEqual(slot_, "night")

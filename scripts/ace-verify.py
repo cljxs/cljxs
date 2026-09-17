@@ -175,11 +175,11 @@ def check_ledger(problems, notes, started):
                  f"{len(base_keys) - len(matched)} left unjudged")
 
 
-def expected_report(agent_name, agent_dir):
+def expected_report(agent_name, agent_dir, started=None):
     """The report filename this cycle owes, taken from the fetcher's _meta.json
     where it exists so both sides read one value, computed only as a fallback."""
     # One answer, from et_time, so this can never disagree with signoff.py.
-    name, slot = et_time.expected_report(agent_dir, agent_name)
+    name, slot = et_time.expected_report(agent_dir, agent_name, started=started)
     return agent_dir / "reports" / name, slot
 
 
@@ -217,7 +217,7 @@ def main():
     # would usually agree - but a run started near a slot boundary (a manual
     # test at 11:59 ET, say) would be handed "morning" and judged against
     # "afternoon", and the agent would be failed for obeying its instructions.
-    report, want = expected_report("ace", AGENT)
+    report, want = expected_report("ace", AGENT, started)
     if not report.exists():
         # Everything already filed for this date, whatever slot it claims -
         # that is how the wrongly-named report gets surfaced rather than just

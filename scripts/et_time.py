@@ -99,20 +99,37 @@ def stamp_is_wellformed(name, agent_name):
     return re.match(rf"^\d{{4}}-\d{{2}}-\d{{2}}-(?:{names})\.md$", str(name)) is not None
 
 
-def expected_report(agent_dir, agent_name, now=None):
+def expected_report(agent_dir, agent_name, now=None, started=None):
     """The exact report this cycle owes, for EVERY caller.
 
-    Three copies of this used to exist - signoff.py, belfort-verify.py and
-    ace-verify.py - and they agreed only when the fetcher had stamped a
-    report_name into data/_meta.json. Without one, signoff accepted any fresh
-    .md while the verifiers computed a filename and demanded that. Same cycle,
-    same files, opposite verdicts: belfort was told its report was both
-    present and missing and spent 49 tool calls on the contradiction.
+    For an agent with scheduled slots this is COMPUTED and the stamp in
+    data/_meta.json is not consulted. That file lives in the workspace of the
+    agent being graded, which gave belfort a way to change the filename it was
+    judged on: at 14:12 UTC - 10:12 ET, the open slot - it wrote
+    2026-09-17-close.md, the verifier agreed and passed the cycle, and the
+    fetcher overwrote the stamp back to "open" half an hour later. The name the
+    verifier reported could only have come from _meta.json.
 
-    Returns (name, slot). A name of None means this agent chooses its own
-    filenames - scout, emily and fury do - and any report written by the run
-    counts. It never means "no report needed".
+    Checking the stamp's shape was not enough. `close` is a real belfort slot;
+    it was simply the wrong half of the day. The only reliable fix is that the
+    graded party has no say: the clock decides.
+
+    `started` is the cycle-start epoch the wrapper passes to the verifier, used
+    in preference to the wall clock so a long cycle cannot drift into the next
+    slot while it runs. Belfort wakes at 09:35 and 15:55 and ace at 15:00 and
+    23:30, all hours from a boundary, so this is belt and braces.
+
+    Agents with no slots - scout, emily, fury - choose their own filenames, and
+    their stamp, which no fetcher writes, still stands. Returns (name, slot); a
+    name of None means any report this run wrote counts.
     """
+    if agent_name in SLOTS:
+        if now is None and started:
+            now = datetime.fromtimestamp(started, timezone.utc).astimezone(_ET) \
+                if _ET else datetime.fromtimestamp(started, timezone.utc) - timedelta(hours=4)
+        now = now or eastern_now()
+        return report_name(agent_name, now), slot(agent_name, now)
+
     try:
         meta = json.loads((Path(agent_dir) / "data" / "_meta.json").read_text())
         name = meta.get("report_name")
@@ -120,10 +137,4 @@ def expected_report(agent_dir, agent_name, now=None):
             return name, (str(meta.get("slot") or "").strip() or None)
     except Exception:
         pass
-
-    # No stamped name. An agent with scheduled slots still owes a specific
-    # file - computing it here is what keeps both sides saying the same thing.
-    if agent_name in SLOTS:
-        now = now or eastern_now()
-        return report_name(agent_name, now), slot(agent_name, now)
     return None, None

@@ -124,7 +124,7 @@ def newest_report(d, started, agent_name):
     # et_time.expected_report is the one place this is decided. It used to be
     # decided here as well, and the two answers differed whenever _meta.json
     # carried no report_name.
-    want, _slot = et_time.expected_report(d.parent, agent_name)
+    want, _slot = et_time.expected_report(d.parent, agent_name, started=started)
 
     if want:
         f = d / want

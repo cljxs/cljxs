@@ -95,11 +95,11 @@ def reconcile(p, problems):
                         f"is removed by `sell`, not zeroed")
 
 
-def expected_report(agent_name, agent_dir):
+def expected_report(agent_name, agent_dir, started=None):
     """The report filename this cycle owes, taken from the fetcher's _meta.json
     where it exists so both sides read one value, computed only as a fallback."""
     # One answer, from et_time, so this can never disagree with signoff.py.
-    name, slot = et_time.expected_report(agent_dir, agent_name)
+    name, slot = et_time.expected_report(agent_dir, agent_name, started=started)
     return agent_dir / "reports" / name, slot
 
 
@@ -131,7 +131,7 @@ def main():
 
     # Prefer the name the fetcher stamped, so a run that straddles a slot
     # boundary is judged against the name it was actually given.
-    report, want = expected_report("belfort", AGENT)
+    report, want = expected_report("belfort", AGENT, started)
     if not report.exists():
         # Everything already filed for this date, whatever slot it claims -
         # that is how the wrongly-named report gets surfaced rather than just
