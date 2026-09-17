@@ -875,3 +875,43 @@ class BackgroundKnockout(unittest.TestCase):
         w, h, px = self.ko.decode(pal)
         self.assertEqual((px[0], px[1], px[2]), (255, 0, 0))
         self.assertEqual((px[4], px[5], px[6]), (0, 0, 255))
+
+
+class PricingApparelBySize(unittest.TestCase):
+    """Stickers have five variants and you type five prices in order. A tee is
+    sizes x colours - a hundred or more - and typing a hundred numbers in the
+    right order is not a workflow, it is a way to get one size wrong and not
+    notice until it sells.
+    """
+
+    def setUp(self):
+        self.pf = load("emily_printify", "emily-printify.py")
+
+    def test_size_is_found_in_either_order(self):
+        for title, want in (("Black / S", "S"), ("S / Black", "S"),
+                            ("Heather Grey / 2XL", "2XL"), ("2XL / Heather Grey", "2XL"),
+                            ("White / XXL", "2XL"),          # alias
+                            ("navy / m", "M")):              # case
+            with self.subTest(title=title):
+                self.assertEqual(self.pf.size_of(title), want)
+
+    def test_a_sticker_size_is_not_a_garment_size(self):
+        # Sticker titles are inches. Reading one as a size would route stickers
+        # into the by-size path and silently change how they are priced.
+        for title in ('2" x 2"', '5.5" x 5.5"', 'Matte', ''):
+            with self.subTest(title=title):
+                self.assertIsNone(self.pf.size_of(title))
+
+    def test_L_inside_a_colour_name_is_not_a_size(self):
+        # "Slate" contains no standalone size token; the parser splits on "/"
+        # and matches whole tokens, so a colour cannot be read as a size.
+        self.assertIsNone(self.pf.size_of("Slate"))
+        self.assertEqual(self.pf.size_of("Slate / L"), "L")
+
+    def test_every_title_is_kept_not_the_first_twelve(self):
+        # cmd_pick used to truncate variant_titles to 12. Invisible with five
+        # sticker variants; on a tee it dropped 88 of them, and --by-size has
+        # nothing to read a size from in a title that was never saved.
+        src = (SCRIPTS / "emily-printify.py").read_text()
+        self.assertNotIn('for v in chosen][:12]', src)
+        self.assertIn('"variant_titles": [v.get("title") for v in chosen],', src)

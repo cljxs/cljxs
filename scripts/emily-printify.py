@@ -241,17 +241,40 @@ def cmd_pick(a):
         "blueprint_id": int(a.blueprint),
         "provider_id": int(a.provider),
         "variant_ids": [v["id"] for v in chosen],
-        "variant_titles": [v.get("title") for v in chosen][:12],
+        # Every title, not the first 12. The cap was invisible while the only
+        # product was a five-size sticker; a tee has sizes x colours, so it
+        # dropped most of them - and --by-size has nothing to read a size from
+        # in a title that was never saved.
+        "variant_titles": [v.get("title") for v in chosen],
         "chosen_at": _now(),
     }
     CATALOG.parent.mkdir(parents=True, exist_ok=True)
     CATALOG.write_text(json.dumps(cat, indent=1) + "\n")
     print(f"saved '{a.product}' -> blueprint {a.blueprint}, provider {a.provider}, "
           f"{len(chosen)} variant(s)")
-    for t in cat[a.product]["variant_titles"]:
+    for t in cat[a.product]["variant_titles"][:12]:
         print(f"    {t}")
+    if len(chosen) > 12:
+        print(f"    ... and {len(chosen) - 12} more")
     print(f"\nWritten to {CATALOG}")
     print("Drafts for this product type are now automatic.")
+
+
+# Printify writes an apparel variant as "S / Black" or "Black / S" depending
+# on the blueprint, so the size is found by looking for a known token rather
+# than by position.
+SIZES = ["XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"]
+_SIZE_ALIAS = {"XXL": "2XL", "XXXL": "3XL", "XXXXL": "4XL", "XXXXXL": "5XL"}
+
+
+def size_of(title):
+    """The size in a variant title, or None. Case and order insensitive."""
+    for part in str(title or "").replace("(", "/").replace(")", "/").split("/"):
+        tok = part.strip().upper()
+        tok = _SIZE_ALIAS.get(tok, tok)
+        if tok in SIZES:
+            return tok
+    return None
 
 
 def cmd_prices(a):
@@ -271,9 +294,33 @@ def cmd_prices(a):
 
     ids = entry.get("variant_ids") or []
     titles = entry.get("variant_titles") or []
-    if not a.price:
-        print(f"'{a.product}' has {len(ids)} variant(s):\n")
+    # --by-size and --all are handled below; only an empty invocation lists.
+    if not a.price and not a.by_size and not a.all_price:
         current = entry.get("prices") or {}
+        sizes_seen = {}
+        for i, vid in enumerate(ids):
+            sz = size_of(titles[i] if i < len(titles) else "")
+            if sz:
+                sizes_seen.setdefault(sz, []).append(current.get(str(vid)))
+
+        print(f"'{a.product}' has {len(ids)} variant(s).\n")
+        if sizes_seen:
+            # Apparel. Listing a hundred rows and asking for a hundred numbers
+            # in the right order is not a workflow, so show the sizes instead.
+            for sz in sorted(sizes_seen, key=lambda z: SIZES.index(z) if z in SIZES else 99):
+                vals = sizes_seen[sz]
+                set_ = [v for v in vals if v]
+                shown = f"${set_[0]/100:.2f}" if set_ else "(unset)"
+                print(f"  {sz:<5} {len(vals):>3} variant(s)  {shown}")
+            example = " ".join(f"{z}=0.00" for z in
+                               sorted(sizes_seen, key=lambda z: SIZES.index(z)
+                                      if z in SIZES else 99))
+            print(f"\nPrice them by size:\n"
+                  f"  emily-printify.py prices --product {a.product} --by-size {example}")
+            print(f"\nOr one price for all of them:\n"
+                  f"  emily-printify.py prices --product {a.product} --all 21.99")
+            return 0
+
         for i, vid in enumerate(ids):
             t = titles[i] if i < len(titles) else f"variant {vid}"
             now = current.get(str(vid))
@@ -281,6 +328,69 @@ def cmd_prices(a):
         print(f"\nSet them in that order:\n"
               f"  emily-printify.py prices --product {a.product} "
               f"{' '.join('0.00' for _ in ids)}")
+        return 0
+
+    # One price per size beats one per variant: a tee is sizes x colours, and
+    # typing a hundred numbers in the right order is not a workflow.
+    if a.by_size or a.all_price:
+        if a.all_price:
+            wanted = {vid: float(a.all_price) for vid in ids}
+        else:
+            table = {}
+            for pair in a.by_size:
+                if "=" not in pair:
+                    print(f"--by-size takes SIZE=PRICE, got {pair!r}", file=sys.stderr)
+                    sys.exit(2)
+                k, v = pair.split("=", 1)
+                k = k.strip().upper()
+                table[_SIZE_ALIAS.get(k, k)] = float(v)
+
+            wanted, unmatched = {}, []
+            for i, vid in enumerate(ids):
+                t = titles[i] if i < len(titles) else ""
+                sz = size_of(t)
+                if sz in table:
+                    wanted[vid] = table[sz]
+                else:
+                    unmatched.append(f"{t or vid} (size {sz or 'unreadable'})")
+            if unmatched:
+                # Refusing beats pricing most of them and leaving the rest at
+                # Printify's default, which is how a listing ends up with one
+                # size priced wrong and nobody noticing until it sells.
+                print(f"{len(unmatched)} variant(s) have no price in --by-size:",
+                      file=sys.stderr)
+                for u in unmatched[:10]:
+                    print(f"    {u}", file=sys.stderr)
+                if len(unmatched) > 10:
+                    print(f"    ... and {len(unmatched) - 10} more", file=sys.stderr)
+                have = sorted(set(size_of(t) or "?" for t in titles))
+                print(f"\n  sizes present: {', '.join(have)}", file=sys.stderr)
+                print(f"  sizes you priced: {', '.join(sorted(table))}", file=sys.stderr)
+                sys.exit(1)
+
+        prices = {}
+        for vid, dollars in wanted.items():
+            cents = int(round(dollars * 100))
+            if cents < 100:
+                print(f"${dollars:.2f} is below $1.00 - almost certainly a typo.",
+                      file=sys.stderr)
+                sys.exit(1)
+            prices[str(vid)] = cents
+
+        entry["prices"] = prices
+        entry["priced_at"] = _now()
+        cat[a.product] = entry
+        CATALOG.write_text(json.dumps(cat, indent=1) + "\n")
+
+        by = {}
+        for i, vid in enumerate(ids):
+            sz = size_of(titles[i] if i < len(titles) else "") or "?"
+            by.setdefault(sz, []).append(prices[str(vid)])
+        for sz in sorted(by, key=lambda s: SIZES.index(s) if s in SIZES else 99):
+            c = by[sz]
+            print(f"  {sz:<5} {len(c):>3} variant(s)  ${c[0]/100:.2f}")
+        print(f"\nSaved {len(prices)} variant price(s). Every draft of "
+              f"'{a.product}' from now on uses these.")
         return 0
 
     if len(a.price) != len(ids):
@@ -601,7 +711,12 @@ def main():
     p.set_defaults(fn=cmd_pick)
 
     p = sub.add_parser("prices"); p.add_argument("--product", required=True)
-    p.add_argument("price", nargs="*"); p.set_defaults(fn=cmd_prices)
+    p.add_argument("price", nargs="*")
+    p.add_argument("--by-size", nargs="+", dest="by_size", metavar="SIZE=PRICE",
+                   help='price by size, e.g. --by-size S=21.99 M=21.99 2XL=23.99')
+    p.add_argument("--all", dest="all_price", metavar="PRICE",
+                   help="one price for every variant")
+    p.set_defaults(fn=cmd_prices)
 
     p = sub.add_parser("status"); p.add_argument("build_dir", nargs="?")
     p.set_defaults(fn=cmd_status)
