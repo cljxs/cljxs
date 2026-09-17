@@ -452,3 +452,32 @@ class MemoryRecording(unittest.TestCase):
         other.write_text("cycle ok\n")
         ok, _ = self.remember.written_this_cycle(other, int(other.stat().st_mtime) - 5)
         self.assertTrue(ok)
+
+
+class VerifierMessages(unittest.TestCase):
+    """belfort was told: no reports/2026-09-17-cycle-report.md for this wake -
+    the `this` slot files as `-this.md`.
+
+    `this` was a display word in the old code that survived as a fallback slot
+    NAME, so the verifier ended up instructing the agent to write a file called
+    2026-09-17-this.md. A wrong filename in the error message is worse than no
+    message: the agent does what it is told.
+    """
+
+    def test_no_verifier_invents_a_slot_named_this(self):
+        for f in ("ace-verify.py", "belfort-verify.py"):
+            with self.subTest(script=f):
+                self.assertNotIn('or "this"', (SCRIPTS / f).read_text(),
+                                 f"{f} still falls back to a slot called 'this'")
+
+    def test_expected_report_reports_an_absent_slot_as_none(self):
+        tmp = tempfile.TemporaryDirectory()
+        agent = Path(tmp.name)
+        (agent / "data").mkdir()
+        # A _meta.json with a name but no slot - exactly belfort's case.
+        (agent / "data" / "_meta.json").write_text(
+            json.dumps({"report_name": "2026-09-17-cycle-report.md"}))
+        name, slot_ = et_time.expected_report(agent, "belfort")
+        self.assertEqual(name, "2026-09-17-cycle-report.md")
+        self.assertIsNone(slot_, "an absent slot must be None, not a word")
+        tmp.cleanup()

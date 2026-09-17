@@ -100,7 +100,7 @@ def expected_report(agent_name, agent_dir):
     where it exists so both sides read one value, computed only as a fallback."""
     # One answer, from et_time, so this can never disagree with signoff.py.
     name, slot = et_time.expected_report(agent_dir, agent_name)
-    return agent_dir / "reports" / name, slot or "this"
+    return agent_dir / "reports" / name, slot
 
 
 def main():
@@ -139,9 +139,9 @@ def main():
         others = sorted(x.name for x in (AGENT / "reports").glob(f"{report.name[:10]}-*.md")) \
             if (AGENT / "reports").is_dir() else []
         extra = f" (found {', '.join(others)})" if others else ""
-        problems.append(f"no reports/{report.name} for this wake{extra} - the "
-                        f"{want} slot files as `-{want}.md`, and notes dropped in "
-                        f"exit_log.txt or into the chat do not count")
+        hint = f" - the {want} slot files as `-{want}.md`" if want else ""
+        problems.append(f"no reports/{report.name} for this wake{extra}{hint}. "
+                        f"Notes dropped in exit_log.txt or into the chat do not count")
     elif started and report.stat().st_mtime < started:
         problems.append(f"reports/{report.name} is left over from an earlier run, "
                         "not written by this one")
