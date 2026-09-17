@@ -280,14 +280,37 @@ def in_catalogue(slug):
     return slug.removeprefix("openrouter/") in _catalogue
 
 
+# A slug has two or three segments: `openai/gpt-5-mini`, and the same again
+# behind a provider prefix as `openrouter/openai/gpt-5-mini`. Matching only
+# two of them truncated ace's model to `openrouter/openai` and then reported
+# that invention as missing from OpenRouter's catalogue - a blocker against a
+# perfectly good config, which is worse than no check at all.
+SLUG_RE = re.compile(r"[\w.-]+/[\w.:-]+(?:/[\w.:-]+)?")
+
+
 def agent_model(name):
+    """(slug, note) - note explains any absence, so a blank column never
+    has to be guessed at."""
     if not shutil_which("openclaw"):
-        return None
-    out = subprocess.run(["openclaw", "config", "get",
-                          f"agents.entries.{name}.model.primary"],
-                         capture_output=True, text=True, timeout=30).stdout
-    m = re.search(r"[\w.-]+/[\w.:-]+", out)
-    return m.group(0) if m else None
+        return None, "unknown"
+    try:
+        r = subprocess.run(["openclaw", "config", "get",
+                            f"agents.entries.{name}.model.primary"],
+                           capture_output=True, text=True, timeout=30)
+    except Exception:
+        return None, "unreadable"
+    out = (r.stdout or "").strip()
+    m = SLUG_RE.search(out)
+    if m:
+        return m.group(0), ""
+    if not out or out.lower() in ("null", "none", "undefined", "{}"):
+        return None, "not set"
+    # openclaw answered with something this does not recognise. Saying
+    # "not set" here would be the same mistake in a different place.
+    warn(name, f"could not read a model slug from `openclaw config get "
+               f"agents.entries.{name}.model.primary`, which said: "
+               f"{out.splitlines()[0][:120]}")
+    return None, "unparsed"
 
 
 def shutil_which(b):
@@ -296,9 +319,9 @@ def shutil_which(b):
 
 
 def check_model(name):
-    slug = agent_model(name)
+    slug, note = agent_model(name)
     if not slug:
-        return None
+        return note
     # A wrong slug does not fail loudly. The agent simply reports "model not
     # found" at its next wake, hours later, with the cycle lost.
     ok = in_catalogue(slug)
@@ -362,7 +385,7 @@ def main():
             sched = "armed"
 
         check_credentials(name, adir)
-        slug = check_model(name) or ("unknown" if not shutil_which("openclaw") else "not set")
+        slug = check_model(name) or "-"
         print(f"{name:<10}{slug:<34}{instr:<14}{sched:<12}")
 
     print()
