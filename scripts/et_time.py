@@ -20,6 +20,7 @@ hyphens and cannot be.
 """
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -76,6 +77,28 @@ def report_name(schedule, now=None):
     return f"{day(now)}-{slot(schedule, now)}.md"
 
 
+def stamp_is_wellformed(name, agent_name):
+    """Does a stamped report_name look like one this agent's fetcher wrote?
+
+    The fetcher stamps data/_meta.json and the verifier grades against it - but
+    the agent has a write tool and the file sits in its own workspace, so it
+    can change the filename it is judged on. That is marking your own exam.
+
+    Belfort was failed for "no reports/2026-09-17-cycle-report.md". No fetcher
+    can produce that name: they stamp report_name(), which only ever yields
+    <date>-<slot>.md. Whatever wrote it, a stamp that does not match the shape
+    this agent's fetcher produces is not evidence of anything and is not
+    trusted.
+
+    Agents with no slots - scout, emily, fury - choose their own filenames, so
+    there is no shape to check and any stamp stands.
+    """
+    if agent_name not in SLOTS:
+        return True
+    names = "|".join(re.escape(n) for _, n in SLOTS[agent_name])
+    return re.match(rf"^\d{{4}}-\d{{2}}-\d{{2}}-(?:{names})\.md$", str(name)) is not None
+
+
 def expected_report(agent_dir, agent_name, now=None):
     """The exact report this cycle owes, for EVERY caller.
 
@@ -93,7 +116,7 @@ def expected_report(agent_dir, agent_name, now=None):
     try:
         meta = json.loads((Path(agent_dir) / "data" / "_meta.json").read_text())
         name = meta.get("report_name")
-        if name:
+        if name and stamp_is_wellformed(name, agent_name):
             return name, (str(meta.get("slot") or "").strip() or None)
     except Exception:
         pass

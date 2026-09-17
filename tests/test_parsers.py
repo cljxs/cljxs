@@ -481,3 +481,55 @@ class VerifierMessages(unittest.TestCase):
         self.assertEqual(name, "2026-09-17-cycle-report.md")
         self.assertIsNone(slot_, "an absent slot must be None, not a word")
         tmp.cleanup()
+
+
+class StampedNameIsNotTrustedBlindly(unittest.TestCase):
+    """belfort was failed for "no reports/2026-09-17-cycle-report.md".
+
+    No fetcher can produce that name - they stamp et_time.report_name(), which
+    only yields <date>-<slot>.md, and every report on disk is slot-named. The
+    agent has a write tool and data/_meta.json lives in its own workspace, so
+    the file it is graded against is one it can edit. Marking your own exam.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.agent = Path(self.tmp.name)
+        (self.agent / "data").mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def stamp(self, **meta):
+        (self.agent / "data" / "_meta.json").write_text(json.dumps(meta))
+
+    def test_a_wellformed_stamp_is_used(self):
+        self.stamp(report_name="2026-09-17-open.md", slot="open")
+        name, slot_ = et_time.expected_report(self.agent, "belfort")
+        self.assertEqual(name, "2026-09-17-open.md")
+        self.assertEqual(slot_, "open")
+
+    def test_the_name_that_actually_appeared_is_rejected(self):
+        self.stamp(report_name="2026-09-17-cycle-report.md")
+        name, _ = et_time.expected_report(self.agent, "belfort")
+        self.assertNotEqual(name, "2026-09-17-cycle-report.md")
+        self.assertRegex(name, r"^\d{4}-\d{2}-\d{2}-(open|close)\.md$")
+
+    def test_a_slot_from_another_agent_is_rejected(self):
+        # belfort files open/close; ace files afternoon/night. A stamp that
+        # crosses them is not something either fetcher wrote.
+        self.stamp(report_name="2026-09-17-open.md")
+        name, _ = et_time.expected_report(self.agent, "ace")
+        self.assertRegex(name, r"^\d{4}-\d{2}-\d{2}-(afternoon|night)\.md$")
+
+    def test_a_path_cannot_be_smuggled_through_the_stamp(self):
+        self.stamp(report_name="../../../etc/passwd")
+        name, _ = et_time.expected_report(self.agent, "belfort")
+        self.assertNotIn("..", name)
+
+    def test_self_naming_agents_keep_their_stamp(self):
+        # scout, emily and fury have no slots and choose their own filenames,
+        # so there is no shape to check and nothing to reject.
+        self.stamp(report_name="whatever-they-called-it.md")
+        name, _ = et_time.expected_report(self.agent, "scout")
+        self.assertEqual(name, "whatever-they-called-it.md")
