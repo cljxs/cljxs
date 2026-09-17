@@ -71,9 +71,23 @@ Propose **3 to 5** ideas. Fewer good ones beats more weak ones. Append to
 
 `id` is `max(existing) + 1`. Never reuse one.
 
-**Small formats only** — stickers, mugs, small prints, totes, phone cases. The
-image models produce about 1024px, a few inches at print resolution. No large
-posters, nothing needing fine detail across a big area.
+**Small formats only** — stickers, mugs, small prints, totes, phone cases, and
+apparel with a **small chest print** (`hoodie`, `tshirt`). The image models
+produce about 1024px, which is a few inches at print resolution. That is why
+a left-chest hoodie design is fine and a full-front one is not: the same file
+that looks sharp at 4 inches is visibly soft at 12. No large posters, nothing
+needing fine detail across a big area.
+
+**For apparel, propose bold graphic work.** The garments print direct-to-
+garment on a 50/50 cotton-poly blend, where ink bonds to the cotton and not
+the polyester — so prints come out softer and less saturated than on paper.
+Strong shapes, clear outlines and flat colour survive that. Fine gradients,
+photographic detail and thin hairlines do not.
+
+**Apparel art needs a plain, even background.** It is cut out before printing
+(`knockout.py`), which removes the background by flooding in from the edges.
+Art on a flat backdrop cuts cleanly; art whose background is textured, or
+which runs off the edge of the frame, is rejected rather than cut badly.
 
 **Never propose trademarked IP.** No characters, brands, logos, teams, films or
 game franchises. Not even "inspired by". Emily will refuse it.

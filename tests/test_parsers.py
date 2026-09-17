@@ -516,11 +516,32 @@ class StampedNameIsNotTrustedBlindly(unittest.TestCase):
     def stamp(self, **meta):
         (self.agent / "data" / "_meta.json").write_text(json.dumps(meta))
 
-    def test_a_wellformed_stamp_is_used(self):
+    def test_a_stamp_that_matches_the_clock_is_what_you_get(self):
+        # Pin the clock. This was written before the stamp stopped deciding
+        # anything, so it asserted a hardcoded "open" against whatever time the
+        # suite happened to run at - green all morning, red from noon Eastern.
+        # The second time-of-day bomb in this file today.
+        morning = datetime(2026, 9, 17, 10, 0, tzinfo=timezone.utc)
         self.stamp(report_name="2026-09-17-open.md", slot="open")
-        name, slot_ = et_time.expected_report(self.agent, "belfort")
+        name, slot_ = et_time.expected_report(self.agent, "belfort", now=morning)
         self.assertEqual(name, "2026-09-17-open.md")
         self.assertEqual(slot_, "open")
+
+    def test_no_test_in_this_file_depends_on_the_time_of_day(self):
+        """Both bombs were the same shape: a hardcoded slot with no `now`.
+        expected_report is clock-driven, so every call that asserts a specific
+        filename has to pin the clock or it is only true for part of the day."""
+        src = Path(__file__).read_text()
+        for i, line in enumerate(src.splitlines(), 1):
+            if "expected_report(" not in line or "def " in line:
+                continue
+            window = "\n".join(src.splitlines()[i - 1:i + 2])
+            if "now=" in window or "started=" in window:
+                continue
+            # Calls that do not assert a specific name are fine.
+            self.assertNotRegex(
+                window, r'assertEqual\(\s*name,\s*"\d{4}-\d{2}-\d{2}-',
+                f"line {i}: asserts a dated filename without pinning the clock")
 
     def test_the_name_that_actually_appeared_is_rejected(self):
         self.stamp(report_name="2026-09-17-cycle-report.md")
