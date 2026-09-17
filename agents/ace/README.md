@@ -64,21 +64,39 @@ spent on the wake least able to clear the bar.
 
 ## Which model, and why
 
-`openai/gpt-4.1-mini`. Ace ran on `gpt-4o-mini` and timed out three cycles
-running, not from errors - zero tool failures throughout - but from taking too
+`openai/gpt-5-mini`. Ace ran on `gpt-4o-mini` and timed out three cycles
+running - not from errors, zero tool failures throughout, but from taking too
 many turns. One run made 87 tool calls over 68 assistant turns and cost $0.29
 before the timeout stopped it.
 
-The cost of a cycle is dominated by cache reads, which scale with the number of
-turns, not by the token rate. A cycle that finishes in twelve turns on a dearer
-model is cheaper than one that takes sixty-eight on a cheap one and produces
-nothing:
+The cost of a cycle is dominated by cache reads, which scale with the number
+of turns rather than with the token rate. That inverts the usual reasoning: a
+cycle finishing in twelve turns on a dearer model is cheaper than one taking
+sixty-eight on a cheap one and producing nothing.
 
-    gpt-4o-mini    at 68 turns   $0.29/cycle   and does not finish
-    gpt-4.1-mini   at 12 turns   $0.07/cycle
+Costed against one healthy cycle (~40K prompt, 8K output, 360K cache read),
+across all 444 models in OpenRouter's catalogue, filtered to the 248 that
+support tool calling, carry 100K+ context, and serve a live API:
 
-If it still loops, `anthropic/claude-haiku-4.5` is the next step up at roughly
-$0.12 a cycle. Change it with:
+    gpt-5-mini             $0.035/cycle   $ 2.10/month
+    gemini-2.5-flash       $0.043/cycle   $ 2.57/month
+    gpt-4.1-mini           $0.065/cycle   $ 3.89/month
+    claude-haiku-4.5       $0.116/cycle   $ 6.96/month
+    gpt-4o-mini (old)      $0.038/cycle   $ 2.27/month - and did not finish
+
+**gpt-5-mini is both cheaper and newer than the model it replaces.** That is
+unusual enough to state plainly; it is not a trade-off.
+
+83 of those 248 models are cheaper still. None of them is worth trying, because
+the failure was never price - 4o-mini is already cheap and cannot complete the
+job. Going cheaper is the wrong direction.
+
+If it still loops, `anthropic/claude-haiku-4.5` is the next real step up.
+Gemini is skipped deliberately: both Gemini models failed mid-cycle on
+tool-using work for Belfort and Scout with `provider internal error`, which is
+why nothing here runs one.
+
+Change it with:
 
     scripts/set-agent-model.sh ace <slug> --apply
 
