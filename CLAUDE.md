@@ -98,3 +98,18 @@ There is no test suite yet, which is why bugs reach the droplet. When you add
 one, fixtures of *real* captured output (an `openclaw config get`, an ESPN
 payload, a `_meta.json`, a `last-run` JSON) are worth more than mocks: every
 parser bug here was a format assumption, not a logic error.
+
+## Running the tests
+
+    python3 -m unittest discover -s tests -v      # no dependencies, runs anywhere
+
+Every test names the bug it guards, and each was checked by reintroducing that
+bug and confirming the test fails - a test that cannot fail is worse than no
+test, because it reports safety it is not providing.
+
+`scripts/capture-fixtures.py` refreshes `tests/fixtures/` from this droplet.
+Fixtures are committed, so it masks every known credential value literally,
+refuses to write a file where one survived, and refuses to overwrite a good
+fixture with a command's error output. CI re-checks for credential-shaped
+strings on every push, because redaction that depends on someone remembering
+to run it is not redaction.
