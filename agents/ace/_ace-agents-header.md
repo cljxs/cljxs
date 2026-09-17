@@ -69,10 +69,14 @@ second chance. That has three consequences:
    many were held back. You are not missing anything by not looking at them;
    a game three days out cannot be bet on information that does not exist yet.
 3. **Default to PASS.** Most cycles you bet nothing — the correct outcome.
-4. **Write `state/bankroll.json`** — bankroll, bets, incremented `cycle_count`,
-   `last_cycle_utc`. **Before the report, not after.** A cycle once wrote a
-   report while `MEMORY.md` still read "No cycles run yet"; an empty log means
-   every later cycle starts blind.
+4. **Record the bets you settled** in `state/bankroll.json` — the bankroll,
+   and each graded bet moved to `settled_bets`. Only if something settled;
+   most cycles nothing has.
+
+   You do **not** edit `cycle_count` or `last_cycle_utc` by hand. Step 7 does
+   that. A cycle spent 87 tool calls and $0.29 rewriting this file trying to
+   satisfy a check, because hand-edited JSON was the one deliverable with no
+   command behind it.
 5. **Record what you judged**, with `ace-judge.py`. Do not write
    `state/ledger.json` yourself.
 
@@ -109,6 +113,15 @@ second chance. That has three consequences:
 
    Explain **every pass**, not just bets.
 7. **Append ONE short line** to `MEMORY.md`. Trim oldest lines past ~2KB.
+8. **Close the cycle:**
+
+   ```
+   python3 ../../scripts/ace-judge.py mark
+   ```
+
+   That bumps `cycle_count` and stamps `last_cycle_utc`. It is what tells the
+   dashboard the cycle ran, and it is the last thing you do before the
+   sign-off.
 
 ## The only bet worth making
 

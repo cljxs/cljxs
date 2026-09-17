@@ -18,6 +18,7 @@ doing the copying. So the copying happens here:
     ace-judge.py rest --why "did not clear 8 points"             sweeps the remainder
     ace-judge.py bet  7 --my-pct 71.0 --stake 150 --why "SP scratched an hour ago"
     ace-judge.py verdict "No picks - 6 judged, nothing cleared 8 points."
+    ace-judge.py mark                       close the cycle (bumps cycle_count)
     ace-judge.py show
 
 `selection`, `match`, `price` and `novig_pct` are copied verbatim from
@@ -248,6 +249,37 @@ def cmd_rest(a):
     return record(a, "passed")
 
 
+def cmd_mark(a):
+    """Close the cycle: bump cycle_count, stamp last_cycle_utc.
+
+    Belfort has had this since the day its arithmetic moved into code. Ace
+    never got it, so bankroll.json was the one deliverable with no helper -
+    hand-edited JSON that signoff.py then demanded had been written this cycle.
+    A cycle that got it slightly wrong was told MISSING with no way to see
+    why, rewrote it, and went round again; one such run made 87 tool calls and
+    cost $0.29 before the timeout stopped it."""
+    bank = AGENT / "state" / "bankroll.json"
+    try:
+        b = json.loads(bank.read_text())
+    except FileNotFoundError:
+        print(f"{bank} does not exist. Seed it:\n"
+              f"  cp -n {bank.with_suffix('')}.seed.json {bank}", file=sys.stderr)
+        return 2
+    except Exception as exc:
+        print(f"{bank} does not parse ({exc}). It has been hand-edited into an "
+              f"invalid state - restore it from state/bankroll.seed.json.", file=sys.stderr)
+        return 2
+
+    b["cycle_count"] = int(b.get("cycle_count") or 0) + 1
+    b["last_cycle_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    bank.write_text(json.dumps(b, indent=1) + "\n")
+
+    open_n = len(b.get("open_bets") or [])
+    print(f"cycle {b['cycle_count']} recorded. bankroll ${float(b.get('bankroll') or 0):,.2f}, "
+          f"{open_n} open bet(s).")
+    return 0
+
+
 def cmd_verdict(a):
     led = load_ledger()
     led["verdict"] = a.text
@@ -290,6 +322,8 @@ def main():
     r.add_argument("--why", default="")
     r.add_argument("--stake", type=float)
     r.set_defaults(fn=cmd_rest)
+
+    sub.add_parser("mark").set_defaults(fn=cmd_mark)
 
     v = sub.add_parser("verdict")
     v.add_argument("text")
