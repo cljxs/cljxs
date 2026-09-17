@@ -122,6 +122,19 @@ function heartbeatAt(agentDir) {
       if (!newest || st.mtimeMs > newest) newest = st.mtimeMs;
     } catch { /* not every agent keeps one */ }
   }
+  // Emily's work lands in builds/<slug>/build.json, not in state/ or reports/,
+  // so drafting a product or reading its publish state moved nothing this
+  // function could see. She showed as 24.5h idle while her newest file was
+  // 7.6h old.
+  try {
+    for (const d of fs.readdirSync(path.join(agentDir, 'builds'), { withFileTypes: true })) {
+      if (!d.isDirectory()) continue;
+      try {
+        const st = fs.statSync(path.join(agentDir, 'builds', d.name, 'build.json'));
+        if (!newest || st.mtimeMs > newest) newest = st.mtimeMs;
+      } catch { /* a build folder without one yet */ }
+    }
+  } catch { /* most agents have no builds/ */ }
   return newest ? new Date(newest).toISOString() : null;
 }
 
