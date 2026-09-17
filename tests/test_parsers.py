@@ -679,3 +679,44 @@ class InstructionsMatchTheVerifier(unittest.TestCase):
                 self.assertNotRegex(src, r"words <\s*\d",
                                     f"{f} has its own copy of the threshold again")
                 self.assertIn("et_time.MIN_REPORT_WORDS", src)
+
+
+class WhatCountsAsJudged(unittest.TestCase):
+    """ace-verify counted every row in the ledger as judged; signoff counted
+    only rows whose status is "passed" or "bet". They agreed solely because
+    ace-judge.py always sets one - so a hand-written row, or any future path
+    that forgets, would have told the agent its ledger was complete and empty
+    at the same time. That contradiction has cost this project more than any
+    other single thing.
+    """
+
+    def setUp(self):
+        self.judge = load("ace_judge", "ace-judge.py")
+
+    def rows(self, *statuses):
+        return {"candidates": [
+            ({"selection": f"S{i}", "match": "A @ B", "status": s} if s else
+             {"selection": f"S{i}", "match": "A @ B"})
+            for i, s in enumerate(statuses)]}
+
+    def test_only_rows_with_a_status_count(self):
+        doc = self.rows("passed", "bet", None)
+        self.assertEqual(len(self.judge.rows_of(doc)), 3)
+        self.assertEqual(len(self.judge.judged_rows(doc)), 2)
+
+    def test_an_unknown_status_does_not_count(self):
+        self.assertEqual(len(self.judge.judged_rows(self.rows("maybe", "skipped"))), 0)
+
+    def test_a_bare_array_is_still_readable(self):
+        # A bare list was what crashed the verifier once, by calling .get() on it.
+        self.assertEqual(len(self.judge.rows_of([{"status": "passed"}])), 1)
+        self.assertEqual(len(self.judge.judged_rows([{"status": "passed"}])), 1)
+
+    def test_neither_reader_keeps_its_own_copy(self):
+        for f in ("ace-verify.py", "signoff.py"):
+            with self.subTest(script=f):
+                src = (SCRIPTS / f).read_text()
+                self.assertIn("ace_judge.judged_rows", src)
+                self.assertNotRegex(
+                    src, r'status\"?\)\s*in\s*\(\"passed\"',
+                    f"{f} has grown its own copy of the judged predicate again")

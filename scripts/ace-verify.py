@@ -34,6 +34,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # name Ace was handed can never disagree.
 import et_time  # noqa: E402
 import remember  # noqa: E402
+import importlib.util as _ilu  # noqa: E402
+_spec = _ilu.spec_from_file_location('ace_judge', Path(__file__).resolve().parent / 'ace-judge.py')
+ace_judge = _ilu.module_from_spec(_spec); _spec.loader.exec_module(ace_judge)
+rows_of = ace_judge.rows_of
 from et_time import eastern_now  # noqa: E402
 
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
@@ -57,12 +61,6 @@ def key(row):
     purpose - a verifier that computes the key its own way would pass rows the
     console then fails to match."""
     return f"{str(row.get('selection') or '').lower()}|{str(row.get('match') or '').lower()}"
-
-
-def rows_of(doc):
-    if isinstance(doc, list):
-        return doc
-    return (doc or {}).get("candidates") or []
 
 
 def reconcile(b, problems):
@@ -136,7 +134,8 @@ def check_ledger(problems, notes, started):
                      "line - the village shows the verdict, so write it with "
                      "`ace-judge.py verdict \"...\"`, which produces the right shape")
 
-    judged = rows_of(ledger)
+    # Same predicate signoff.py uses. A row with no status is not judged.
+    judged = ace_judge.judged_rows(ledger)
     if not judged:
         problems.append("state/ledger.json has no candidates - a cycle that looked at "
                         "nothing is not a pass, it is a cycle that did not run")

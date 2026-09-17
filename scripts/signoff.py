@@ -34,6 +34,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import et_time  # noqa: E402
 import remember  # noqa: E402
+import importlib.util as _ilu  # noqa: E402
+_spec = _ilu.spec_from_file_location('ace_judge', Path(__file__).resolve().parent / 'ace-judge.py')
+ace_judge = _ilu.module_from_spec(_spec); _spec.loader.exec_module(ace_judge)
 
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
 CANDIDATES = ROOT / "agents" / "ace" / "data" / "candidates.json"
@@ -217,7 +220,7 @@ def main():
                 missing.append(label)
                 continue
             rows = doc if isinstance(doc, list) else (doc.get("candidates") or [])
-            judged = [r for r in rows if r.get("status") in ("passed", "bet")]
+            judged = ace_judge.judged_rows({"candidates": rows})
 
             # Say WHAT IS WRONG, not just that something is. A bare "MISSING"
             # sent one cycle into 43 turns of rewriting this file in different

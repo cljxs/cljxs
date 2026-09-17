@@ -47,6 +47,30 @@ LEDGER = AGENT / "state" / "ledger.json"
 CARRY = ("selection", "match", "sport", "price", "novig_pct", "starts_utc")
 
 
+# What counts as a judged row, in one place.
+#
+# ace-verify counted every row in the ledger as judged; signoff counted only
+# rows whose status is one of these. They agree today only because this script
+# always sets a status - the moment a row arrives without one, the agent is
+# told its ledger is both complete and empty, which is the shape of every
+# expensive bug in this repo.
+JUDGED_STATUSES = ("passed", "bet")
+
+
+def rows_of(doc):
+    """The rows of a ledger or candidates document, whatever shape it is in.
+
+    A bare array was what crashed the verifier once: calling .get() on a list.
+    """
+    if isinstance(doc, list):
+        return doc
+    return (doc or {}).get("candidates") or []
+
+
+def judged_rows(doc):
+    return [r for r in rows_of(doc) if r.get("status") in JUDGED_STATUSES]
+
+
 def load_candidates():
     try:
         doc = json.loads(CANDIDATES.read_text())
