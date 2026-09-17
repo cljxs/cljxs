@@ -136,7 +136,8 @@ def main():
               "two agents drifted for days without anyone noticing.")
         return 1
 
-    print(f"timmy-verify: PASS - {len(expected)} reports for {day}, memory +{after - before}B")
+    print(f"timmy-verify: PASS - {len(expected)} reports for {day}, "
+          f"memory {after - before:+d}B")
     for n in notes:
         print(f"  {n}")
     return 0

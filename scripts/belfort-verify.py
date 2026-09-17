@@ -172,7 +172,7 @@ def main():
     start = num(p.get("starting_cash"), 10000.0)
     print(f"belfort-verify: PASS - cycle {cycles}, book balances, "
           f"value ${value:,.2f} ({(value / start - 1) * 100:+.2f}%), "
-          f"{len(p.get('positions', []))} open, memory +{mem_after - mem_before}B")
+          f"{len(p.get('positions', []))} open, memory {mem_after - mem_before:+d}B")
     for n in notes:
         print(f"  {n}")
     return 0

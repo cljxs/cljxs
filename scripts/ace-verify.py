@@ -260,7 +260,7 @@ def main():
     start = num(b.get("starting_bankroll"), 10000.0)
     print(f"ace-verify: PASS - cycle {cycles}, bankroll ${bank:,.2f} "
           f"({(bank / start - 1) * 100:+.2f}%), {len(b.get('open_bets') or [])} open, "
-          f"memory +{mem_after - mem_before}B")
+          f"memory {mem_after - mem_before:+d}B")
     for n in notes:
         print(f"  {n}")
     return 0
