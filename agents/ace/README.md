@@ -62,6 +62,29 @@ Ace's bar requires *real information the market has not priced yet*, and that
 information does not exist yet in the morning. It was a third of the fuel
 spent on the wake least able to clear the bar.
 
+## Which model, and why
+
+`openai/gpt-4.1-mini`. Ace ran on `gpt-4o-mini` and timed out three cycles
+running, not from errors - zero tool failures throughout - but from taking too
+many turns. One run made 87 tool calls over 68 assistant turns and cost $0.29
+before the timeout stopped it.
+
+The cost of a cycle is dominated by cache reads, which scale with the number of
+turns, not by the token rate. A cycle that finishes in twelve turns on a dearer
+model is cheaper than one that takes sixty-eight on a cheap one and produces
+nothing:
+
+    gpt-4o-mini    at 68 turns   $0.29/cycle   and does not finish
+    gpt-4.1-mini   at 12 turns   $0.07/cycle
+
+If it still loops, `anthropic/claude-haiku-4.5` is the next step up at roughly
+$0.12 a cycle. Change it with:
+
+    scripts/set-agent-model.sh ace <slug> --apply
+
+which checks the slug against OpenRouter's catalogue first - a wrong one does
+not fail until the next wake, hours later.
+
 ## Checking on it
 
     systemctl list-timers 'ace*' --no-pager
