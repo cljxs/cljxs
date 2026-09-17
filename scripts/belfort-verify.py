@@ -147,7 +147,7 @@ def main():
                         "not written by this one")
     else:
         words = len(report.read_text().split())
-        if words < 60:
+        if words < et_time.MIN_REPORT_WORDS:
             problems.append(f"reports/{report.name} is {words} words - too short "
                             "to be a real report")
         else:

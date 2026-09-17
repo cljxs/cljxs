@@ -64,7 +64,8 @@ and do not write that file by hand even to "fix" it.
    in prose and the next cycle would have marked to market against a position
    already sold.
 5. **Write the report.** `data/_meta.json` gives you its exact filename in
-   `report_name` — use that string, do not work it out.
+   `report_name` — use that string, do not work it out. **At least 60 words**;
+   the verifier rejects anything shorter, however quiet the session was.
 
    Do not check a clock for this. The clock you can see reads UTC, and the
    09:35 ET open is 13:35 UTC, which looks like the afternoon: that run was

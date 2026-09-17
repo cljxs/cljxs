@@ -59,6 +59,13 @@ BELFORT = ((12, "open"), (24, "close"))                          # 09:35 15:55
 
 SLOTS = {"ace": ACE, "belfort": BELFORT}
 
+# The shortest thing that counts as a report. It lived as a bare 60 in two
+# verifiers and nowhere in any agent's instructions, so belfort was failed for
+# writing 43 words having been told only to write "two honest paragraphs" - a
+# rule it was never given and could not have satisfied on purpose. It lives
+# here now, the headers quote it, and a test fails the build if they drift.
+MIN_REPORT_WORDS = 60
+
 
 def slot(schedule, now=None):
     """Which wake this is. `schedule` is one of the tuples above, or an agent

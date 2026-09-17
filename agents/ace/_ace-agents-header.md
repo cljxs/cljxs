@@ -104,7 +104,8 @@ second chance. That has three consequences:
 
 6. **Write the report.** `data/_meta.json` gives you its exact filename in
    `report_name` — use that string, do not work it out. `candidates.json`
-   carries the same `day` and `slot`.
+   carries the same `day` and `slot`. **At least 60 words**; the verifier
+   rejects anything shorter, however quiet the slate was.
 
    Do not check a clock for this. The clock you can see reads UTC, and a
    23:31 Eastern wake was filed as `2026-09-16-afternoon.md` when the correct

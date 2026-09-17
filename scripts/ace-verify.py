@@ -231,7 +231,7 @@ def main():
         problems.append(f"reports/{report.name} is left over from an earlier run")
     else:
         words = len(report.read_text().split())
-        if words < 60:
+        if words < et_time.MIN_REPORT_WORDS:
             problems.append(f"reports/{report.name} is {words} words - too short to "
                             "explain a single pass, let alone all of them")
         else:

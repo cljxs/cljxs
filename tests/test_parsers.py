@@ -16,6 +16,7 @@ with nothing installed:
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -641,3 +642,40 @@ class TheClockDecidesNotTheStamp(unittest.TestCase):
         name, slot_ = et_time.expected_report(self.agent, "ace", now=night)
         self.assertEqual(name, "2026-09-16-night.md")
         self.assertEqual(slot_, "night")
+
+
+class InstructionsMatchTheVerifier(unittest.TestCase):
+    """Belfort wrote 43 words and was failed for being under 60. Its
+    instructions said "two honest paragraphs" and named no number - the
+    threshold existed only inside the verifier. The agent was graded against a
+    rule it had never been given, which it could not have satisfied except by
+    accident.
+
+    A header is prose and cannot import a constant, so this is the only thing
+    that keeps the two in step. If someone changes MIN_REPORT_WORDS and not the
+    headers, or a header and not the constant, the build fails here rather than
+    an agent failing at 4am.
+    """
+
+    ENFORCED_BY_A_VERIFIER = ("ace", "belfort")
+
+    def header(self, agent):
+        return (ROOT / "agents" / agent / f"_{agent}-agents-header.md").read_text()
+
+    def test_every_header_states_the_real_minimum(self):
+        for agent in self.ENFORCED_BY_A_VERIFIER:
+            with self.subTest(agent=agent):
+                m = re.search(r"[Aa]t least (\d+) words", self.header(agent))
+                self.assertIsNotNone(
+                    m, f"{agent} is failed for short reports but is never told the minimum")
+                self.assertEqual(int(m.group(1)), et_time.MIN_REPORT_WORDS,
+                                 f"{agent} is told a different number from the one "
+                                 f"the verifier enforces")
+
+    def test_no_verifier_hardcodes_the_number_any_more(self):
+        for f in ("ace-verify.py", "belfort-verify.py"):
+            with self.subTest(script=f):
+                src = (SCRIPTS / f).read_text()
+                self.assertNotRegex(src, r"words <\s*\d",
+                                    f"{f} has its own copy of the threshold again")
+                self.assertIn("et_time.MIN_REPORT_WORDS", src)
