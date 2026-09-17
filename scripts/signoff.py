@@ -101,10 +101,41 @@ def age(path):
 
 
 def newest_report(d, started):
-    """The report this run wrote. A file from an earlier cycle is not it - that
-    is how a run that wrote nothing inherits the last one's paperwork."""
+    """The report this run owes.
+
+    Where the fetcher has stamped a report_name into data/_meta.json, that
+    exact file is what is wanted - because the cycle verifier demands the same
+    one. They used to decide separately: this asked for any fresh .md and the
+    verifier asked for a specific name. An agent could satisfy one and fail the
+    other, be told its report was both present and missing, and spend 49 tool
+    calls trying to satisfy both. Belfort did exactly that, and ended up
+    proposing to contact technical support.
+
+    Without a stamped name - Scout, Emily, Fury - any report written by this
+    run counts, which is right: they choose their own filenames.
+    """
     if not d.is_dir():
         return None, "the reports/ folder does not exist"
+
+    want = None
+    try:
+        meta = json.loads((d.parent / "data" / "_meta.json").read_text())
+        want = meta.get("report_name") or None
+    except Exception:
+        pass
+
+    if want:
+        f = d / want
+        if not f.is_file():
+            others = sorted(x.name for x in d.glob("*.md"))[-3:]
+            extra = f" (newest here: {', '.join(others)})" if others else ""
+            return None, (f"this cycle owes reports/{want}{extra}. That name comes "
+                          f"from data/_meta.json and is what the verifier checks too.")
+        if started and f.stat().st_mtime < started:
+            return None, (f"reports/{want} was written {age(f)}, before this cycle "
+                          f"started. This run has not written it.")
+        return f, None
+
     files = sorted(d.glob("*.md"), key=lambda f: f.stat().st_mtime, reverse=True)
     if not files:
         return None, "no report files at all"
