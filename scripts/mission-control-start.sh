@@ -26,15 +26,23 @@ if command -v tailscale >/dev/null 2>&1; then
   done
 fi
 
-if [ -n "$HOST" ]; then
+# Loopback ALWAYS, plus the tailnet address when there is one. Binding only to
+# the tailnet address is what took the task queue down: the dispatcher, Emily's
+# completion POST and fury-collect all talk to 127.0.0.1:3001.
+TSIP="$HOST"
+if [ -n "$TSIP" ]; then
+  HOST="127.0.0.1,$TSIP"
+fi
+
+if [ -n "$TSIP" ]; then
   NAME="$(tailscale status --json 2>/dev/null \
           | python3 -c 'import json,sys; print((json.load(sys.stdin).get("Self") or {}).get("DNSName","").rstrip("."))' 2>/dev/null)"
-  echo "binding to Tailscale address $HOST (not reachable from the public internet)"
+  echo "binding to $HOST  (loopback for the task queue, tailnet for your phone)"
   [ -n "$NAME" ] && echo "on your phone:  http://$NAME:$PORT/dashboard"
-  echo "or by IP:       http://$HOST:$PORT/dashboard"
+  echo "or by IP:       http://$TSIP:$PORT/dashboard"
 else
   HOST=127.0.0.1
-  echo "TAILSCALE IS NOT UP - falling back to $HOST, so this is reachable only"
+  echo "TAILSCALE IS NOT UP - binding $HOST only, so this is reachable only"
   echo "from the droplet itself. Run: /root/ecosystem/scripts/tailscale-setup.sh"
 fi
 

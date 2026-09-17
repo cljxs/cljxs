@@ -116,9 +116,9 @@ def main():
     names = sorted(d.name for d in AGENTS.iterdir()
                    if d.is_dir() and not d.name.startswith("."))
 
-    print(f"{'agent':<10}{'state':<9}{'timer last':<13}{'disk last':<13}"
+    print(f"{'agent':<10}{'state':<11}{'timer last':<13}{'disk last':<13}"
           f"{'deck says':<13}{'next wake':<22}")
-    print("-" * 80)
+    print("-" * 82)
 
     problems = []
     for name in names:
@@ -127,6 +127,11 @@ def main():
             print(f"{name:<10}{'retired':<9}{'-':<13}{'-':<13}{'-':<13}{'-':<22}")
             continue
 
+        # Not every agent is timer-driven. Emily is woken by the task queue
+        # when you approve one of Scout's ideas, so she has no cycle unit at
+        # all - reporting that as "cannot run" is a false alarm about the one
+        # agent that has actually shipped a product.
+        scheduled = (ROOT / "deploy" / f"{name}-cycle.service").is_file()
         result, ran_at, load = unit_facts(f"{name}-cycle.service")
         nxt = timer_next(f"{name}-cycle.timer")
 
@@ -144,10 +149,12 @@ def main():
             deck_age = datetime.now(timezone.utc).timestamp() - d["last_run_age_min"] * 60
 
         state = "ok" if result == "success" else (result or "?")
-        if load == "not-found":
+        if not scheduled:
+            state = "on demand"
+        elif load == "not-found":
             state = "no unit"
 
-        print(f"{name:<10}{state:<9}{ago(ran_at):<13}{ago(disk):<13}"
+        print(f"{name:<10}{state:<11}{ago(ran_at):<13}{ago(disk):<13}"
               f"{(ago(deck_age) if d else 'absent'):<13}{nxt:<22}")
 
         # --- where the three disagree -------------------------------------
@@ -156,10 +163,10 @@ def main():
         elif d and disk and deck_age and abs(disk - deck_age) > 3600:
             problems.append(f"{name}: disk says {ago(disk)}, the Deck says {ago(deck_age)} - "
                             f"the Deck is reading something other than the newest file")
-        if HAVE_SYSTEMD and result not in ("success", "?", ""):
+        if HAVE_SYSTEMD and scheduled and result not in ("success", "?", ""):
             problems.append(f"{name}: last cycle ended '{result}' - "
                             f"scripts/last-run.py {name} says why")
-        if not HAVE_SYSTEMD:
+        if not HAVE_SYSTEMD or not scheduled:
             pass
         elif load == "not-found":
             problems.append(f"{name}: {name}-cycle.service is not installed - "

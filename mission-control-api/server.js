@@ -12,6 +12,8 @@ const aceRoutes = require('./ace');
 const PORT = Number(process.env.PORT || 3001);
 // Bind to loopback by default, matching the OpenClaw gateway's posture.
 // Set HOST=0.0.0.0 only if you deliberately want this reachable off-box.
+// One address, or several separated by commas. Never 0.0.0.0: the write
+// endpoints are unauthenticated.
 const HOST = process.env.HOST || '127.0.0.1';
 
 const db = openDb();
@@ -290,9 +292,25 @@ app.use((err, req, res, next) => {
 });
 
 if (require.main === module) {
-  app.listen(PORT, HOST, () => {
-    console.log(`[mission-control-api] listening on http://${HOST}:${PORT}`);
-  });
+  // HOST may be a comma-separated list, and normally is: loopback plus this
+  // machine's Tailscale address. Binding ONLY to the tailnet address broke
+  // every internal caller at once - the task dispatcher, Emily's completion
+  // POST, fury-collect - because they all talk to 127.0.0.1:3001. Binding to
+  // 0.0.0.0 instead would have put unauthenticated write endpoints on the
+  // public internet, so: bind to each address explicitly, and no others.
+  const hosts = HOST.split(',').map(h => h.trim()).filter(Boolean);
+  let bound = 0;
+  for (const h of hosts) {
+    const server = app.listen(PORT, h, () => {
+      console.log(`[mission-control-api] listening on http://${h}:${PORT}`);
+    });
+    server.on('error', err => {
+      // One address failing must not take the others down - a tailnet address
+      // can disappear when Tailscale restarts, and loopback still has to work.
+      console.error(`[mission-control-api] could not bind ${h}:${PORT} - ${err.message}`);
+      if (++bound >= hosts.length) process.exitCode = 1;
+    });
+  }
 }
 
 module.exports = app;
