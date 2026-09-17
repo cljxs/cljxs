@@ -109,7 +109,15 @@ class ProviderErrors(unittest.TestCase):
     """A bare \\b401\\b matched `'schemaChars': 401` in a tool-schema dump and
     reported a working API key as rejected."""
 
-    def run_checker(self, fixture):
+    def run_checker(self, fixture, must_exist=True):
+        # A fixture that is not there must fail the test, never pass it.
+        # check-provider-error exits 0 for a missing log by design, which is
+        # exactly what a clean log returns - so without this the whole class
+        # reports green when the fixtures have gone missing. They did: .gitignore
+        # ate both of them and CI was the only thing that noticed.
+        if must_exist:
+            self.assertTrue(Path(fixture).is_file(),
+                            f"fixture missing: {fixture} - is it gitignored?")
         return subprocess.run(
             [sys.executable, str(SCRIPTS / "check-provider-error.py"), str(fixture)],
             capture_output=True, text=True)
@@ -138,7 +146,7 @@ class ProviderErrors(unittest.TestCase):
         self.assertIn("OUT OF CREDIT", r.stdout)
 
     def test_a_missing_log_is_not_evidence_of_anything(self):
-        r = self.run_checker(FIXTURES / "does-not-exist.log")
+        r = self.run_checker(FIXTURES / "does-not-exist.log", must_exist=False)
         self.assertEqual(r.returncode, 0)
 
 
