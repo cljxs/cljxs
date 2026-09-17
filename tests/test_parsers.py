@@ -965,3 +965,41 @@ class BlueprintSearchIgnoresTrademarks(unittest.TestCase):
     def test_spacing_and_case_do_not_matter(self):
         self.assertTrue(self.pf.matches("Unisex  Heavy   Blend™ Hooded Sweatshirt",
                                         "  HEAVY blend   hooded "))
+
+
+class PickingColoursNotTheFirstTwelve(unittest.TestCase):
+    """The Gildan 18500 has 274 variants. `pick` defaulted to --limit 12 and
+    silently kept the first twelve, which for this product is six sizes of Ash
+    and a bit of Dark Heather - a hoodie listing with no Black in it. A sticker
+    has five variants and never reached that line; a garment reaches it every
+    time.
+
+    Titles are real: "Ash / S", "Dark Heather / 5XL", from blueprint 77
+    provider 99.
+    """
+
+    def setUp(self):
+        self.pf = load("emily_printify", "emily-printify.py")
+
+    def test_colour_and_size_split_from_the_real_titles(self):
+        for title, colour, size in (
+                ("Ash / S", "Ash", "S"),
+                ("Dark Heather / 5XL", "Dark Heather", "5XL"),
+                ("Maroon / 2XL", "Maroon", "2XL"),
+                ("2XL / Black", "Black", "2XL")):      # order does not matter
+            with self.subTest(title=title):
+                self.assertEqual(self.pf.colour_of(title), colour)
+                self.assertEqual(self.pf.size_of(title), size)
+
+    def test_every_size_this_garment_offers_is_known(self):
+        # S through 5XL. A size the parser cannot read becomes a variant with
+        # no price, which --by-size then refuses - correct, but only if the
+        # sizes are known in the first place.
+        for s in ("S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"):
+            with self.subTest(size=s):
+                self.assertEqual(self.pf.size_of(f"Navy / {s}"), s)
+                self.assertIn(s, self.pf.SIZES)
+
+    def test_a_colourless_title_has_no_colour(self):
+        self.assertIsNone(self.pf.colour_of("S"))
+        self.assertIsNone(self.pf.colour_of(""))

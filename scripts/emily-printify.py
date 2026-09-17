@@ -249,9 +249,31 @@ def cmd_pick(a):
         if not chosen:
             print(f"none of {wanted} are variants of this product.", file=sys.stderr)
             sys.exit(1)
+    elif a.colors:
+        want = {c.strip().lower() for c in a.colors.split(",") if c.strip()}
+        chosen = [v for v in all_v if (colour_of(v.get("title")) or "").lower() in want]
+        missing = want - {(colour_of(v.get("title")) or "").lower() for v in chosen}
+        if missing:
+            have = sorted({colour_of(v.get("title")) or "?" for v in all_v})
+            print(f"no variants in: {', '.join(sorted(missing))}", file=sys.stderr)
+            print(f"\n  colours available: {', '.join(have)}", file=sys.stderr)
+            sys.exit(1)
+    elif len(all_v) > a.limit:
+        # Silently keeping the first 12 of 274 is how a hoodie listing ends up
+        # with six sizes of Ash and no Black. A sticker has five variants and
+        # never hit this; a garment hits it every time.
+        have = sorted({colour_of(v.get("title")) or "?" for v in all_v})
+        print(f"this product has {len(all_v)} variants - too many to take blindly.",
+              file=sys.stderr)
+        print(f"\n  colours available ({len(have)}):", file=sys.stderr)
+        for c in have:
+            print(f"    {c}", file=sys.stderr)
+        print(f"\n  Choose some:\n"
+              f"    emily-printify.py pick --product {a.product} --blueprint {a.blueprint} "
+              f"--provider {a.provider} \\\n        --colors \"{have[0]},{have[1] if len(have)>1 else have[0]}\"\n"
+              f"\n  Or take all {len(all_v)}:  --limit {len(all_v)}", file=sys.stderr)
+        sys.exit(1)
     else:
-        # Default to every variant. For a sticker that is the size range, which
-        # is what you want on a listing; trim it later with --variants if not.
         chosen = all_v[:a.limit]
 
     cat = read_catalog()
@@ -293,6 +315,13 @@ def size_of(title):
         if tok in SIZES:
             return tok
     return None
+
+
+def colour_of(title):
+    """The colour half of "Dark Heather / 2XL". None if there is no colour."""
+    parts = [x.strip() for x in str(title or "").split("/")]
+    rest = [x for x in parts if x and size_of(x) is None]
+    return " / ".join(rest) if rest else None
 
 
 def cmd_prices(a):
@@ -726,6 +755,8 @@ def main():
     p = sub.add_parser("pick"); p.add_argument("--product", required=True)
     p.add_argument("--blueprint", required=True); p.add_argument("--provider", required=True)
     p.add_argument("--variants", default=""); p.add_argument("--limit", type=int, default=12)
+    p.add_argument("--colors", "--colours", default="", dest="colors",
+                   help='comma-separated colour names, e.g. --colors "Black,Navy"')
     p.set_defaults(fn=cmd_pick)
 
     p = sub.add_parser("prices"); p.add_argument("--product", required=True)
