@@ -106,6 +106,30 @@ def main():
     print(f"tool calls   {ts.get('calls')}   failures={ts.get('failures')}   "
           f"tools={', '.join(ts.get('tools') or []) or 'none'}")
 
+    # What the cycle cost, and the shape of it. The shape is what decides
+    # whether a model swap helps: cache-read dominated cycles get cheaper on a
+    # model with a low cache rate even if its output rate is higher, and
+    # output-heavy ones go the other way.
+    u = d.get("usage") or {}
+    if u:
+        cost = d.get("costUsd")
+        if cost is None:
+            cost = ((d.get("usage") or {}).get("cost") or {}).get("total")
+        turns = d.get("assistantTurns")
+        parts = []
+        for k, label in (("input", "in"), ("output", "out"), ("cacheRead", "cache")):
+            if u.get(k):
+                parts.append(f"{label} {u[k]:,}")
+        print(f"usage        {'  '.join(parts)}"
+              + (f"   turns {turns}" if turns else ""))
+        if isinstance(cost, (int, float)):
+            biggest = max(("cacheRead", u.get("cacheRead") or 0),
+                          ("input", u.get("input") or 0),
+                          ("output", (u.get("output") or 0) * 4),  # weighted: output bills dearer
+                          key=lambda t: t[1])[0]
+            print(f"cost         ${cost:.4f} this cycle   (~${cost * 60:.2f}/month at 2 wakes a day)")
+            print(f"             dominated by {biggest}")
+
     # How big is the toolset the agent was handed? This is the number that
     # tells you whether a tools.allow restriction actually took effect - the
     # config command can report success and change nothing.
