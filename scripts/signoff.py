@@ -31,6 +31,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import et_time  # noqa: E402
+
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
 CANDIDATES = ROOT / "agents" / "ace" / "data" / "candidates.json"
 
@@ -100,7 +103,7 @@ def age(path):
     return f"{secs / 3600:.1f}h ago"
 
 
-def newest_report(d, started):
+def newest_report(d, started, agent_name):
     """The report this run owes.
 
     Where the fetcher has stamped a report_name into data/_meta.json, that
@@ -117,12 +120,10 @@ def newest_report(d, started):
     if not d.is_dir():
         return None, "the reports/ folder does not exist"
 
-    want = None
-    try:
-        meta = json.loads((d.parent / "data" / "_meta.json").read_text())
-        want = meta.get("report_name") or None
-    except Exception:
-        pass
+    # et_time.expected_report is the one place this is decided. It used to be
+    # decided here as well, and the two answers differed whenever _meta.json
+    # carried no report_name.
+    want, _slot = et_time.expected_report(d.parent, agent_name)
 
     if want:
         f = d / want
@@ -162,7 +163,7 @@ def main():
         path = base / rel
 
         if kind == "report":
-            found, why = newest_report(path, started)
+            found, why = newest_report(path, started, agent)
             if found:
                 words = len(found.read_text().split())
                 lines.append(f"{label}: reports/{found.name}  ({words} words, {age(found)})")

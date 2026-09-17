@@ -97,16 +97,9 @@ def reconcile(p, problems):
 def expected_report(agent_name, agent_dir):
     """The report filename this cycle owes, taken from the fetcher's _meta.json
     where it exists so both sides read one value, computed only as a fallback."""
-    try:
-        meta = json.loads((agent_dir / "data" / "_meta.json").read_text())
-        name = meta.get("report_name")
-        if name:
-            return agent_dir / "reports" / name, str(meta.get("slot") or "").strip() or "this"
-    except Exception:
-        pass
-    now = et_time.eastern_now()
-    slot = et_time.slot(agent_name, now)
-    return agent_dir / "reports" / et_time.report_name(agent_name, now), slot
+    # One answer, from et_time, so this can never disagree with signoff.py.
+    name, slot = et_time.expected_report(agent_dir, agent_name)
+    return agent_dir / "reports" / name, slot or "this"
 
 
 def main():

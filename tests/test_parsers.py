@@ -251,3 +251,115 @@ class EveryScriptCompiles(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class ReportNameAgreement(unittest.TestCase):
+    """Belfort was told its report was both present and missing, and spent 49
+    tool calls before offering to contact technical support.
+
+    Commit 42d660b unified the case where the fetcher stamps a report_name
+    into data/_meta.json. It left the FALLBACK divergent: with no stamped
+    name, signoff accepted any fresh .md while the verifier demanded one
+    computed filename. Same cycle, same files, opposite verdicts.
+
+    So this does not test either function's internals. It puts real files on
+    disk and asserts the two sides reach the same verdict about them.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.agent = Path(self.tmp.name) / "agents" / "belfort"
+        (self.agent / "reports").mkdir(parents=True)
+        (self.agent / "data").mkdir(parents=True)
+        self.started = 0
+        self.signoff = load("signoff", "signoff.py")
+        self.verify = load("belfort_verify", "belfort-verify.py")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def verdicts(self):
+        """(signoff is satisfied, verifier is satisfied) for what is on disk."""
+        found, _why = self.signoff.newest_report(self.agent / "reports", self.started, "belfort")
+        path, _slot = self.verify.expected_report("belfort", self.agent)
+        return found is not None, Path(path).is_file()
+
+    def test_they_agree_when_the_fetcher_stamped_a_name(self):
+        (self.agent / "data" / "_meta.json").write_text(
+            json.dumps({"report_name": "2026-09-17-close.md", "slot": "close"}))
+        (self.agent / "reports" / "2026-09-17-close.md").write_text("# close\n")
+        a, b = self.verdicts()
+        self.assertEqual(a, b, "stamped name: both sides should see the report")
+        self.assertTrue(a)
+
+    def test_they_agree_when_the_stamped_report_is_genuinely_absent(self):
+        (self.agent / "data" / "_meta.json").write_text(
+            json.dumps({"report_name": "2026-09-17-close.md", "slot": "close"}))
+        a, b = self.verdicts()
+        self.assertEqual(a, b, "stamped name, no file: both sides should see it missing")
+        self.assertFalse(a)
+
+    def test_they_agree_with_no_meta_at_all(self):
+        # THE LIVE BUG. No _meta.json, and a report under a name the agent
+        # chose. signoff accepts it; the verifier computes a name of its own
+        # and calls it missing - "both present and missing", verbatim.
+        (self.agent / "reports" / "belfort-notes.md").write_text("# notes\n")
+        a, b = self.verdicts()
+        self.assertEqual(
+            a, b,
+            "no _meta.json: signoff and the verifier must not disagree - that "
+            "contradiction is what sent belfort looking for technical support")
+
+    def test_they_agree_when_meta_exists_but_carries_no_report_name(self):
+        (self.agent / "data" / "_meta.json").write_text(json.dumps({"asof_utc": "x"}))
+        (self.agent / "reports" / "belfort-notes.md").write_text("# notes\n")
+        a, b = self.verdicts()
+        self.assertEqual(a, b, "meta without report_name is the same case")
+
+    def test_an_agent_that_names_its_own_reports_is_left_alone(self):
+        # scout, emily and fury choose their own filenames. Unifying the
+        # stricter rule must not start demanding a computed name from them -
+        # that would break three working agents to fix one.
+        name, slot_ = et_time.expected_report(self.agent, "scout")
+        self.assertIsNone(name)
+        self.assertIsNone(slot_)
+
+    def test_the_slotted_agents_always_resolve_to_a_name(self):
+        # belfort-verify and ace-verify build `reports / name` directly, so a
+        # None here would be a TypeError at the worst possible moment.
+        for agent in ("ace", "belfort"):
+            with self.subTest(agent=agent):
+                self.assertIn(agent, et_time.SLOTS)
+                name, _ = et_time.expected_report(self.agent, agent)
+                self.assertTrue(name and name.endswith(".md"))
+
+
+class HeadersNameRealCommands(unittest.TestCase):
+    """preflight.py catches a command that does not exist - but only on the
+    droplet, after deploy.sh has built AGENTS.md from the header.
+
+    The headers themselves are tracked, so the same check runs here, on every
+    push. `ace-judge.py mark` was named in ace's instructions before mark
+    existed; three cycles were lost to the agent improvising around it. This
+    turns that into a failed build instead.
+    """
+
+    def test_every_command_in_every_header_exists(self):
+        headers = sorted((ROOT / "agents").glob("*/_*-agents-header.md"))
+        self.assertTrue(headers, "no instruction headers found - has the layout moved?")
+
+        checked = 0
+        for header in headers:
+            agent = header.parent.name
+            for script, sub in sorted(set(preflight.CMD_RE.findall(header.read_text()))):
+                with self.subTest(agent=agent, cmd=f"{script} {sub}"):
+                    self.assertTrue((SCRIPTS / script).is_file(),
+                                    f"{agent}'s instructions call scripts/{script}, "
+                                    f"which does not exist")
+                    subs = preflight.subcommands(script)
+                    if subs is not None:
+                        self.assertIn(sub, subs,
+                                      f"{agent}'s instructions say `{script} {sub}`, "
+                                      f"but it accepts: {', '.join(sorted(subs))}")
+                    checked += 1
+        self.assertGreater(checked, 0, "no commands were checked - is CMD_RE matching?")

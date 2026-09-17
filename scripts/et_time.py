@@ -19,7 +19,9 @@ Underscored filename so it is importable - the scripts around it have
 hyphens and cannot be.
 """
 
+import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 try:
     from zoneinfo import ZoneInfo
@@ -72,3 +74,33 @@ def slot(schedule, now=None):
 def report_name(schedule, now=None):
     now = now or eastern_now()
     return f"{day(now)}-{slot(schedule, now)}.md"
+
+
+def expected_report(agent_dir, agent_name, now=None):
+    """The exact report this cycle owes, for EVERY caller.
+
+    Three copies of this used to exist - signoff.py, belfort-verify.py and
+    ace-verify.py - and they agreed only when the fetcher had stamped a
+    report_name into data/_meta.json. Without one, signoff accepted any fresh
+    .md while the verifiers computed a filename and demanded that. Same cycle,
+    same files, opposite verdicts: belfort was told its report was both
+    present and missing and spent 49 tool calls on the contradiction.
+
+    Returns (name, slot). A name of None means this agent chooses its own
+    filenames - scout, emily and fury do - and any report written by the run
+    counts. It never means "no report needed".
+    """
+    try:
+        meta = json.loads((Path(agent_dir) / "data" / "_meta.json").read_text())
+        name = meta.get("report_name")
+        if name:
+            return name, (str(meta.get("slot") or "").strip() or None)
+    except Exception:
+        pass
+
+    # No stamped name. An agent with scheduled slots still owes a specific
+    # file - computing it here is what keeps both sides saying the same thing.
+    if agent_name in SLOTS:
+        now = now or eastern_now()
+        return report_name(agent_name, now), slot(agent_name, now)
+    return None, None
