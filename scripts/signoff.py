@@ -159,6 +159,19 @@ def main():
     # reported as missing rather than counted.
     started = int(sys.argv[2]) if len(sys.argv) > 2 else cycle_started(base)
 
+    # A missing epoch disables every freshness rule below, silently. The
+    # verifier IS handed one by the wrapper, so the two then reach opposite
+    # verdicts on the same files: this prints "All deliverables present" and
+    # the cycle is failed anyway. The docstring on cycle_started has described
+    # that bug for a while; it stayed silent about it, which is the half that
+    # made it expensive.
+    if not started:
+        print("!! state/.cycle-started is missing, so freshness is NOT being checked.")
+        print("   Files left by an earlier run will be reported as present here,")
+        print("   while the cycle verifier - which is given the epoch - fails the run.")
+        print("   If a cycle is running, something removed it; re-run through")
+        print("   scripts/<agent>-cycle.sh rather than trusting what follows.\n")
+
     lines, missing = [], []
     for label, kind, rel, extra in AGENTS[agent]:
         path = base / rel

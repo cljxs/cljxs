@@ -15,9 +15,11 @@ with nothing installed:
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -536,3 +538,45 @@ class StampedNameIsNotTrustedBlindly(unittest.TestCase):
         self.stamp(report_name="whatever-they-called-it.md")
         name, _ = et_time.expected_report(self.agent, "scout")
         self.assertEqual(name, "whatever-they-called-it.md")
+
+
+class SignoffWithoutAnEpoch(unittest.TestCase):
+    """state/.cycle-started is written by <agent>-cycle.sh at wake. Without it
+    signoff disabled every freshness rule and said nothing about having done
+    so, while the verifier - handed the epoch on argv - failed the same run.
+    Two checks, opposite verdicts, and the agent believes the one saying it is
+    finished. That is what cost belfort 49 tool calls."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        agent = self.root / "agents" / "belfort"
+        (agent / "data").mkdir(parents=True)
+        (agent / "state").mkdir()
+        (agent / "reports").mkdir()
+        (agent / "data" / "_meta.json").write_text(
+            json.dumps({"slot": "close", "report_name": "2026-09-17-close.md"}))
+        (agent / "reports" / "2026-09-17-close.md").write_text("word " * 120)
+        (agent / "MEMORY.md").write_text("- 2026-09-10 an old note\n")
+        (agent / "state" / "portfolio.json").write_text(json.dumps(
+            {"starting_cash": 10000.0, "cash": 10000.0, "positions": [],
+             "trades": [], "cycle_count": 3}))
+        self.agent = agent
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_signoff(self):
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+        return subprocess.run([sys.executable, str(SCRIPTS / "signoff.py"), "belfort"],
+                              capture_output=True, text=True, env=env)
+
+    def test_it_says_so_when_the_epoch_is_missing(self):
+        r = self.run_signoff()
+        self.assertIn(".cycle-started is missing", r.stdout)
+        self.assertIn("NOT being checked", r.stdout)
+
+    def test_it_stays_quiet_when_the_epoch_is_there(self):
+        (self.agent / "state" / ".cycle-started").write_text(str(int(time.time()) - 60))
+        r = self.run_signoff()
+        self.assertNotIn(".cycle-started is missing", r.stdout)
