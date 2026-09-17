@@ -111,10 +111,28 @@ def cmd_check(a):
                   f"channel={s.get('sales_channel')}")
 
 
+# Printify puts trademark symbols inside product names: "Unisex Heavy Blend(TM)
+# Hooded Sweatshirt", "Unisex EcoSmart(R) Crewneck Sweatshirt". A plain
+# substring search for "heavy blend hooded" therefore matches nothing, because
+# the symbol sits between two of the words you typed - and the only hit is the
+# Youth version, which happens not to carry it. That looked like the product
+# being absent from the catalogue.
+_NOISE = dict.fromkeys(map(ord, "\u2122\u00ae\u00a9\u2120"), None)
+
+
+def searchable(title):
+    """A title with trademark symbols dropped and whitespace collapsed."""
+    return " ".join(str(title or "").translate(_NOISE).lower().split())
+
+
+def matches(title, term):
+    return searchable(term) in searchable(title)
+
+
 def cmd_blueprints(a):
     bps = call("/catalog/blueprints.json")
     term = (a.search or "").lower()
-    hits = [b for b in bps if term in b.get("title", "").lower()] if term else bps
+    hits = [b for b in bps if matches(b.get("title"), term)] if term else bps
     for b in hits[:a.limit]:
         print(f"  {b['id']:>6}  {b['title']}")
     nxt = hits[0]["id"] if hits else None
@@ -199,9 +217,9 @@ def cmd_suggest(a):
     """Find candidate blueprints for a product type and show what to do next."""
     bps = call("/catalog/blueprints.json")
     term = (a.product or "").lower()
-    hits = [b for b in bps if term in b.get("title", "").lower()]
+    hits = [b for b in bps if matches(b.get("title"), term)]
     if not hits:
-        hits = [b for b in bps if term.rstrip("s") in b.get("title", "").lower()]
+        hits = [b for b in bps if matches(b.get("title"), term.rstrip("s"))]
     if not hits:
         print(f"nothing in the catalogue matches '{a.product}'. "
               f"Try: blueprints --search <word>")

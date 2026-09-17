@@ -936,3 +936,32 @@ class PricingApparelBySize(unittest.TestCase):
         src = (SCRIPTS / "emily-printify.py").read_text()
         self.assertNotIn('for v in chosen][:12]', src)
         self.assertIn('"variant_titles": [v.get("title") for v in chosen],', src)
+
+
+class BlueprintSearchIgnoresTrademarks(unittest.TestCase):
+    """Searching the catalogue for "heavy blend hooded" returned only the
+    Youth version. Printify writes the one we wanted as "Unisex Heavy Blend(TM)
+    Hooded Sweatshirt" - the symbol sits between two of the words typed, so a
+    plain substring match fails. It read as the product being absent from the
+    catalogue rather than as a search that could not see it.
+    """
+
+    def setUp(self):
+        self.pf = load("emily_printify", "emily-printify.py")
+
+    def test_the_search_that_failed(self):
+        self.assertTrue(self.pf.matches("Unisex Heavy Blend™ Hooded Sweatshirt",
+                                        "heavy blend hooded"))
+
+    def test_every_symbol_printify_uses(self):
+        for sym in ("™", "®", "©", "℠"):
+            with self.subTest(symbol=sym):
+                self.assertTrue(self.pf.matches(f"Unisex EcoSmart{sym} Crewneck", "ecosmart crewneck"))
+
+    def test_it_does_not_match_everything_now(self):
+        self.assertFalse(self.pf.matches("Unisex Jersey Short Sleeve Tee", "heavy blend hooded"))
+        self.assertFalse(self.pf.matches("Youth Heavy Blend Hooded Sweatshirt", "ecosmart"))
+
+    def test_spacing_and_case_do_not_matter(self):
+        self.assertTrue(self.pf.matches("Unisex  Heavy   Blend™ Hooded Sweatshirt",
+                                        "  HEAVY blend   hooded "))
