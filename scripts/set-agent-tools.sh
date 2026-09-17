@@ -40,6 +40,7 @@ PATHS=(
   "agents.$AGENT.tools"
 )
 FOUND=""
+SETTABLE=""
 say "looking for the tools key"
 for k in "${PATHS[@]}"; do
   out=$(openclaw config get "$k" 2>&1)
@@ -50,7 +51,18 @@ for k in "${PATHS[@]}"; do
     FOUND="$k"
     break
   fi
-  echo "no (${out:0:60})"
+  # openclaw tells "valid but unset" apart from "unknown path", and only the
+  # second means the key is unsupported. This used to lump them together and
+  # report that the two cases "look identical from here" - they do not, and
+  # believing they did left the tool surface untrimmed for a week.
+  case "$out" in
+    *"valid but unset"*)
+      echo "SETTABLE (in the schema, no value yet)"
+      FOUND="$k"
+      SETTABLE=yes
+      break ;;
+    *) echo "no (${out:0:60})" ;;
+  esac
 done
 
 if [ -z "$FOUND" ]; then
