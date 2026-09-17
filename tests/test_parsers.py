@@ -471,14 +471,17 @@ class VerifierMessages(unittest.TestCase):
                                  f"{f} still falls back to a slot called 'this'")
 
     def test_expected_report_reports_an_absent_slot_as_none(self):
+        # A well-formed name with no slot key. This used to be written with
+        # report_name "2026-09-17-cycle-report.md", which the stamp guard now
+        # rejects outright - so the case has to be built from a name the
+        # fetcher could really have written, or it tests the guard instead.
         tmp = tempfile.TemporaryDirectory()
         agent = Path(tmp.name)
         (agent / "data").mkdir()
-        # A _meta.json with a name but no slot - exactly belfort's case.
         (agent / "data" / "_meta.json").write_text(
-            json.dumps({"report_name": "2026-09-17-cycle-report.md"}))
+            json.dumps({"report_name": "2026-09-17-open.md"}))
         name, slot_ = et_time.expected_report(agent, "belfort")
-        self.assertEqual(name, "2026-09-17-cycle-report.md")
+        self.assertEqual(name, "2026-09-17-open.md")
         self.assertIsNone(slot_, "an absent slot must be None, not a word")
         tmp.cleanup()
 
