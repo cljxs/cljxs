@@ -2353,10 +2353,12 @@ class OpenRouterPricesAreReadNotAssumed(unittest.TestCase):
     """cost-estimate.py's table carries a date, and a dated number goes stale.
     `--rates` asks OpenRouter what it charges today instead.
 
-    The fixture is three real entries captured from /api/v1/models on
+    The fixture is five real entries captured from /api/v1/models on
     2026-09-18 - the shape is the thing that breaks, so the shape is what the
     tests use. It was captured because a hand-written parser against an
-    imagined payload is how every format bug in this repo happened.
+    imagined payload is how every format bug in this repo happened, and it
+    earned its keep twice over within the hour: gpt-4o-mini has a null
+    input_cache_write, and openrouter/auto publishes its price as "-1".
     """
 
     def setUp(self):
@@ -2368,7 +2370,7 @@ class OpenRouterPricesAreReadNotAssumed(unittest.TestCase):
         # A missing fixture must fail the test, not make it vacuous - the
         # credential-scan test passed for a week on a file that did not exist.
         self.assertTrue((FIXTURES / "openrouter-models.json").is_file())
-        self.assertEqual(len(self.models), 3)
+        self.assertEqual(len(self.models), 5)
 
     def test_prices_arrive_per_token_as_strings_and_come_back_per_million(self):
         rows = dict((r[0], r) for r in self.m.rate_rows(self.models, ""))
@@ -2405,8 +2407,43 @@ class OpenRouterPricesAreReadNotAssumed(unittest.TestCase):
         self.assertEqual(len(ids), 2)
         self.assertEqual(self.m.rate_rows(self.models, "gemini"), [])
 
-    def test_a_model_with_no_headline_price_is_skipped_not_crashed_on(self):
+    def test_a_price_of_minus_one_is_a_sentinel_not_a_discount(self):
+        # openrouter/auto is a router: it picks a model per request and
+        # publishes "-1" rather than a price. Multiplied out, that printed as
+        # -$1,000,000 per million tokens - and it was belfort's configured
+        # model, so it was the first thing anyone would have looked up.
+        rows = dict((r[0], r) for r in self.m.rate_rows(self.models, ""))
+        _, in_r, out_r, _, _ = rows["openrouter/auto"]
+        self.assertIsNone(in_r)
+        self.assertIsNone(out_r)
+
+    def test_a_router_is_listed_rather_than_hidden(self):
+        # Skipping unpriced entries answered "nothing matches" to someone
+        # asking what their own configured model costs.
+        self.assertIn("openrouter/auto",
+                      [r[0] for r in self.m.rate_rows(self.models, "auto")])
+
+    def test_an_unreadable_price_is_none_and_does_not_crash(self):
         broken = [{"id": "a/b", "pricing": {"prompt": None, "completion": "1"}},
                   {"id": "c/d"},
                   {"id": "e/f", "pricing": {"prompt": "x", "completion": "1"}}]
-        self.assertEqual(self.m.rate_rows(broken, ""), [])
+        rows = self.m.rate_rows(broken, "")
+        self.assertEqual(len(rows), 3)
+        self.assertTrue(all(r[1] is None for r in rows))
+
+    def test_the_printed_output_says_a_router_has_no_price(self):
+        # What matters is that the person reading it is not shown a number.
+        r = subprocess.run([sys.executable, str(SCRIPTS / "cost-estimate.py"),
+                            "--rates", "openrouter/auto"],
+                           capture_output=True, text=True, timeout=90)
+        # Skip only for the one thing this test cannot control. Treating any
+        # non-zero exit as "no network" swallowed a crash - the formatter
+        # raising on a None price exited non-zero and the test skipped, which
+        # is the vacuous pass this suite keeps having to relearn.
+        self.assertNotIn("Traceback", r.stderr, r.stderr[-800:])
+        if r.returncode != 0 and "could not reach OpenRouter" in r.stderr:
+            self.skipTest("OpenRouter unreachable from here")
+        self.assertEqual(r.returncode, 0, r.stderr[-800:])
+        self.assertIn("not published", r.stdout)
+        self.assertNotIn("-1000000", r.stdout)
+        self.assertNotIn("$-", r.stdout)

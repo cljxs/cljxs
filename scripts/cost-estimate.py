@@ -143,16 +143,24 @@ def rate_rows(models, term):
     Kept out of main() so it can be run against a captured payload. The prices
     arrive as strings of dollars PER TOKEN, and some are null - gpt-4o-mini has
     no input_cache_write at all - so every field is converted defensively. A
-    null is not a zero: a zero would read as "caching is free here".
+    null is not a zero: a zero would read as "caching is free here". Nor is
+    "-1", which openrouter/auto publishes because it is a router that picks a
+    model per request and has no price of its own. Absent, null and -1 all
+    come back as None and print as not published; none of them is a number,
+    and inventing one is worse than saying so.
     """
     def per_million(pricing, key):
         raw = (pricing or {}).get(key)
         if raw in (None, ""):
             return None
         try:
-            return float(raw) * 1_000_000
+            value = float(raw)
         except (TypeError, ValueError):
             return None
+        # A negative price is a sentinel, not a discount. openrouter/auto
+        # publishes "-1", which multiplied out printed as -$1,000,000 per
+        # million tokens.
+        return value * 1_000_000 if value >= 0 else None
 
     out = []
     for m in models:
@@ -162,8 +170,10 @@ def rate_rows(models, term):
         pricing = m.get("pricing") or {}
         in_r = per_million(pricing, "prompt")
         out_r = per_million(pricing, "completion")
-        if in_r is None or out_r is None:
-            continue  # a model with no headline price cannot be compared
+        # A model whose price cannot be read is still listed. Hiding
+        # openrouter/auto would answer "nothing matches" to someone asking what
+        # their own configured model costs - the opposite of useful. It is
+        # listed, with the price stated as unknown.
         out.append((mid, in_r, out_r,
                     per_million(pricing, "input_cache_read"),
                     per_million(pricing, "input_cache_write")))
@@ -248,6 +258,12 @@ def main():
               f"pay, and\nthe id column is the slug for set-agent-model.sh "
               f"(prefixed openrouter/):\n")
         for mid, in_r, out_r, c_read, c_write in rows:
+            if in_r is None or out_r is None:
+                print(f"  {mid:<40} price not published - this is a router, "
+                      f"not a model.\n{'':<42}It picks one per request, so "
+                      f"neither the model nor the\n{'':<42}cost is knowable "
+                      f"in advance.")
+                continue
             cache = ""
             if c_read is not None and in_r:
                 cache = f"   cache read {c_read / in_r:.2f}x"
