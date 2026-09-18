@@ -22,11 +22,18 @@ The second term is quadratic. A 68-turn cycle does not cost five times a
 loop saves more than switching models, and the --turns number is the one worth
 measuring properly.
 
-RATES ARE ANTHROPIC FIRST-PARTY LIST, read 2026-09-18. The agents here reach
-models through OpenRouter, which sets its own prices and may not expose prompt
-caching at all. Treat the cached column as the best case and check your own
-provider before believing it. Add a row to PRICES for whatever you actually
-run - that is what the table is for.
+RATES ARE ANTHROPIC FIRST-PARTY LIST, read 2026-09-18 - and checked the same
+day against OpenRouter's own /api/v1/models, which is what these agents
+actually buy through: it charges Anthropic list for the Opus and Sonnet rows,
+no margin. That was a caveat here until it was checked; it is now a fact with
+a date on it. Re-check it rather than trusting this line a year from now:
+
+    python3 scripts/cost-estimate.py --rates opus
+
+THE CACHED COLUMN IS STILL A BEST CASE. OpenRouter carries the price, but
+whether OpenClaw sends cache_control on an agent wake is unverified, and
+without it nothing caches. Read that column as the ceiling on what caching
+could save, not as a discount you are getting.
 
 TOKEN COUNTS ARE ESTIMATED FROM CHARACTERS. The only true count comes from the
 provider's own usage field on a real call. This is a planning number, not a
@@ -130,6 +137,39 @@ def cycles_per_week():
     return out
 
 
+def rate_rows(models, term):
+    """[(id, in, out, cache_read, cache_write)] per million tokens, matching term.
+
+    Kept out of main() so it can be run against a captured payload. The prices
+    arrive as strings of dollars PER TOKEN, and some are null - gpt-4o-mini has
+    no input_cache_write at all - so every field is converted defensively. A
+    null is not a zero: a zero would read as "caching is free here".
+    """
+    def per_million(pricing, key):
+        raw = (pricing or {}).get(key)
+        if raw in (None, ""):
+            return None
+        try:
+            return float(raw) * 1_000_000
+        except (TypeError, ValueError):
+            return None
+
+    out = []
+    for m in models:
+        mid = str(m.get("id") or "")
+        if term.lower() not in mid.lower():
+            continue
+        pricing = m.get("pricing") or {}
+        in_r = per_million(pricing, "prompt")
+        out_r = per_million(pricing, "completion")
+        if in_r is None or out_r is None:
+            continue  # a model with no headline price cannot be compared
+        out.append((mid, in_r, out_r,
+                    per_million(pricing, "input_cache_read"),
+                    per_million(pricing, "input_cache_write")))
+    return sorted(out)
+
+
 def cycle_cost(model, prompt, turns, output, growth, cached):
     """(input tokens, output tokens, dollars, why-not) for one cycle.
 
@@ -180,9 +220,43 @@ def main():
                     dest="tool_result",
                     help=f"tokens a tool hands back per turn "
                          f"(default {DEFAULT_TOOL_RESULT_TOKENS})")
+    ap.add_argument("--rates", metavar="TERM",
+                    help="ask OpenRouter what it charges today for slugs "
+                         "matching TERM, instead of trusting the table above")
     ap.add_argument("--schedule", action="store_true",
                     help="how often each agent wakes a model, from the timers")
     a = ap.parse_args()
+
+    if a.rates:
+        # The table has a date on it, and a dated number is a number that goes
+        # stale. This is how you check it without pasting a fragile one-liner.
+        import json
+        import urllib.request
+        try:
+            with urllib.request.urlopen(
+                    "https://openrouter.ai/api/v1/models", timeout=30) as r:
+                models = json.load(r)["data"]
+        except Exception as exc:
+            print(f"could not reach OpenRouter: {exc}", file=sys.stderr)
+            return 1
+        rows = rate_rows(models, a.rates)
+        if not rows:
+            print(f"nothing in OpenRouter's catalogue matches {a.rates!r}",
+                  file=sys.stderr)
+            return 1
+        print(f"OpenRouter slugs matching {a.rates!r} - this is what you would "
+              f"pay, and\nthe id column is the slug for set-agent-model.sh "
+              f"(prefixed openrouter/):\n")
+        for mid, in_r, out_r, c_read, c_write in rows:
+            cache = ""
+            if c_read is not None and in_r:
+                cache = f"   cache read {c_read / in_r:.2f}x"
+                if c_write is not None:
+                    cache += f", write {c_write / in_r:.2f}x"
+                else:
+                    cache += ", write not priced"
+            print(f"  {mid:<40} in ${in_r:>7.2f}/M   out ${out_r:>7.2f}/M{cache}")
+        return 0
 
     if a.schedule:
         weekly = cycles_per_week()
@@ -226,10 +300,12 @@ def main():
         print(f"  {model:<{width}}  ${plain:>9.4f}  ${cheap:>9.4f}   "
               f"{in_t:>8,} / {out_t:<7,}{note}")
 
-    print(f"\n  Rates are Anthropic list, read 2026-09-18. These agents reach "
-          f"models through\n  OpenRouter, which prices separately and may not "
-          f"cache at all - check before\n  trusting the cached column. Token "
-          f"counts are estimated at {CHARS_PER_TOKEN} chars/token.")
+    print(f"\n  Rates are Anthropic list, read 2026-09-18 and confirmed the same "
+          f"day to be\n  what OpenRouter charges for these models - that is "
+          f"where these agents buy.\n  Whether OpenClaw sends cache_control on "
+          f"a wake is unverified, so read the\n  cached column as a ceiling, "
+          f"not a discount. Token counts are estimated at\n  {CHARS_PER_TOKEN} "
+          f"chars/token - a true count only comes from a provider's usage field.")
     print(f"\n  Halve the turns and you halve more than the cost: "
           f"{a.turns} turns carries "
           f"{growth * a.turns * (a.turns-1) // 2:,} tokens of transcript, "

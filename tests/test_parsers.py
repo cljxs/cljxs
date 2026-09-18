@@ -2347,3 +2347,66 @@ class WhatACycleCosts(unittest.TestCase):
         self.assertEqual(tokens, len(body) // self.m.CHARS_PER_TOKEN)
         self.assertIn("AGENTS.md", source)
         self.assertNotIn("larger", source, "it IS the real prompt here")
+
+
+class OpenRouterPricesAreReadNotAssumed(unittest.TestCase):
+    """cost-estimate.py's table carries a date, and a dated number goes stale.
+    `--rates` asks OpenRouter what it charges today instead.
+
+    The fixture is three real entries captured from /api/v1/models on
+    2026-09-18 - the shape is the thing that breaks, so the shape is what the
+    tests use. It was captured because a hand-written parser against an
+    imagined payload is how every format bug in this repo happened.
+    """
+
+    def setUp(self):
+        self.m = load("cost_estimate", "cost-estimate.py")
+        self.models = json.loads(
+            (FIXTURES / "openrouter-models.json").read_text())["data"]
+
+    def test_the_fixture_is_really_there(self):
+        # A missing fixture must fail the test, not make it vacuous - the
+        # credential-scan test passed for a week on a file that did not exist.
+        self.assertTrue((FIXTURES / "openrouter-models.json").is_file())
+        self.assertEqual(len(self.models), 3)
+
+    def test_prices_arrive_per_token_as_strings_and_come_back_per_million(self):
+        rows = dict((r[0], r) for r in self.m.rate_rows(self.models, ""))
+        _, in_r, out_r, _, _ = rows["anthropic/claude-opus-5"]
+        self.assertAlmostEqual(in_r, 5.00, places=6)
+        self.assertAlmostEqual(out_r, 25.00, places=6)
+
+    def test_openrouter_charges_anthropic_list_for_opus(self):
+        # The claim the estimate rests on. If OpenRouter ever adds a margin
+        # this fails and the table's note needs rewriting.
+        rows = dict((r[0], r) for r in self.m.rate_rows(self.models, ""))
+        _, in_r, out_r, _, _ = rows["anthropic/claude-opus-5"]
+        table = self.m.PRICES["claude-opus-5"]
+        self.assertAlmostEqual(in_r, table["in"], places=6)
+        self.assertAlmostEqual(out_r, table["out"], places=6)
+
+    def test_the_cache_multipliers_match_the_table_too(self):
+        rows = dict((r[0], r) for r in self.m.rate_rows(self.models, ""))
+        _, in_r, _, c_read, c_write = rows["anthropic/claude-opus-5"]
+        table = self.m.PRICES["claude-opus-5"]
+        self.assertAlmostEqual(c_read / in_r, table["cache_read"], places=6)
+        self.assertAlmostEqual(c_write / in_r, table["cache_write"], places=6)
+
+    def test_a_null_price_stays_null_rather_than_becoming_zero(self):
+        # gpt-4o-mini really has no input_cache_write. Zero would read as
+        # "caching is free on this model", which is a discount nobody offered.
+        rows = dict((r[0], r) for r in self.m.rate_rows(self.models, ""))
+        _, _, _, c_read, c_write = rows["openai/gpt-4o-mini"]
+        self.assertIsNone(c_write)
+        self.assertIsNotNone(c_read)
+
+    def test_the_term_filters(self):
+        ids = [r[0] for r in self.m.rate_rows(self.models, "opus")]
+        self.assertEqual(len(ids), 2)
+        self.assertEqual(self.m.rate_rows(self.models, "gemini"), [])
+
+    def test_a_model_with_no_headline_price_is_skipped_not_crashed_on(self):
+        broken = [{"id": "a/b", "pricing": {"prompt": None, "completion": "1"}},
+                  {"id": "c/d"},
+                  {"id": "e/f", "pricing": {"prompt": "x", "completion": "1"}}]
+        self.assertEqual(self.m.rate_rows(broken, ""), [])
