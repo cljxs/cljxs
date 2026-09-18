@@ -14,6 +14,11 @@ agents/belfort/reports/*
 !agents/belfort/reports/.gitkeep
 agents/belfort/state/portfolio.json
 agents/belfort/MEMORY.md
+# Written by the dispatcher when it wakes an agent and removed when the agent
+# exits - it says which task is in flight right now, and nothing about it
+# belongs in history.
+agents/*/state/current-task
+
 agents/*/AGENTS.md
 agents/*/SOUL.md
 agents/*/TOOLS.md

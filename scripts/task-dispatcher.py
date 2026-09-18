@@ -147,6 +147,33 @@ def claim_next_task(conn, agent):
     return row["id"]
 
 
+def task_marker(agent):
+    return AGENTS_DIR / agent / task.TASK_FILE
+
+
+def write_task_marker(agent, task_id):
+    """Put the task number where the agent will actually find it."""
+    path = task_marker(agent)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{task_id}\n")
+    except OSError as exc:
+        # Not fatal: the number is in the wake message too, and the agent can
+        # pass it. Say so rather than letting it fail silently at the far end.
+        log(f"could not write {path}: {exc} - {agent} will have to use the "
+            f"number from its wake message")
+
+
+def clear_task_marker(agent):
+    """So the next wake cannot read the last wake's number."""
+    try:
+        task_marker(agent).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        log(f"could not clear {task_marker(agent)}: {exc}")
+
+
 def spawn_agent(agent, task_id):
     """Launch OpenClaw for one task with a fresh session id."""
     # A fresh --session-id per task is REQUIRED: reusing sessions caused
@@ -166,9 +193,15 @@ def spawn_agent(agent, task_id):
         "--json",
     ]
 
-    # The task number, so scripts/task.py needs no argument. Emily was asked to
-    # substitute it into a <placeholder> by hand; she printed the command
-    # instead of running it and the task was failed at exit.
+    # The task number, twice, because neither route is reliable alone.
+    #
+    # The environment variable reaches the openclaw CLI and stops there:
+    # openclaw runs the agent from its gateway, in a process that never
+    # inherits this. Emily woke, ran `task.py read`, and was told there was no
+    # task number - so the file is what actually arrives. It lands in the
+    # agent's own folder, which is its working directory, and is removed when
+    # the agent exits so a later wake cannot read a stale one.
+    write_task_marker(agent, task_id)
     env = dict(os.environ, **{task.TASK_ENV: str(task_id)})
     kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "env": env}
 
@@ -195,6 +228,7 @@ def reap_finished(conn):
 
         task_id = entry["task_id"]
         del running[agent]
+        clear_task_marker(agent)
         code = proc.returncode
         try:
             stdout, stderr = proc.communicate(timeout=5)

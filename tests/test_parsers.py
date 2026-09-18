@@ -2578,3 +2578,121 @@ class CreatingATaskIsACommandToo(unittest.TestCase):
     def test_list_shows_why_a_failed_task_failed(self):
         r = self.run_task("list")
         self.assertIn("agent exited with code 0", r.stdout)
+
+
+class TheTaskNumberHasToActuallyArrive(unittest.TestCase):
+    """Task #7 failed with Emily saying, correctly, that ECOSYSTEM_TASK_ID was
+    not set and she could not name her own task.
+
+    The dispatcher was exporting it onto the openclaw CLI process. openclaw
+    runs the agent from its gateway, in a process that never inherits that, so
+    it reached nothing. Worse, the wake message said "both commands already
+    know the task number - do not type one", which forbade the one workaround
+    that would have worked: an instruction that rules out the fallback turns a
+    degraded path into a dead one.
+
+    The number now travels three ways - an argument, a file the dispatcher
+    writes into the agent's own folder, and the environment variable - because
+    being unable to name your own task is a failed cycle.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.agent_dir = self.root / "agents" / "emily"
+        self.agent_dir.mkdir(parents=True)
+        self.t = load("task_py", "task.py")
+        self.d = load("dispatcher", "task-dispatcher.py")
+        self.d.AGENTS_DIR = self.root / "agents"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_from_agent_dir(self, *args, env_task=None):
+        env = dict(os.environ, MISSION_CONTROL_API="http://127.0.0.1:1")
+        env.pop("ECOSYSTEM_TASK_ID", None)
+        if env_task:
+            env["ECOSYSTEM_TASK_ID"] = env_task
+        return subprocess.run([sys.executable, str(SCRIPTS / "task.py"), *args],
+                              capture_output=True, text=True, env=env,
+                              cwd=self.agent_dir, timeout=60)
+
+    def test_the_dispatcher_writes_the_number_where_the_agent_will_find_it(self):
+        self.d.write_task_marker("emily", 7)
+        self.assertEqual(
+            (self.agent_dir / "state" / "current-task").read_text().strip(), "7")
+
+    def test_an_agent_with_no_env_var_still_knows_its_task(self):
+        # The whole incident: no ECOSYSTEM_TASK_ID anywhere.
+        self.d.write_task_marker("emily", 7)
+        r = self.run_from_agent_dir("read")
+        # The queue is unreachable here, so it must get as far as TRYING task 7
+        # rather than stopping at "no task number".
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("#7", r.stderr)
+        self.assertNotIn("no task number", r.stderr)
+
+    def test_the_marker_is_cleared_so_a_later_wake_cannot_read_a_stale_number(self):
+        self.d.write_task_marker("emily", 7)
+        self.d.clear_task_marker("emily")
+        r = self.run_from_agent_dir("read")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("no task number", r.stderr)
+
+    def test_clearing_a_marker_that_is_not_there_is_silent(self):
+        # Not merely "does not raise" - FileNotFoundError is an OSError, so a
+        # broader handler catches it and logs a failure that did not happen.
+        # A dispatcher that complains every reap teaches you to ignore it.
+        said = []
+        self.d.log = lambda msg: said.append(msg)
+        self.d.clear_task_marker("emily")
+        self.assertEqual(said, [])
+
+    def test_an_explicit_number_still_wins(self):
+        self.d.write_task_marker("emily", 7)
+        r = self.run_from_agent_dir("read", "9")
+        self.assertIn("#9", r.stderr)
+
+    def test_the_env_var_still_works_where_it_does_arrive(self):
+        r = self.run_from_agent_dir("read", env_task="5")
+        self.assertIn("#5", r.stderr)
+
+    def test_with_nothing_anywhere_it_points_at_the_wake_message(self):
+        r = self.run_from_agent_dir("read")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("wake message", r.stderr)
+        self.assertIn("task.py read", r.stderr)
+
+    # --- the message must not forbid the fallback ---------------------------
+
+    def test_the_wake_message_carries_the_number_in_both_commands(self):
+        msg = self.t.wake_message(7)
+        self.assertIn("task.py read 7", msg)
+        self.assertIn("task.py done 7", msg)
+
+    def test_the_wake_message_does_not_forbid_typing_the_number(self):
+        # This sentence is what turned a missing env var into a dead end.
+        msg = self.t.wake_message(7).lower()
+        self.assertNotIn("do not type", msg)
+
+    def test_the_dispatcher_writes_the_marker_before_it_spawns(self):
+        src = (SCRIPTS / "task-dispatcher.py").read_text()
+        body = src.split("def spawn_agent(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("write_task_marker(agent, task_id)", body)
+        self.assertLess(body.index("write_task_marker"), body.index("Popen"))
+
+    def test_the_dispatcher_clears_the_marker_when_the_agent_exits(self):
+        src = (SCRIPTS / "task-dispatcher.py").read_text()
+        body = src.split("def reap_finished(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("clear_task_marker(agent)", body)
+
+    def test_a_marker_that_cannot_be_written_is_logged_not_swallowed(self):
+        # The number is still in the wake message, so this is degraded rather
+        # than fatal - but a silent failure here surfaces as a confused agent
+        # an hour later, which is exactly how this bug presented.
+        said = []
+        self.d.log = lambda msg: said.append(msg)
+        self.d.AGENTS_DIR = Path("/proc/nonexistent-and-unwritable")
+        self.d.write_task_marker("emily", 7)
+        self.assertTrue(said)
+        self.assertIn("wake message", " ".join(said))

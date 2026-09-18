@@ -38,6 +38,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 API_BASE = os.environ.get("MISSION_CONTROL_API", "http://127.0.0.1:3001")
 TASK_ENV = "ECOSYSTEM_TASK_ID"
@@ -50,22 +51,49 @@ def wake_message(task_id, api_base=API_BASE):
     and the commands that exist are the same fact. They drifted once already:
     the header, the wake message and this queue's API each described completing
     a task in their own words.
+
+    THE NUMBER IS IN THE MESSAGE. It used to say "do not type one", because
+    the dispatcher exported it - except the export reaches the openclaw CLI,
+    not the agent, which openclaw runs from its gateway in another process.
+    Emily ran the command, got "no task number", and was forbidden by this
+    very message from doing the one thing that would have worked. An
+    instruction that rules out the fallback turns a degraded path into a dead
+    one.
     """
     return (f"Task #{task_id} is assigned to you.\n"
             f"Read it first:\n"
-            f"  python3 ../../scripts/task.py read\n"
+            f"  python3 ../../scripts/task.py read {task_id}\n"
             f"The payload holds everything you need. When you have finished, "
             f"and only then:\n"
-            f'  python3 ../../scripts/task.py done "<one line about what you made>"\n'
-            f"Both commands already know the task number - do not type one.\n"
+            f'  python3 ../../scripts/task.py done {task_id} "<one line about '
+            f'what you made>"\n'
             f"If you cannot finish, run `done` anyway with an honest line "
             f"saying why: a task left unfinished blocks your next one.")
 
 
+# The dispatcher drops the task number here before waking an agent, and
+# removes it when the agent exits. The environment variable below travels only
+# as far as the openclaw CLI - openclaw runs the agent from its gateway, in
+# another process that never sees it - so a file in the agent's own folder is
+# what actually arrives.
+TASK_FILE = Path("state") / "current-task"
+
+
 def task_id_from(argv_value=None):
-    """The task number: an explicit argument, else the one we were woken for."""
+    """The task number: an argument, the file the dispatcher wrote, or the env.
+
+    Three sources because the first two can each be absent, and being unable
+    to name your own task is a failed cycle. An agent runs with its own folder
+    as the working directory, so the relative path resolves to that agent.
+    """
     if argv_value:
         return str(argv_value).lstrip("#")
+    try:
+        written = TASK_FILE.read_text().strip()
+        if written:
+            return written.lstrip("#")
+    except OSError:
+        pass
     env = os.environ.get(TASK_ENV, "").strip()
     if env:
         return env.lstrip("#")
@@ -268,9 +296,9 @@ def main():
 
     task_id = task_id_from(explicit)
     if task_id is None:
-        print(f"no task number. The dispatcher normally sets {TASK_ENV}; "
-              f"if you are running this by hand, give it:\n"
-              f"  python3 scripts/task.py {cmd} 6"
+        print(f"no task number, and none in {TASK_FILE} or {TASK_ENV}.\n"
+              f"The number is in your wake message - pass it:\n"
+              f"  python3 ../../scripts/task.py {cmd} 7"
               + (' "<one line>"' if cmd == "done" else ""), file=sys.stderr)
         return 2
 
