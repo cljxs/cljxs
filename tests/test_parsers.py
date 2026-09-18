@@ -2696,3 +2696,104 @@ class TheTaskNumberHasToActuallyArrive(unittest.TestCase):
         self.d.write_task_marker("emily", 7)
         self.assertTrue(said)
         self.assertIn("wake message", " ".join(said))
+
+
+class TheGarmentsOwnNameShouldNotNeedAnAlias(unittest.TestCase):
+    """Emily's first clean cycle ended with the finisher stopping on "hooded
+    sweatshirt" - a fourth word for a garment already aliased as hoodie and
+    sweatshirt.
+
+    Aliasing is for a word the catalogue could not have guessed. "Hooded
+    Sweatshirt" is literally in "Unisex Heavy Blend Hooded Sweatshirt", so it
+    should never have needed one - but that entry was chosen before pick
+    started recording the blueprint title, so title matching had nothing to
+    match against and every wording had to be aliased by hand, one failed
+    draft at a time. `refresh` fills the titles in.
+    """
+
+    # The droplet's catalogue as the failure printed it, plus the real titles.
+    CAT = {
+        "hoodie": {"blueprint_id": 77, "provider_id": 99, "aliases": ["sweatshirt"]},
+        "kisscut": {"blueprint_id": 400, "provider_id": 1},
+        "sticker": {"blueprint_id": 564, "provider_id": 27},
+    }
+    TITLES = {77: "Unisex Heavy Blend Hooded Sweatshirt",
+              400: "Kiss-Cut Stickers", 564: "Kiss Cut Stickers"}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / "agents" / "emily" / "state").mkdir(parents=True)
+        self.m = load("emily_printify", "emily-printify.py")
+        self.m.CATALOG = self.root / "agents/emily/state/printify-catalog.json"
+        self.m.CATALOG.write_text(json.dumps(self.CAT))
+        self.asked = []
+
+        def fake_call(path):
+            bid = int(path.split("/")[-1].split(".")[0])
+            self.asked.append(bid)
+            return {"title": self.TITLES[bid]}
+        self.m.call = fake_call
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def refresh(self):
+        class A:
+            pass
+        return self.m.cmd_refresh(A())
+
+    def test_the_word_that_failed_resolves_afterwards(self):
+        cat = self.m.read_catalog()
+        self.assertEqual(self.m.resolve(cat, "hooded sweatshirt"), (None, None))
+        self.refresh()
+        self.assertEqual(
+            self.m.resolve(self.m.read_catalog(), "hooded sweatshirt")[0], "hoodie")
+
+    def test_the_title_is_written_to_disk_not_just_used(self):
+        self.refresh()
+        saved = self.m.read_catalog()["hoodie"]["blueprint_title"]
+        self.assertEqual(saved, self.TITLES[77])
+
+    def test_existing_aliases_and_keys_are_left_alone(self):
+        self.refresh()
+        entry = self.m.read_catalog()["hoodie"]
+        self.assertEqual(entry["aliases"], ["sweatshirt"])
+        self.assertEqual(entry["blueprint_id"], 77)
+        self.assertEqual(sorted(self.m.read_catalog()), ["hoodie", "kisscut", "sticker"])
+
+    def test_an_entry_that_already_has_a_title_is_not_re_fetched(self):
+        # One read per entry, once. A refresh that re-reads everything every
+        # time is a refresh nobody runs.
+        self.refresh()
+        self.asked.clear()
+        self.refresh()
+        self.assertEqual(self.asked, [])
+
+    def test_a_word_that_became_ambiguous_is_reported_not_raised(self):
+        # "cut" reaches both kisscut and sticker. Walking every word of every
+        # title through resolve() raised straight out of the report - after
+        # the file had been written, so it half-succeeded and printed a
+        # traceback. Ambiguity is the interesting part of this report.
+        rc = self.refresh()
+        self.assertEqual(rc, 0)
+
+    def test_an_entry_with_no_blueprint_id_is_named_not_skipped_silently(self):
+        self.m.CATALOG.write_text(json.dumps({"mug": {"provider_id": 1}}))
+        self.assertEqual(self.refresh(), 1)
+
+    def test_a_blueprint_that_cannot_be_read_does_not_lose_the_others(self):
+        def boom(path):
+            if "/77." in path:
+                raise RuntimeError("network")
+            bid = int(path.split("/")[-1].split(".")[0])
+            return {"title": self.TITLES[bid]}
+        self.m.call = boom
+        self.assertEqual(self.refresh(), 1)
+        cat = self.m.read_catalog()
+        self.assertNotIn("blueprint_title", cat["hoodie"])
+        self.assertEqual(cat["kisscut"]["blueprint_title"], self.TITLES[400])
+
+    def test_an_empty_catalogue_is_not_an_error(self):
+        self.m.CATALOG.write_text("{}")
+        self.assertEqual(self.refresh(), 0)

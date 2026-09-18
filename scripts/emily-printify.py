@@ -20,6 +20,8 @@ Subcommands:
   pick --product sticker \\        remember a blueprint/provider once, by hand
        --blueprint 564 --provider 27
   alias hoodie sweatshirt       another word for a product already chosen
+  refresh                       fill in blueprint titles, so the garment's own
+                                name resolves without an alias
   draft builds/my-slug          build folder -> UNPUBLISHED product, no judgement
 
 Standard library only.
@@ -327,6 +329,87 @@ def no_entry(cat, product_type):
         lines.append("\n  The catalogue is empty. Choose a blueprint once:")
     lines.append(f"    emily-printify.py suggest --product {product_type}")
     return "\n".join(lines)
+
+
+def cmd_refresh(a):
+    """Fill in blueprint_title on entries saved before it was recorded.
+
+    Aliasing is for a word the catalogue could not have guessed. A word that
+    IS the garment's name should never have needed one - "hooded sweatshirt"
+    is right there in "Unisex Heavy Blend Hooded Sweatshirt". The hoodie entry
+    was chosen before pick started saving that title, so every wording of the
+    same garment had to be aliased by hand, one failed draft at a time.
+
+    One read per entry, once.
+    """
+    cat = read_catalog()
+    if not cat:
+        print("the catalogue is empty - nothing to refresh")
+        return 0
+    filled, already, failed = [], [], []
+    for key, entry in sorted(cat.items()):
+        if entry.get("blueprint_title"):
+            already.append(key)
+            continue
+        bid = entry.get("blueprint_id")
+        if not bid:
+            failed.append((key, "no blueprint_id"))
+            continue
+        try:
+            title = call(f"/catalog/blueprints/{bid}.json").get("title") or ""
+        except Exception as exc:
+            failed.append((key, f"{type(exc).__name__}"))
+            continue
+        if not title:
+            failed.append((key, "blueprint has no title"))
+            continue
+        entry["blueprint_title"] = title
+        filled.append((key, title))
+
+    if filled:
+        CATALOG.write_text(json.dumps(cat, indent=1) + "\n")
+
+    def reaches(word):
+        """Which entry a word reaches, or None if it is ambiguous.
+
+        resolve() raises on ambiguity, and this report walked every word of
+        every title straight into that - "cut" reaches both kisscut and
+        sticker. A crash here left the file written and the summary half
+        printed. Ambiguity is the interesting part of this report, not an
+        error in it.
+        """
+        try:
+            return resolve(cat, word)[0]
+        except Ambiguous:
+            return None
+
+    contested = {}
+    for key, title in filled:
+        print(f"  {key:<14} {title}")
+        extra = sorted({w for w in words(title) if reaches(w) == key})
+        if extra:
+            print(f"{'':<16}now also answers to: {', '.join(extra)}")
+        for word in words(title):
+            try:
+                resolve(cat, word)
+            except Ambiguous as exc:
+                contested[word] = exc.keys
+    for key in already:
+        print(f"  {key:<14} (already had a title)")
+    for key, why in failed:
+        print(f"  {key:<14} COULD NOT REFRESH - {why}", file=sys.stderr)
+    if contested:
+        print("\n  These words now match more than one entry. Drafting against "
+              "one of them\n  still works - the exact key wins - but any other "
+              "wording will be refused\n  rather than guessed at:")
+        for word, keys in sorted(contested.items()):
+            print(f"    {word:<14} {', '.join(keys)}")
+        print("\n  If two of those entries are really the same product, that is "
+              "a duplicate\n  worth removing: a price set on one does not apply "
+              "to the other.")
+    if not filled and not failed:
+        print("\nnothing needed refreshing.")
+    return 1 if failed else 0
 
 
 def cmd_alias(a):
@@ -985,6 +1068,8 @@ def main():
     p.add_argument("--alias", default="",
                    help="other words that mean this product, comma-separated")
     p.set_defaults(fn=cmd_pick)
+
+    sub.add_parser("refresh").set_defaults(fn=cmd_refresh)
 
     p = sub.add_parser("alias"); p.add_argument("product")
     p.add_argument("alias", nargs="+"); p.set_defaults(fn=cmd_alias)

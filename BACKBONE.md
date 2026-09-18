@@ -148,6 +148,16 @@ answer. Wanting one named facility is a reason to pick a specific provider
 - Nothing here can publish. `emily-printify.py` has no publish command by
   design; every product is created UNPUBLISHED and you press Publish.
 
+**Run `refresh` once.** It fills in each entry's blueprint title, after which
+the garment's own name resolves without an alias:
+
+    python3 scripts/emily-printify.py refresh
+
+Entries chosen before the title was recorded have nothing for the matcher to
+work with, so every wording had to be aliased by hand, one failed draft at a
+time - hoodie, then sweatshirt, then hooded sweatshirt. `refresh` also names
+any word that now matches two entries, which is how you find a duplicate.
+
 **One garment, one catalogue entry.** The blueprint/provider/variant choice
 is cached in `agents/emily/state/printify-catalog.json` under a word — and the
 word in a build's `listing.json` is whichever one Emily wrote. When they
