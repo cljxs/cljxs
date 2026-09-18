@@ -104,6 +104,53 @@ and completing the second collides with the first. Scoping to open statuses
 means finishing a task drops it out of the index entirely. Creating a second
 open task with a key already in use returns **409**.
 
+## Publishing a listing on Etsy — the half no script can check
+
+Everything from artwork to draft is enforced in code. These steps live inside
+Etsy's own UI, where nothing here can reach, so they are the ones that get
+forgotten.
+
+**Once per shop.** Register the production partner:
+
+    Shop Manager -> Settings -> Production partners -> Add a production partner
+
+      Partner name   Printify
+      Location       the production location
+      About          what they do for you, e.g. "Prints my original designs
+                     on blank garments and ships them to my customers"
+
+Location is awkward with **Printify Choice (provider 99)**, which routes each
+order to whichever top-rated provider suits it — there is no single facility
+to name. For a US shop selling US-fulfilled garments, the US is the honest
+answer. Wanting one named facility is a reason to pick a specific provider
+(SwiftPOD 39, Monster Digital 29) over Choice.
+
+**Every listing, before publishing:**
+
+- [ ] **Attach the production partner.** Edit listing -> *Production* section
+      -> select Printify. Registering it in Settings is **not** enough; a
+      listing with none attached is undisclosed even though the partner
+      exists on the shop.
+- [ ] **Who made it: "I did."** You designed it. Not "a member of my shop",
+      and nothing implying you assembled the garment.
+- [ ] **Read the description once.** `draft` refuses without the disclosure
+      lines, so they are present — but present is not the same as accurate.
+
+**Already enforced, listed so you know what you are not checking:**
+
+- The disclosure lines are in the description — `draft` refuses without them
+  (`scripts/disclosures.py`, wording in `agents/emily/state/disclosures.json`).
+- Apparel artwork has its background removed — `draft` refuses art that
+  cannot be cut cleanly (`scripts/knockout.py`).
+- Nothing here can publish. `emily-printify.py` has no publish command by
+  design; every product is created UNPUBLISHED and you press Publish.
+
+**Two caveats.** Etsy blocks automated reads of `/legal/creativity/`,
+`/legal/handmade/` and its help pages, so the above was assembled from
+secondary sources — trust the screen over this file when a label differs, and
+read those pages yourself. And none of it is legal advice: the checklist is a
+reminder that cannot be forgotten, not a lawyer.
+
 ## Notes
 
 - **Install with `--ignore-scripts`.** `better-sqlite3` ships ready-made
