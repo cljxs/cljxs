@@ -71,6 +71,25 @@ def judged_rows(doc):
     return [r for r in rows_of(doc) if r.get("status") in JUDGED_STATUSES]
 
 
+def slate_size(agent_dir=None):
+    """How many games the fetcher offered this cycle, or None if unreadable.
+
+    Zero is a real, recurring state. ace-fetch keeps only games starting within
+    BET_WINDOW_HOURS and drops ones already underway, so on a Friday night -
+    MLB finished, NFL not until Sunday - the slate is legitimately empty. An
+    empty ledger is then correct and not evidence of anything.
+
+    Ace was failed at 03:31 on 2026-09-18 for exactly that, having written
+    "No picks - nothing cleared the bar on the no-vig line." It had done every
+    part of its job.
+    """
+    path = (Path(agent_dir) / "data" / "candidates.json") if agent_dir else CANDIDATES
+    try:
+        return len(rows_of(json.loads(path.read_text())))
+    except Exception:
+        return None
+
+
 def load_candidates():
     try:
         doc = json.loads(CANDIDATES.read_text())

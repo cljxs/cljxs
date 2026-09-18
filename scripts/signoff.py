@@ -257,8 +257,15 @@ def main():
             # shapes, 36 tool failures and $0.19, ending with a proposal to
             # "reformat it in a way that may trick the system into recognizing
             # the change". It was never going to guess its way out.
-            if not rows:
-                lines.append(f"{label}: EMPTY - {rel} parses but has no rows. "
+            if not rows and ace_judge.slate_size(base) == 0:
+                # No games were offered. Telling the agent to judge row 1 sends
+                # it looking for a game that does not exist.
+                lines.append(f"{label}: {rel} - no games on the slate this cycle, "
+                             f"nothing to judge")
+            elif not rows:
+                offered = ace_judge.slate_size(base)
+                extra = "" if offered is None else f" ({offered} on the slate)"
+                lines.append(f"{label}: EMPTY - {rel} parses but has no rows{extra}. "
                              f"Add one with: python3 ../../scripts/ace-judge.py "
                              f"pass 1 --my-pct 55 --why \"your reason\"")
                 missing.append(label)

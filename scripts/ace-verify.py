@@ -137,8 +137,20 @@ def check_ledger(problems, notes, started):
     # Same predicate signoff.py uses. A row with no status is not judged.
     judged = ace_judge.judged_rows(ledger)
     if not judged:
-        problems.append("state/ledger.json has no candidates - a cycle that looked at "
-                        "nothing is not a pass, it is a cycle that did not run")
+        offered = ace_judge.slate_size(AGENT)
+        if offered == 0:
+            # Nothing was on the slate. An empty ledger is the right answer and
+            # the only one available - the agent cannot judge a game that does
+            # not exist. This failed a cycle that had done everything asked.
+            notes.append("no games on the slate this cycle, so nothing to judge")
+            if not str((ledger if isinstance(ledger, dict) else {}).get("verdict") or "").strip():
+                notes.append("ledger has no verdict line - even an empty slate "
+                             "gets a sentence")
+            return
+        extra = "" if offered is None else f" - candidates.json offered {offered}"
+        problems.append(f"state/ledger.json has no candidates{extra}. A cycle that "
+                        f"looked at nothing is not a pass, it is a cycle that did "
+                        f"not run")
         return
 
     try:

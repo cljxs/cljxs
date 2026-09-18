@@ -1552,3 +1552,96 @@ class EtsyDisclosuresAreRequiredToDraft(unittest.TestCase):
         fin = (SCRIPTS / "emily-finish.py").read_text()
         self.assertIn("required disclosure", fin,
                       "emily-finish exits 0 by design, so it must name this case")
+
+
+class AnEmptySlateIsNotASkippedCycle(unittest.TestCase):
+    """Ace's 03:31 scheduled run on 2026-09-18 was failed for "state/ledger.json
+    has no candidates - a cycle that looked at nothing is not a pass, it is a
+    cycle that did not run".
+
+    The fetcher had offered nothing: games_shown 0, games_outside_window 0,
+    candidates []. MLB finished for the day, NFL not until Sunday, and
+    ace-fetch keeps only games starting within 14 hours. The ledger even
+    carried the verdict line - "No picks - nothing cleared the bar on the
+    no-vig line" - so Ace had done every part of its job, including the one
+    added hours earlier, and was failed for not judging games that did not
+    exist. It recurs every Friday in this part of the season.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.agent = self.root / "agents" / "ace"
+        for d in ("data", "state", "reports"):
+            (self.agent / d).mkdir(parents=True)
+        self.started = int(time.time()) - 120
+        want, _ = et_time.expected_report(self.agent, "ace", started=self.started)
+        (self.agent / "reports" / want).write_text("word " * 196)
+        (self.agent / "MEMORY.md").write_text("- quiet slate\n")
+        (self.agent / "state" / ".cycle-started").write_text(str(self.started))
+        (self.agent / "state" / ".cycle-before").write_text("6")
+        (self.agent / "state" / "bankroll.json").write_text(json.dumps(
+            {"starting_bankroll": 10000.0, "bankroll": 10000.0, "open_bets": [],
+             "settled_bets": [], "cycle_count": 7}))
+        self.ledger(verdict="No picks - nothing cleared the bar on the no-vig line.")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def slate(self, n):
+        rows = [{"selection": f"S{i}", "match": "A @ B", "price": -110} for i in range(n)]
+        (self.agent / "data" / "candidates.json").write_text(json.dumps(
+            {"day": "2026-09-18", "slot": "night", "games_shown": n,
+             "games_outside_window": 0, "candidates": rows}))
+
+    def ledger(self, rows=None, verdict=""):
+        (self.agent / "state" / "ledger.json").write_text(json.dumps(
+            {"day": "2026-09-17", "slot": "night", "verdict": verdict,
+             "candidates": rows or []}))
+
+    def verify(self):
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+        return subprocess.run([sys.executable, str(SCRIPTS / "ace-verify.py"),
+                               "40", "6", str(self.started)],
+                              capture_output=True, text=True, env=env)
+
+    def signoff(self):
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+        return subprocess.run([sys.executable, str(SCRIPTS / "signoff.py"), "ace"],
+                              capture_output=True, text=True, env=env)
+
+    def test_the_run_that_was_wrongly_failed_now_passes(self):
+        self.slate(0)
+        r = self.verify()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("no games on the slate", r.stdout)
+
+    def test_signoff_agrees_and_does_not_send_it_hunting(self):
+        self.slate(0)
+        r = self.signoff()
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("nothing to judge", r.stdout)
+        self.assertNotIn("pass 1", r.stdout,
+                         "telling it to judge row 1 of an empty slate sends it "
+                         "looking for a game that does not exist")
+
+    def test_a_slate_that_was_offered_and_ignored_still_fails(self):
+        self.slate(2)
+        self.assertEqual(self.verify().returncode, 1)
+        self.assertEqual(self.signoff().returncode, 1)
+
+    def test_the_failure_names_how_many_were_offered(self):
+        self.slate(2)
+        self.assertIn("offered 2", self.verify().stdout)
+
+    def test_an_empty_slate_still_owes_a_verdict_line(self):
+        self.slate(0)
+        self.ledger(verdict="")
+        r = self.verify()
+        self.assertEqual(r.returncode, 0, "a missing sentence is not a failed cycle")
+        self.assertIn("even an empty slate gets a sentence", r.stdout)
+
+    def test_an_unreadable_slate_does_not_excuse_an_empty_ledger(self):
+        (self.agent / "data" / "candidates.json").write_text("{ not json")
+        self.assertEqual(self.verify().returncode, 1,
+                         "unknown is not the same as zero")
