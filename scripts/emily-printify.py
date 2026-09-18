@@ -28,6 +28,7 @@ import argparse
 import base64
 import json
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -317,6 +318,24 @@ def size_of(title):
     return None
 
 
+def needs_cutout(entry):
+    """Does this product need a transparent background?
+
+    A sticker is die-cut, so an opaque square is fine. A garment prints the
+    background as a visible rectangle - a white box on a black hoodie. Emily
+    generates opaque art, so without this step the drafted product is wrong in
+    a way that looks fine in a thumbnail and arrives wrong on the doorstep.
+
+    Decided once, from the catalogue entry: an explicit "cutout" if pick set
+    one, otherwise inferred from whether the variants carry garment sizes. The
+    hoodie entry was saved before the flag existed, so the inference is what
+    covers it.
+    """
+    if "cutout" in (entry or {}):
+        return bool(entry["cutout"])
+    return any(size_of(t) for t in (entry or {}).get("variant_titles") or [])
+
+
 def colour_of(title):
     """The colour half of "Dark Heather / 2XL". None if there is no colour."""
     parts = [x.strip() for x in str(title or "").split("/")]
@@ -520,10 +539,31 @@ def cmd_draft(a):
         print("PRINTIFY_SHOP_ID is not set - run emily-printify.py check.", file=sys.stderr)
         sys.exit(2)
 
-    print(f"uploading {design.name} ({design.stat().st_size // 1024} KB) ...")
+    # Apparel needs the background removed before it goes anywhere near a
+    # garment. knockout.py refuses art it cannot cut cleanly, and that refusal
+    # has to stop the draft: uploading the opaque file instead would produce a
+    # product that looks right in the listing and wrong on the shirt.
+    upload_from = design
+    if needs_cutout(cat):
+        cut = d / "design-cutout.png"
+        ko = Path(__file__).resolve().parent / "knockout.py"
+        print(f"{product_type} is apparel - cutting the background out first ...")
+        r = subprocess.run([sys.executable, str(ko), str(design), str(cut)],
+                           capture_output=True, text=True)
+        sys.stdout.write(r.stdout)
+        if r.returncode != 0:
+            sys.stderr.write(r.stderr)
+            print(f"\nnot drafting: the artwork cannot be cut out, and an opaque "
+                  f"file prints its background as a rectangle on the garment.\n"
+                  f"  Regenerate the art on a plain, even background.", file=sys.stderr)
+            sys.exit(1)
+        upload_from = cut
+
+    print(f"uploading {upload_from.name} "
+          f"({upload_from.stat().st_size // 1024} KB) ...")
     up = call("/uploads/images.json", {
         "file_name": f"{d.name}.png",
-        "contents": base64.b64encode(design.read_bytes()).decode(),
+        "contents": base64.b64encode(upload_from.read_bytes()).decode(),
     })
     image_id = up.get("id")
     if not image_id:

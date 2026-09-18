@@ -1149,3 +1149,48 @@ class TheVerdictLine(unittest.TestCase):
         r = self.signoff()
         self.assertEqual(r.returncode, 0)
         self.assertIn("All deliverables present", r.stdout)
+
+
+class ApparelIsCutOutBeforeItIsUploaded(unittest.TestCase):
+    """knockout.py existed as a standalone script nothing called, and `draft`
+    uploaded design.png directly. So a hoodie drafted today would have carried
+    Emily's opaque artwork - which prints the background as a visible rectangle
+    on the garment, a white box on a black hoodie.
+
+    That is the worst failure mode available here: it looks right in the
+    listing and arrives wrong on the doorstep. Everything else this week failed
+    loudly.
+    """
+
+    def setUp(self):
+        self.pf = load("emily_printify", "emily-printify.py")
+
+    def test_the_hoodie_entry_saved_before_the_flag_existed(self):
+        # No "cutout" key - it was picked yesterday. Inferred from the sizes.
+        self.assertTrue(self.pf.needs_cutout(
+            {"variant_titles": ["Black / S", "Navy / 2XL", "Maroon / 5XL"]}))
+
+    def test_stickers_are_left_alone(self):
+        # Die-cut already; an opaque square is correct for them.
+        self.assertFalse(self.pf.needs_cutout(
+            {"variant_titles": ['2" x 2"', '4" x 4"', '5.5" x 5.5"']}))
+
+    def test_an_explicit_flag_beats_the_inference(self):
+        self.assertFalse(self.pf.needs_cutout({"cutout": False,
+                                               "variant_titles": ["Black / S"]}))
+        self.assertTrue(self.pf.needs_cutout({"cutout": True,
+                                              "variant_titles": ['2" x 2"']}))
+
+    def test_an_empty_entry_does_not_crash(self):
+        for entry in ({}, None, {"variant_titles": []}):
+            with self.subTest(entry=entry):
+                self.assertFalse(self.pf.needs_cutout(entry))
+
+    def test_draft_refuses_rather_than_uploading_the_opaque_file(self):
+        src = (SCRIPTS / "emily-printify.py").read_text()
+        self.assertIn("upload_from = cut", src)
+        self.assertIn("not drafting:", src,
+                      "a knockout that refuses must stop the draft, not fall through")
+        # The upload must read the cutout, never the original, once cut.
+        self.assertIn("upload_from.read_bytes()", src)
+        self.assertNotIn("contents\": base64.b64encode(design.read_bytes())", src)
