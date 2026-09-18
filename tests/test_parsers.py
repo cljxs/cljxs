@@ -2897,3 +2897,124 @@ class TheDeckDoesNotDecideWhatRemovingMeans(unittest.TestCase):
         # It was documented "Read-only, unlike scout.js". A comment that is no
         # longer true is how the next reader gets a wrong idea for free.
         self.assertNotIn("Read-only, unlike scout.js", self.JS)
+
+
+class TheImageModelKnobIsWiredToSomething(unittest.TestCase):
+    """The art was disappointing and the obvious lever - draw it with a
+    different model - was documented and dead.
+
+    EMILY_IMAGE_MODEL was read into a module constant at import. Credentials
+    are loaded inside main(), which runs after, so setting it in
+    credentials.env - the only place this ecosystem keeps that kind of setting
+    - was read before the file that sets it existed in the environment, and
+    silently did nothing. A documented knob wired to nothing is worse than no
+    knob, because it gets believed.
+    """
+
+    def setUp(self):
+        self.m = load("emily_assets", "emily-assets.py")
+        self.saved = os.environ.pop("EMILY_IMAGE_MODEL", None)
+
+    def tearDown(self):
+        os.environ.pop("EMILY_IMAGE_MODEL", None)
+        if self.saved is not None:
+            os.environ["EMILY_IMAGE_MODEL"] = self.saved
+
+    def test_the_env_var_is_read_when_asked_not_when_imported(self):
+        # Set AFTER import, the way load_credentials() does it.
+        os.environ["EMILY_IMAGE_MODEL"] = "openai/gpt-5-image"
+        self.assertEqual(self.m.image_model(), "openai/gpt-5-image")
+
+    def test_an_explicit_model_beats_the_environment(self):
+        os.environ["EMILY_IMAGE_MODEL"] = "openai/gpt-5-image"
+        self.assertEqual(self.m.image_model("google/gemini-3-pro-image"),
+                         "google/gemini-3-pro-image")
+
+    def test_unset_and_blank_both_fall_back(self):
+        self.assertEqual(self.m.image_model(), self.m.DEFAULT_IMAGE_MODEL)
+        os.environ["EMILY_IMAGE_MODEL"] = "   "
+        self.assertEqual(self.m.image_model(), self.m.DEFAULT_IMAGE_MODEL)
+
+    def test_the_model_is_not_frozen_at_import(self):
+        # The bug itself: a module-level constant cannot see a later change.
+        src = (SCRIPTS / "emily-assets.py").read_text()
+        head = src.split("def image_model(", 1)[0]
+        self.assertNotIn('os.environ.get("EMILY_IMAGE_MODEL"', head)
+
+    def test_generate_sends_the_chosen_model(self):
+        src = (SCRIPTS / "emily-assets.py").read_text()
+        body = src.split("def generate(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn('"model": model or image_model()', body)
+
+
+class ComparingModelsIsLookingAtThem(unittest.TestCase):
+    """"Would ChatGPT's images be better" has no answer in the abstract - it
+    depends on the prompt, the garment, and the taste of whoever is selling
+    them. So compare draws one prompt with several models and writes them into
+    a build folder, because the Deck's gallery already renders a folder of
+    images with a lightbox. The filename is the model, so what you are looking
+    at is never a guess.
+    """
+
+    def setUp(self):
+        self.m = load("emily_assets", "emily-assets.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name) / "builds" / "bakeoff-fall"
+        self.drawn = []
+
+        def fake_generate(path, prompt, key, model=None):
+            self.drawn.append((model, prompt))
+            if "refuses" in (model or ""):
+                raise RuntimeError("provider returned 429")
+            Path(path).write_bytes(b"\x89PNG" + b"x" * 900)
+            return Path(path).stat().st_size
+        self.m.generate = fake_generate
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_every_model_gets_the_same_prompt(self):
+        self.m.compare("a fall emblem", "a/one,b/two", "k", self.dir)
+        self.assertEqual([p for _m, p in self.drawn], ["a fall emblem"] * 2)
+
+    def test_the_filename_names_the_model(self):
+        self.m.compare("x", "openai/gpt-5-image,google/gemini-2.5-flash-image",
+                       "k", self.dir)
+        names = sorted(p.name for p in self.dir.glob("*.png"))
+        self.assertEqual(names, ["google-gemini-2.5-flash-image.png",
+                                 "openai-gpt-5-image.png"])
+
+    def test_one_model_failing_does_not_cost_you_the_others(self):
+        rc = self.m.compare("x", "a/refuses,b/two,c/three", "k", self.dir)
+        self.assertEqual(rc, 0, "two of three still drew something")
+        self.assertEqual(len(list(self.dir.glob("*.png"))), 2)
+
+    def test_a_failure_is_recorded_rather_than_only_printed(self):
+        self.m.compare("x", "a/refuses,b/two", "k", self.dir)
+        results = json.loads((self.dir / "comparison.json").read_text())["results"]
+        failed = [r for r in results if not r["ok"]]
+        self.assertEqual(len(failed), 1)
+        self.assertIn("429", failed[0]["error"])
+
+    def test_every_model_failing_is_a_failure(self):
+        self.assertEqual(self.m.compare("x", "a/refuses", "k", self.dir), 1)
+
+    def test_it_is_not_a_product(self):
+        # No price, no printify id, and a status the gallery will not read as
+        # something sellable.
+        self.m.compare("x", "a/one", "k", self.dir)
+        build = json.loads((self.dir / "build.json").read_text())
+        listing = json.loads((self.dir / "listing.json").read_text())
+        self.assertEqual(build["status"], "comparison")
+        self.assertNotIn("printify_product_id", build)
+        self.assertNotIn("price_suggestion", listing)
+
+    def test_comparing_without_a_key_says_so_instead_of_drawing_placeholders(self):
+        # A folder of identical geometric placeholders answers nothing, and
+        # looks like the models all agreed.
+        rc = self.m.compare("x", "a/one", "", self.dir)
+        self.assertEqual(rc, 2)
+        self.assertFalse(self.dir.exists())
+
+    def test_no_models_named_is_refused(self):
+        self.assertEqual(self.m.compare("x", "  ,  ", "k", self.dir), 2)

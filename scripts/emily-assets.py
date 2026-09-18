@@ -47,7 +47,20 @@ def load_credentials():
 
 
 OR_URL = "https://openrouter.ai/api/v1/chat/completions"
-OR_MODEL = os.environ.get("EMILY_IMAGE_MODEL", "google/gemini-2.5-flash-image")
+DEFAULT_IMAGE_MODEL = "google/gemini-2.5-flash-image"
+
+
+def image_model(override=None):
+    """Which model draws the art.
+
+    Read HERE, not at import. It used to be a module constant, and
+    load_credentials() runs inside main() - so EMILY_IMAGE_MODEL set in
+    credentials.env was read before the file that sets it had been loaded, and
+    silently did nothing. A documented knob that is wired to nothing is worse
+    than no knob, because it is believed.
+    """
+    return (override or os.environ.get("EMILY_IMAGE_MODEL") or "").strip() \
+        or DEFAULT_IMAGE_MODEL
 
 
 # ---------------------------------------------------------------- PNG writer
@@ -97,9 +110,9 @@ def placeholder(path, prompt, size):
 
 # ------------------------------------------------------------- OpenRouter
 
-def generate(path, prompt, key):
+def generate(path, prompt, key, model=None):
     body = json.dumps({
-        "model": OR_MODEL,
+        "model": model or image_model(),
         "messages": [{"role": "user", "content": prompt}],
         "modalities": ["image", "text"],
     }).encode()
@@ -125,22 +138,95 @@ def generate(path, prompt, key):
     raise RuntimeError("no image returned; response keys: " + ",".join(msg.keys()))
 
 
+def safe_name(model):
+    """A model slug as a filename: openai/gpt-5-image -> openai-gpt-5-image."""
+    return "".join(c if c.isalnum() or c in "-." else "-" for c in model).strip("-")
+
+
+def compare(prompt, models, key, out_dir):
+    """Draw one prompt with several models, side by side.
+
+    "Are the ChatGPT ones better" is not answerable in the abstract - it
+    depends on the prompt, the garment and the taste of the person selling
+    them. So this puts the same brief through each model and writes them into
+    a build folder, because the Deck's gallery already renders a folder of
+    images with a lightbox. The filename is the model, so what you are looking
+    at is never a guess.
+
+    Nothing here is a product: no listing, no price, no Printify. It is a
+    folder of pictures to look at, and the Remove button throws it away.
+    """
+    if not key:
+        print(json.dumps({"ok": False, "error": "no OPENROUTER_API_KEY - "
+                          "comparing needs real generations"}), file=sys.stderr)
+        return 2
+
+    wanted = [m.strip() for m in models.split(",") if m.strip()]
+    if not wanted:
+        print(json.dumps({"ok": False, "error": "no models given"}), file=sys.stderr)
+        return 2
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "build.json").write_text(json.dumps({
+        "status": "comparison",
+        "art_mode": "generated",
+        "idea": f"Model comparison - {prompt[:60]}",
+        "prompt": prompt,
+        "models": wanted,
+    }, indent=1) + "\n")
+    (out_dir / "listing.json").write_text(json.dumps({
+        "title": f"Model comparison: {prompt[:48]}",
+        "description": "Not a product. One prompt drawn by several models, "
+                       "for choosing between them.",
+    }, indent=1) + "\n")
+
+    results = []
+    for model in wanted:
+        path = out_dir / f"{safe_name(model)}.png"
+        try:
+            n = generate(path, prompt, key, model)
+            results.append({"model": model, "ok": True,
+                            "file": path.name, "bytes": n})
+            print(f"  {model:<38} {n:>9,} bytes  {path.name}")
+        except Exception as exc:
+            # One model refusing or timing out must not cost you the others.
+            results.append({"model": model, "ok": False, "error": str(exc)[:200]})
+            print(f"  {model:<38} FAILED  {str(exc)[:90]}", file=sys.stderr)
+
+    (out_dir / "comparison.json").write_text(json.dumps(
+        {"prompt": prompt, "results": results}, indent=1) + "\n")
+    drawn = [r for r in results if r["ok"]]
+    print(f"\n{len(drawn)} of {len(wanted)} drew something. Look at them in the "
+          f"Command Deck -\nthe filename under each is the model. Throw the "
+          f"whole comparison away with Remove.")
+    return 0 if drawn else 1
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prompt", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--size", type=int, default=1024)
     ap.add_argument("--placeholder-only", action="store_true")
+    ap.add_argument("--model", default="",
+                    help="draw with this model instead of the configured one")
+    ap.add_argument("--compare", default="",
+                    help="comma-separated models: draw the SAME prompt with "
+                         "each, into a build folder the Deck already shows")
     a = ap.parse_args()
 
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     load_credentials()
     key = os.environ.get("OPENROUTER_API_KEY", "").strip()
 
+    if a.compare:
+        return compare(a.prompt, a.compare, key, Path(a.out))
+
     if key and not a.placeholder_only:
         try:
-            n = generate(a.out, a.prompt, key)
-            print(json.dumps({"ok": True, "mode": "generated", "model": OR_MODEL,
+            model = image_model(a.model)
+            n = generate(a.out, a.prompt, key, model)
+            print(json.dumps({"ok": True, "mode": "generated", "model": model,
                               "path": a.out, "bytes": n}))
             return 0
         except Exception as exc:
