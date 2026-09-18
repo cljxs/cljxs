@@ -27,6 +27,30 @@ import urllib.request
 import zlib
 from pathlib import Path
 
+def read_env_file(path):
+    """{key: value} from a credentials.env, or {} if it cannot be read.
+
+    THE one parser for this format. preflight grew a second one to show which
+    model draws the art, and the two disagreed immediately: this accepts
+    `KEY = value` with spaces around the equals and that one did not, so a
+    setting that worked perfectly would have been reported as absent.
+    """
+    out = {}
+    try:
+        lines = Path(path).read_text().splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k, v = k.strip(), v.strip().strip('"').strip("'")
+        if k and v:
+            out[k] = v
+    return out
+
+
 def load_credentials():
     """credentials.env is a file, not an environment. Nothing was loading it,
     so the key was never visible and every build silently fell back to a
@@ -36,13 +60,8 @@ def load_credentials():
                  Path(os.environ.get("EMILY_CREDENTIALS", "/nonexistent"))):
         if not cand.is_file():
             continue
-        for line in cand.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            k, v = k.strip(), v.strip().strip('"').strip("'")
-            if v and k not in os.environ:
+        for k, v in read_env_file(cand).items():
+            if k not in os.environ:
                 os.environ[k] = v
 
 

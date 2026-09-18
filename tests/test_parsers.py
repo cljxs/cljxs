@@ -3054,3 +3054,124 @@ class ComparingModelsIsLookingAtThem(unittest.TestCase):
         src = (SCRIPTS / "emily-assets.py").read_text()
         body = src.split("def generate(", 1)[1].split("\ndef ", 1)[0]
         self.assertIn('"usage": {"include": True}', body)
+
+
+class ASettingYouCannotSeeChangesBackQuietly(unittest.TestCase):
+    """Choosing an image model after comparing four of them writes one line
+    into credentials.env and leaves no trace anywhere a person looks. If that
+    file is ever rebuilt the setting reverts to the default silently, and the
+    art quietly gets worse with nothing to notice.
+
+    preflight already prints what model each agent thinks with, costs nothing
+    and is run constantly. It prints what draws the art too now.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.adir = Path(self.tmp.name) / "agents" / "emily"
+        (self.adir / "state").mkdir(parents=True)
+        self.pf = load("preflight", "preflight.py")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write(self, text):
+        (self.adir / "state" / "credentials.env").write_text(text)
+
+    def test_the_chosen_model_is_shown(self):
+        self.write("PRINTIFY_API_TOKEN=secret\nEMILY_IMAGE_MODEL=google/gemini-3-pro-image\n")
+        self.assertEqual(self.pf.image_model_for("emily", self.adir),
+                         "google/gemini-3-pro-image")
+
+    def test_quotes_and_spacing_do_not_defeat_it(self):
+        self.write('EMILY_IMAGE_MODEL = "google/gemini-3-pro-image" \n')
+        self.assertEqual(self.pf.image_model_for("emily", self.adir),
+                         "google/gemini-3-pro-image")
+
+    def test_nothing_set_is_nothing_shown_not_a_guess(self):
+        # Printing the default here would state as fact something the file
+        # does not say - and the default is exactly what this is meant to
+        # catch reverting to.
+        self.write("PRINTIFY_API_TOKEN=secret\n")
+        self.assertIsNone(self.pf.image_model_for("emily", self.adir))
+
+    def test_a_blank_value_is_not_a_model(self):
+        self.write("EMILY_IMAGE_MODEL=\n")
+        self.assertIsNone(self.pf.image_model_for("emily", self.adir))
+
+    def test_no_credentials_file_at_all(self):
+        self.assertIsNone(self.pf.image_model_for("fury", self.adir.parent / "fury"))
+
+    def test_it_reads_only_the_model_line(self):
+        # This function touches a mode-600 file full of API tokens. It must
+        # return the model and nothing else, ever.
+        self.write("PRINTIFY_API_TOKEN=tok_do_not_print_me\n"
+                   "OPENROUTER_API_KEY=sk-also-not-this\n"
+                   "EMILY_IMAGE_MODEL=google/gemini-3-pro-image\n")
+        got = self.pf.image_model_for("emily", self.adir)
+        self.assertEqual(got, "google/gemini-3-pro-image")
+        self.assertNotIn("tok_", got)
+        self.assertNotIn("sk-", got)
+
+    def test_a_token_that_merely_mentions_the_name_is_not_returned(self):
+        self.write("SOMETHING_EMILY_IMAGE_MODEL_KEY=sk-not-a-model\n")
+        self.assertIsNone(self.pf.image_model_for("emily", self.adir))
+
+
+class OneParserForCredentialsEnv(unittest.TestCase):
+    """emily-assets.py owns the credentials.env format. preflight grew a
+    second parser to show which model draws the art, and the two disagreed on
+    the first real line tried: `KEY = value` with spaces around the equals,
+    which emily-assets accepts and the new one did not. A setting that worked
+    perfectly would have been reported as absent.
+
+    Tested here at its own level rather than only through its callers - both
+    of those filter a blank value downstream, so a parser that returned one
+    would have looked fine through either.
+    """
+
+    def setUp(self):
+        self.m = load("emily_assets", "emily-assets.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "credentials.env"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def read(self, text):
+        self.path.write_text(text)
+        return self.m.read_env_file(self.path)
+
+    def test_plain(self):
+        self.assertEqual(self.read("A=1\nB=two\n"), {"A": "1", "B": "two"})
+
+    def test_spaces_around_the_equals(self):
+        self.assertEqual(self.read("A = 1\n"), {"A": "1"})
+
+    def test_quotes_are_stripped(self):
+        self.assertEqual(self.read('A="one"\nB=\'two\'\n'), {"A": "one", "B": "two"})
+
+    def test_comments_and_blank_lines_are_skipped(self):
+        self.assertEqual(self.read("# a note\n\nA=1\n"), {"A": "1"})
+
+    def test_a_blank_value_is_not_a_setting(self):
+        # An empty value is someone who meant to set something and did not.
+        # Returning "" makes the key look present to anything checking `in`.
+        self.assertEqual(self.read("A=\nB=  \nC=1\n"), {"C": "1"})
+
+    def test_a_value_containing_an_equals_survives_whole(self):
+        # Tokens contain =, and splitting on every one would truncate them.
+        self.assertEqual(self.read("TOKEN=abc=def==\n"), {"TOKEN": "abc=def=="})
+
+    def test_a_line_with_no_equals_is_skipped_not_crashed_on(self):
+        self.assertEqual(self.read("nonsense\nA=1\n"), {"A": "1"})
+
+    def test_a_file_that_is_not_there_is_empty_not_an_error(self):
+        self.assertEqual(self.m.read_env_file(self.path.parent / "nope.env"), {})
+
+    def test_preflight_uses_this_one(self):
+        src = (SCRIPTS / "preflight.py").read_text()
+        self.assertIn("ea.read_env_file", src)
+        body = src.split("def image_model_for(", 1)[1].split("\ndef ", 1)[0]
+        self.assertNotIn("splitlines", body, "that is a second parser")
+        self.assertNotIn('split("=", 1)', body, "that is a second parser")

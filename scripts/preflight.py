@@ -48,6 +48,12 @@ SCRIPTS = ROOT / "scripts"
 # about whether a timer is installed, and those drift - the report filename,
 # the sign-off freshness rule and the balance identity all drifted exactly
 # that way before they were pulled into one place.
+# Same reason: emily-assets.py owns the credentials.env format, so the model
+# shown here and the model actually used are read by one parser.
+_easpec = importlib.util.spec_from_file_location("emilyassets", SCRIPTS / "emily-assets.py")
+ea = importlib.util.module_from_spec(_easpec)
+_easpec.loader.exec_module(ea)
+
 _spec = importlib.util.spec_from_file_location("healthcheck", SCRIPTS / "health-check.py")
 hc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(hc)
@@ -334,6 +340,22 @@ def check_model(name):
 
 # --------------------------------------------------------------------------
 
+def image_model_for(name, adir):
+    """Which model draws this agent's art, read from its credentials file.
+
+    It lives in credentials.env and nothing shows it, so choosing one after
+    comparing four of them leaves no trace anywhere a person looks - and if
+    that file is ever rebuilt the setting reverts silently to the default with
+    nothing to notice. A setting you cannot see is a setting that quietly
+    changes back.
+
+    A model name is not a credential. This prints the value; it never prints
+    anything else in that file.
+    """
+    values = ea.read_env_file(adir / "state" / "credentials.env")
+    return values.get("EMILY_IMAGE_MODEL") or values.get("IMAGE_MODEL") or None
+
+
 def main():
     hc.HAVE_SYSTEMD = subprocess.run(["systemctl", "is-system-running"],
                                      capture_output=True, text=True
@@ -387,6 +409,9 @@ def main():
         check_credentials(name, adir)
         slug = check_model(name) or "-"
         print(f"{name:<10}{slug:<34}{instr:<14}{sched:<12}")
+        art = image_model_for(name, adir)
+        if art:
+            print(f"{'':<10}{'art: ' + art:<34}")
 
     print()
     check_credit()
