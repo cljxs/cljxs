@@ -1194,3 +1194,60 @@ class ApparelIsCutOutBeforeItIsUploaded(unittest.TestCase):
         # The upload must read the cutout, never the original, once cut.
         self.assertIn("upload_from.read_bytes()", src)
         self.assertNotIn("contents\": base64.b64encode(design.read_bytes())", src)
+
+
+class ScoutCanBeFocusedForOneRun(unittest.TestCase):
+    """Steering one run by editing AGENTS.md means remembering to edit it back,
+    and a forgotten edit is an agent running last week's rules - what
+    preflight.py reports as stale/broken. The focus is an argument instead: it
+    is written to no file and nothing remembers it.
+
+    Scout was also the last agent whose whole cycle lived inline in its unit,
+    with nested quotes, escaped quotes and systemd %% escaping stacked. The
+    comment atop ace-cycle.sh records why the others were extracted: it failed
+    silently.
+    """
+
+    WRAPPER = SCRIPTS / "scout-cycle.sh"
+
+    def test_the_wrapper_exists_and_parses(self):
+        self.assertTrue(self.WRAPPER.is_file())
+        r = subprocess.run(["bash", "-n", str(self.WRAPPER)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_the_unit_calls_the_wrapper_not_a_wall_of_inline_bash(self):
+        unit = (ROOT / "deploy" / "scout-cycle.service").read_text()
+        exec_line = [l for l in unit.splitlines() if l.startswith("ExecStart=")][0]
+        self.assertIn("scout-cycle.sh", exec_line)
+        self.assertNotIn("openclaw agent", exec_line,
+                         "the cycle is inline in the unit again")
+
+    def test_the_checks_survived_the_move(self):
+        # The unit did three things beyond waking the agent. Losing any of them
+        # in the move would be silent: a run that recorded nothing would pass.
+        src = self.WRAPPER.read_text()
+        self.assertIn("SCOUT RECORDED NOTHING", src)
+        self.assertIn('printf \'%s\\n\' "$LINE" >> "$MEM"', src)
+        self.assertIn("proposed no new ideas - a pass", src)
+
+    def test_the_default_run_is_unfocused(self):
+        src = self.WRAPPER.read_text()
+        self.assertIn('MESSAGE="scheduled idea run"', src)
+        self.assertIn('if [ "$#" -gt 0 ]; then', src)
+
+    def test_a_focus_reaches_the_message_verbatim(self):
+        r = subprocess.run(
+            ["bash", "-c",
+             'set -- "the Gildan 18500 hoodie"; '
+             'MESSAGE="scheduled idea run"; '
+             'if [ "$#" -gt 0 ]; then MESSAGE="Focused idea run. Every idea you '
+             'propose must be for: $*"; fi; echo "$MESSAGE"'],
+            capture_output=True, text=True)
+        self.assertIn("the Gildan 18500 hoodie", r.stdout)
+
+    def test_the_focus_is_not_written_anywhere(self):
+        # If it touched a file, it would outlive the run it was meant for.
+        src = self.WRAPPER.read_text()
+        for line in src.splitlines():
+            if ">" in line and "MESSAGE" in line:
+                self.fail(f"the focus is being written to a file: {line.strip()}")
