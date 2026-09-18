@@ -1410,3 +1410,74 @@ class ProposalsThatCannotBeReadAreNotAQuietPass(unittest.TestCase):
         self.merge()
         log = json.loads((self.state / "ideas.json").read_text())["ideas"]
         self.assertEqual([i["title"] for i in log], ["Keep me"])
+
+
+class ScoutDoesNotHandWriteJson(unittest.TestCase):
+    """Scout's first good run proposed three hoodie ideas and none were filed.
+    Not a reasoning failure - a quoting one:
+
+        "brief": "... sized for a 3.5" chest print."
+
+    The inch mark closed the JSON string. So `propose` takes the fields as
+    arguments and does the quoting, the same reason ace-judge.py exists: a
+    selection that is never typed cannot be mistyped.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.state = self.root / "agents" / "scout" / "state"
+        self.state.mkdir(parents=True)
+        (self.state / "ideas.json").write_text('{"ideas":[]}')
+        self.proposals = self.state / "proposals.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_it(self, *args):
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+        return subprocess.run([sys.executable, str(SCRIPTS / "scout-ideas.py"), *args],
+                              capture_output=True, text=True, env=env)
+
+    def test_an_inch_mark_survives_propose(self):
+        r = self.run_it("propose", "--title", "Pocket Folklore Deer",
+                        "--product", "hoodie",
+                        "--brief", 'Bold flat shapes at 3.5" wide.')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rows = json.loads(self.proposals.read_text())["proposals"]
+        self.assertIn('3.5"', rows[0]["brief"], "the words are the agent's")
+        self.assertEqual(self.run_it("merge").returncode, 0)
+
+    def test_proposals_accumulate_across_calls(self):
+        for t in ("One", "Two", "Three"):
+            self.run_it("propose", "--title", t, "--product", "hoodie")
+        self.assertEqual(len(json.loads(self.proposals.read_text())["proposals"]), 3)
+
+    def test_propose_will_not_clobber_a_file_it_cannot_read(self):
+        self.proposals.write_text("{ not json")
+        r = self.run_it("propose", "--title", "New", "--product", "hoodie")
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(self.proposals.read_text(), "{ not json")
+
+    def test_the_inch_repair_recovers_a_hand_written_file(self):
+        # What actually happened, kept because a model writing measurements
+        # into JSON will do it again even with propose available.
+        self.proposals.write_text(
+            '{"proposals":[{"title":"Minimalist Mountain Badge",'
+            '"product":"hoodie","brief":"sized for a 3.5" chest print."}]}')
+        r = self.run_it("merge")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("inch mark had closed a string early", r.stderr)
+        log = json.loads((self.state / "ideas.json").read_text())["ideas"]
+        self.assertEqual(log[0]["title"], "Minimalist Mountain Badge")
+
+    def test_the_repair_is_not_applied_when_it_does_not_help(self):
+        self.proposals.write_text('{"proposals": [')
+        r = self.run_it("merge")
+        self.assertEqual(r.returncode, 1, "a guess that does not parse is still a guess")
+        self.assertIn("does not parse", r.stderr)
+
+    def test_scout_is_told_to_use_propose(self):
+        header = (ROOT / "agents" / "scout" / "_scout-agents-header.md").read_text()
+        self.assertIn("scout-ideas.py propose", header)
+        self.assertIn("Do not write any JSON by hand", header)

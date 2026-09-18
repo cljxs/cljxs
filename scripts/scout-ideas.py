@@ -25,6 +25,7 @@ Standard library only.
 """
 
 import json
+import re
 import os
 import sys
 from datetime import datetime, timezone
@@ -34,6 +35,11 @@ ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.par
 STATE = ROOT / "agents" / "scout" / "state"
 IDEAS = STATE / "ideas.json"
 PROPOSALS = STATE / "proposals.json"
+
+# An inch mark is a quote with more text after it; a quote that really ends a
+# JSON string is followed by a comma, brace, bracket or line end. Scout wrote
+# `sized for a 3.5" chest print` and closed the string on the inches.
+_INCHES = re.compile(r'(\d)"(?=[^,}\]\n]*[^\s,}\]\n])')
 
 KEEP = ("title", "product", "angle", "brief")
 
@@ -74,12 +80,32 @@ def load_proposals():
     try:
         d = json.loads(raw)
     except Exception as exc:
+        # One repair, because a model writing measurements into JSON will do
+        # this again and the ideas are perfectly good. Loud, and only when it
+        # actually yields valid JSON - a guess that parses is still a guess,
+        # so the file is rewritten so you can see exactly what was changed.
+        mended = _INCHES.sub(r'\1 inch', raw)
+        if mended != raw:
+            try:
+                d = json.loads(mended)
+                PROPOSALS.write_text(mended)
+                print(f"NOTE: {PROPOSALS.name} did not parse - an inch mark had "
+                      f"closed a string early.\n"
+                      f"      Rewrote 3.5\" as 3.5 inch and it parses now. The "
+                      f"ideas are unchanged otherwise.", file=sys.stderr)
+                return _rows_of(d)
+            except Exception:
+                pass
         raise ProposalsUnreadable(
             f"{PROPOSALS} does not parse ({exc}).\n"
             f"  It holds this run's ideas and they are not in the log yet, so "
             f"they are still there to recover:\n"
             f"  {raw.strip()[:300]}") from exc
 
+    return _rows_of(d)
+
+
+def _rows_of(d):
     rows = d if isinstance(d, list) else (d.get("proposals") or d.get("ideas") or [])
     if not isinstance(rows, list):
         raise ProposalsUnreadable(
@@ -145,6 +171,48 @@ def cmd_merge():
     return 0
 
 
+def cmd_propose(argv):
+    """Add one idea from arguments, so no model ever types JSON here.
+
+        scout-ideas.py propose --title "Minimalist Mountain Badge" \
+          --product hoodie --angle "..." --brief "..."
+
+    Same reason ace-judge.py exists: a selection that is never typed cannot be
+    mistyped. Scout wrote a good brief containing 3.5" and broke the file on
+    the inches - not a reasoning failure, a quoting one, and quoting is exactly
+    what a script should own.
+    """
+    import argparse
+    ap = argparse.ArgumentParser(prog="scout-ideas.py propose")
+    ap.add_argument("--title", required=True)
+    ap.add_argument("--product", required=True)
+    ap.add_argument("--angle", default="")
+    ap.add_argument("--brief", default="")
+    a = ap.parse_args(argv)
+
+    rows = []
+    if PROPOSALS.is_file() and PROPOSALS.read_text().strip():
+        try:
+            rows = _rows_of(json.loads(PROPOSALS.read_text()))
+        except Exception:
+            print(f"{PROPOSALS} does not parse, so this would overwrite ideas "
+                  f"already in it. Fix or delete it first.", file=sys.stderr)
+            return 1
+
+    row = {"title": a.title.strip(), "product": a.product.strip()}
+    if a.angle.strip():
+        row["angle"] = a.angle.strip()
+    if a.brief.strip():
+        row["brief"] = a.brief.strip()
+    rows.append(row)
+
+    PROPOSALS.parent.mkdir(parents=True, exist_ok=True)
+    PROPOSALS.write_text(json.dumps({"proposals": rows}, indent=1) + "\n")
+    print(f"proposed: {row['title']} ({row['product']})  "
+          f"[{len(rows)} waiting to merge]")
+    return 0
+
+
 def cmd_show():
     d, _ = load_ideas()
     for i in d["ideas"]:
@@ -158,9 +226,11 @@ def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "merge":
         return cmd_merge()
+    if cmd == "propose":
+        return cmd_propose(sys.argv[2:])
     if cmd == "show":
         return cmd_show()
-    print("usage: scout-ideas.py merge|show", file=sys.stderr)
+    print("usage: scout-ideas.py propose|merge|show", file=sys.stderr)
     return 2
 
 

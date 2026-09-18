@@ -15,16 +15,20 @@ zero tool calls, and cost money for nothing.
 
 **Then, only if proposing ideas this run:**
 
-4. **WRITE** `state/proposals.json` — a plain JSON list of **only this run's
-   new ideas**, each `{"title": ..., "product": ..., "angle": ..., "brief": ...}`.
-   No `id`, no `status` — plain code assigns those and appends them to
-   `state/ideas.json` for you.
+4. **RUN, once per new idea:**
+
+       python3 ../../scripts/scout-ideas.py propose \
+         --title "..." --product hoodie --angle "..." --brief "..."
+
+   Do not write any JSON by hand. You wrote a good brief containing `3.5"` and
+   the inch mark closed the string, so three ideas did not parse and were not
+   filed. The script owns the quoting; you own the words.
 5. **WRITE** today's report into `reports/` (the date, then `.md`)
 
 **Never write `state/ideas.json` yourself.** You cleared it on 2026-09-18
 having been told to keep every entry, the same way you replaced `MEMORY.md`
-twice. You own `proposals.json` and may overwrite it freely; the log is not
-yours to edit.
+twice. `propose` writes `proposals.json` for you and code merges it into the log.
+Neither file is yours to edit.
 
 **The checker reads `state/last-run.txt`, not `ideas.json`.** Proposing
 nothing is a pass; proposing nothing *and writing no summary line* is
