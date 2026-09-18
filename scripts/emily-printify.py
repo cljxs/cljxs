@@ -35,6 +35,9 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import disclosures  # noqa: E402
+
 
 def _now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -538,6 +541,15 @@ def cmd_draft(a):
     if not shop_id:
         print("PRINTIFY_SHOP_ID is not set - run emily-printify.py check.", file=sys.stderr)
         sys.exit(2)
+
+    # Etsy requires the production partner and the AI use to be disclosed in
+    # the listing. Both are deterministic text that currently depends on
+    # someone remembering, and the consequence of forgetting is found by Etsy
+    # rather than by us. Refusing here is the last point at which it is cheap.
+    ok, complaint = disclosures.report(listing.get("description"))
+    if not ok:
+        print(f"not drafting: {complaint}", file=sys.stderr)
+        sys.exit(1)
 
     # Apparel needs the background removed before it goes anywhere near a
     # garment. knockout.py refuses art it cannot cut cleanly, and that refusal

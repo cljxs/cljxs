@@ -1481,3 +1481,74 @@ class ScoutDoesNotHandWriteJson(unittest.TestCase):
         header = (ROOT / "agents" / "scout" / "_scout-agents-header.md").read_text()
         self.assertIn("scout-ideas.py propose", header)
         self.assertIn("Do not write any JSON by hand", header)
+
+
+class EtsyDisclosuresAreRequiredToDraft(unittest.TestCase):
+    """Etsy requires two things stated in the listing: that a production
+    partner makes the item, and that AI was used. Both are deterministic text
+    that depended on someone remembering, and the consequence of forgetting is
+    found by Etsy rather than by us - reportedly in the same category as
+    selling a prohibited item.
+
+    The wording lives in agents/emily/state/disclosures.json, not in code. It
+    is a legal statement about a real shop and no script should freeze one on
+    the owner's behalf; the check follows whatever the file says.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / "agents" / "emily" / "state").mkdir(parents=True)
+        self.d = load("disclosures", "disclosures.py")
+        self.d.ROOT = self.root
+        self.d.FILE = self.root / "agents" / "emily" / "state" / "disclosures.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_a_listing_with_neither_is_refused(self):
+        ok, why = self.d.report("A cosy hoodie with a mountain badge.")
+        self.assertFalse(ok)
+        self.assertIn("production_partner", why)
+        self.assertIn("ai", why)
+
+    def test_a_listing_with_both_passes(self):
+        rules = self.d.load()
+        desc = ("A cosy hoodie. "
+                + rules["production_partner"]["text"] + " " + rules["ai"]["text"])
+        ok, why = self.d.report(desc)
+        self.assertTrue(ok, why)
+
+    def test_one_present_one_missing_names_only_the_missing_one(self):
+        rules = self.d.load()
+        ok, why = self.d.report("A cosy hoodie. " + rules["ai"]["text"])
+        self.assertFalse(ok)
+        self.assertIn("production_partner", why)
+        self.assertNotIn("\n  ai\n", why)
+
+    def test_rewording_the_file_rewords_the_check(self):
+        # The point of keeping the text out of code. If the owner writes their
+        # own sentence, that sentence is what is required - not mine.
+        mine = {"ai": {"required": True,
+                       "text": "Artwork generated with AI under my direction."}}
+        ok, _ = self.d.report("A hoodie. Artwork generated with AI under my direction.",
+                              rules=mine)
+        self.assertTrue(ok)
+        ok, _ = self.d.report("A hoodie. " + self.d.DEFAULTS["ai"]["text"], rules=mine)
+        self.assertFalse(ok, "the default must not satisfy a rule the owner rewrote")
+
+    def test_an_optional_rule_is_not_enforced(self):
+        rules = {"x": {"required": False, "text": "something"}}
+        self.assertTrue(self.d.report("nothing here", rules=rules)[0])
+
+    def test_whitespace_and_case_do_not_defeat_it(self):
+        rules = {"ai": {"required": True, "text": "Made with AI."}}
+        self.assertTrue(self.d.report("a hoodie.   MADE   WITH   ai.  ", rules=rules)[0])
+
+    def test_draft_refuses_and_finish_says_why(self):
+        pf = (SCRIPTS / "emily-printify.py").read_text()
+        self.assertIn("disclosures.report", pf)
+        self.assertIn("not drafting:", pf)
+        fin = (SCRIPTS / "emily-finish.py").read_text()
+        self.assertIn("required disclosure", fin,
+                      "emily-finish exits 0 by design, so it must name this case")

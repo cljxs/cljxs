@@ -65,6 +65,14 @@ def main():
     if res.returncode == 0:
         print("emily-finish: drafted in Printify, UNPUBLISHED. "
               "Press Publish there when you are happy with it.")
+    elif "required disclosure" in out:
+        # Not a last-mile failure. The artwork is fine and the listing is not:
+        # Etsy needs the production partner and the AI use stated, and a draft
+        # without them is a policy problem waiting to be found by Etsy.
+        print("emily-finish: NOT drafted - the listing is missing a disclosure "
+              "Etsy requires. Add the line(s) above to the description in "
+              f"{d.name}/listing.json and re-run:\n"
+              f"  python3 scripts/emily-finish.py {d.name}")
     else:
         print(f"emily-finish: could not create the Printify draft "
               f"(exit {res.returncode}). The build stays 'ready_local' - the "
