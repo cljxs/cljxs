@@ -1998,3 +1998,200 @@ class OneGarmentIsOneCatalogueEntry(unittest.TestCase):
     def test_draft_does_not_announce_a_rename_that_did_not_happen(self):
         r = self.draft("hoodie", {"hoodie": self.DROPLET["hoodie"]})
         self.assertNotIn("-> catalogue entry", r.stdout + r.stderr)
+
+
+class CompletingATaskIsACommandNotAParagraph(unittest.TestCase):
+    """Task #6 was failed with "agent exited with code 0". The dispatcher log
+    shows Emily printed the curl she had been told to write -
+
+        Here's the command to complete the task:
+        ```bash
+        curl -s -X POST .../tasks/6/complete -H '...' -d '{"result":...}'
+        ```
+        Proceeding with the completion now.
+
+    - and then stopped. Three deterministic things were being asked of a cheap
+    model at once: substitute a number into a <placeholder>, hand-write JSON
+    inside a shell quote, and remember a flag. All three are now in a script,
+    and the number is not typed at all.
+
+    The queue here is a stub serving task #6 exactly as the droplet's API
+    returned it, nested payload string and all - the shape is the thing that
+    breaks, so it is the thing the tests use.
+    """
+
+    REAL_TASK_6 = {
+        "id": 6, "created_at": "2026-09-18 13:13:14", "created_by": "you",
+        "assignee": "emily", "type": "product-build", "status": "in_progress",
+        # The payload is JSON *inside a JSON string*, which is how the API
+        # really returns it. Every agent that read it unwrapped it by hand.
+        "payload": json.dumps({
+            "idea": "Left-Chest Lantern Emblem",
+            "brief": '3-inch circular emblem: a lantern with a soft halo.',
+            "product": "Gildan 18500 hooded sweatshirt",
+            "slug": "left-chest-lantern-emblem",
+            "build_dir": "builds/left-chest-lantern-emblem",
+        }),
+        "result": None, "cost_estimate": 0.25, "cost_actual": 0,
+        "notes": "DRAFT ONLY - Emily must not publish.",
+        "kill_criteria": "Stop if assets cannot be produced.",
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        import http.server
+        import threading
+
+        cls.completed = []
+        task = cls.REAL_TASK_6
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def _send(self, code, body=b""):
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                if self.path == "/tasks/6":
+                    self._send(200, json.dumps(task).encode())
+                else:
+                    self._send(404, b'{"error":"not found"}')
+
+            def do_POST(self):
+                if self.path == "/tasks/6/complete":
+                    n = int(self.headers.get("Content-Length") or 0)
+                    cls.completed.append(json.loads(self.rfile.read(n) or b"{}"))
+                    self._send(200, b'{"ok":true}')
+                else:
+                    self._send(404, b'{"error":"not found"}')
+
+        cls.srv = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+        cls.base = f"http://127.0.0.1:{cls.srv.server_port}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+
+    def setUp(self):
+        type(self).completed = []
+
+    def run_task(self, *args, task_id="6", api=None):
+        env = dict(os.environ, MISSION_CONTROL_API=api or self.base)
+        if task_id is None:
+            env.pop("ECOSYSTEM_TASK_ID", None)
+        else:
+            env["ECOSYSTEM_TASK_ID"] = task_id
+        return subprocess.run([sys.executable, str(SCRIPTS / "task.py"), *args],
+                              capture_output=True, text=True, env=env, timeout=60)
+
+    def test_the_agent_does_not_type_the_task_number(self):
+        # A <placeholder> in an instruction is a thing to get wrong.
+        r = self.run_task("read")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Task #6", r.stdout)
+
+    def test_read_unwraps_the_payload_that_is_json_inside_json(self):
+        # Unwrapped means each field on its own line. Asserting only that the
+        # slug appears somewhere passes on the raw JSON string too - which is
+        # exactly the dump this is supposed to prevent.
+        r = self.run_task("read")
+        self.assertIn("\n  slug: left-chest-lantern-emblem\n", r.stdout)
+        self.assertIn("\n  build_dir: builds/left-chest-lantern-emblem\n", r.stdout)
+        self.assertNotIn('{"idea"', r.stdout, "the payload must be unwrapped, not dumped")
+
+    def test_read_shows_the_limits_the_task_was_created_with(self):
+        r = self.run_task("read")
+        self.assertIn("must not publish", r.stdout)
+        self.assertIn("kill_criteria", r.stdout)
+
+    def test_done_sends_what_the_queue_expects(self):
+        r = self.run_task("done", "Drafted the hoodie, UNPUBLISHED.")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.completed,
+                         [{"result": "Drafted the hoodie, UNPUBLISHED.",
+                           "cost_actual": 0.0}])
+
+    def test_done_takes_the_line_without_quoting_json_by_hand(self):
+        # The words arrive as arguments; the script owns the JSON. Emily's
+        # apostrophes and quotes are hers to write, not to escape.
+        r = self.run_task("done", "Emily's", '"cosy"', "hoodie: done")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.completed[0]["result"], 'Emily\'s "cosy" hoodie: done')
+
+    def test_a_typed_number_is_accepted_rather_than_punished(self):
+        r = self.run_task("done", "6", "did the thing", task_id=None)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.completed[0]["result"], "did the thing")
+
+    def test_cost_is_optional_and_parsed(self):
+        r = self.run_task("done", "did it", "--cost", "0.25")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.completed[0]["cost_actual"], 0.25)
+        self.assertEqual(self.completed[0]["result"], "did it")
+
+    def test_done_with_nothing_to_say_is_refused(self):
+        r = self.run_task("done")
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(self.completed, [])
+
+    def test_a_queue_that_is_down_says_so_instead_of_a_traceback(self):
+        r = self.run_task("read", api="http://127.0.0.1:1")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("cannot reach the queue", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_a_task_number_that_does_not_exist_says_which(self):
+        r = self.run_task("read", task_id="999")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no task with that number", r.stderr)
+
+    def test_with_no_number_anywhere_it_asks_rather_than_guessing(self):
+        r = self.run_task("read", task_id=None)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("no task number", r.stderr)
+
+    # --- the instruction and the command are one fact -----------------------
+
+    def test_the_wake_message_names_commands_that_exist(self):
+        t = load("task_py", "task.py")
+        msg = t.wake_message(6)
+        wanted = set(re.findall(r"scripts/task\.py (\w+)", msg))
+        self.assertTrue(wanted, "the wake message must name the commands")
+        for cmd in wanted:
+            r = self.run_task(cmd, "a line" if cmd == "done" else "")
+            self.assertNotEqual(r.returncode, 2,
+                                f"the wake message tells agents to run "
+                                f"'{cmd}', which task.py does not accept")
+
+    def test_the_wake_message_does_not_ask_for_a_number(self):
+        t = load("task_py", "task.py")
+        msg = t.wake_message(6)
+        self.assertNotIn("<the number", msg)
+        self.assertNotIn("curl", msg,
+                         "hand-written curl is what task #6 died of")
+
+    def test_the_dispatcher_does_not_keep_its_own_copy_of_the_wake_message(self):
+        src = (SCRIPTS / "task-dispatcher.py").read_text()
+        self.assertIn("task.wake_message(", src)
+        self.assertNotIn("/complete -H", src)
+
+    def test_the_dispatcher_exports_the_task_number(self):
+        # Without this the script has no number and the agent is back to
+        # substituting one by hand.
+        src = (SCRIPTS / "task-dispatcher.py").read_text()
+        body = src.split("def spawn_agent(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("task.TASK_ENV", body)
+        self.assertIn('"env": env', body)
+
+    def test_emilys_header_no_longer_tells_her_to_write_curl(self):
+        h = (ROOT / "agents" / "emily" / "_emily-agents-header.md").read_text()
+        self.assertNotIn("tasks/<the number", h)
+        self.assertIn("scripts/task.py read", h)
+        self.assertIn('scripts/task.py done', h)

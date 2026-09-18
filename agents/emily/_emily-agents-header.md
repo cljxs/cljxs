@@ -27,11 +27,12 @@ Your wake message names a task number. **Fetch it before anything else** —
 nothing else tells you what to build:
 
 ```
-curl -s http://127.0.0.1:3001/tasks/<the number in your message>
+python3 ../../scripts/task.py read
 ```
 
-The `payload` field holds `idea`, `brief`, `product`, `slug` and `build_dir`.
-Everything you need is there.
+It already knows which task you were woken for — do not type a number. It
+prints `idea`, `brief`, `product`, `slug` and `build_dir`. Everything you need
+is there.
 
 A run of yours woke to "task #1 assigned, see /tasks/1", had no idea where
 that was, and quit after fourteen seconds having written nothing. If you
@@ -105,10 +106,12 @@ how you stop repeating a rejected idea. Read it before you design.
 Mark the task done through the queue so the dispatcher frees your slot:
 
 ```
-curl -s -X POST http://127.0.0.1:3001/tasks/<the number in your message>/complete \
-  -H 'Content-Type: application/json' \
-  -d '{"result":"<one line>","cost_actual":0.0}'
+python3 ../../scripts/task.py done "<one line about what you made>"
 ```
 
-If you cannot finish — missing tokens, impossible brief — still complete the
-task with an honest `result` saying why. A task left `in_progress` blocks you.
+**Run it. Do not print it.** Task #6 was failed because the command was
+written out in the reply, followed by "Proceeding with the completion now",
+and nothing ran. A command you have described is a command you have not run.
+
+If you cannot finish — missing tokens, impossible brief — run `done` anyway
+with an honest line saying why. A task left `in_progress` blocks you.

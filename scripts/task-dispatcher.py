@@ -36,6 +36,12 @@ OPENCLAW_BIN = os.environ.get("OPENCLAW_BIN", "openclaw")
 # a wake message saying "see /tasks/3" is not enough to act on.
 API_BASE = os.environ.get("MISSION_CONTROL_API", "http://127.0.0.1:3001")
 
+# What an agent is told on waking, and the commands that exist to obey it, are
+# one fact. They lived in three places - this file, Emily's header, and the
+# API - and the one here told her to hand-write JSON inside a shell quote.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import task  # noqa: E402
+
 # --- schema -----------------------------------------------------------------
 # Identical to the API's. The dispatcher ensures the schema itself on startup so
 # it never crashes with "no such table: tasks" when it boots before the API.
@@ -154,19 +160,17 @@ def spawn_agent(agent, task_id):
         # instructions to read her payload, had no way to, and quit in 14
         # seconds having written nothing. The wake message now carries the
         # whole command.
-        "--message", (f"Task #{task_id} is assigned to you. Read it first with:\n"
-                      f"  curl -s {API_BASE}/tasks/{task_id}\n"
-                      f"The payload holds everything you need. "
-                      f"When you are finished, complete it with:\n"
-                      f"  curl -s -X POST {API_BASE}/tasks/{task_id}/complete "
-                      f"-H 'Content-Type: application/json' "
-                      f"-d '{{\"result\":\"<one line>\",\"cost_actual\":0.0}}'"),
+        "--message", task.wake_message(task_id, API_BASE),
         "--session-id", session_id,
         "--timeout", str(TASK_TIMEOUT),
         "--json",
     ]
 
-    kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
+    # The task number, so scripts/task.py needs no argument. Emily was asked to
+    # substitute it into a <placeholder> by hand; she printed the command
+    # instead of running it and the task was failed at exit.
+    env = dict(os.environ, **{task.TASK_ENV: str(task_id)})
+    kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "env": env}
 
     # Windows only: stop a console window flashing up on every agent run.
     # There is no window to hide on Mac/Linux, so this is guarded.
