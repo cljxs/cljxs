@@ -542,14 +542,20 @@ def cmd_draft(a):
         print("PRINTIFY_SHOP_ID is not set - run emily-printify.py check.", file=sys.stderr)
         sys.exit(2)
 
-    # Etsy requires the production partner and the AI use to be disclosed in
-    # the listing. Both are deterministic text that currently depends on
-    # someone remembering, and the consequence of forgetting is found by Etsy
-    # rather than by us. Refusing here is the last point at which it is cheap.
-    ok, complaint = disclosures.report(listing.get("description"))
-    if not ok:
-        print(f"not drafting: {complaint}", file=sys.stderr)
-        sys.exit(1)
+    # Etsy requires the production partner and the AI use disclosed in the
+    # listing. This used to refuse without them, which blocked two finished
+    # hoodies over a rule Emily was never told about - a rule enforced in code
+    # and absent from the instructions, the failure this repo keeps repeating.
+    # The text is fixed, so code writes it. It is also written back to
+    # listing.json, so what shipped and what is on disk stay the same thing.
+    desc, added = disclosures.ensure(listing.get("description"))
+    if added:
+        listing["description"] = desc
+        (d / "listing.json").write_text(json.dumps(listing, indent=1) + "\n")
+        print(f"added {len(added)} required disclosure(s) to the description:")
+        for line in added:
+            print(f"  + {line}")
+        print(f"  (wording lives in agents/emily/state/disclosures.json)")
 
     # Apparel needs the background removed before it goes anywhere near a
     # garment. knockout.py refuses art it cannot cut cleanly, and that refusal

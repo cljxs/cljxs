@@ -129,6 +129,11 @@ function heartbeatAt(agentDir) {
   try {
     for (const d of fs.readdirSync(path.join(agentDir, 'builds'), { withFileTypes: true })) {
       if (!d.isDirectory()) continue;
+      // builds/_removed/ holds builds the owner archived with emily-build.py.
+      // A moved folder keeps its mtime, so without this an archived build
+      // would keep Emily looking active forever. The leading underscore is
+      // the rule both readers use - the gallery's SLUG_RE rejects it too.
+      if (d.name.startsWith('_')) continue;
       try {
         const st = fs.statSync(path.join(agentDir, 'builds', d.name, 'build.json'));
         if (!newest || st.mtimeMs > newest) newest = st.mtimeMs;

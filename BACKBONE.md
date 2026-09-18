@@ -133,17 +133,28 @@ answer. Wanting one named facility is a reason to pick a specific provider
       exists on the shop.
 - [ ] **Who made it: "I did."** You designed it. Not "a member of my shop",
       and nothing implying you assembled the garment.
-- [ ] **Read the description once.** `draft` refuses without the disclosure
-      lines, so they are present — but present is not the same as accurate.
+- [ ] **Read the description once.** `draft` writes the disclosure lines in,
+      so they are present — but present is not the same as accurate.
 
 **Already enforced, listed so you know what you are not checking:**
 
-- The disclosure lines are in the description — `draft` refuses without them
+- The disclosure lines are in the description — `draft` appends whichever is
+  missing and saves the corrected description back to `listing.json`
   (`scripts/disclosures.py`, wording in `agents/emily/state/disclosures.json`).
+  It used to refuse instead, which stalled two finished hoodies over a rule
+  Emily's instructions never mentioned.
 - Apparel artwork has its background removed — `draft` refuses art that
   cannot be cut cleanly (`scripts/knockout.py`).
 - Nothing here can publish. `emily-printify.py` has no publish command by
   design; every product is created UNPUBLISHED and you press Publish.
+
+**Throwing one away.** `scripts/emily-build.py list` shows every build and
+its state; `remove <slug>` archives one you do not want to `builds/_removed/`
+and the gallery stops showing it; `restore <slug>` puts it back. It archives
+rather than deletes because the artwork cost a model call, and it refuses
+without `--force` when the build has a Printify product — moving the folder
+would leave that product in Printify with nothing here pointing at it, so
+delete it there first.
 
 **Two caveats.** Etsy blocks automated reads of `/legal/creativity/`,
 `/legal/handmade/` and its help pages, so the above was assembled from

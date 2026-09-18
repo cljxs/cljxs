@@ -1488,7 +1488,8 @@ class EtsyDisclosuresAreRequiredToDraft(unittest.TestCase):
     partner makes the item, and that AI was used. Both are deterministic text
     that depended on someone remembering, and the consequence of forgetting is
     found by Etsy rather than by us - reportedly in the same category as
-    selling a prohibited item.
+    selling a prohibited item. So draft writes them in; it used to refuse
+    without them, which failed Emily for a rule her header never mentioned.
 
     The wording lives in agents/emily/state/disclosures.json, not in code. It
     is a legal statement about a real shop and no script should freeze one on
@@ -1545,13 +1546,186 @@ class EtsyDisclosuresAreRequiredToDraft(unittest.TestCase):
         rules = {"ai": {"required": True, "text": "Made with AI."}}
         self.assertTrue(self.d.report("a hoodie.   MADE   WITH   ai.  ", rules=rules)[0])
 
-    def test_draft_refuses_and_finish_says_why(self):
+    def test_ensure_adds_both_when_neither_is_present(self):
+        desc, added = self.d.ensure("A cosy hoodie with a mountain badge.")
+        self.assertEqual(len(added), 2)
+        self.assertTrue(self.d.report(desc)[0],
+                        "ensure must produce something report() accepts")
+
+    def test_ensure_is_idempotent(self):
+        once, _ = self.d.ensure("A cosy hoodie.")
+        twice, added = self.d.ensure(once)
+        self.assertEqual(added, [], "re-running must not duplicate the lines")
+        self.assertEqual(once, twice)
+
+    def test_ensure_leaves_a_complete_description_untouched(self):
+        rules = self.d.load()
+        desc = ("A cosy hoodie. " + rules["production_partner"]["text"]
+                + " " + rules["ai"]["text"])
+        out, added = self.d.ensure(desc)
+        self.assertEqual(added, [])
+        self.assertEqual(out, desc)
+
+    def test_ensure_adds_only_what_is_missing(self):
+        rules = self.d.load()
+        desc, added = self.d.ensure("A cosy hoodie. " + rules["ai"]["text"])
+        self.assertEqual(added, [rules["production_partner"]["text"]])
+        self.assertEqual(desc.count(rules["ai"]["text"]), 1)
+
+    def test_ensure_does_not_add_an_optional_rule(self):
+        rules = {"x": {"required": False, "text": "something"}}
+        desc, added = self.d.ensure("a hoodie", rules=rules)
+        self.assertEqual(added, [])
+        self.assertEqual(desc, "a hoodie")
+
+    def test_ensure_of_an_empty_description_does_not_lead_with_blank_lines(self):
+        desc, added = self.d.ensure("")
+        self.assertEqual(len(added), 2)
+        self.assertFalse(desc.startswith("\n"))
+        self.assertTrue(self.d.report(desc)[0])
+
+    def test_ensure_follows_the_owners_wording_too(self):
+        # Same point as report(): the file decides, not this code.
+        mine = {"ai": {"required": True, "text": "Artwork made with AI."}}
+        desc, added = self.d.ensure("A hoodie.", rules=mine)
+        self.assertEqual(added, ["Artwork made with AI."])
+        self.assertNotIn(self.d.DEFAULTS["ai"]["text"], desc)
+
+    def test_draft_adds_the_lines_rather_than_refusing(self):
+        # The incident: two finished hoodies sat at LOCAL ONLY because draft
+        # refused over a rule Emily's header never mentioned. A rule enforced
+        # in code and absent from the instructions fails the agent for
+        # something it was never told.
+        # (draft does still refuse art knockout.py cannot cut - that is a
+        # different refusal, over something Emily's header does tell her.)
+        body = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_draft(", 1)[1]
+        self.assertIn("disclosures.ensure", body)
+        self.assertNotIn("disclosures.report", body,
+                         "draft must not refuse over disclosures again")
+
+    def test_draft_writes_the_corrected_description_back_to_disk(self):
+        # Otherwise what Printify holds and what listing.json says would be
+        # two different descriptions, and the next reader would see the old one.
         pf = (SCRIPTS / "emily-printify.py").read_text()
-        self.assertIn("disclosures.report", pf)
-        self.assertIn("not drafting:", pf)
+        body = pf.split("def cmd_draft(", 1)[1]
+        self.assertIn('listing["description"] = desc', body)
+        self.assertIn('(d / "listing.json").write_text', body)
+
+    def test_finish_does_not_still_explain_a_refusal_that_cannot_happen(self):
+        # draft no longer emits it, so the branch matching on it was dead code
+        # telling the owner to go and edit a file by hand.
         fin = (SCRIPTS / "emily-finish.py").read_text()
-        self.assertIn("required disclosure", fin,
-                      "emily-finish exits 0 by design, so it must name this case")
+        self.assertNotIn("required disclosure", fin)
+
+
+class RemovingABuildDoesNotDestroyIt(unittest.TestCase):
+    """"How do I delete designs if I don't like them" had no answer: the only
+    way was rm -rf on a folder the gallery reads, with a Printify product
+    possibly still pointing at it.
+
+    remove archives to builds/_removed/ instead of deleting. The artwork cost a
+    model call, and "I do not like it" and "destroy it" are different
+    intentions.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.builds = self.root / "agents" / "emily" / "builds"
+        self.builds.mkdir(parents=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def build(self, slug, **fields):
+        d = self.builds / slug
+        d.mkdir()
+        (d / "build.json").write_text(json.dumps(dict(status="ready_local", **fields)))
+        (d / "design.png").write_bytes(b"not really a png")
+        return d
+
+    def run_build(self, *args):
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "emily-build.py"), *args],
+            capture_output=True, text=True, env=env, timeout=60)
+
+    def test_remove_archives_rather_than_deletes(self):
+        self.build("dislike-this")
+        r = self.run_build("remove", "dislike-this")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse((self.builds / "dislike-this").exists())
+        kept = self.builds / "_removed" / "dislike-this"
+        self.assertTrue((kept / "design.png").is_file(),
+                        "the artwork must survive - it cost a model call")
+
+    def test_restore_puts_it_back(self):
+        self.build("dislike-this")
+        self.run_build("remove", "dislike-this")
+        r = self.run_build("restore", "dislike-this")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((self.builds / "dislike-this" / "design.png").is_file())
+
+    def test_a_build_with_a_printify_product_is_refused(self):
+        # Archiving the folder does not remove the product. Printify would
+        # still hold it with nothing here pointing at it.
+        self.build("has-a-product", printify_product_id="abc123")
+        r = self.run_build("remove", "has-a-product")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("abc123", r.stderr)
+        self.assertTrue((self.builds / "has-a-product").is_dir(),
+                        "a refusal must not half-remove it")
+
+    def test_force_removes_one_with_a_product(self):
+        self.build("has-a-product", printify_product_id="abc123")
+        r = self.run_build("remove", "has-a-product", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((self.builds / "_removed" / "has-a-product").is_dir())
+
+    def test_removing_the_same_slug_twice_does_not_overwrite_the_first(self):
+        self.build("twice")
+        self.run_build("remove", "twice")
+        self.build("twice")
+        r = self.run_build("remove", "twice")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        gone = sorted(p.name for p in (self.builds / "_removed").iterdir())
+        self.assertEqual(gone, ["twice", "twice-2"],
+                         "the second archive must not clobber the first")
+
+    def test_removing_something_that_does_not_exist_is_an_error_not_a_shrug(self):
+        r = self.run_build("remove", "never-existed")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("never-existed", r.stderr)
+
+    def test_list_names_the_live_builds_and_the_archived_ones(self):
+        self.build("keep-this")
+        self.build("drop-this")
+        self.run_build("remove", "drop-this")
+        r = self.run_build("list")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("keep-this", r.stdout)
+        self.assertIn("drop-this", r.stdout)
+        self.assertIn("1 build(s)", r.stdout)
+
+    def test_the_archive_folder_is_hidden_from_the_gallery(self):
+        # remove tells the owner "the gallery will stop showing it". The
+        # gallery is JS in another folder and decides for itself, so this
+        # checks the claim against its actual regex rather than trusting it.
+        js = (ROOT / "mission-control-api" / "emily.js").read_text()
+        m = re.search(r"const SLUG_RE = /(.+?)/;", js)
+        self.assertIsNotNone(m, "emily.js no longer declares SLUG_RE this way")
+        slug_re = re.compile(m.group(1))
+        self.assertIsNone(slug_re.match("_removed"),
+                          "the gallery would still list the archive folder")
+        self.assertIsNotNone(slug_re.match("dislike-this"),
+                             "...and it must still list real builds")
+
+    def test_an_archived_build_no_longer_counts_as_emily_being_busy(self):
+        # shutil.move keeps the mtime, so without this the Deck's freshness
+        # clock would read an archived build forever.
+        js = (ROOT / "mission-control-api" / "dashboard-data.js").read_text()
+        scan = js.split("'builds'", 1)[1]
+        self.assertIn("startsWith('_')", scan[:600])
 
 
 class AnEmptySlateIsNotASkippedCycle(unittest.TestCase):

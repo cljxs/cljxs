@@ -13,8 +13,14 @@ someone remembering:
 
 Both are deterministic text. Forgetting one is reportedly treated in the same
 category as selling a prohibited item, and it would be found by Etsy rather
-than by us - so `draft` refuses a listing that is missing either, the same way
-knockout refuses art it cannot cut.
+than by us - so `draft` APPENDS whichever is missing and writes the corrected
+description back to listing.json.
+
+It used to refuse instead. That blocked two finished hoodies over a rule Emily
+was never told about - a rule enforced in code and absent from her
+instructions, which is the failure this repo keeps repeating. Refusing only
+helps if somebody comes back to fix it; the text is fixed and required on
+every listing, so a script can simply put it there.
 
 THE WORDING IS YOURS. It lives in agents/emily/state/disclosures.json, not in
 this file, because it is a legal statement about your shop and no script
@@ -75,6 +81,29 @@ def missing_from(description, rules=None):
         if want and want not in text:
             out.append((name, rule))
     return out
+
+
+def ensure(description, rules=None):
+    """(description with every required disclosure present, what was added).
+
+    Refusing was the wrong shape. The text is fixed and required on every
+    listing, so a script can simply put it there - and Emily was never told it
+    existed, which meant the gate blocked two finished hoodies over a rule she
+    had no way to satisfy. Appending guarantees the disclosure; refusing only
+    helps if somebody comes back to fix it.
+    """
+    gaps = missing_from(description, rules)
+    if not gaps:
+        return description, []
+    body = str(description or "").rstrip()
+    added = []
+    for _name, rule in gaps:
+        text = str(rule.get("text") or "").strip()
+        if not text:
+            continue
+        body = (body + "\n\n" + text) if body else text
+        added.append(text)
+    return body, added
 
 
 def report(description, rules=None):
