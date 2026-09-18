@@ -1082,3 +1082,70 @@ class ClosingTheCycle(unittest.TestCase):
                 src = (SCRIPTS / f).read_text()
                 self.assertIn(".cycle-before", src,
                               f"{f} must publish CYCLES_BEFORE or signoff cannot check it")
+
+
+class TheVerdictLine(unittest.TestCase):
+    """The village shows one sentence per cycle: the ledger's verdict line.
+    ace-verify noted its absence on every passing run; signoff checked nothing,
+    so the agent read "All deliverables present" and stopped. AGENTS.md asks
+    for it. Nothing enforced it, and the village showed a blank.
+
+    Deliberate asymmetry, unlike the four bugs before it: signoff REQUIRES the
+    line, the verifier only notes it. signoff guides a cycle that is still
+    running and can still act; the verifier judges one that is over, and a
+    missing sentence is not a cycle that failed to happen. Signoff being the
+    stricter of the two means the verifier should never fire.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.agent = self.root / "agents" / "ace"
+        for d in ("data", "state", "reports"):
+            (self.agent / d).mkdir(parents=True)
+        started = int(time.time()) - 120
+        want, _ = et_time.expected_report(self.agent, "ace", started=started)
+        self.rows = [{"selection": f"P{i}", "match": "A @ B", "status": "passed",
+                      "why_not": ["no edge"]} for i in range(6)]
+        (self.agent / "data" / "candidates.json").write_text(
+            json.dumps({"candidates": self.rows}))
+        (self.agent / "reports" / want).write_text("word " * 248)
+        (self.agent / "MEMORY.md").write_text("- a line\n")
+        (self.agent / "state" / ".cycle-started").write_text(str(started))
+        (self.agent / "state" / ".cycle-before").write_text("4")
+        (self.agent / "state" / "bankroll.json").write_text(json.dumps(
+            {"starting_bankroll": 10000.0, "bankroll": 10000.0, "open_bets": [],
+             "settled_bets": [], "cycle_count": 5}))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def ledger(self, **extra):
+        (self.agent / "state" / "ledger.json").write_text(
+            json.dumps(dict({"candidates": self.rows}, **extra)))
+
+    def signoff(self):
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+        return subprocess.run([sys.executable, str(SCRIPTS / "signoff.py"), "ace"],
+                              capture_output=True, text=True, env=env)
+
+    def test_a_missing_verdict_is_not_a_finished_cycle(self):
+        self.ledger()
+        r = self.signoff()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("NO VERDICT", r.stdout)
+        self.assertNotIn("All deliverables present", r.stdout)
+
+    def test_it_names_the_command(self):
+        self.ledger()
+        self.assertIn("ace-judge.py verdict", self.signoff().stdout)
+
+    def test_an_empty_verdict_does_not_count(self):
+        self.ledger(verdict="   ")
+        self.assertEqual(self.signoff().returncode, 1)
+
+    def test_a_real_verdict_passes(self):
+        self.ledger(verdict="Quiet slate - nothing cleared the bar.")
+        r = self.signoff()
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("All deliverables present", r.stdout)

@@ -271,6 +271,17 @@ def main():
                     f"`python3 ../../scripts/ace-judge.py pass <n> --my-pct <n> "
                     f"--why \"...\"`, which writes the row correctly.")
                 missing.append(label)
+            elif not str((doc if isinstance(doc, dict) else {}).get("verdict") or "").strip():
+                # The one line a person actually reads. The verifier noted its
+                # absence and signoff said nothing, so the agent read "All
+                # deliverables present" and stopped - and the village showed a
+                # blank. Asked for in AGENTS.md, checked nowhere until now.
+                lines.append(
+                    f"{label}: NO VERDICT - {rel} has {len(judged)} judged row(s) but "
+                    f"no verdict line, so the village has nothing to show. "
+                    f"Add it with: python3 ../../scripts/ace-judge.py verdict "
+                    f"\"one line on the slate\"")
+                missing.append(label)
             else:
                 # The join is the thing nobody can see by looking at the file.
                 # NB: not `base` - that is the agent directory in this loop.
