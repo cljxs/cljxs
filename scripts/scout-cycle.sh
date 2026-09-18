@@ -18,7 +18,6 @@ set -u
 ROOT="${ECOSYSTEM_ROOT:-/root/ecosystem}"
 AGENT="$ROOT/agents/scout"
 LAST="$AGENT/state/last-run.txt"
-IDEAS="$AGENT/state/ideas.json"
 MEM="$AGENT/MEMORY.md"
 
 MESSAGE="scheduled idea run"
@@ -33,19 +32,18 @@ Set \"product\" on each idea to the product type it is for, so approving one
 drafts against the right catalogue entry.
 
 Everything else is unchanged: read the files first, write state/last-run.txt
-whatever you decide, and append to state/ideas.json rather than replacing it."
+whatever you decide, and put this run's new ideas in state/proposals.json.
+Do not write state/ideas.json - code appends to it for you."
   echo "== focused run: $*"
 fi
 
 T=$(stat -c %Y "$LAST" 2>/dev/null || echo 0)
-I=$(stat -c %Y "$IDEAS" 2>/dev/null || echo 0)
 
 cd "$AGENT" || exit 1
 openclaw agent --agent scout --message "$MESSAGE" \
   --session-id "wake-scout-$(date +%s)" --timeout 600 --json
 
 U=$(stat -c %Y "$LAST" 2>/dev/null || echo 0)
-J=$(stat -c %Y "$IDEAS" 2>/dev/null || echo 0)
 
 # "Wrote no ideas" and "did nothing" stay different things. Scout is told to
 # propose nothing when ideas are already piling up, and those runs pass - but
@@ -68,8 +66,10 @@ fi
 # overwrite freely.
 printf '%s\n' "$LINE" >> "$MEM"
 
-if [ "$J" -gt "$I" ]; then
-  echo "scout wrote ideas.json; logged to MEMORY.md: $LINE"
-else
-  echo "scout proposed no new ideas - a pass; logged to MEMORY.md: $LINE"
-fi
+# Scout proposes into state/proposals.json, which it owns and may overwrite.
+# Code folds those into ideas.json, because Scout cleared that file on
+# 2026-09-18 after being told in bold to keep every existing entry - the same
+# way it destroyed MEMORY.md twice. Nothing here removes an idea.
+echo "-- merging proposals"
+python3 "$ROOT/scripts/scout-ideas.py" merge
+echo "logged to MEMORY.md: $LINE"

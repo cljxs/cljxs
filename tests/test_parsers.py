@@ -1228,7 +1228,13 @@ class ScoutCanBeFocusedForOneRun(unittest.TestCase):
         src = self.WRAPPER.read_text()
         self.assertIn("SCOUT RECORDED NOTHING", src)
         self.assertIn('printf \'%s\\n\' "$LINE" >> "$MEM"', src)
-        self.assertIn("proposed no new ideas - a pass", src)
+        # The pass/fell-over distinction moved into scout-ideas.py when the
+        # merge took over, so assert the wrapper still calls it rather than
+        # pinning a sentence that legitimately moved.
+        self.assertIn("scout-ideas.py", src)
+        merge = (SCRIPTS / "scout-ideas.py").read_text()
+        self.assertIn("unchanged", merge,
+                      "a run that proposes nothing must still say the log is intact")
 
     def test_the_default_run_is_unfocused(self):
         src = self.WRAPPER.read_text()
@@ -1251,3 +1257,89 @@ class ScoutCanBeFocusedForOneRun(unittest.TestCase):
         for line in src.splitlines():
             if ">" in line and "MESSAGE" in line:
                 self.fail(f"the focus is being written to a file: {line.strip()}")
+
+
+class ScoutCannotDestroyTheIdeaLog(unittest.TestCase):
+    """On 2026-09-18 Scout wrote "Cleared existing ideas to reflect no new
+    proposals" and emptied state/ideas.json. Line 18 of its own instructions
+    said, in bold: "every existing entry kept, yours appended". Nothing was
+    lost because nothing was pending - luck, not a safeguard.
+
+    Second time: its unit records that it destroyed MEMORY.md twice the same
+    way. The fix there was to take the job off it, so Scout owns a scratch file
+    and code does the append. Same fix, same reason.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.state = self.root / "agents" / "scout" / "state"
+        self.state.mkdir(parents=True)
+        self.ideas = self.state / "ideas.json"
+        self.proposals = self.state / "proposals.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def merge(self):
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+        return subprocess.run([sys.executable, str(SCRIPTS / "scout-ideas.py"), "merge"],
+                              capture_output=True, text=True, env=env)
+
+    def log(self):
+        return json.loads(self.ideas.read_text())["ideas"]
+
+    def test_existing_ideas_survive_a_run_that_proposes_nothing(self):
+        self.ideas.write_text(json.dumps({"ideas": [
+            {"id": 1, "title": "Autumn cocoa sticker", "status": "pending"},
+            {"id": 2, "title": "Rainy window print", "status": "approved"}]}))
+        self.proposals.write_text("[]")
+        self.merge()
+        self.assertEqual(len(self.log()), 2, "a quiet run must not empty the log")
+        self.assertEqual(self.log()[1]["status"], "approved", "verdicts survive too")
+
+    def test_new_ideas_are_appended_not_substituted(self):
+        self.ideas.write_text(json.dumps({"ideas": [{"id": 1, "title": "Old one"}]}))
+        self.proposals.write_text(json.dumps([{"title": "Trail map hoodie",
+                                               "product": "hoodie"}]))
+        self.merge()
+        titles = [i["title"] for i in self.log()]
+        self.assertEqual(titles, ["Old one", "Trail map hoodie"])
+
+    def test_ids_are_assigned_here_not_by_the_agent(self):
+        self.ideas.write_text(json.dumps({"ideas": [{"id": 7, "title": "Old"}]}))
+        self.proposals.write_text(json.dumps([{"title": "A"}, {"title": "B"}]))
+        self.merge()
+        self.assertEqual([i["id"] for i in self.log()], [7, 8, 9])
+        self.assertTrue(all(i.get("status") == "pending" for i in self.log()[1:]))
+
+    def test_a_repeated_title_is_not_filed_twice(self):
+        self.ideas.write_text(json.dumps({"ideas": [{"id": 1, "title": "Trail map hoodie"}]}))
+        self.proposals.write_text(json.dumps([{"title": "  trail MAP hoodie "}]))
+        self.merge()
+        self.assertEqual(len(self.log()), 1)
+
+    def test_rerunning_the_merge_adds_nothing(self):
+        self.ideas.write_text(json.dumps({"ideas": []}))
+        self.proposals.write_text(json.dumps([{"title": "One"}]))
+        self.merge()
+        self.merge()
+        self.assertEqual(len(self.log()), 1)
+
+    def test_an_unparseable_log_is_refused_not_overwritten(self):
+        self.ideas.write_text("{ this is not json")
+        self.proposals.write_text(json.dumps([{"title": "New"}]))
+        r = self.merge()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("does not parse", r.stderr)
+        self.assertEqual(self.ideas.read_text(), "{ this is not json",
+                         "a merge into an unreadable file must change nothing")
+
+    def test_scout_is_told_the_log_is_not_its_to_edit(self):
+        header = (ROOT / "agents" / "scout" / "_scout-agents-header.md").read_text()
+        self.assertIn("proposals.json", header)
+        self.assertIn("Never write `state/ideas.json` yourself", header)
+
+    def test_the_wrapper_merges(self):
+        src = (SCRIPTS / "scout-cycle.sh").read_text()
+        self.assertIn("scout-ideas.py", src)
