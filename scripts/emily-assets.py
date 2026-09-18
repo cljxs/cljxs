@@ -111,10 +111,20 @@ def placeholder(path, prompt, size):
 # ------------------------------------------------------------- OpenRouter
 
 def generate(path, prompt, key, model=None):
+    """Draw one image. Returns (bytes written, usage).
+
+    `usage.include` asks OpenRouter to price the call and hand the number back
+    in the response. An image's cost cannot be worked out from the published
+    rate alone - image_output is dollars per output TOKEN, and how many tokens
+    an image is depends on the model, the size and the quality. So rather than
+    estimate it and be wrong in a direction nobody can check, the run reports
+    what it actually cost.
+    """
     body = json.dumps({
         "model": model or image_model(),
         "messages": [{"role": "user", "content": prompt}],
         "modalities": ["image", "text"],
+        "usage": {"include": True},
     }).encode()
     req = urllib.request.Request(OR_URL, data=body, headers={
         "Authorization": f"Bearer {key}",
@@ -125,17 +135,31 @@ def generate(path, prompt, key, model=None):
     with urllib.request.urlopen(req, timeout=120) as r:
         data = json.loads(r.read())
 
+    usage = data.get("usage") or {}
     msg = (data.get("choices") or [{}])[0].get("message") or {}
     for img in (msg.get("images") or []):
         url = ((img.get("image_url") or {}).get("url")) or img.get("url") or ""
         if url.startswith("data:"):
             Path(path).write_bytes(base64.b64decode(url.split(",", 1)[1]))
-            return Path(path).stat().st_size
+            return Path(path).stat().st_size, usage
         if url.startswith("http"):
             with urllib.request.urlopen(url, timeout=120) as im:
                 Path(path).write_bytes(im.read())
-            return Path(path).stat().st_size
+            return Path(path).stat().st_size, usage
     raise RuntimeError("no image returned; response keys: " + ",".join(msg.keys()))
+
+
+def cost_of(usage):
+    """What the call cost in dollars, or None if the provider did not say.
+
+    None is not zero. A zero here would read as "this model is free", which is
+    the kind of number that gets repeated.
+    """
+    for key in ("cost", "total_cost"):
+        value = (usage or {}).get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+    return None
 
 
 def safe_name(model):
@@ -184,10 +208,12 @@ def compare(prompt, models, key, out_dir):
     for model in wanted:
         path = out_dir / f"{safe_name(model)}.png"
         try:
-            n = generate(path, prompt, key, model)
-            results.append({"model": model, "ok": True,
-                            "file": path.name, "bytes": n})
-            print(f"  {model:<38} {n:>9,} bytes  {path.name}")
+            n, usage = generate(path, prompt, key, model)
+            cost = cost_of(usage)
+            results.append({"model": model, "ok": True, "file": path.name,
+                            "bytes": n, "cost_usd": cost, "usage": usage})
+            shown = f"${cost:.4f}" if cost is not None else "cost not reported"
+            print(f"  {model:<38} {n:>9,} bytes  {shown:>18}")
         except Exception as exc:
             # One model refusing or timing out must not cost you the others.
             results.append({"model": model, "ok": False, "error": str(exc)[:200]})
@@ -196,6 +222,11 @@ def compare(prompt, models, key, out_dir):
     (out_dir / "comparison.json").write_text(json.dumps(
         {"prompt": prompt, "results": results}, indent=1) + "\n")
     drawn = [r for r in results if r["ok"]]
+    priced = [r["cost_usd"] for r in drawn if r["cost_usd"] is not None]
+    if priced:
+        print(f"\n  this comparison cost ${sum(priced):.4f}"
+              + ("" if len(priced) == len(drawn)
+                 else f" (only {len(priced)} of {len(drawn)} reported a cost)"))
     print(f"\n{len(drawn)} of {len(wanted)} drew something. Look at them in the "
           f"Command Deck -\nthe filename under each is the model. Throw the "
           f"whole comparison away with Remove.")
@@ -225,9 +256,10 @@ def main():
     if key and not a.placeholder_only:
         try:
             model = image_model(a.model)
-            n = generate(a.out, a.prompt, key, model)
+            n, usage = generate(a.out, a.prompt, key, model)
             print(json.dumps({"ok": True, "mode": "generated", "model": model,
-                              "path": a.out, "bytes": n}))
+                              "path": a.out, "bytes": n,
+                              "cost_usd": cost_of(usage)}))
             return 0
         except Exception as exc:
             print(json.dumps({"ok": False, "mode": "generate-failed",

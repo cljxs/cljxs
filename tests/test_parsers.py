@@ -2962,12 +2962,15 @@ class ComparingModelsIsLookingAtThem(unittest.TestCase):
         self.dir = Path(self.tmp.name) / "builds" / "bakeoff-fall"
         self.drawn = []
 
+        self.costs = {}
+
         def fake_generate(path, prompt, key, model=None):
             self.drawn.append((model, prompt))
             if "refuses" in (model or ""):
                 raise RuntimeError("provider returned 429")
             Path(path).write_bytes(b"\x89PNG" + b"x" * 900)
-            return Path(path).stat().st_size
+            usage = {"cost": self.costs[model]} if model in self.costs else {}
+            return Path(path).stat().st_size, usage
         self.m.generate = fake_generate
 
     def tearDown(self):
@@ -3018,3 +3021,36 @@ class ComparingModelsIsLookingAtThem(unittest.TestCase):
 
     def test_no_models_named_is_refused(self):
         self.assertEqual(self.m.compare("x", "  ,  ", "k", self.dir), 2)
+
+    def test_what_each_model_actually_cost_is_recorded(self):
+        # An image's price cannot be worked out from the published rate:
+        # image_output is dollars per output TOKEN, and how many tokens an
+        # image is depends on the model, the size and the quality. So the run
+        # reports what it cost rather than anyone estimating it.
+        self.costs = {"a/one": 0.042, "b/two": 0.0081}
+        self.m.compare("x", "a/one,b/two", "k", self.dir)
+        results = json.loads((self.dir / "comparison.json").read_text())["results"]
+        got = {r["model"]: r["cost_usd"] for r in results}
+        self.assertEqual(got, {"a/one": 0.042, "b/two": 0.0081})
+
+    def test_a_provider_that_reports_no_cost_is_none_not_zero(self):
+        # Zero would read as "this model is free", which is the kind of number
+        # that gets repeated.
+        self.costs = {"a/one": 0.042}
+        self.m.compare("x", "a/one,b/silent", "k", self.dir)
+        results = json.loads((self.dir / "comparison.json").read_text())["results"]
+        silent = next(r for r in results if r["model"] == "b/silent")
+        self.assertIsNone(silent["cost_usd"])
+
+    def test_cost_of_reads_what_the_provider_sent(self):
+        self.assertEqual(self.m.cost_of({"cost": 0.039}), 0.039)
+        self.assertEqual(self.m.cost_of({"total_cost": 0.039}), 0.039)
+        self.assertIsNone(self.m.cost_of({}))
+        self.assertIsNone(self.m.cost_of(None))
+        self.assertIsNone(self.m.cost_of({"cost": "0.039"}),
+                          "a string is not a number the arithmetic can trust")
+
+    def test_the_request_asks_for_the_cost_back(self):
+        src = (SCRIPTS / "emily-assets.py").read_text()
+        body = src.split("def generate(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn('"usage": {"include": True}', body)
