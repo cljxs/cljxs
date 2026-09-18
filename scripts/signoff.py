@@ -80,6 +80,22 @@ AGENTS = {
 }
 
 
+# What closes a cycle, per agent. The verifier names it in its own failure
+# message; this is the other half of the same sentence.
+MARK_COMMAND = {
+    "ace": "python3 ../../scripts/ace-judge.py mark",
+    "belfort": "python3 ../../scripts/belfort-trade.py mark",
+}
+
+
+def cycles_before(agent_dir):
+    """The counter at wake, written by <agent>-cycle.sh. None if absent."""
+    try:
+        return int((agent_dir / "state" / ".cycle-before").read_text().strip())
+    except Exception:
+        return None
+
+
 def cycle_started(agent_dir):
     """When this cycle began, written by <agent>-cycle.sh at wake.
 
@@ -208,7 +224,21 @@ def main():
                 lines.append(f"{label}: BROKEN - {rel} does not parse ({exc})")
                 missing.append(label)
                 continue
-            bit = f"  {extra}={doc.get(extra)}" if extra else ""
+
+            # A counter that has not moved is the cycle never reaching its end.
+            # This used to report the value and stop, so the agent read "All
+            # deliverables present" and was then failed by the verifier for
+            # exactly this. Same file, same number, opposite verdicts.
+            before = cycles_before(base)
+            now = doc.get(extra)
+            if extra and before is not None and isinstance(now, int) and now <= before:
+                cmd = MARK_COMMAND.get(agent, "the mark command")
+                lines.append(f"{label}: NOT CLOSED - {rel} still says {extra}={now}, "
+                             f"the same as when this cycle started. Run: {cmd}")
+                missing.append(label)
+                continue
+
+            bit = f"  {extra}={now}" if extra else ""
             lines.append(f"{label}: {rel}{bit}  ({age(path)})")
 
         elif kind == "ledger":

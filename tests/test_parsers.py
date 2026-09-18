@@ -1003,3 +1003,82 @@ class PickingColoursNotTheFirstTwelve(unittest.TestCase):
     def test_a_colourless_title_has_no_colour(self):
         self.assertIsNone(self.pf.colour_of("S"))
         self.assertIsNone(self.pf.colour_of(""))
+
+
+class ClosingTheCycle(unittest.TestCase):
+    """Ace's 19:01 scheduled run judged 14 of 14 rows, joined them all to the
+    board, wrote a 90-word report and recorded its memory. signoff printed
+    "All deliverables present". The verifier then failed it:
+
+        cycle_count did not advance (4 -> 4)
+
+    signoff checked the counter EXISTS; the verifier checked it ADVANCED. The
+    wrapper computes the wake value and hands it only to the verifier, so
+    signoff had no way to apply the same rule. Fourth instance of one fact with
+    two opinions.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.agent = self.root / "agents" / "ace"
+        for d in ("data", "state", "reports"):
+            (self.agent / d).mkdir(parents=True)
+        self.started = int(time.time()) - 120
+        want, _ = et_time.expected_report(self.agent, "ace", started=self.started)
+        rows = [{"selection": f"P{i}", "match": "A @ B", "status": "passed",
+                 "why_not": ["no edge"]} for i in range(14)]
+        (self.agent / "data" / "candidates.json").write_text(json.dumps({"candidates": rows}))
+        (self.agent / "state" / "ledger.json").write_text(
+            json.dumps({"candidates": rows, "verdict": "Quiet slate."}))
+        (self.agent / "reports" / want).write_text("word " * 90)
+        (self.agent / "MEMORY.md").write_text("- a line\n")
+        (self.agent / "state" / ".cycle-started").write_text(str(self.started))
+        (self.agent / "state" / ".cycle-before").write_text("4")
+        self.bank(4)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def bank(self, count):
+        (self.agent / "state" / "bankroll.json").write_text(json.dumps(
+            {"starting_bankroll": 10000.0, "bankroll": 10000.0, "open_bets": [],
+             "settled_bets": [], "cycle_count": count}))
+
+    def signoff(self):
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+        return subprocess.run([sys.executable, str(SCRIPTS / "signoff.py"), "ace"],
+                              capture_output=True, text=True, env=env)
+
+    def test_an_unadvanced_counter_is_not_a_finished_cycle(self):
+        r = self.signoff()
+        self.assertEqual(r.returncode, 1, "signoff must not pass a cycle that never closed")
+        self.assertIn("NOT CLOSED", r.stdout)
+        self.assertNotIn("All deliverables present", r.stdout)
+
+    def test_it_names_the_command_that_fixes_it(self):
+        # The agent reads this mid-cycle. A complaint it cannot act on costs a
+        # whole run; naming the command is the difference.
+        self.assertIn("ace-judge.py mark", self.signoff().stdout)
+
+    def test_a_closed_cycle_passes(self):
+        self.bank(5)
+        r = self.signoff()
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("All deliverables present", r.stdout)
+
+    def test_a_counter_going_backwards_is_also_refused(self):
+        self.bank(3)
+        self.assertEqual(self.signoff().returncode, 1)
+
+    def test_belfort_is_told_its_own_command(self):
+        sign = load("signoff", "signoff.py")
+        self.assertIn("belfort-trade.py mark", sign.MARK_COMMAND["belfort"])
+        self.assertIn("ace-judge.py mark", sign.MARK_COMMAND["ace"])
+
+    def test_both_wrappers_publish_the_wake_count(self):
+        for f in ("ace-cycle.sh", "belfort-cycle.sh"):
+            with self.subTest(wrapper=f):
+                src = (SCRIPTS / f).read_text()
+                self.assertIn(".cycle-before", src,
+                              f"{f} must publish CYCLES_BEFORE or signoff cannot check it")

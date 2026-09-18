@@ -44,6 +44,11 @@ STARTED=$(date +%s)
 # the verifier does. Without it the two disagreed, and the agent believed
 # the one that told it there was nothing left to do.
 mkdir -p "$AGENT/state" && printf '%s\n' "$STARTED" > "$AGENT/state/.cycle-started"
+# And the cycle count at wake. The verifier gets this on argv; signoff had
+# no way to know it, so it checked that cycle_count EXISTS while the
+# verifier checked that it ADVANCED. Ace did all its work, was told "All
+# deliverables present", and was failed for never running mark.
+printf '%s\n' "$CYCLES_BEFORE" > "$AGENT/state/.cycle-before"
 
 LOG="$(mktemp)"
 trap 'rm -f "$LOG"' EXIT
