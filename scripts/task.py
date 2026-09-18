@@ -5,6 +5,9 @@ task.py — an agent's two dealings with the task queue, as commands.
     python3 scripts/task.py read          what am I supposed to build?
     python3 scripts/task.py done "<one line about what I made>"
 
+    python3 scripts/task.py new emily --idea "..." --brief "..."   (you, not an agent)
+    python3 scripts/task.py list
+
 Task #6 was failed with "agent exited with code 0". The log shows Emily
 printed the curl she had been told to write:
 
@@ -123,6 +126,97 @@ def cmd_read(task_id):
     return 0
 
 
+def cmd_list(status=None):
+    """What is in the queue, newest first."""
+    path = "/tasks" + (f"?status={status}" if status else "")
+    try:
+        tasks = call(path)
+    except Exception as exc:
+        print(f"could not read the queue: {explain(exc)}", file=sys.stderr)
+        return 1
+    if not tasks:
+        print("nothing in the queue" + (f" with status {status}" if status else ""))
+        return 0
+    for t in sorted(tasks, key=lambda t: -(t.get("id") or 0)):
+        line = (f"  #{t.get('id'):<4} {str(t.get('status')):<12} "
+                f"{str(t.get('assignee')):<9}")
+        # Absent, unreadable and empty are three different things. Rendering
+        # all three as a blank line is how a broken payload looks like a task
+        # with nothing in it - the same mistake scout-ideas.py had to unlearn.
+        raw = t.get("payload")
+        payload, note = raw, ""
+        if isinstance(raw, str):
+            try:
+                payload = json.loads(raw)
+            except Exception:
+                payload, note = None, "(payload will not parse)"
+        elif raw is None:
+            note = "(no payload)"
+        idea = payload.get("idea") if isinstance(payload, dict) else None
+        print(line + (idea or note or t.get("type") or ""))
+        if t.get("result"):
+            print(f"       -> {t['result']}")
+    return 0
+
+
+def cmd_new(a):
+    """Create a task, with this script owning the JSON.
+
+    The queue takes a POST with a payload that is itself JSON, nested inside
+    JSON, inside a shell quote. That is precisely the shape that made Emily
+    print her completion command instead of running it - and leaving it for a
+    human to hand-write, on a terminal that flattens multi-line pastes, is the
+    same trap with a different victim. Fields go in as arguments; the quoting
+    is not anyone's problem.
+    """
+    payload = {"idea": a.idea, "brief": a.brief}
+    if a.product:
+        payload["product"] = a.product
+    if a.slug:
+        payload["slug"] = a.slug
+        payload["build_dir"] = f"builds/{a.slug}"
+    if a.artwork:
+        payload["artwork"] = a.artwork
+
+    body = {
+        "created_by": "you",
+        "assignee": a.agent,
+        "type": a.type,
+        "payload": payload,
+        "cost_estimate": a.cost,
+        "notes": a.notes,
+        "kill_criteria": a.kill,
+    }
+    if a.slug:
+        body["dedupe_key"] = f"{a.agent}-build-{a.slug}"
+
+    try:
+        task = call("/tasks", body)
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = json.loads(exc.read().decode()).get("error") or ""
+        except Exception:
+            pass
+        if exc.code == 409:
+            print(f"there is already an open task for this: {detail}\n"
+                  f"  see it with: python3 scripts/task.py list", file=sys.stderr)
+        elif exc.code == 429:
+            print(f"a spend cap would be broken: {detail}\n"
+                  f"  caps live in tasks/limits.json", file=sys.stderr)
+        else:
+            print(f"the queue refused it ({exc.code}): {detail}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"could not create the task: {explain(exc)}", file=sys.stderr)
+        return 1
+
+    print(f"task #{task.get('id')} created for {a.agent}: {a.idea}")
+    print(f"  the dispatcher picks it up within a couple of seconds. Watch:\n"
+          f"    journalctl -u task-dispatcher -f")
+    return 0
+
+
 def cmd_done(task_id, result, cost):
     if not result.strip():
         print("say what you did, in one line:\n"
@@ -143,6 +237,27 @@ def main():
     argv = sys.argv[1:]
     cmd = argv[0] if argv else "read"
     rest = argv[1:]
+
+    # `new` and `list` are for a person at a terminal, not for an agent, so
+    # they take flags and never touch ECOSYSTEM_TASK_ID.
+    if cmd == "new":
+        import argparse
+        ap = argparse.ArgumentParser(prog="task.py new")
+        ap.add_argument("agent")
+        ap.add_argument("--idea", required=True)
+        ap.add_argument("--brief", required=True)
+        ap.add_argument("--product", default="")
+        ap.add_argument("--slug", default="")
+        ap.add_argument("--artwork", default="")
+        ap.add_argument("--type", default="product-build")
+        ap.add_argument("--cost", type=float, default=0.25)
+        ap.add_argument("--notes", default="DRAFT ONLY - do not publish.")
+        ap.add_argument("--kill", default="Stop if assets cannot be produced, "
+                                          "or if the idea requires trademarked IP.")
+        return cmd_new(ap.parse_args(rest))
+
+    if cmd == "list":
+        return cmd_list(rest[0] if rest else None)
 
     # `done 6 "a line"` and `done "a line"` both work: a leading all-digits
     # argument is the task number. An agent that types the number anyway is
@@ -173,7 +288,8 @@ def main():
             rest = rest[:i] + rest[i + 2:]
         return cmd_done(task_id, " ".join(rest), cost)
 
-    print("usage: task.py read | task.py done \"<one line>\" [--cost 0.0]",
+    print("usage: task.py read | task.py done \"<one line>\" [--cost 0.0]\n"
+          "       task.py new <agent> --idea \"...\" --brief \"...\" | task.py list",
           file=sys.stderr)
     return 2
 

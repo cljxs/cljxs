@@ -2447,3 +2447,134 @@ class OpenRouterPricesAreReadNotAssumed(unittest.TestCase):
         self.assertIn("not published", r.stdout)
         self.assertNotIn("-1000000", r.stdout)
         self.assertNotIn("$-", r.stdout)
+
+
+class CreatingATaskIsACommandToo(unittest.TestCase):
+    """task.py took the hand-written curl away from Emily and left it for the
+    person at the terminal: creating a task meant a POST whose payload is JSON
+    nested inside JSON inside a shell quote, on a terminal that flattens
+    multi-line pastes. Same trap, different victim.
+
+    `new` takes the fields as arguments and owns the quoting, the way
+    scout-ideas.py propose does - and for the same reason, which is that a
+    3.5" inch mark in a brief broke a hand-written payload once already.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import http.server
+        import threading
+        cls.got = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def _send(self, code, body=b""):
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                cls.got.append(body)
+                if body.get("assignee") == "dupe":
+                    return self._send(409, b'{"error":"an open task with this '
+                                           b'dedupe_key already exists"}')
+                if body.get("assignee") == "broke":
+                    return self._send(429, b'{"error":"daily_total_spend_cap 10 '
+                                           b'would be exceeded"}')
+                self._send(201, json.dumps({"id": 7, **body}).encode())
+
+            def do_GET(self):
+                self._send(200, json.dumps([
+                    {"id": 7, "status": "pending", "assignee": "emily",
+                     "payload": json.dumps({"idea": "Left-Chest Lantern Emblem"})},
+                    {"id": 6, "status": "failed", "assignee": "emily",
+                     "payload": "{bad json", "result": "agent exited with code 0"},
+                    {"id": 5, "status": "done", "assignee": "emily", "payload": None},
+                ]).encode())
+
+        cls.srv = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+        cls.base = f"http://127.0.0.1:{cls.srv.server_port}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+
+    def setUp(self):
+        type(self).got = []
+
+    def run_task(self, *args):
+        env = dict(os.environ, MISSION_CONTROL_API=self.base)
+        env.pop("ECOSYSTEM_TASK_ID", None)
+        return subprocess.run([sys.executable, str(SCRIPTS / "task.py"), *args],
+                              capture_output=True, text=True, env=env, timeout=60)
+
+    def test_the_fields_go_in_as_arguments(self):
+        r = self.run_task("new", "emily", "--idea", "Lantern Emblem",
+                          "--brief", "a lantern", "--product", "Gildan 18500")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        payload = self.got[0]["payload"]
+        self.assertEqual(payload["idea"], "Lantern Emblem")
+        self.assertEqual(payload["product"], "Gildan 18500")
+
+    def test_an_inch_mark_in_the_brief_survives(self):
+        # The exact value that broke a hand-written payload: 3.5" closes the
+        # JSON string early unless something escapes it.
+        brief = 'Emblem with a "soft halo", 3.5" wide'
+        r = self.run_task("new", "emily", "--idea", "x", "--brief", brief)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.got[0]["payload"]["brief"], brief)
+
+    def test_a_slug_becomes_the_build_dir_and_the_dedupe_key(self):
+        # Both were derived by hand from the slug every time a task was
+        # written, which is two chances to mistype one string.
+        self.run_task("new", "emily", "--idea", "x", "--brief", "y",
+                      "--slug", "left-chest-lantern-emblem")
+        body = self.got[0]
+        self.assertEqual(body["payload"]["build_dir"],
+                         "builds/left-chest-lantern-emblem")
+        self.assertEqual(body["dedupe_key"],
+                         "emily-build-left-chest-lantern-emblem")
+
+    def test_a_task_without_a_slug_has_no_dedupe_key(self):
+        # A dedupe key of "emily-build-" would collide with every other
+        # slugless task.
+        self.run_task("new", "emily", "--idea", "x", "--brief", "y")
+        self.assertIsNone(self.got[0].get("dedupe_key"))
+
+    def test_the_draft_only_note_is_carried_by_default(self):
+        self.run_task("new", "emily", "--idea", "x", "--brief", "y")
+        self.assertIn("do not publish", self.got[0]["notes"].lower())
+        self.assertTrue(self.got[0]["kill_criteria"])
+
+    def test_an_already_open_task_says_so_and_says_where_to_look(self):
+        r = self.run_task("new", "dupe", "--idea", "x", "--brief", "y")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("already an open task", r.stderr)
+        self.assertIn("task.py list", r.stderr)
+
+    def test_a_broken_spend_cap_names_the_cap_and_where_it_lives(self):
+        r = self.run_task("new", "broke", "--idea", "x", "--brief", "y")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("daily_total_spend_cap", r.stderr)
+        self.assertIn("limits.json", r.stderr)
+
+    def test_list_distinguishes_absent_unreadable_and_present(self):
+        # Rendering all three as a blank line is how a broken payload looks
+        # like a task with nothing in it.
+        r = self.run_task("list")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Left-Chest Lantern Emblem", r.stdout)
+        self.assertIn("will not parse", r.stdout)
+        self.assertIn("no payload", r.stdout)
+
+    def test_list_shows_why_a_failed_task_failed(self):
+        r = self.run_task("list")
+        self.assertIn("agent exited with code 0", r.stdout)
