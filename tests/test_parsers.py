@@ -1819,3 +1819,182 @@ class AnEmptySlateIsNotASkippedCycle(unittest.TestCase):
         (self.agent / "data" / "candidates.json").write_text("{ not json")
         self.assertEqual(self.verify().returncode, 1,
                          "unknown is not the same as zero")
+
+
+class OneGarmentIsOneCatalogueEntry(unittest.TestCase):
+    """emily-finish on a finished hoodie stopped with "no catalogue entry for
+    'sweatshirt'. Choose one once" - while the entry for that exact garment sat
+    in the catalogue under "hoodie".
+
+    The key is a word the model picked when it wrote listing.json and the
+    lookup was exact. Worse than the stop was the advice: "choose one once"
+    invites a second entry for a blueprint already chosen, and two catalogue
+    entries for one garment is the drift this repo keeps paying for.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / "agents" / "emily" / "state").mkdir(parents=True)
+        self.m = load("emily_printify", "emily-printify.py")
+        self.m.CATALOG = self.root / "agents/emily/state/printify-catalog.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    # The shape actually on the droplet: chosen under "hoodie", and saved
+    # before blueprint_title existed, so it has none.
+    DROPLET = {
+        "sticker": {"blueprint_id": 564, "provider_id": 27},
+        "hoodie": {"blueprint_id": 49, "provider_id": 99,
+                   "variant_titles": ["Black / M", "Navy / L"]},
+    }
+
+    def test_the_exact_key_still_wins(self):
+        self.assertEqual(self.m.resolve(self.DROPLET, "hoodie")[0], "hoodie")
+        self.assertEqual(self.m.resolve(self.DROPLET, "sticker")[0], "sticker")
+
+    def test_case_and_plural_do_not_miss(self):
+        self.assertEqual(self.m.resolve(self.DROPLET, "Hoodie")[0], "hoodie")
+        self.assertEqual(self.m.resolve(self.DROPLET, "hoodies")[0], "hoodie")
+
+    def test_a_word_nothing_answers_to_is_still_a_miss(self):
+        self.assertEqual(self.m.resolve(self.DROPLET, "mug"), (None, None))
+        self.assertEqual(self.m.resolve(self.DROPLET, ""), (None, None))
+
+    def test_the_blueprints_own_title_answers_without_a_synonym_list(self):
+        # Once pick records the title, "sweatshirt" finds the hoodie because
+        # the garment really is called one - nobody maintains that mapping.
+        cat = {"hoodie": dict(self.DROPLET["hoodie"],
+                              blueprint_title="Unisex Heavy Blend Hooded Sweatshirt")}
+        for word in ("sweatshirt", "Sweatshirts", "hooded sweatshirt"):
+            self.assertEqual(self.m.resolve(cat, word)[0], "hoodie", word)
+
+    def test_a_title_word_that_is_not_the_garment_does_not_match(self):
+        # Matching any word of the title made "blend" find the hoodie. A loose
+        # match here is a wrong draft, not a near miss.
+        title = "Unisex Heavy Blend Hooded Sweatshirt"
+        for word in ("blend", "unisex", "heavy", "tee", "mug"):
+            self.assertFalse(self.m.title_answers_to(title, word), word)
+
+    def test_real_printify_titles_answer_to_their_own_garment(self):
+        for title, word in (("Unisex Heavy Blend Hooded Sweatshirt", "sweatshirt"),
+                            ("Unisex Jersey Short Sleeve Tee", "tee"),
+                            ("Kiss-Cut Stickers", "sticker"),
+                            ("Kiss-Cut Stickers", "stickers")):
+            self.assertTrue(self.m.title_answers_to(title, word), (title, word))
+
+    def test_two_entries_answering_to_one_word_is_refused_not_guessed(self):
+        # A crewneck and a hoodie are both sweatshirts. Picking either would be
+        # a silently wrong garment on a real order.
+        two = {"hoodie": {"blueprint_title": "Unisex Heavy Blend Hooded Sweatshirt"},
+               "crewneck": {"blueprint_title": "Unisex Crewneck Sweatshirt"}}
+        with self.assertRaises(self.m.Ambiguous) as caught:
+            self.m.resolve(two, "sweatshirt")
+        self.assertEqual(caught.exception.keys, ["crewneck", "hoodie"])
+
+    def test_the_miss_message_lists_what_is_already_there(self):
+        # The whole defect: it said "choose one once" while the answer was
+        # sitting in the catalogue.
+        msg = self.m.no_entry(self.DROPLET, "sweatshirt")
+        self.assertIn("hoodie", msg)
+        self.assertIn("sticker", msg)
+        self.assertIn("alias", msg)
+
+    def test_the_miss_message_on_an_empty_catalogue_does_not_offer_an_alias(self):
+        msg = self.m.no_entry({}, "sticker")
+        self.assertNotIn("alias", msg)
+        self.assertIn("suggest --product sticker", msg)
+
+    def test_alias_teaches_the_existing_entry_rather_than_duplicating_it(self):
+        self.m.CATALOG.write_text(json.dumps(self.DROPLET))
+
+        class A:
+            product = "hoodie"
+            alias = ["sweatshirt"]
+        self.m.cmd_alias(A())
+        cat = self.m.read_catalog()
+        self.assertEqual(sorted(cat), ["hoodie", "sticker"],
+                         "aliasing must not create a second entry")
+        self.assertEqual(self.m.resolve(cat, "sweatshirt")[0], "hoodie")
+
+    def test_alias_refuses_to_point_one_word_at_two_entries(self):
+        self.m.CATALOG.write_text(json.dumps(self.DROPLET))
+
+        class A:
+            product = "hoodie"
+            alias = ["sweatshirt"]
+        self.m.cmd_alias(A())
+
+        class B:
+            product = "sticker"
+            alias = ["sweatshirt"]
+        with self.assertRaises(SystemExit) as caught:
+            self.m.cmd_alias(B())
+        self.assertEqual(caught.exception.code, 1)
+
+    def test_alias_is_idempotent(self):
+        self.m.CATALOG.write_text(json.dumps(self.DROPLET))
+
+        class A:
+            product = "hoodie"
+            alias = ["sweatshirt"]
+        self.m.cmd_alias(A())
+        self.m.cmd_alias(A())
+        self.assertEqual(self.m.read_catalog()["hoodie"]["aliases"], ["sweatshirt"])
+
+    def test_pick_records_the_title_so_the_next_word_resolves_itself(self):
+        src = (SCRIPTS / "emily-printify.py").read_text()
+        body = src.split("def cmd_pick(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn('"blueprint_title": blueprint_title', body,
+                      "the title must go into the saved entry, not just a local")
+
+    def test_only_one_place_says_there_is_no_catalogue_entry(self):
+        # draft and prices each had their own lookup and their own message,
+        # which is how the advice in one went stale while the other stayed.
+        src = (SCRIPTS / "emily-printify.py").read_text()
+        self.assertEqual(src.count('f"no catalogue entry for'), 1,
+                         "only no_entry() may compose that message")
+        for name in ("cmd_draft", "cmd_prices"):
+            body = src.split(f"def {name}(", 1)[1].split("\ndef ", 1)[0]
+            self.assertIn("no_entry(", body, name)
+
+    # --- the real thing: run draft far enough to hit the catalogue -----------
+    #
+    # It resolves the product type before it needs a shop id or the network, so
+    # the lookup can be exercised for real rather than asserted about in source.
+
+    def draft(self, product_type, catalogue):
+        d = self.root / "agents" / "emily" / "builds" / "a-build"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "listing.json").write_text(json.dumps(
+            {"title": "A Hoodie", "description": "cosy", "product_type": product_type}))
+        (d / "design.png").write_bytes(b"x" * 4000)
+        self.m.CATALOG.parent.mkdir(parents=True, exist_ok=True)
+        self.m.CATALOG.write_text(json.dumps(catalogue))
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+        env.pop("PRINTIFY_SHOP_ID", None)
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "emily-printify.py"), "draft", str(d)],
+            capture_output=True, text=True, env=env, timeout=60)
+
+    def test_draft_of_a_sweatshirt_reaches_the_hoodie_entry(self):
+        # The incident, end to end: Emily wrote "sweatshirt", the entry is
+        # "hoodie", and draft stopped dead.
+        cat = {"hoodie": dict(self.DROPLET["hoodie"],
+                              blueprint_title="Unisex Heavy Blend Hooded Sweatshirt")}
+        r = self.draft("sweatshirt", cat)
+        out = r.stdout + r.stderr
+        self.assertNotIn("no catalogue entry", out, out)
+        self.assertIn("'sweatshirt' -> catalogue entry 'hoodie'", out,
+                      "and it must say which entry it used")
+
+    def test_draft_of_something_really_absent_still_stops(self):
+        r = self.draft("mug", {"hoodie": self.DROPLET["hoodie"]})
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("no catalogue entry for 'mug'", r.stderr)
+        self.assertIn("hoodie", r.stderr, "it must list what IS there")
+
+    def test_draft_does_not_announce_a_rename_that_did_not_happen(self):
+        r = self.draft("hoodie", {"hoodie": self.DROPLET["hoodie"]})
+        self.assertNotIn("-> catalogue entry", r.stdout + r.stderr)

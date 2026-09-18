@@ -148,6 +148,19 @@ answer. Wanting one named facility is a reason to pick a specific provider
 - Nothing here can publish. `emily-printify.py` has no publish command by
   design; every product is created UNPUBLISHED and you press Publish.
 
+**One garment, one catalogue entry.** The blueprint/provider/variant choice
+is cached in `agents/emily/state/printify-catalog.json` under a word — and the
+word in a build's `listing.json` is whichever one Emily wrote. When they
+differ, do **not** pick the blueprint again; point the second word at the
+entry that already exists:
+
+    python3 scripts/emily-printify.py alias hoodie sweatshirt
+
+`draft` resolves a word through the key, then any aliases, then the
+blueprint's own title, and prints which entry it used whenever the two names
+differ. Two entries for one blueprint is how a price set on one stops
+applying to the other.
+
 **Throwing one away.** `scripts/emily-build.py list` shows every build and
 its state; `remove <slug>` archives one you do not want to `builds/_removed/`
 and the gallery stops showing it; `restore <slug>` puts it back. It archives

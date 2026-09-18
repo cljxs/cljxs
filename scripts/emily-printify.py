@@ -19,6 +19,7 @@ Subcommands:
   suggest --product sticker     find candidate blueprints for a product type
   pick --product sticker \\        remember a blueprint/provider once, by hand
        --blueprint 564 --provider 27
+  alias hoodie sweatshirt       another word for a product already chosen
   draft builds/my-slug          build folder -> UNPUBLISHED product, no judgement
 
 Standard library only.
@@ -28,6 +29,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -207,7 +209,11 @@ def cmd_create(a):
 # So the choosing happens once, by a human, and is cached. After that a draft
 # is one command with no judgement in it.
 
-CATALOG = Path(__file__).resolve().parent.parent / "agents" / "emily" / "state" / "printify-catalog.json"
+# ECOSYSTEM_ROOT overrides the root - every other script here honours it and
+# these two did not, which is also why the catalogue could not be exercised
+# from a test without reaching into the module.
+ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
+CATALOG = ROOT / "agents" / "emily" / "state" / "printify-catalog.json"
 
 
 def read_catalog():
@@ -215,6 +221,145 @@ def read_catalog():
         return json.loads(CATALOG.read_text())
     except Exception:
         return {}
+
+
+class Ambiguous(Exception):
+    """More than one catalogue entry answers to that word."""
+
+    def __init__(self, word, keys):
+        super().__init__(word)
+        self.word = word
+        self.keys = keys
+
+
+def words(s):
+    """The lowercase words in a string, with a trailing plural s dropped."""
+    out = []
+    for w in re.split(r"[^a-z0-9]+", str(s or "").lower()):
+        if not w:
+            continue
+        out.append(w[:-1] if len(w) > 3 and w.endswith("s") else w)
+    return out
+
+
+def title_answers_to(blueprint_title, product_type):
+    """Does a blueprint's own title answer to this word?
+
+    Printify puts the garment last - "Unisex Heavy Blend Hooded Sweatshirt",
+    "Unisex Jersey Short Sleeve Tee", "Kiss-Cut Stickers" - so the head noun
+    is one of the final two words. Matching any word of the title instead made
+    "blend" find the hoodie, which is how a loose match becomes a wrong draft.
+    Every word asked for must be in the title, and the head must be the
+    garment.
+    """
+    have = words(blueprint_title)
+    asked = words(product_type)
+    if not have or not asked:
+        return False
+    return asked[-1] in have[-2:] and all(w in have for w in asked)
+
+
+def resolve(cat, product_type):
+    """(key, entry) for a product type, or (None, None).
+
+    The catalogue key is a word a model picked when it wrote listing.json, and
+    the lookup used to be exact. Emily wrote "sweatshirt", the entry had been
+    saved as "hoodie", and draft stopped with "no catalogue entry for
+    'sweatshirt'. Choose one once" - inviting a second entry for a garment that
+    was already chosen. Two catalogue entries for one blueprint is the drift
+    this repo keeps paying for.
+
+    So a word reaches an entry three ways, in order:
+
+      the key itself, then the aliases recorded on it, then a word of the
+      blueprint's own title - "sweatshirt" finds the entry whose blueprint is
+      "Unisex Heavy Blend Hooded Sweatshirt" without anyone maintaining a list.
+
+    Two entries answering to one word is not resolved by guessing: Ambiguous
+    says which, and the caller names them.
+    """
+    want = " ".join(words(product_type))
+    if not want:
+        return None, None
+
+    for key, entry in cat.items():
+        if str(key).lower() == str(product_type).lower():
+            return key, entry
+
+    hits = [k for k in cat if " ".join(words(k)) == want]
+    if not hits:
+        hits = [k for k, e in cat.items()
+                if any(" ".join(words(x)) == want for x in (e.get("aliases") or []))]
+    if not hits:
+        hits = [k for k, e in cat.items()
+                if title_answers_to(e.get("blueprint_title"), product_type)]
+
+    if len(hits) > 1:
+        raise Ambiguous(product_type, sorted(hits))
+    if not hits:
+        return None, None
+    return hits[0], cat[hits[0]]
+
+
+def no_entry(cat, product_type):
+    """What to print when nothing matches. It lists what IS in the catalogue.
+
+    The old message said only "choose one once", which is wrong advice when
+    the garment is already there under another word - and that is exactly the
+    case that produced it.
+    """
+    lines = [f"no catalogue entry for '{product_type}'."]
+    if cat:
+        lines.append("\n  The catalogue already has:")
+        for key, entry in sorted(cat.items()):
+            title = entry.get("blueprint_title") or f"blueprint {entry.get('blueprint_id')}"
+            extra = ", ".join(entry.get("aliases") or [])
+            lines.append(f"    {key:<14} {title}" + (f"  (also: {extra})" if extra else ""))
+        asked = set(words(product_type))
+        likely = next((k for k, e in sorted(cat.items())
+                       if asked & set(words(e.get("blueprint_title")) + words(k))),
+                      sorted(cat)[0])
+        lines.append(f"\n  If one of those IS this product, say so rather than "
+                     f"picking it twice:\n"
+                     f"    emily-printify.py alias {likely} {product_type}")
+        lines.append(f"\n  If it is genuinely a new product:")
+    else:
+        lines.append("\n  The catalogue is empty. Choose a blueprint once:")
+    lines.append(f"    emily-printify.py suggest --product {product_type}")
+    return "\n".join(lines)
+
+
+def cmd_alias(a):
+    """Teach an existing entry another word, rather than duplicating it."""
+    cat = read_catalog()
+    if a.product not in cat:
+        print(no_entry(cat, a.product), file=sys.stderr)
+        sys.exit(2)
+    entry = cat[a.product]
+    have = list(entry.get("aliases") or [])
+    added = []
+    for word in a.alias:
+        if word == a.product or word in have:
+            continue
+        clash, _ = (None, None)
+        try:
+            clash, _ = resolve(cat, word)
+        except Ambiguous as exc:
+            clash = exc.keys[0]
+        if clash and clash != a.product:
+            print(f"'{word}' already reaches '{clash}' - two entries answering "
+                  f"to one word is the thing this avoids.", file=sys.stderr)
+            sys.exit(1)
+        have.append(word)
+        added.append(word)
+    entry["aliases"] = have
+    CATALOG.write_text(json.dumps(cat, indent=1) + "\n")
+    if added:
+        print(f"'{a.product}' now also answers to: {', '.join(added)}")
+    else:
+        print(f"'{a.product}' already answered to all of those")
+    print(f"  aliases: {', '.join(have) or '(none)'}")
+    return 0
 
 
 def cmd_suggest(a):
@@ -280,9 +425,19 @@ def cmd_pick(a):
     else:
         chosen = all_v[:a.limit]
 
+    # The blueprint's own title, so resolve() can match a word Emily used
+    # against the garment's real name without anyone maintaining a synonym
+    # list. One extra read, once, at the only moment a human is here anyway.
+    try:
+        blueprint_title = call(f"/catalog/blueprints/{a.blueprint}.json").get("title") or ""
+    except Exception:
+        blueprint_title = ""
+
     cat = read_catalog()
     cat[a.product] = {
         "blueprint_id": int(a.blueprint),
+        "blueprint_title": blueprint_title,
+        "aliases": [w.strip() for w in (a.alias or "").split(",") if w.strip()],
         "provider_id": int(a.provider),
         "variant_ids": [v["id"] for v in chosen],
         # Every title, not the first 12. The cap was invisible while the only
@@ -354,11 +509,14 @@ def cmd_prices(a):
     that is the whole reason a listing has them.
     """
     cat = read_catalog()
-    entry = cat.get(a.product)
+    try:
+        _key, entry = resolve(cat, a.product)
+    except Ambiguous as exc:
+        print(f"'{exc.word}' matches more than one entry: {', '.join(exc.keys)}. "
+              f"Name one of those exactly.", file=sys.stderr)
+        sys.exit(2)
     if not entry:
-        print(f"no catalogue entry for '{a.product}' yet. Choose the blueprint "
-              f"and provider first:\n\n  emily-printify.py suggest --product {a.product}\n",
-              file=sys.stderr)
+        print(no_entry(cat, a.product), file=sys.stderr)
         sys.exit(2)
 
     ids = entry.get("variant_ids") or []
@@ -530,12 +688,22 @@ def cmd_draft(a):
     # profit tables compared side by side. Without this the flag did nothing,
     # because listing.json always carries a product_type.
     product_type = (a.product or listing.get("product_type") or "sticker").lower()
-    cat = read_catalog().get(product_type)
-    if not cat:
-        print(f"no catalogue entry for '{product_type}'. Choose one once:\n\n"
-              f"  emily-printify.py suggest --product {product_type}\n",
+    catalog = read_catalog()
+    try:
+        cat_key, cat = resolve(catalog, product_type)
+    except Ambiguous as exc:
+        print(f"'{exc.word}' matches more than one catalogue entry: "
+              f"{', '.join(exc.keys)}.\n  Draft against one of them explicitly:\n"
+              f"    emily-printify.py draft {a.build_dir} --product {exc.keys[0]}",
               file=sys.stderr)
         sys.exit(2)
+    if not cat:
+        print(no_entry(catalog, product_type), file=sys.stderr)
+        sys.exit(2)
+    if cat_key.lower() != product_type:
+        # Say it out loud. A listing that says "sweatshirt" drafted against the
+        # "hoodie" entry is right, but only if nobody has to guess that it was.
+        print(f"'{product_type}' -> catalogue entry '{cat_key}'")
 
     shop_id = os.environ.get("PRINTIFY_SHOP_ID")
     if not shop_id:
@@ -656,8 +824,7 @@ def cmd_draft(a):
 
 
 def _builds_root():
-    here = Path(__file__).resolve().parent.parent
-    return here / "agents" / "emily" / "builds"
+    return ROOT / "agents" / "emily" / "builds"
 
 
 def _resolve_build(arg):
@@ -815,7 +982,12 @@ def main():
     p.add_argument("--variants", default=""); p.add_argument("--limit", type=int, default=12)
     p.add_argument("--colors", "--colours", default="", dest="colors",
                    help='comma-separated colour names, e.g. --colors "Black,Navy"')
+    p.add_argument("--alias", default="",
+                   help="other words that mean this product, comma-separated")
     p.set_defaults(fn=cmd_pick)
+
+    p = sub.add_parser("alias"); p.add_argument("product")
+    p.add_argument("alias", nargs="+"); p.set_defaults(fn=cmd_alias)
 
     p = sub.add_parser("prices"); p.add_argument("--product", required=True)
     p.add_argument("price", nargs="*")
