@@ -2797,3 +2797,103 @@ class TheGarmentsOwnNameShouldNotNeedAnAlias(unittest.TestCase):
     def test_an_empty_catalogue_is_not_an_error(self):
         self.m.CATALOG.write_text("{}")
         self.assertEqual(self.refresh(), 0)
+
+
+class TheDeckDoesNotDecideWhatRemovingMeans(unittest.TestCase):
+    """The Command Deck grew a Remove button. What removing a build means -
+    archive to _removed/ rather than delete, refuse while a Printify product
+    still points at it - was already decided by scripts/emily-build.py.
+
+    Writing that again in JavaScript is the drift this repo keeps paying for:
+    the two would agree on the day they were written and not afterwards. So
+    emily.js runs the script. These tests hold that line, and hold the
+    contract the dashboard depends on, without needing a server running.
+    """
+
+    JS = None
+    HTML = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls.JS = (ROOT / "mission-control-api" / "emily.js").read_text()
+        cls.HTML = (ROOT / "mission-control-api" / "public" / "dashboard.html").read_text()
+
+    def test_the_endpoint_runs_the_script_rather_than_moving_files(self):
+        # Reading _removed/ to list what can be restored is fine. Moving or
+        # deleting anything is not: that is the script's decision to make.
+        self.assertIn("emily-build.py", self.JS)
+        for forbidden in ("fs.rename", "fs.renameSync", "fs.rm(", "fs.rmSync",
+                          "fs.unlink", "rmdir", "fs.cpSync", "fs.mkdir"):
+            self.assertNotIn(forbidden, self.JS,
+                             f"emily.js must not implement removal itself ({forbidden})")
+
+    def test_the_script_is_run_with_an_argument_array_not_a_shell_string(self):
+        # A slug is data. execFile with an array keeps it that way even if the
+        # slug regex is ever loosened.
+        self.assertIn("execFile('python3', [BUILD_SCRIPT", self.JS)
+        self.assertNotIn("exec(", self.JS.replace("execFile(", ""))
+
+    def test_force_is_not_passed_unless_asked_for(self):
+        # The refusal exists because archiving the folder does not remove the
+        # product from Printify. A UI that always forces has deleted it.
+        body = self.JS.split("app.delete(", 1)[1].split("app.post(", 1)[0]
+        self.assertIn("force ?", body)
+        self.assertIn("'--force'", body)
+        self.assertIn("req.query.force === '1'", body)
+
+    def test_the_three_outcomes_get_three_status_codes(self):
+        # One status for all of them tells the dashboard nothing it can
+        # respond to differently - and it responds differently to each.
+        # Assert the status call, not the numbers - they also appear in the
+        # comment above it, which survives any change to the code.
+        body = self.JS.split("app.delete(", 1)[1].split("app.post(", 1)[0]
+        self.assertIn("res.status(blocked ? 409 : missing ? 404 : 500)", body)
+
+    def test_the_refusal_text_is_the_scripts_own(self):
+        # Rewording it here is a second copy of the explanation.
+        body = self.JS.split("app.delete(", 1)[1].split("app.post(", 1)[0]
+        self.assertIn("r.stderr", body)
+
+    def test_every_write_endpoint_checks_the_slug(self):
+        for route in ("app.delete('/api/emily/builds/:slug'",
+                      "app.post('/api/emily/builds/:slug/restore'"):
+            self.assertIn(route, self.JS)
+            body = self.JS.split(route, 1)[1][:400]
+            self.assertIn("SLUG_RE.test", body, route)
+
+    def test_there_is_still_no_publish_endpoint(self):
+        # The one thing this file has always refused to do.
+        self.assertNotIn("/publish", self.JS)
+        self.assertIn("no endpoint for it here", self.JS)
+
+    def test_removing_is_not_a_one_way_door(self):
+        self.assertIn("/api/emily/removed", self.JS)
+        self.assertIn("restore", self.JS)
+        self.assertIn("restoreBuild", self.HTML)
+        # Defined is not enough - the archived list has to be refreshed when
+        # the gallery is, or it only appears after a full page reload.
+        gallery = self.HTML.split("async function loadBuilds(", 1)[1].split(
+            "async function removeBuild(", 1)[0]
+        self.assertIn("loadRemoved()", gallery)
+
+    def test_the_dashboard_asks_before_removing(self):
+        body = self.HTML.split("async function removeBuild(", 1)[1].split(
+            "async function restoreBuild(", 1)[0]
+        # The guard, not just the word: `if (false && !confirm(...))` still
+        # contains "confirm(" and asks nobody anything.
+        self.assertIn("if (!force && !confirm(", body)
+        # And asks a second time before overriding the Printify refusal,
+        # rather than offering force as the first button.
+        self.assertIn("d.blocked", body)
+        self.assertIn("if (confirm(", body)
+        self.assertEqual(body.count("confirm("), 2)
+
+    def test_the_dashboard_shows_the_scripts_reason_not_its_own(self):
+        body = self.HTML.split("async function removeBuild(", 1)[1].split(
+            "async function restoreBuild(", 1)[0]
+        self.assertIn("d.error", body)
+
+    def test_the_file_says_it_writes_now(self):
+        # It was documented "Read-only, unlike scout.js". A comment that is no
+        # longer true is how the next reader gets a wrong idea for free.
+        self.assertNotIn("Read-only, unlike scout.js", self.JS)

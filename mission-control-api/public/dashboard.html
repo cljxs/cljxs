@@ -134,6 +134,16 @@
 
   /* Emily's builds gallery */
   .gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(184px,1fr));gap:14px}
+.bact{margin-top:6px}
+.build .rm{font:inherit;font-size:11px;padding:3px 9px;border-radius:5px;cursor:pointer;
+  background:transparent;border:1px solid var(--line,#2a3140);color:var(--dim,#8b94a7)}
+.build .rm:hover{border-color:#a04040;color:#ff9a9a}
+.rmlist{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:10px;
+  padding-top:10px;border-top:1px solid var(--line,#2a3140)}
+.rmh{font-size:11px;color:var(--dim,#8b94a7);text-transform:uppercase;letter-spacing:.06em}
+.rmlist button{font:inherit;font-size:11px;padding:3px 9px;border-radius:5px;cursor:pointer;
+  background:transparent;border:1px dashed var(--line,#2a3140);color:var(--dim,#8b94a7)}
+.rmlist button:hover{color:#9ad3a0;border-color:#3f7a46}
   .build{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:rgba(255,255,255,.02)}
   .build .shot{
     display:block;width:100%;aspect-ratio:1;object-fit:cover;background:rgba(255,255,255,.04);
@@ -262,6 +272,7 @@
   <div class="card" id="buildsCard" style="margin-top:16px;display:none">
     <h3>Emily&rsquo;s builds <span id="buildsCount" style="text-transform:none;letter-spacing:0;color:var(--dim);font-weight:400"></span></h3>
     <div id="builds"></div>
+    <div id="removed"></div>
     <div class="note">Tap any image to see it full size. Publishing still happens in Printify &mdash; nothing here puts a product on sale.</div>
   </div>
   <div class="foot" id="foot">&mdash;</div>
@@ -605,9 +616,66 @@ async function loadBuilds(){
         <div class="bs">${buildPills(b)}</div>
         <div class="bd">${b.images.length} image${b.images.length===1?'':'s'} · ${kb(b.bytes)}${
           b.price_suggestion ? ' · suggests ' + money(b.price_suggestion) : ''}</div>
+        <div class="bact"><button class="rm" onclick="removeBuild('${esc(b.slug)}')"
+          title="Archive this build">Remove</button></div>
       </div></div>`;
     }).join('') + `</div>`;
+    loadRemoved();
   }catch{ /* the main poll already reports connectivity */ }
+}
+
+// ------------------------------------------------- removing a build
+//
+// "Remove" archives. The artwork cost a model call and "I do not like it" and
+// "destroy it" are different intentions, so the folder moves to _removed/ and
+// the list below puts it back. Nothing here knows what removing means - the
+// endpoint runs scripts/emily-build.py, which owns that.
+
+async function removeBuild(slug, force){
+  const b = (window.__builds || []).find(x => x.slug === slug);
+  const title = b ? b.title : slug;
+  if (!force && !confirm(`Remove “${title}”?\n\nIt is archived, not deleted - `
+      + `you can put it back from the list under the gallery.`)) return;
+  try{
+    const r = await fetch(`/api/emily/builds/${encodeURIComponent(slug)}`
+      + (force ? '?force=1' : ''), { method:'DELETE' });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok){ await loadBuilds(); return; }
+
+    // The script refused because a Printify product still points at it. That
+    // is worth a second, explicit yes rather than a button that quietly wins.
+    if (d.blocked){
+      if (confirm(`${d.error}\n\nRemove it here anyway?\n\n`
+          + `The Printify product stays where it is - nothing here will point `
+          + `at it afterwards.`)) return removeBuild(slug, true);
+      return;
+    }
+    alert(d.error || 'Could not remove that build.');
+  }catch{ alert('Could not reach the Command Deck.'); }
+}
+
+async function restoreBuild(slug){
+  try{
+    const r = await fetch(`/api/emily/builds/${encodeURIComponent(slug)}/restore`,
+                          { method:'POST' });
+    if (r.ok){ await loadBuilds(); return; }
+    const d = await r.json().catch(() => ({}));
+    alert(d.error || 'Could not restore that build.');
+  }catch{ alert('Could not reach the Command Deck.'); }
+}
+
+async function loadRemoved(){
+  const el = $('removed');
+  if (!el) return;
+  try{
+    const r = await fetch('/api/emily/removed', {cache:'no-store'});
+    const names = (await r.json()).removed || [];
+    if (!names.length){ el.innerHTML = ''; return; }
+    el.innerHTML = `<div class="rmlist"><span class="rmh">Removed</span>`
+      + names.map(n => `<button onclick="restoreBuild('${esc(n)}')"
+          title="Put this build back">${esc(n)} ↩</button>`).join('')
+      + `</div>`;
+  }catch{ el.innerHTML = ''; }
 }
 
 // ------------------------------------------------------- report reader
