@@ -52,13 +52,47 @@ def load_ideas():
     return d, True
 
 
+class ProposalsUnreadable(Exception):
+    pass
+
+
 def load_proposals():
-    try:
-        d = json.loads(PROPOSALS.read_text())
-    except Exception:
+    """This run's new ideas. Raises rather than returning [] on a bad file.
+
+    The first version swallowed every exception and returned an empty list, so
+    "Scout wrote nothing", "Scout wrote something I cannot parse" and "Scout
+    proposed nothing" were one outcome with one message: "no new proposals".
+    Scout proposed three hoodie ideas, the file did not parse, and the run
+    reported a quiet pass. Three ideas lost inside an except clause written
+    while fixing this exact class of bug elsewhere.
+    """
+    if not PROPOSALS.is_file():
+        return []                      # a run that proposed nothing. Fine.
+    raw = PROPOSALS.read_text()
+    if not raw.strip():
         return []
+    try:
+        d = json.loads(raw)
+    except Exception as exc:
+        raise ProposalsUnreadable(
+            f"{PROPOSALS} does not parse ({exc}).\n"
+            f"  It holds this run's ideas and they are not in the log yet, so "
+            f"they are still there to recover:\n"
+            f"  {raw.strip()[:300]}") from exc
+
     rows = d if isinstance(d, list) else (d.get("proposals") or d.get("ideas") or [])
-    return [r for r in rows if isinstance(r, dict) and str(r.get("title") or "").strip()]
+    if not isinstance(rows, list):
+        raise ProposalsUnreadable(
+            f"{PROPOSALS} parsed, but the ideas are not a list - found "
+            f"{type(rows).__name__}. Expected a JSON list of "
+            f'{{"title": ..., "product": ...}}.')
+
+    good = [r for r in rows if isinstance(r, dict) and str(r.get("title") or "").strip()]
+    if rows and not good:
+        raise ProposalsUnreadable(
+            f"{PROPOSALS} has {len(rows)} entr(ies), none with a title. "
+            f"Every idea needs one - it is what the log is keyed on.")
+    return good
 
 
 def cmd_merge():
@@ -68,7 +102,13 @@ def cmd_merge():
               f"I cannot read would destroy whatever is in there.", file=sys.stderr)
         return 1
 
-    new = load_proposals()
+    try:
+        new = load_proposals()
+    except ProposalsUnreadable as exc:
+        print(f"scout-ideas: {exc}", file=sys.stderr)
+        print(f"\n  Nothing was merged and nothing was lost. Fix the file and "
+              f"re-run:\n    python3 scripts/scout-ideas.py merge", file=sys.stderr)
+        return 1
     if not new:
         print(f"no new proposals ({len(existing['ideas'])} idea(s) in the log, unchanged)")
         return 0

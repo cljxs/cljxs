@@ -1343,3 +1343,70 @@ class ScoutCannotDestroyTheIdeaLog(unittest.TestCase):
     def test_the_wrapper_merges(self):
         src = (SCRIPTS / "scout-cycle.sh").read_text()
         self.assertIn("scout-ideas.py", src)
+
+
+class ProposalsThatCannotBeReadAreNotAQuietPass(unittest.TestCase):
+    """Scout proposed three hoodie ideas on gpt-5-mini - the first good output
+    it has produced - and the merge printed "no new proposals". The loader
+    swallowed every exception and returned an empty list, so three outcomes had
+    one message:
+
+        the file is absent          a run that proposed nothing
+        the file does not parse     ideas written and unreadable
+        the file is an empty list   a run that proposed nothing
+
+    Written two hours earlier, in a script whose whole purpose was to stop
+    ideas being lost, inside an except clause added while fixing this exact
+    class of bug elsewhere.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.state = self.root / "agents" / "scout" / "state"
+        self.state.mkdir(parents=True)
+        (self.state / "ideas.json").write_text('{"ideas":[]}')
+        self.proposals = self.state / "proposals.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def merge(self):
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+        return subprocess.run([sys.executable, str(SCRIPTS / "scout-ideas.py"), "merge"],
+                              capture_output=True, text=True, env=env)
+
+    def test_no_file_is_a_pass(self):
+        r = self.merge()
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("no new proposals", r.stdout)
+
+    def test_an_empty_list_is_a_pass(self):
+        self.proposals.write_text("[]")
+        self.assertEqual(self.merge().returncode, 0)
+
+    def test_a_file_that_does_not_parse_is_an_error(self):
+        self.proposals.write_text('[{"title": "Minimalist Mountain Badge"')
+        r = self.merge()
+        self.assertEqual(r.returncode, 1, "a broken file must not read as a quiet pass")
+        self.assertIn("does not parse", r.stderr)
+        self.assertNotIn("no new proposals", r.stdout)
+
+    def test_the_error_shows_the_ideas_so_they_can_be_recovered(self):
+        # They are not in the log yet. If the message does not carry them, the
+        # only copy is in a file the operator has to know to go and read.
+        self.proposals.write_text('[{"title": "Pocket Folklore Deer Silhouette"')
+        self.assertIn("Pocket Folklore Deer Silhouette", self.merge().stderr)
+
+    def test_entries_without_titles_are_an_error_not_a_silent_drop(self):
+        self.proposals.write_text('[{"name": "x"}, {"name": "y"}]')
+        r = self.merge()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("none with a title", r.stderr)
+
+    def test_a_broken_file_leaves_the_log_alone(self):
+        (self.state / "ideas.json").write_text('{"ideas":[{"id":1,"title":"Keep me"}]}')
+        self.proposals.write_text("{ not json")
+        self.merge()
+        log = json.loads((self.state / "ideas.json").read_text())["ideas"]
+        self.assertEqual([i["title"] for i in log], ["Keep me"])
