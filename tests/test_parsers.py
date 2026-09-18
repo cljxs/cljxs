@@ -2195,3 +2195,155 @@ class CompletingATaskIsACommandNotAParagraph(unittest.TestCase):
         self.assertNotIn("tasks/<the number", h)
         self.assertIn("scripts/task.py read", h)
         self.assertIn('scripts/task.py done', h)
+
+
+class WhatACycleCosts(unittest.TestCase):
+    """Pricing is arithmetic, and a model asked to do arithmetic will
+    eventually claim it did. So the rates are a table, the schedule is read
+    from the timers, and the multiplication is checked here against numbers
+    worked by hand.
+    """
+
+    def setUp(self):
+        self.m = load("cost_estimate", "cost-estimate.py")
+
+    def test_the_arithmetic_is_the_arithmetic(self):
+        # prompt 1000, 2 turns, 100 out, no tool results.
+        #   transcript = 100 * 2*1/2            = 100
+        #   input      = 1000*2 + 100           = 2,100
+        #   output     = 100*2                  = 200
+        #   opus       = (2100*5 + 200*25)/1e6  = $0.0155
+        in_t, out_t, dollars, _ = self.m.cycle_cost(
+            "claude-opus-5", prompt=1000, turns=2, output=100, growth=100,
+            cached=False)
+        self.assertEqual((in_t, out_t), (2100, 200))
+        self.assertAlmostEqual(dollars, 0.0155, places=6)
+
+    def test_the_cached_arithmetic_too(self):
+        #   billed = 1000*1.25 + 1000*0.1*1 + 100 = 1,450
+        #   opus   = (1450*5 + 200*25)/1e6        = $0.01225
+        _, _, dollars, _why = self.m.cycle_cost(
+            "claude-opus-5", prompt=1000, turns=2, output=100, growth=100,
+            cached=True)
+        self.assertAlmostEqual(dollars, 0.01225, places=6)
+
+    def test_turns_cost_more_than_linearly(self):
+        # The point of the whole script: every turn re-reads everything said
+        # so far, so doubling the turns more than doubles the bill. "Fixing a
+        # loop saves more than switching models" is this inequality.
+        def cost(turns):
+            return self.m.cycle_cost("claude-opus-5", 2000, turns, 400, 1000,
+                                     cached=False)[2]
+        self.assertGreater(cost(24), 2 * cost(12))
+
+    def test_a_cheaper_model_on_a_longer_loop_can_cost_more(self):
+        # The claim in CLAUDE.md, as a number: 68 turns of Haiku against 12 of
+        # Opus. If this ever stops being true the advice needs rewriting.
+        opus = self.m.cycle_cost("claude-opus-5", 2000, 12, 400, 1000, False)[2]
+        haiku = self.m.cycle_cost("claude-haiku-4-5", 2000, 68, 400, 1000, False)[2]
+        self.assertGreater(haiku, opus)
+
+    def test_caching_never_costs_more_than_not_caching(self):
+        for model in self.m.PRICES:
+            for turns in (1, 2, 12, 68):
+                plain = self.m.cycle_cost(model, 8000, turns, 400, 1000, False)[2]
+                cheap = self.m.cycle_cost(model, 8000, turns, 400, 1000, True)[2]
+                self.assertLessEqual(cheap, plain + 1e-12, (model, turns))
+
+    def test_a_prompt_too_short_to_cache_is_not_quietly_discounted(self):
+        # Below the model's minimum the marker is ignored and nothing is
+        # saved. Reporting a discount there would be inventing money.
+        rate = self.m.PRICES["claude-haiku-4-5"]
+        short = rate["cache_min"] - 1
+        plain = self.m.cycle_cost("claude-haiku-4-5", short, 12, 400, 1000, False)[2]
+        cheap, why = self.m.cycle_cost("claude-haiku-4-5", short, 12, 400, 1000, True)[2:]
+        self.assertEqual(plain, cheap)
+        self.assertIn("minimum", why)
+
+    def test_one_turn_cannot_save_anything_by_caching(self):
+        # A write with no read is strictly worse, so the cached column must
+        # not undercut the plain one - and must say why it did not.
+        plain = self.m.cycle_cost("claude-opus-5", 8000, 1, 400, 1000, False)[2]
+        cheap, why = self.m.cycle_cost("claude-opus-5", 8000, 1, 400, 1000, True)[2:]
+        self.assertEqual(cheap, plain)
+        self.assertIn("nothing reads", why)
+
+    # --- the schedule is read, not restated ---------------------------------
+
+    def test_the_schedule_comes_from_the_timers(self):
+        weekly = self.m.cycles_per_week()
+        # ace wakes twice daily, belfort twice on weekdays.
+        self.assertEqual(weekly["ace"], 14)
+        self.assertEqual(weekly["belfort"], 10)
+        self.assertEqual(weekly["scout"], 7)
+
+    def test_a_timer_that_wakes_no_model_is_not_counted(self):
+        # fury-cycle runs fury-collect.py. A timer is not a bill unless
+        # something behind it calls a model.
+        self.assertEqual(self.m.cycles_per_week()["fury"], 0)
+
+    def test_an_execstart_that_runs_to_several_lines_is_still_read(self):
+        # timmy's unit puts its openclaw call on a continuation line. Matching
+        # only lines starting with ExecStart read it as waking no model, which
+        # would have under-counted any inline unit written that way.
+        self.assertGreater(self.m.cycles_per_week()["timmy"], 0)
+
+    def test_every_cycle_timer_is_accounted_for(self):
+        units = {u.name[:-len("-cycle.timer")]
+                 for u in (ROOT / "deploy").glob("*-cycle.timer")}
+        self.assertEqual(set(self.m.cycles_per_week()), units)
+
+    # --- what it measures ---------------------------------------------------
+
+    def test_the_prompt_is_measured_not_assumed(self):
+        tokens, source = self.m.prompt_tokens_for("emily")
+        self.assertGreater(tokens, 0)
+        self.assertIn("emily", source)
+
+    def test_an_unbuilt_agents_md_says_so_rather_than_understating_silently(self):
+        # AGENTS.md is generated and untracked, so a checkout without a
+        # droplet measures the header - a smaller number, and saying so is the
+        # difference between an estimate and a wrong estimate.
+        built = ROOT / "agents" / "emily" / "AGENTS.md"
+        _tokens, source = self.m.prompt_tokens_for("emily")
+        if not built.is_file():
+            self.assertIn("larger", source)
+
+    def test_an_agent_that_does_not_exist_is_not_priced(self):
+        self.assertEqual(self.m.prompt_tokens_for("nobody"), (None, None))
+
+    def test_the_rates_carry_the_date_they_were_read(self):
+        # A price with no date is a price nobody can check - and the date has
+        # to be ON the table, not somewhere else in the file.
+        src = (SCRIPTS / "cost-estimate.py").read_text()
+        preamble = src.split("PRICES = {", 1)[0].splitlines()[-12:]
+        self.assertRegex("\n".join(preamble), r"read (on |from\n?)?[^\n]*20\d\d-\d\d-\d\d")
+        self.assertIn("OpenRouter", src,
+                      "these agents do not buy from Anthropic directly")
+
+    def test_the_printed_estimate_says_whose_prices_these_are(self):
+        # Grepping the source proves a caveat exists somewhere in the file.
+        # What matters is that it reaches the person reading the number: these
+        # agents buy through OpenRouter, which prices separately.
+        r = subprocess.run([sys.executable, str(SCRIPTS / "cost-estimate.py"),
+                            "--prompt-tokens", "8000", "--turns", "12"],
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("OpenRouter", r.stdout)
+        self.assertRegex(r.stdout, r"20\d\d-\d\d-\d\d")
+        self.assertIn("estimated", r.stdout, "a token estimate must say it is one")
+
+    def test_the_prompt_is_the_built_agents_md_when_there_is_one(self):
+        # AGENTS.md is what the agent actually wakes with. On this checkout
+        # there is none, so without building one the measuring branch is never
+        # exercised and a hardcoded size would pass unnoticed.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "agents" / "emily").mkdir(parents=True)
+            body = "x" * 12_000
+            (root / "agents" / "emily" / "AGENTS.md").write_text(body)
+            self.m.ROOT = root
+            tokens, source = self.m.prompt_tokens_for("emily")
+        self.assertEqual(tokens, len(body) // self.m.CHARS_PER_TOKEN)
+        self.assertIn("AGENTS.md", source)
+        self.assertNotIn("larger", source, "it IS the real prompt here")
