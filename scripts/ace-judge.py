@@ -308,6 +308,22 @@ MAX_OPEN_BETS = 4
 # reason, where a single number would be a fiction.
 ESTIMATE_REQUIRED_UPTO = 2
 
+# How many estimates a cycle has to come home with. Requiring one per studied
+# game was unenforceable - nothing can see which files were opened - and a
+# sweep of the whole board with `rest` records none at all, which is what a
+# week of unanswerable "no bets" was made of.
+#
+# Three, because the instructions already say to study three or four. Ace
+# chooses which three; it is the choosing that makes them the studied ones.
+# A slate smaller than three asks only for what is on it.
+MIN_ESTIMATES = 3
+
+
+def estimates_in(ledger):
+    """Rows carrying Ace's own probability. The evidence, counted."""
+    return [r for r in rows_of(ledger)
+            if isinstance(r.get("my_pct"), (int, float))]
+
 
 def open_bet_count():
     """How many bets are open right now, from the bankroll file."""

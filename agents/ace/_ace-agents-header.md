@@ -124,8 +124,9 @@ second chance. That has three consequences:
    Use `rest` only for a reason honestly true of every remaining game. "Did not
    clear the bar on the no-vig line" is. "Read the context file" is not.
 
-   **Give `--my-pct` for every game you actually studied.** Passing one or two
-   games by name without it is refused. Your estimate and the no-vig line are
+   **Give `--my-pct` for at least 3 games every cycle** — the ones you studied.
+   The verifier fails a cycle that comes home with fewer, and passing one or
+   two games by name without it is refused outright. Your estimate and the no-vig line are
    what produce `edge_pts`, and that number is the only evidence anyone has
    about whether the 8-point bar is set right. A month of passes with no
    estimates says nothing except that you passed; a month of passes reading

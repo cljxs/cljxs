@@ -3582,7 +3582,12 @@ class AWeekOfPassesShouldSayHowClose(unittest.TestCase):
         # repo keeps repeating.
         header = (ROOT / "agents" / "ace" / "_ace-agents-header.md").read_text()
         self.assertIn("--my-pct", header)
-        self.assertIn("every game you actually studied", header)
+        # Asserted on intent rather than a sentence: the header must tell Ace
+        # that estimates are owed and that it is failed without them. Pinning
+        # the exact wording broke this test the first time the paragraph was
+        # rewritten, which says nothing about whether Ace was told.
+        self.assertIn("studied", header)
+        self.assertRegex(header, r"verifier fails a cycle")
 
 
 class RuleTwoNeedsSomethingToPointAt(unittest.TestCase):
@@ -3815,3 +3820,110 @@ class WhatAPropsFeedWouldCost(unittest.TestCase):
         self.assertIn("per-event", r.stdout)
         self.assertIn("2026-09-19", r.stdout)
         self.assertIn("cheapest that fits", r.stdout)
+
+
+class ACycleOwesEstimates(unittest.TestCase):
+    """Requiring an estimate on a pass that names one or two games was not
+    enough: a cycle can sweep all sixteen rows with `rest` and one shared
+    reason, record nothing, and pass. That is exactly what happened - "passed
+    1-16, no edge on the no-vig line" - and it is what a week of unanswerable
+    "no bets" is made of.
+
+    Nothing can see which context files were opened, so "estimate the ones you
+    studied" is unenforceable as written. A count is not: a cycle owes
+    MIN_ESTIMATES, Ace chooses which, and the choosing is what makes them the
+    studied ones.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / "agents/ace/state").mkdir(parents=True)
+        (self.root / "agents/ace/data").mkdir(parents=True)
+        os.environ["ECOSYSTEM_ROOT"] = str(self.root)
+        self.av = load("ace_verify", "ace-verify.py")
+        self.cands = [{"selection": f"T{i} ML", "match": f"A@B{i}", "price": -150,
+                       "novig_pct": 57.0, "sport": "cfb"} for i in range(16)]
+        self.slate(self.cands)
+
+    def tearDown(self):
+        os.environ.pop("ECOSYSTEM_ROOT", None)
+        self.tmp.cleanup()
+
+    def slate(self, rows):
+        (self.root / "agents/ace/data/candidates.json").write_text(json.dumps(
+            {"day": "2026-09-19", "slot": "afternoon", "candidates": rows}))
+
+    def judge(self, n_rows, n_estimates):
+        rows = [dict(c, status="passed", why_not=["no edge"])
+                for c in self.cands[:n_rows]]
+        for i in range(n_estimates):
+            rows[i]["my_pct"] = 54.0 + i
+        (self.root / "agents/ace/state/ledger.json").write_text(json.dumps(
+            {"day": "2026-09-19", "slot": "afternoon", "verdict": "No picks.",
+             "candidates": rows}))
+        problems, notes = [], []
+        self.av.check_ledger(problems, notes, None)
+        return [p for p in problems if "my-pct" in p]
+
+    def test_the_sweep_that_started_this_now_fails(self):
+        # 16 rows judged, 0 estimates - today's cycle, verbatim.
+        self.assertTrue(self.judge(16, 0))
+
+    def test_one_short_is_still_short(self):
+        want = load("ace_judge", "ace-judge.py").MIN_ESTIMATES
+        self.assertTrue(self.judge(16, want - 1))
+
+    def test_meeting_the_count_passes(self):
+        want = load("ace_judge", "ace-judge.py").MIN_ESTIMATES
+        self.assertEqual(self.judge(16, want), [])
+
+    def test_more_than_asked_for_is_fine(self):
+        self.assertEqual(self.judge(16, 9), [])
+
+    def test_a_slate_smaller_than_the_minimum_asks_only_for_what_is_there(self):
+        # Failing a cycle for not estimating games that were never offered is
+        # the empty-slate mistake this repo already made once.
+        self.slate(self.cands[:2])
+        self.assertEqual(self.judge(2, 2), [])
+
+    def test_a_one_game_slate_still_owes_that_one(self):
+        self.slate(self.cands[:1])
+        self.assertTrue(self.judge(1, 0))
+        self.assertEqual(self.judge(1, 1), [])
+
+    def test_it_is_a_problem_not_a_note(self):
+        # A rule that only warns is the rule that was there before.
+        rows = [dict(c, status="passed", why_not=["no edge"]) for c in self.cands]
+        (self.root / "agents/ace/state/ledger.json").write_text(json.dumps(
+            {"day": "2026-09-19", "slot": "afternoon", "verdict": "x",
+             "candidates": rows}))
+        problems, notes = [], []
+        self.av.check_ledger(problems, notes, None)
+        self.assertTrue([p for p in problems if "my-pct" in p])
+        self.assertFalse([n for n in notes if "my-pct" in n])
+
+    def test_a_string_estimate_does_not_count(self):
+        # Only a number can be subtracted from the no-vig line.
+        rows = [dict(c, status="passed", why_not=["no edge"]) for c in self.cands]
+        for i in range(5):
+            rows[i]["my_pct"] = "54.0"
+        (self.root / "agents/ace/state/ledger.json").write_text(json.dumps(
+            {"day": "2026-09-19", "slot": "afternoon", "verdict": "x",
+             "candidates": rows}))
+        problems, notes = [], []
+        self.av.check_ledger(problems, notes, None)
+        self.assertTrue([p for p in problems if "my-pct" in p])
+
+    def test_the_header_states_the_number_the_verifier_enforces(self):
+        # The failure this repo keeps repeating: a rule in the verifier and
+        # not in the instructions.
+        header = (ROOT / "agents" / "ace" / "_ace-agents-header.md").read_text()
+        m = re.search(r"`--my-pct` for at least (\d+) games", header)
+        self.assertIsNotNone(m, "Ace is failed for this but never told the count")
+        self.assertEqual(int(m.group(1)),
+                         load("ace_judge", "ace-judge.py").MIN_ESTIMATES)
+
+    def test_the_verifier_does_not_keep_its_own_copy_of_the_number(self):
+        src = (SCRIPTS / "ace-verify.py").read_text()
+        self.assertIn("ace_judge.MIN_ESTIMATES", src)
