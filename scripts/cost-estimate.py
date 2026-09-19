@@ -64,6 +64,22 @@ PRICES = {
                          "cache_write": 1.25, "cache_min": 4096},
 }
 
+# The Odds API's published plans, read 2026-09-19. Credits, not requests: a
+# call to the regular odds endpoint costs one credit per market per region,
+# and player props must be fetched ONE EVENT AT A TIME from
+# /events/{id}/odds, costing one credit per market returned per region. So
+# props scale with games x markets x how often you look - which is the whole
+# question, and the reason this is a table and not a sentence.
+#
+# Re-check rather than trusting this a year from now: the-odds-api.com
+ODDS_API_PLANS = [
+    ("free", 0.00, 500),
+    ("20K", 30.00, 20_000),
+    ("100K", 59.00, 100_000),
+    ("5M", 119.00, 5_000_000),
+    ("15M", 249.00, 15_000_000),
+]
+
 # Roughly four characters to a token for English prose. Good enough to choose
 # a model, not good enough to predict an invoice - see the docstring.
 CHARS_PER_TOKEN = 4
@@ -180,6 +196,33 @@ def rate_rows(models, term):
     return sorted(out)
 
 
+def feed_credits(games, markets, regions, fetches_per_day, days_per_week):
+    """Credits a month of player-prop fetching would cost.
+
+    Props are per-event, so this multiplies out fast: every game, every
+    market, every region, every time you look. A month is 4.33 weeks.
+    """
+    per_fetch = games * markets * regions
+    per_day = per_fetch * fetches_per_day
+    return {
+        "per_fetch": per_fetch,
+        "per_day": per_day,
+        "per_month": int(round(per_day * days_per_week * 4.33)),
+    }
+
+
+def plan_for(credits_per_month):
+    """The cheapest plan that covers this, and the headroom it leaves.
+
+    Returns None when nothing published covers it - which is a real answer,
+    not a reason to quote the largest plan and hope.
+    """
+    for name, price, quota in ODDS_API_PLANS:
+        if quota >= credits_per_month:
+            return name, price, quota
+    return None
+
+
 def cycle_cost(model, prompt, turns, output, growth, cached):
     """(input tokens, output tokens, dollars, why-not) for one cycle.
 
@@ -233,9 +276,41 @@ def main():
     ap.add_argument("--rates", metavar="TERM",
                     help="ask OpenRouter what it charges today for slugs "
                          "matching TERM, instead of trusting the table above")
+    ap.add_argument("--feed", action="store_true",
+                    help="what a player-props odds feed would cost to poll")
+    ap.add_argument("--games", type=int, default=8,
+                    help="games carrying props per fetch (default 8, Ace's window)")
+    ap.add_argument("--markets", type=int, default=5,
+                    help="prop markets per game (default 5)")
+    ap.add_argument("--regions", type=int, default=1)
+    ap.add_argument("--fetches-per-day", type=int, default=29, dest="fetches",
+                    help="default 29 - every 30 min, 09:00-23:00, as ace-fetch runs")
+    ap.add_argument("--days-per-week", type=int, default=7, dest="days")
     ap.add_argument("--schedule", action="store_true",
                     help="how often each agent wakes a model, from the timers")
     a = ap.parse_args()
+
+    if a.feed:
+        use = feed_credits(a.games, a.markets, a.regions, a.fetches, a.days)
+        print(f"{a.games} games x {a.markets} markets x {a.regions} region(s) "
+              f"= {use['per_fetch']:,} credits per fetch")
+        print(f"x {a.fetches} fetches a day x {a.days} day(s) a week\n")
+        print(f"  {use['per_day']:>10,} credits/day")
+        print(f"  {use['per_month']:>10,} credits/month\n")
+        fit = plan_for(use["per_month"])
+        for name, price, quota in ODDS_API_PLANS:
+            mark = "  <- cheapest that fits" if fit and name == fit[0] else ""
+            room = "" if quota < use["per_month"] else \
+                f"  ({quota / max(use['per_month'], 1):.1f}x headroom)"
+            over = "  TOO SMALL" if quota < use["per_month"] else room
+            print(f"  {name:<6} ${price:>6.2f}/mo  {quota:>10,} credits{over}{mark}")
+        if not fit:
+            print(f"\n  Nothing published covers {use['per_month']:,} a month. "
+                  f"Look less often,\n  carry fewer markets, or ask them for a quote.")
+        print(f"\n  Plans read 2026-09-19 from the-odds-api.com. Props are "
+              f"per-event:\n  one credit per market returned per region, per game, "
+              f"every time you look.")
+        return 0
 
     if a.rates:
         # The table has a date on it, and a dated number is a number that goes

@@ -3738,3 +3738,80 @@ class EveryCandidateSaysWhetherThereIsNews(unittest.TestCase):
     def test_the_window_is_published_so_the_number_can_be_checked(self):
         self.game("X", 4)
         self.assertEqual(self.slate()["fresh_injury_hours"], self.m.FRESH_INJURY_HOURS)
+
+
+class WhatAPropsFeedWouldCost(unittest.TestCase):
+    """Player props are the one thing ESPN's free endpoint does not carry, so
+    they mean a paid feed. The Odds API sells credits, not requests, and props
+    must be fetched one event at a time - one credit per market returned per
+    region, per game, every time you look.
+
+    That multiplies out fast enough that the plan you need depends entirely on
+    how often you poll and how many markets you carry, which is a calculation,
+    not a price. The plans below were read from the-odds-api.com on
+    2026-09-19.
+    """
+
+    def setUp(self):
+        self.m = load("cost_estimate", "cost-estimate.py")
+
+    def test_the_arithmetic_is_the_arithmetic(self):
+        #   8 games x 5 markets x 1 region          = 40 per fetch
+        #   x 29 fetches                            = 1,160 a day
+        #   x 3 days a week x 4.33 weeks            = 15,068 a month
+        use = self.m.feed_credits(8, 5, 1, 29, 3)
+        self.assertEqual(use["per_fetch"], 40)
+        self.assertEqual(use["per_day"], 1160)
+        self.assertEqual(use["per_month"], 15068)
+
+    def test_polling_twice_as_often_costs_twice_as_much(self):
+        # Unlike a model cycle, this one really is linear - there is no
+        # transcript growing underneath it.
+        half = self.m.feed_credits(16, 5, 1, 14, 3)["per_month"]
+        full = self.m.feed_credits(16, 5, 1, 28, 3)["per_month"]
+        self.assertEqual(full, half * 2)
+
+    def test_the_cheapest_plan_that_fits_is_the_one_returned(self):
+        name, price, quota = self.m.plan_for(15_068)
+        self.assertEqual(name, "20K")
+        self.assertEqual(price, 30.00)
+        self.assertGreaterEqual(quota, 15_068)
+
+    def test_a_plan_exactly_at_quota_still_counts_as_fitting(self):
+        self.assertEqual(self.m.plan_for(20_000)[0], "20K")
+        self.assertEqual(self.m.plan_for(20_001)[0], "100K")
+
+    def test_nothing_covering_it_is_said_rather_than_rounded_up(self):
+        # Quoting the biggest plan for a load it does not cover would be
+        # inventing a price, and the honest answer is "look less often".
+        biggest = max(q for _n, _p, q in self.m.ODDS_API_PLANS)
+        self.assertIsNone(self.m.plan_for(biggest + 1))
+
+    def test_the_free_tier_is_not_offered_for_a_real_workload(self):
+        # 500 credits is twelve fetches of one game. It exists to try the API.
+        self.assertEqual(self.m.plan_for(1)[0], "free")
+        self.assertEqual(self.m.plan_for(501)[0], "20K")
+
+    def test_the_plans_are_in_ascending_order(self):
+        # plan_for returns the first that fits, so an unsorted table would
+        # quote the wrong price without failing anything.
+        quotas = [q for _n, _p, q in self.m.ODDS_API_PLANS]
+        prices = [p for _n, p, _q in self.m.ODDS_API_PLANS]
+        self.assertEqual(quotas, sorted(quotas))
+        self.assertEqual(prices, sorted(prices))
+
+    def test_the_plans_carry_the_date_they_were_read(self):
+        src = (SCRIPTS / "cost-estimate.py").read_text()
+        preamble = src.split("ODDS_API_PLANS = [", 1)[0].splitlines()[-12:]
+        self.assertRegex("\n".join(preamble), r"read 20\d\d-\d\d-\d\d")
+
+    def test_the_printed_answer_says_props_are_per_event(self):
+        # The whole reason the number is large. A reader who misses it will
+        # assume one call covers the slate.
+        r = subprocess.run([sys.executable, str(SCRIPTS / "cost-estimate.py"),
+                            "--feed", "--games", "8"],
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("per-event", r.stdout)
+        self.assertIn("2026-09-19", r.stdout)
+        self.assertIn("cheapest that fits", r.stdout)
