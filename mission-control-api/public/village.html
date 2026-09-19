@@ -1,0 +1,1439 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<!-- Added to the home screen from Safari this opens without browser chrome. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Pixel Village">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1b2a1f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Pixel Village</title>
+<style>
+  :root{ --ink:#e8ecf5; --mute:#9aa4bb; --card:#141824; --line:rgba(255,255,255,.10);
+         --up:#34d399; --down:#fb7185; --warn:#fbbf24; --c1:#22d3ee; --c2:#a78bfa; }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#1b2a1f;
+    font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink)}
+  #game{position:fixed;inset:0}
+  canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges}
+  .num{font-variant-numeric:tabular-nums}
+
+  /* HUD */
+  #hud{position:fixed;top:0;left:0;right:0;padding:10px 14px;display:flex;gap:10px;
+    align-items:center;pointer-events:none;z-index:5;
+    background:linear-gradient(180deg,rgba(8,12,10,.72),transparent)}
+  #hud .title{font-weight:700;letter-spacing:-.01em;text-shadow:0 2px 6px rgba(0,0,0,.6)}
+  #hud .chip{margin-left:auto;font-size:12px;color:var(--mute);background:rgba(0,0,0,.42);
+    border:1px solid var(--line);border-radius:999px;padding:4px 10px}
+
+  /* interaction prompt */
+  #prompt{position:fixed;left:50%;bottom:112px;transform:translateX(-50%);z-index:6;
+    background:rgba(10,14,12,.88);border:1px solid var(--line);border-radius:12px;
+    padding:9px 16px;font-size:13px;display:none;pointer-events:none;
+    box-shadow:0 8px 26px rgba(0,0,0,.45)}
+  #prompt b{color:var(--c1)}
+
+  /* touch controls */
+  #stick{position:fixed;left:20px;bottom:22px;width:132px;height:132px;z-index:7;
+    border-radius:50%;background:rgba(0,0,0,.26);border:1px solid var(--line);touch-action:none;display:none}
+  #nub{position:absolute;left:50%;top:50%;width:56px;height:56px;margin:-28px 0 0 -28px;
+    border-radius:50%;background:rgba(255,255,255,.30);border:1px solid rgba(255,255,255,.4)}
+  #act{position:fixed;right:22px;bottom:38px;width:88px;height:88px;z-index:7;border-radius:50%;
+    background:linear-gradient(135deg,var(--c1),var(--c2));border:0;color:#06121a;font-weight:800;
+    font-size:15px;display:none;box-shadow:0 8px 26px rgba(0,0,0,.5)}
+  #act:active{transform:scale(.94)}
+
+  /* agent panel */
+  #panel{position:fixed;inset:0;z-index:20;display:none;align-items:center;justify-content:center;
+    background:rgba(4,7,10,.72);backdrop-filter:blur(6px);padding:18px}
+  #card{background:var(--card);border:1px solid var(--line);border-radius:18px;
+    width:min(560px,100%);max-height:86vh;overflow:auto;padding:20px;
+    box-shadow:0 24px 70px rgba(0,0,0,.6)}
+  #card.wide{width:min(780px,100%)}
+  #card h2{margin:0 0 2px;font-size:21px;text-transform:capitalize;letter-spacing:-.01em}
+  #card .sub{color:var(--mute);font-size:12.5px;margin-bottom:16px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+  .stat{background:rgba(255,255,255,.035);border:1px solid var(--line);border-radius:11px;padding:11px}
+  .stat .l{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute)}
+  .stat .v{font-size:20px;font-weight:650;margin-top:3px}
+  .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--mute)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:right;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--mute);
+     padding-bottom:7px;border-bottom:1px solid var(--line);font-weight:600}
+  th:first-child,td:first-child{text-align:left}
+  td{padding:8px 0;border-bottom:1px solid var(--line);text-align:right}
+  tr:last-child td{border-bottom:0}
+  .quote{background:rgba(255,255,255,.035);border-left:2px solid var(--c2);border-radius:0 9px 9px 0;
+    padding:10px 12px;font-size:12.5px;color:var(--mute);line-height:1.5;margin-top:6px}
+  #close{margin-top:16px;width:100%;padding:12px;border-radius:11px;border:1px solid var(--line);
+    background:rgba(255,255,255,.06);color:var(--ink);font-size:14px;font-weight:600}
+  .muted{color:var(--mute);font-size:12.5px}
+  .idea{padding:11px 0;border-bottom:1px solid var(--line)}
+  .idea:last-of-type{border-bottom:0}
+  .idea .t{font-weight:600}
+  .idea .p{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute);
+    border:1px solid var(--line);border-radius:5px;padding:1px 6px;margin-left:7px;vertical-align:1px}
+  .idea .d{font-size:12px;color:var(--mute);margin-top:4px;line-height:1.45}
+  .idea .w{font-size:11.5px;color:#7c869c;margin-top:4px;font-style:italic;line-height:1.45}
+  .acts{display:flex;gap:8px;margin-top:9px}
+  .acts button{flex:1;padding:9px;border-radius:10px;font-size:12.5px;font-weight:600;
+    border:1px solid var(--line);background:rgba(255,255,255,.05);color:var(--ink)}
+  .acts button:disabled{opacity:.45}
+  .acts .yes{border-color:rgba(52,211,153,.45);color:var(--up)}
+  .acts .no{border-color:rgba(251,113,133,.40);color:var(--down)}
+
+  /* Emily's gallery */
+  .gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:10px;margin-top:4px}
+  .build{border:1px solid var(--line);border-radius:11px;overflow:hidden;background:rgba(255,255,255,.03)}
+  .build img{display:block;width:100%;aspect-ratio:1;object-fit:cover;background:rgba(255,255,255,.05)}
+  .build .noart{display:flex;align-items:center;justify-content:center;width:100%;aspect-ratio:1;
+    color:var(--mute);font-size:11px;background:rgba(255,255,255,.04)}
+  .build .meta{padding:8px 9px 9px}
+  .build .bt{font-size:11.5px;font-weight:600;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+  .build .bs{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+  .pill{font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;border-radius:5px;
+    padding:2px 5px;border:1px solid var(--line);color:var(--mute)}
+  .pill.ok{border-color:rgba(52,211,153,.45);color:var(--up)}
+  .pill.warn{border-color:rgba(245,158,11,.45);color:#f59e0b}
+  #lb{position:fixed;inset:0;z-index:25;display:none;align-items:center;justify-content:center;
+    flex-direction:column;gap:12px;padding:18px;background:rgba(3,5,8,.94)}
+  #lb.on{display:flex}
+  #lb img{max-width:min(100%,760px);max-height:66vh;border-radius:11px;border:1px solid var(--line);background:#000}
+  #lb .bar{display:flex;gap:7px;flex-wrap:wrap;justify-content:center}
+  #lb .bar button{padding:8px 12px;border-radius:10px;font-size:12px;font-weight:600;
+    border:1px solid var(--line);background:rgba(255,255,255,.07);color:var(--ink)}
+  #lb .bar button.sel{border-color:var(--c2);color:#fff}
+  #lb .cap{font-size:12.5px;color:var(--mute);text-align:center}
+
+  /* report reader */
+  .doclink{cursor:pointer;color:var(--c2);border-bottom:1px dotted rgba(255,255,255,.3)}
+  #doc{position:fixed;inset:0;z-index:26;display:none;align-items:flex-start;justify-content:center;
+    background:rgba(4,7,10,.94);padding:16px;overflow:auto}
+  #doc.on{display:flex}
+  #docbox{background:var(--card);border:1px solid var(--line);border-radius:16px;
+    width:min(680px,100%);margin:auto;box-shadow:0 24px 70px rgba(0,0,0,.6)}
+  #dochead{display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line);
+    position:sticky;top:0;background:var(--card);border-radius:16px 16px 0 0;flex-wrap:wrap}
+  #dochead .who{font-weight:650;text-transform:capitalize}
+  #dochead .when{font-size:11.5px;color:var(--mute)}
+  #dochead button{margin-left:auto;padding:7px 12px;border-radius:9px;font-size:12px;font-weight:600;
+    border:1px solid var(--line);background:rgba(255,255,255,.07);color:var(--ink)}
+  #docdays{display:flex;gap:6px;flex-wrap:wrap;padding:10px 16px 0}
+  #docdays button{padding:4px 9px;border-radius:7px;font-size:11px;
+    border:1px solid var(--line);background:rgba(255,255,255,.04);color:var(--mute)}
+  #docdays button.sel{border-color:var(--c2);color:#fff}
+  #docbody{padding:4px 18px 20px;font-size:13.5px;line-height:1.6}
+  #docbody h1{font-size:18px;margin:16px 0 8px}
+  #docbody h2{font-size:14px;margin:18px 0 6px;color:var(--c2)}
+  #docbody h3{font-size:13px;margin:14px 0 5px;color:var(--mute)}
+  #docbody p{margin:8px 0}
+  #docbody ul,#docbody ol{margin:8px 0;padding-left:20px}
+  #docbody li{margin:4px 0}
+  #docbody code{background:rgba(255,255,255,.08);border-radius:4px;padding:1px 5px;font-size:12px}
+  #docbody blockquote{margin:10px 0;padding:8px 12px;border-left:2px solid var(--c1);
+    background:rgba(255,255,255,.03);border-radius:0 8px 8px 0;color:var(--mute)}
+  #docbody hr{border:0;border-top:1px solid var(--line);margin:16px 0}
+  #docbody .tw{overflow-x:auto;margin:10px 0}
+  #docbody em{color:var(--mute)}
+
+  /* Ace's betting console */
+  .verdict{background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:11px;
+    padding:12px 14px;font-size:13px;line-height:1.5;margin-bottom:12px}
+  .verdict b{color:var(--ink)}
+  .sect{font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute);
+    margin:18px 0 8px;font-family:ui-monospace,Menlo,monospace}
+  .board{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px}
+  .board table{min-width:560px;font-size:12px}
+  .board th{white-space:nowrap;font-size:9.5px;padding:0 8px 6px 0;text-align:left}
+  .board td{padding:8px 8px 8px 0;vertical-align:top;text-align:left;border-bottom:1px solid var(--line)}
+  .board .sel{font-weight:600;white-space:nowrap}
+  .board .mt{color:var(--mute);font-size:11px}
+  .board .why{color:#c9a227;font-size:11px;line-height:1.4;min-width:150px}
+  .board .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .tagp{font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;border-radius:5px;
+    padding:2px 6px;border:1px solid var(--line);color:var(--mute);white-space:nowrap}
+  .tagp.bet{border-color:rgba(52,211,153,.5);color:var(--up)}
+  .tagp.won{border-color:rgba(52,211,153,.5);color:var(--up)}
+  .tagp.lost{border-color:rgba(251,113,133,.45);color:var(--down)}
+  .mini{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .mini .box{background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:10px;padding:10px}
+  .mini .box .l{font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--mute)}
+  .mini .box .rowline{display:flex;justify-content:space-between;gap:8px;font-size:11.5px;margin-top:5px}
+  .mini .box .rowline span:last-child{color:var(--mute);font-variant-numeric:tabular-nums}
+
+  #boot{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:30;
+    background:#121a14;color:var(--mute);font-size:13px;text-align:center;padding:24px}
+</style>
+</head>
+<body>
+<div id="game"></div>
+
+<div id="hud">
+  <div class="title">🏡 Pixel Village</div>
+  <div class="chip" id="chip">loading…</div>
+</div>
+
+<div id="prompt"></div>
+<div id="stick"><div id="nub"></div></div>
+<button id="act">ENTER</button>
+
+<div id="panel"><div id="card"></div></div>
+<div id="doc" onclick="if(event.target===this)closeDoc()">
+  <div id="docbox">
+    <div id="dochead"><span class="who" id="docwho"></span><span class="when" id="docwhen"></span>
+      <button onclick="closeDoc()">Close</button></div>
+    <div id="docdays"></div>
+    <div id="docbody"></div>
+  </div>
+</div>
+
+<div id="lb" onclick="if(event.target===this)closeLb()">
+  <img id="lbimg" alt="">
+  <div class="bar" id="lbbar"></div>
+  <div class="cap" id="lbcap"></div>
+  <div class="bar"><button onclick="closeLb()">Close</button></div>
+</div>
+<div id="boot">Loading the village…</div>
+
+<script src="/vendor/phaser.min.js"></script>
+<script>
+/* ------------------------------------------------------------------ *
+ * Pixel Village — a walkable front-end for the agent ecosystem.
+ * Every texture here is generated in code. No image files, no asset
+ * packs, nothing to buy. Swap in a real tileset later if you want.
+ * ------------------------------------------------------------------ */
+
+const T = 32;                 // tile size
+const MAP_W = 38, MAP_H = 23; // tiles
+
+// Hand-placed house plots rather than `col = i % 5`. A grid puts every house on
+// the same baseline at the same spacing, which reads as a row of identical
+// buildings - the one thing a neighbourhood never looks like. These sit at
+// different depths, in loose clusters, some set back from the lane and some
+// close to it. `flip` mirrors a house so its neighbour is not a photocopy.
+// Module scope because the ground painter needs them too, to run a garden path
+// from each door out to the lane before anything is drawn.
+const PLOTS = [
+  { x: 2.5,  y: 4.5,  flip: false },
+  { x: 8.6,  y: 7.6,  flip: true  },
+  { x: 13.8, y: 3.2,  flip: false },
+  { x: 23.6, y: 6.2,  flip: true  },
+  { x: 29.8, y: 2.6,  flip: false },
+  { x: 26.4, y: 17.6, flip: true  },
+  { x: 11.6, y: 18.6, flip: false },
+  { x: 33.4, y: 8.6,  flip: true  },
+];
+
+// The pond, one x-span per row. A rectangle of water in a field looks like a
+// swimming pool; the point of listing rows is that the edge can wander.
+const POND = { 16: [4, 7], 17: [3, 8], 18: [2, 9], 19: [1, 9], 20: [1, 8], 21: [2, 7], 22: [3, 6] };
+const W = MAP_W * T, H = MAP_H * T;
+
+let DATA = { agents: [], kpis: {}, health: {} };
+let scene = null, player = null, doors = [], nearDoor = null, openAgent = null;
+let npcs = [], boardText = null, boardSub = null;
+const keys = {};
+const touch = { active: false, dx: 0, dy: 0, id: null };
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const money = v => (v === null || v === undefined) ? '—'
+  : (v < 0 ? '-' : '') + '$' + Math.abs(v).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+const pctTxt = v => (v === null || v === undefined) ? '' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+const cls = v => (v === null || v === undefined) ? 'flat' : v > 0 ? 'up' : v < 0 ? 'down' : 'flat';
+const ago = m => (m === null || m === undefined) ? 'never' : m < 1 ? 'just now'
+  : m < 60 ? m + 'm ago' : m < 1440 ? Math.floor(m/60) + 'h ago' : Math.floor(m/1440) + 'd ago';
+
+/* ---------------- procedural pixel art ----------------
+ * Still no image files and nothing to buy. What changed is how much work
+ * the generator does: flat fills became tonal bands, hard tile seams became
+ * irregular fringes, and everything that sits on the ground now casts a
+ * shadow. The old version drew one colour per surface, which is what made it
+ * read as a diagram rather than a place.
+ * ----------------------------------------------------------------------- */
+
+function px(g, x, y, w, h, color, alpha) { g.fillStyle(color, alpha === undefined ? 1 : alpha); g.fillRect(x, y, w, h); }
+
+// Deterministic noise, so the village looks the same on every reload. A
+// village that reshuffles its grass every refresh feels broken.
+function rng(seed) {
+  let s = seed >>> 0 || 1;
+  return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+}
+
+// Scatter n single pixels of `color` across a w×h area.
+function speckle(g, r, w, h, color, n, size) {
+  for (let i = 0; i < n; i++) {
+    const sz = size || 1;
+    px(g, Math.floor(r() * (w - sz)), Math.floor(r() * (h - sz)), sz, sz, color);
+  }
+}
+
+const PAL = {
+  grass:  [0x4c8a3a, 0x5c9c44, 0x6db052, 0x84c765],
+  path:   [0xbe9c66, 0xd0ac75, 0xdcbd8b, 0xe9d2a8],
+  water:  [0x2b6396, 0x3a7fb8, 0x53a0d6, 0x9ad6ef],
+  wood:   [0x5f4026, 0x7d5533, 0x9b6f45, 0xbc8d5e],
+  stone:  [0x6f7480, 0x898f9b, 0xa6acb8, 0xc6ccd6],
+  leaf:   [0x24632f, 0x2f7d3d, 0x3f9b50, 0x5fbd6e],
+};
+
+function makeTextures(s) {
+  let g;
+
+  /* --- ground: four grass variants so no seam repeats next to itself --- */
+  for (let v = 0; v < 4; v++) {
+    const r = rng(9001 + v * 77);
+    g = s.add.graphics();
+    px(g, 0, 0, T, T, PAL.grass[1]);
+    // broad tonal patches first, then blades on top. One flat green was the
+    // single biggest reason the old ground looked like graph paper.
+    for (let i = 0; i < 5; i++) {
+      const w = 6 + Math.floor(r() * 12), h = 4 + Math.floor(r() * 8);
+      px(g, Math.floor(r() * (T - w)), Math.floor(r() * (T - h)), w, h, PAL.grass[r() < .5 ? 0 : 2], .5);
+    }
+    for (let i = 0; i < 14; i++) {
+      const x = Math.floor(r() * T), y = Math.floor(r() * (T - 3));
+      px(g, x, y, 1, 2 + Math.floor(r() * 2), PAL.grass[3], .75);
+    }
+    speckle(g, r, T, T, PAL.grass[0], 10);
+    g.generateTexture(`grass${v}`, T, T); g.destroy();
+  }
+
+  /* --- dirt path, four variants with gravel --- */
+  for (let v = 0; v < 4; v++) {
+    const r = rng(4400 + v * 31);
+    g = s.add.graphics();
+    px(g, 0, 0, T, T, PAL.path[1]);
+    for (let i = 0; i < 4; i++) {
+      const w = 8 + Math.floor(r() * 14), h = 5 + Math.floor(r() * 9);
+      px(g, Math.floor(r() * (T - w)), Math.floor(r() * (T - h)), w, h, PAL.path[r() < .5 ? 0 : 2], .45);
+    }
+    speckle(g, r, T, T, PAL.path[3], 12);
+    speckle(g, r, T, T, PAL.path[0], 14);
+    for (let i = 0; i < 3; i++) px(g, Math.floor(r()*(T-3)), Math.floor(r()*(T-2)), 2 + Math.floor(r()*2), 2, PAL.stone[1], .6);
+    g.generateTexture(`path${v}`, T, T); g.destroy();
+  }
+
+  /* --- cobbled plaza. The square was the same dirt as the lanes, so the
+   * middle of the village read as a wide road rather than a place. --- */
+  for (let v = 0; v < 3; v++) {
+    const r = rng(5200 + v * 37);
+    g = s.add.graphics();
+    // Warm sandstone, not grey. The first attempt used cold greys at 8px and
+    // the square read as a concrete slab dropped into a field.
+    px(g, 0, 0, T, T, 0x9c8a6d);
+    for (let row = 0; row < 6; row++) {
+      const off = row % 2 ? 3 : 0;
+      for (let col = -1; col < 7; col++) {
+        const cx2 = col * 6 + off, cy = row * 6;
+        const tone = [0xc4ae86, 0xb8a179, 0xcdb891, 0xad9770][Math.floor(r() * 4)];
+        px(g, cx2 + 1, cy + 1, 4, 4, tone);
+        px(g, cx2 + 1, cy + 1, 4, 1, 0xdcc9a6, .45);
+        px(g, cx2 + 1, cy + 4, 4, 1, 0x7d6c52, .3);
+      }
+    }
+    speckle(g, r, T, T, 0x8a7a5e, 10);
+    speckle(g, r, T, T, 0xd8c6a4, 6);
+    g.generateTexture(`cobble${v}`, T, T); g.destroy();
+  }
+
+  /* --- path edges -------------------------------------------------------
+   * Grass fringe that hangs over the paving. Drawn ON TOP of a path tile
+   * wherever its neighbour is grass. The dead-straight boundary between path
+   * and grass was the clearest tell that this was rectangles, not a place. */
+  const EDGE = ['n', 's', 'w', 'e'];
+  EDGE.forEach((side, i) => {
+    const r = rng(7700 + i * 53);
+    g = s.add.graphics();
+    for (let t = 0; t < T; t++) {
+      const d = 3 + Math.floor(r() * 5);                 // how far the grass creeps in
+      if (side === 'n') { px(g, t, 0, 1, d, PAL.grass[1]); px(g, t, d, 1, 1, PAL.grass[0], .5); }
+      if (side === 's') { px(g, t, T - d, 1, d, PAL.grass[1]); px(g, t, T - d - 1, 1, 1, PAL.grass[0], .5); }
+      if (side === 'w') { px(g, 0, t, d, 1, PAL.grass[1]); px(g, d, t, 1, 1, PAL.grass[0], .5); }
+      if (side === 'e') { px(g, T - d, t, d, 1, PAL.grass[1]); px(g, T - d - 1, t, 1, 1, PAL.grass[0], .5); }
+    }
+    g.generateTexture(`edge-${side}`, T, T); g.destroy();
+  });
+
+  /* --- water: depth bands plus a foam rim --- */
+  for (let v = 0; v < 2; v++) {
+    const r = rng(3100 + v * 17);
+    g = s.add.graphics();
+    px(g, 0, 0, T, T, PAL.water[1]);
+    for (let i = 0; i < 4; i++) {
+      const w = 10 + Math.floor(r() * 14);
+      px(g, Math.floor(r() * (T - w)), Math.floor(r() * T), w, 3, PAL.water[0], .5);
+    }
+    for (let i = 0; i < 3; i++) {
+      const w = 6 + Math.floor(r() * 10);
+      px(g, Math.floor(r() * (T - w)), Math.floor(r() * T), w, 2, PAL.water[2], .8);
+    }
+    px(g, 4, 6, 8, 1, PAL.water[3], .9); px(g, 18, 21, 7, 1, PAL.water[3], .8);
+    g.generateTexture(`water${v}`, T, T); g.destroy();
+  }
+  // shoreline: wet sand + foam, drawn over the grass side of a water edge
+  ['n','s','w','e'].forEach((side, i) => {
+    const r = rng(6100 + i * 23);
+    g = s.add.graphics();
+    for (let t = 0; t < T; t++) {
+      const d = 4 + Math.floor(r() * 4);
+      const band = (a, b, w, h) => { px(g, a, b, w, h, 0xcbb389); };
+      if (side === 'n') { band(t, 0, 1, d); px(g, t, d, 1, 1, PAL.water[3], .7); }
+      if (side === 's') { band(t, T - d, 1, d); px(g, t, T - d - 1, 1, 1, PAL.water[3], .7); }
+      if (side === 'w') { band(0, t, d, 1); px(g, d, t, 1, 1, PAL.water[3], .7); }
+      if (side === 'e') { band(T - d, t, d, 1); px(g, T - d - 1, t, 1, 1, PAL.water[3], .7); }
+    }
+    g.generateTexture(`shore-${side}`, T, T); g.destroy();
+  });
+
+  // Land wedges for a water tile with two adjacent land sides. Tile steps read
+  // as a staircase at 32px however carefully the outline is drawn; rounding the
+  // inside of each corner is what turns the steps into a bank.
+  [['nw', 0, 0], ['ne', T, 0], ['sw', 0, T], ['se', T, T]].forEach(([name, ox, oy]) => {
+    g = s.add.graphics();
+    const R = 15;
+    for (let y = 0; y < T; y++) for (let x = 0; x < T; x++) {
+      const d = Math.hypot(x + .5 - ox, y + .5 - oy);
+      if (d < R - 3)      px(g, x, y, 1, 1, 0xcbb389);              // dry sand
+      else if (d < R)     px(g, x, y, 1, 1, 0xb9a078);              // wet sand
+      else if (d < R + 1) px(g, x, y, 1, 1, PAL.water[3], .65);     // foam
+    }
+    g.generateTexture(`wcorn-${name}`, T, T); g.destroy();
+  });
+
+  // Lily pads and reeds. Open water with nothing on it reads as a hole in the
+  // map; two or three floating things give it a surface.
+  for (let v = 0; v < 2; v++) {
+    const r = rng(9400 + v * 13);
+    g = s.add.graphics();
+    for (let i = 0; i < 3; i++) {
+      const lx = 4 + Math.floor(r() * 16), ly = 4 + Math.floor(r() * 14), rad = 4 + Math.floor(r() * 3);
+      g.fillStyle(0x1f5c2c, .35); g.fillEllipse(lx, ly + 2, rad * 2.2, rad * 1.5);
+      g.fillStyle(0x3f9b50, 1);   g.fillEllipse(lx, ly, rad * 2, rad * 1.4);
+      g.fillStyle(0x5fbd6e, 1);   g.fillEllipse(lx - 1, ly - 1, rad, rad * .7);
+      px(g, lx + rad - 2, ly - 1, 2, 2, 0x1f5c2c);        // the notch
+    }
+    if (v === 0) { px(g, 20, 6, 2, 2, 0xf6f1e4); px(g, 21, 5, 1, 1, 0xf2d06a); }  // a flower
+    g.generateTexture(`lily${v}`, 28, 24); g.destroy();
+  }
+
+  g = s.add.graphics();                                   // reeds
+  [[3, 14], [7, 10], [11, 15], [15, 9], [19, 13]].forEach(([rx, ry], i) => {
+    px(g, rx, ry, 1, 22 - ry, 0x4e7a33);
+    px(g, rx + 1, ry + 2, 1, 20 - ry, 0x6b9a48);
+    if (i % 2) px(g, rx - 1, ry - 3, 3, 4, 0x7a5230);     // seed head
+  });
+  g.generateTexture('reeds', 22, 24); g.destroy();
+
+  /* --- a soft shadow, reused under everything that stands up --- */
+  g = s.add.graphics();
+  g.fillStyle(0x000000, .22); g.fillEllipse(32, 8, 60, 14);
+  g.fillStyle(0x000000, .14); g.fillEllipse(32, 8, 64, 16);
+  g.generateTexture('shadow', 64, 16); g.destroy();
+
+  /* --- trees: three shapes, layered canopy, shaded trunk --- */
+  for (let v = 0; v < 3; v++) {
+    const r = rng(2200 + v * 91);
+    g = s.add.graphics();
+    const TW = 62, TH = 86, cx = TW / 2;
+    px(g, cx - 5, 56, 10, 30, PAL.wood[0]);             // trunk, dark side
+    px(g, cx - 5, 56, 6, 30, PAL.wood[1]);              // lit side
+    px(g, cx - 3, 62, 1, 18, PAL.wood[2], .7);          // bark line
+    px(g, cx - 9, 80, 18, 6, PAL.wood[0]);              // root flare
+    // Seven overlapping blobs instead of four, then lit tops, then an
+    // underside shade. A canopy needs layers or it reads as a lollipop.
+    const blobs = [[cx, 38, 24, 16], [cx - 14, 30, 17, 14], [cx + 14, 31, 16, 13],
+                   [cx - 7, 22, 17, 14], [cx + 8, 21, 16, 13], [cx, 14, 15, 11],
+                   [cx - 18, 40, 12, 10]];
+    blobs.forEach(([bx, by, bw, bh]) => { g.fillStyle(PAL.leaf[1], 1); g.fillEllipse(bx, by, bw * 2, bh * 2); });
+    blobs.forEach(([bx, by, bw, bh], i) => {
+      if (i % 3 === 2) return;
+      g.fillStyle(PAL.leaf[2], 1); g.fillEllipse(bx - 3, by - 5, bw * 1.5, bh * 1.25);
+    });
+    [[cx - 8, 13], [cx + 6, 17], [cx - 16, 32]].forEach(([hx, hy]) => {
+      g.fillStyle(PAL.leaf[3], .85); g.fillEllipse(hx, hy, 13, 9);
+    });
+    g.fillStyle(PAL.leaf[0], .45); g.fillEllipse(cx + 8, 46, 30, 15);   // underside
+    g.fillStyle(PAL.leaf[0], .35); g.fillEllipse(cx - 14, 46, 22, 12);
+    speckle(g, r, TW, 56, PAL.leaf[3], 12);
+    speckle(g, r, TW, 56, PAL.leaf[0], 10);
+    g.generateTexture(`tree${v}`, TW, TH); g.destroy();
+  }
+
+  /* --- hero, 2-frame walk, three facings --- */
+  const hero = (name, facing, frame) => {
+    const gg = s.add.graphics();
+    const skin = 0xf2cfa6, shirt = facing === 'up' ? 0x3d5a99 : 0x4b6cb7, hair = 0x3a2a1d;
+    px(gg, 4, 25, 16, 3, 0x000000, .18);                 // contact shadow
+    if (frame === 0) { px(gg, 7, 20, 4, 6, 0x2c3550); px(gg, 13, 20, 4, 6, 0x2c3550); }
+    else { px(gg, 5, 20, 4, 6, 0x2c3550); px(gg, 15, 20, 4, 6, 0x2c3550); }
+    px(gg, 6, 11, 12, 10, shirt);
+    px(gg, 6, 11, 3, 10, 0x000000, .12);                 // body shading
+    if (facing !== 'up') px(gg, 8, 4, 8, 8, skin); else px(gg, 8, 4, 8, 8, hair);
+    px(gg, 7, 2, 10, 4, hair);
+    px(gg, 7, 2, 10, 1, 0x4a3725);
+    if (facing === 'down') { px(gg, 9, 8, 2, 2, 0x22303f); px(gg, 13, 8, 2, 2, 0x22303f); }
+    if (facing === 'side') { px(gg, 12, 8, 2, 2, 0x22303f); }
+    gg.generateTexture(name, 24, 28); gg.destroy();
+  };
+  ['down','up','side'].forEach(f => { hero(`hero-${f}-0`, f, 0); hero(`hero-${f}-1`, f, 1); });
+
+  /* --- buildings: shingled roof, framed windows, stone footing --- */
+  const ROOFS = [
+    [0x8f3b38, 0xb5504c, 0xcf6a64], [0x2f5b8a, 0x4272ab, 0x5e91c8],
+    [0x5f7a34, 0x7d9c46, 0x9bbb5e], [0x54406f, 0x6f568f, 0x8d74ad],
+    [0x9a5148, 0xbd6c60, 0xd68a7c], [0x2d7f8c, 0x3f9dab, 0x5bbccb],
+  ];
+  ROOFS.forEach(([dark, mid, light], i) => {
+    const gg = s.add.graphics();
+    const HW = 128, HH = 116;
+    const wr = rng(8800 + i * 13);
+    px(gg, 6, 36, HW - 12, HH - 40, 0xe4d5b4);          // plaster
+    px(gg, 6, 36, 10, HH - 40, 0xcfbd96);               // left wall in shade
+    px(gg, HW - 16, 36, 10, HH - 40, 0xf4ebd4);         // right wall lit
+    for (let n = 0; n < 60; n++) {                       // plaster grain
+      const w2 = 2 + Math.floor(wr() * 5);
+      px(gg, 8 + Math.floor(wr() * (HW - 18)), 40 + Math.floor(wr() * (HH - 50)),
+         w2, 1, wr() < .5 ? 0xd3c2a0 : 0xf0e5ca, .5);
+    }
+    [10, 62, 108].forEach(bx => px(gg, bx, 40, 4, HH - 48, 0x9c7f55, .5));  // corner posts
+    px(gg, 6, 40, HW - 12, 3, 0x9c7f55, .45);            // header beam
+    px(gg, 4, HH - 10, HW - 8, 10, PAL.stone[1]);        // stone footing
+    for (let sx = 4; sx < HW - 8; sx += 11) px(gg, sx, HH - 10, 9, 4, PAL.stone[2]);
+    for (let sx = 9; sx < HW - 8; sx += 11) px(gg, sx, HH - 6, 9, 5, PAL.stone[0]);
+
+    // Pitched roof in shingle courses. Each course is drawn dark, then a row
+    // of lighter tabs with a gap between them, then a hard shadow line under
+    // it - that last line is what makes a course read as overlapping the one
+    // below instead of as a stripe.
+    for (let r = 0; r < 13; r++) {
+      const half = 10 + r * 4.55, y = 4 + r * 2.6, x0 = 64 - half, w = half * 2;
+      px(gg, x0, y, w, 4, dark);
+      for (let sx = x0 + (r % 2 ? 0 : 5); sx < x0 + w - 4; sx += 10)
+        px(gg, sx, y, 6, 3, r < 4 ? light : mid);
+      px(gg, x0, y + 3, w, 1, 0x000000, .20);
+      px(gg, x0, y, 2, 4, 0x000000, .16);                // left rake in shade
+      px(gg, x0 + w - 2, y, 2, 4, light, .35);           // right rake catches light
+    }
+    px(gg, 0, 33, HW, 9, mid);                           // eaves board
+    px(gg, 0, 33, HW, 2, light);
+    px(gg, 0, 40, HW, 2, dark);
+    px(gg, 0, 42, HW, 4, 0x000000, .26);                 // shadow the roof throws
+    px(gg, 0, 46, HW, 3, 0x000000, .12);
+    px(gg, 58, 2, 12, 18, 0x7d5a3c);                     // chimney
+    px(gg, 58, 2, 12, 3, 0x9a7250);
+    px(gg, 58, 2, 3, 18, 0x60442c);
+    for (let by = 6; by < 20; by += 4) px(gg, 58, by, 12, 1, 0x000000, .18);
+    px(gg, 50, 68, 28, 48, PAL.wood[1]);                 // door
+    px(gg, 50, 68, 28, 3, PAL.wood[0]);
+    px(gg, 53, 74, 22, 16, PAL.wood[0], .35);            // upper panel
+    px(gg, 53, 94, 22, 16, PAL.wood[0], .35);            // lower panel
+    px(gg, 72, 92, 4, 4, 0xffd76e);                      // handle
+    px(gg, 46, HH - 4, 36, 4, PAL.stone[2]);             // doorstep
+    [16, 84].forEach(wx => {                             // windows
+      px(gg, wx - 3, 48, 30, 28, PAL.wood[1]);           // frame
+      px(gg, wx, 51, 24, 22, 0x9fd3e8);
+      px(gg, wx, 51, 24, 8, 0xc2e6f4);                   // sky reflection
+      px(gg, wx + 11, 51, 2, 22, PAL.wood[0]);
+      px(gg, wx, 60, 24, 2, PAL.wood[0]);
+      px(gg, wx - 5, 74, 34, 4, 0xcbb894);               // sill
+    });
+    gg.generateTexture(`house-${i}`, HW, HH); gg.destroy();
+  });
+
+  /* --- decoration --- */
+  let d = s.add.graphics();                              // bush
+  d.fillStyle(0x000000, .18); d.fillEllipse(15, 20, 26, 6);
+  d.fillStyle(PAL.leaf[1], 1); d.fillEllipse(15, 13, 26, 16);
+  d.fillStyle(PAL.leaf[2], 1); d.fillEllipse(12, 9, 18, 12);
+  d.fillStyle(PAL.leaf[3], .9); d.fillEllipse(10, 7, 8, 5);
+  [[7,12],[19,10],[13,16]].forEach(([a,b]) => px(d, a, b, 2, 2, 0xe0556a));  // berries
+  d.generateTexture('bush', 30, 24); d.destroy();
+
+  d = s.add.graphics();                                  // rock
+  d.fillStyle(0x000000, .18); d.fillEllipse(12, 17, 22, 5);
+  px(d, 2, 7, 20, 9, PAL.stone[0]);
+  px(d, 4, 4, 15, 8, PAL.stone[1]);
+  px(d, 6, 5, 8, 4, PAL.stone[2]);
+  px(d, 8, 6, 3, 2, PAL.stone[3]);
+  d.generateTexture('rock', 24, 20); d.destroy();
+
+  d = s.add.graphics();                                  // fence
+  [2, 26].forEach(fx => { px(d, fx, 3, 5, 20, PAL.wood[1]); px(d, fx, 3, 2, 20, PAL.wood[2]); px(d, fx, 3, 5, 2, PAL.wood[3]); });
+  px(d, 0, 7, T, 4, PAL.wood[2]); px(d, 0, 7, T, 1, PAL.wood[3]);
+  px(d, 0, 15, T, 4, PAL.wood[2]); px(d, 0, 15, T, 1, PAL.wood[3]);
+  px(d, 0, 22, T, 2, 0x000000, .15);
+  d.generateTexture('fence', T, 26); d.destroy();
+
+  d = s.add.graphics();                                  // lamp post
+  px(d, 2, 44, 12, 3, 0x000000, .18);
+  px(d, 6, 14, 4, 31, 0x3c414c);
+  px(d, 6, 14, 2, 31, 0x555b68);
+  px(d, 3, 5, 10, 10, 0xffe9a8);
+  px(d, 5, 7, 6, 5, 0xfff6d6);
+  px(d, 2, 3, 12, 3, 0x3c414c); px(d, 4, 0, 8, 3, 0x3c414c);
+  d.generateTexture('lamp', 16, 48); d.destroy();
+
+  d = s.add.graphics();                                  // flower bed
+  px(d, 0, 8, 36, 10, 0x6b4a2e);
+  px(d, 0, 8, 36, 2, 0x835b39);
+  const fr = rng(555);
+  for (let i = 0; i < 9; i++) {
+    const fx2 = 2 + Math.floor(fr() * 32), fy = 5 + Math.floor(fr() * 8);
+    px(d, fx2, fy + 3, 1, 4, 0x3f7d3a);
+    px(d, fx2 - 1, fy, 3, 3, [0xe8798f, 0xf2e06a, 0xffffff, 0xb48be0, 0xf09a4a][i % 5]);
+  }
+  d.generateTexture('bed', 36, 20); d.destroy();
+
+  d = s.add.graphics();                                  // barrel
+  px(d, 1, 24, 18, 3, 0x000000, .18);
+  px(d, 2, 4, 16, 21, PAL.wood[1]);
+  px(d, 2, 4, 5, 21, PAL.wood[2]);
+  px(d, 14, 4, 4, 21, PAL.wood[0]);
+  px(d, 1, 8, 18, 3, 0x6b6f78); px(d, 1, 18, 18, 3, 0x6b6f78);
+  px(d, 3, 2, 14, 4, PAL.wood[3]);
+  d.generateTexture('barrel', 20, 28); d.destroy();
+
+  d = s.add.graphics();                                  // crate
+  px(d, 1, 21, 20, 3, 0x000000, .18);
+  px(d, 1, 3, 20, 19, PAL.wood[2]);
+  px(d, 1, 3, 20, 3, PAL.wood[3]);
+  px(d, 1, 3, 3, 19, PAL.wood[3]);
+  px(d, 1, 11, 20, 2, PAL.wood[0]); px(d, 10, 3, 2, 19, PAL.wood[0]);
+  d.generateTexture('crate', 22, 26); d.destroy();
+
+  d = s.add.graphics();                                  // market stall
+  px(d, 2, 52, 60, 4, 0x000000, .18);
+  px(d, 6, 26, 5, 28, PAL.wood[1]); px(d, 53, 26, 5, 28, PAL.wood[1]);
+  px(d, 4, 30, 56, 10, PAL.wood[2]);                     // counter
+  px(d, 4, 30, 56, 2, PAL.wood[3]);
+  for (let i = 0; i < 8; i++) px(d, 2 + i * 8, 6, 8, 18, i % 2 ? 0xe8e2d2 : 0xd8574f);  // awning
+  px(d, 0, 22, 64, 4, 0xb5504c);
+  px(d, 0, 4, 64, 4, 0x8f3b38);
+  [[12,42],[24,42],[36,42],[48,42]].forEach(([a,b],i) =>
+    px(d, a, b, 8, 6, [0xe0556a, 0xf2a03c, 0x7fbf4a, 0xd9c24a][i]));   // produce
+  d.generateTexture('stall', 64, 58); d.destroy();
+
+  d = s.add.graphics();                                  // town notice board
+  px(d, 4, 74, 96, 4, 0x000000, .18);
+  px(d, 6, 46, 8, 28, PAL.wood[1]); px(d, 88, 46, 8, 28, PAL.wood[1]);
+  px(d, 6, 46, 3, 28, PAL.wood[2]); px(d, 88, 46, 3, 28, PAL.wood[2]);
+  px(d, 0, 4, 102, 46, 0xe0d0aa);                        // board face
+  px(d, 3, 7, 96, 40, 0xd3c098, .6);                     // weathered inset
+  px(d, 0, 4, 102, 5, PAL.wood[1]); px(d, 0, 45, 102, 5, PAL.wood[1]);
+  px(d, 0, 4, 5, 46, PAL.wood[1]); px(d, 97, 4, 5, 46, PAL.wood[1]);
+  px(d, 0, 4, 102, 2, PAL.wood[2]);
+  px(d, 4, 0, 94, 6, 0x8f3b38);                          // little shingle cap
+  px(d, 4, 0, 94, 2, 0xb5504c);
+  d.generateTexture('board', 102, 78); d.destroy();
+
+  d = s.add.graphics();                                  // signpost
+  px(d, 3, 24, 12, 3, 0x000000, .18);
+  px(d, 7, 10, 4, 15, PAL.wood[1]); px(d, 7, 10, 2, 15, PAL.wood[2]);
+  px(d, 0, 2, 18, 10, 0xe0d0aa);
+  px(d, 0, 2, 18, 2, PAL.wood[2]); px(d, 0, 10, 18, 2, PAL.wood[0]);
+  d.generateTexture('sign', 18, 28); d.destroy();
+
+  d = s.add.graphics();                                  // well
+  px(d, 2, 40, 40, 4, 0x000000, .18);
+  px(d, 4, 22, 36, 20, PAL.stone[0]);
+  for (let sy = 22; sy < 42; sy += 6)
+    for (let sx = 4; sx < 40; sx += 9) px(d, sx + (sy % 12 ? 0 : 4), sy, 8, 5, PAL.stone[1]);
+  px(d, 8, 24, 28, 8, 0x1b2430);                         // the shaft
+  px(d, 10, 2, 4, 22, PAL.wood[1]); px(d, 30, 2, 4, 22, PAL.wood[1]);
+  px(d, 4, 0, 36, 6, 0x8f3b38); px(d, 4, 0, 36, 2, 0xb5504c);
+  d.generateTexture('well', 44, 46); d.destroy();
+}
+
+/* ---------------- scene ---------------- */
+
+function preload() {}
+
+function create() {
+  scene = this;
+  makeTextures(this);
+  npcs = [];
+
+  const ground = this.add.renderTexture(0, 0, W, H).setOrigin(0).setDepth(0);
+  const gr = rng(31337);
+  const pick = (base, n) => base + Math.floor(gr() * n);
+
+  const ROAD_Y = 13;
+  // Work out what every tile IS before drawing any of it. The edge fringes
+  // below need to know a tile's neighbours, which the old draw-as-you-go
+  // loop could not answer.
+  const PAVED = [], WET = [];
+  for (let y = 0; y < MAP_H; y++) { PAVED[y] = []; WET[y] = []; for (let x = 0; x < MAP_W; x++) { PAVED[y][x] = false; WET[y][x] = false; } }
+  for (let x = 0; x < MAP_W; x++) { PAVED[ROAD_Y][x] = true; PAVED[ROAD_Y + 1][x] = true; }
+  for (let y = ROAD_Y; y < MAP_H - 2; y++) { PAVED[y][18] = true; PAVED[y][19] = true; }
+  for (let y = 11; y < 18; y++) for (let x = 16; x < 22; x++) PAVED[y][x] = true;
+  for (const [ys, [x0, x1]] of Object.entries(POND)) {
+    const y = Number(ys);
+    for (let x = x0; x <= x1; x++) { WET[y][x] = true; PAVED[y][x] = false; }
+  }
+
+  // A garden path from each occupied door out to the lane. Without one the
+  // houses sit on grass with no way in, which is what made them read as
+  // scenery rather than as homes people come and go from.
+  const occupied = Math.min((DATA.agents || []).length, PLOTS.length);
+  for (let i = 0; i < occupied; i++) {
+    const pl = PLOTS[i];
+    const dx = Math.round(pl.x + 2);                 // door tile, house is 4 wide
+    const dy = Math.round(pl.y + 3.7);               // ground just below the door
+    if (dy <= ROAD_Y) for (let y = dy; y <= ROAD_Y; y++) { if (!WET[y][dx]) PAVED[y][dx] = true; }
+    else              for (let y = ROAD_Y + 1; y <= dy; y++) { if (!WET[y][dx]) PAVED[y][dx] = true; }
+  }
+
+  const at = (grid, x, y) => (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) ? false : grid[y][x];
+
+  for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) {
+    const plaza = x >= 16 && x <= 21 && y >= 11 && y <= 17;
+    if (WET[y][x])        ground.draw(`water${pick(0, 2)}`, x * T, y * T);
+    else if (plaza)       ground.draw(`cobble${pick(0, 3)}`, x * T, y * T);
+    else if (PAVED[y][x]) ground.draw(`path${pick(0, 4)}`, x * T, y * T);
+    else                  ground.draw(`grass${pick(0, 4)}`, x * T, y * T);
+  }
+
+  // Fringes last, over the top. A path tile whose neighbour is grass gets
+  // grass hanging over that side; a grass tile next to water gets a shoreline.
+  for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) {
+    if (PAVED[y][x]) {
+      if (!at(PAVED, x, y - 1) && !at(WET, x, y - 1)) ground.draw('edge-n', x * T, y * T);
+      if (!at(PAVED, x, y + 1) && !at(WET, x, y + 1)) ground.draw('edge-s', x * T, y * T);
+      if (!at(PAVED, x - 1, y) && !at(WET, x - 1, y)) ground.draw('edge-w', x * T, y * T);
+      if (!at(PAVED, x + 1, y) && !at(WET, x + 1, y)) ground.draw('edge-e', x * T, y * T);
+    } else if (!WET[y][x]) {
+      if (at(WET, x, y + 1)) ground.draw('shore-s', x * T, y * T);
+      if (at(WET, x, y - 1)) ground.draw('shore-n', x * T, y * T);
+      if (at(WET, x + 1, y)) ground.draw('shore-e', x * T, y * T);
+      if (at(WET, x - 1, y)) ground.draw('shore-w', x * T, y * T);
+    }
+    if (WET[y][x]) {
+      const N = !at(WET, x, y - 1), S = !at(WET, x, y + 1),
+            Wd = !at(WET, x - 1, y), E = !at(WET, x + 1, y);
+      if (N && Wd) ground.draw('wcorn-nw', x * T, y * T);
+      if (N && E)  ground.draw('wcorn-ne', x * T, y * T);
+      if (S && Wd) ground.draw('wcorn-sw', x * T, y * T);
+      if (S && E)  ground.draw('wcorn-se', x * T, y * T);
+    }
+  }
+
+  // flowers: decoration only, deterministic, never on paving
+  const fl = this.add.graphics();
+  px(fl, 2, 3, 1, 3, 0x3f7d3a); px(fl, 1, 1, 3, 3, 0xf2e06a);
+  px(fl, 7, 5, 1, 3, 0x3f7d3a); px(fl, 6, 3, 3, 3, 0xffffff);
+  px(fl, 11, 4, 1, 3, 0x3f7d3a); px(fl, 10, 2, 3, 3, 0xe8798f);
+  fl.generateTexture('flowers', 14, 10); fl.destroy();
+  const rnd = rng(20260914);
+  for (let i = 0; i < 130; i++) {
+    const tx = Math.floor(rnd() * MAP_W), ty = Math.floor(rnd() * MAP_H);
+    const paved = (ty >= ROAD_Y && ty <= ROAD_Y + 1) || (tx >= 18 && tx <= 19 && ty >= ROAD_Y)
+                || (tx >= 16 && tx <= 21 && ty >= 11 && ty <= 17);
+    if (!paved) ground.draw('flowers', tx * T + 8, ty * T + 10);
+  }
+
+  this.physics.world.setBounds(0, 0, W, H);
+  const solids = this.physics.add.staticGroup();
+  const blocker = (x, y, w, h) => solids.add(this.add.zone(x, y, w, h).setOrigin(.5));
+
+  // One blocker per row of water, so you cannot walk across the narrow ends
+  // of a pond that is no longer a rectangle.
+  for (const [ys, [x0, x1]] of Object.entries(POND)) {
+    const y = Number(ys), w = x1 - x0 + 1;
+    blocker((x0 + w / 2) * T, (y + .5) * T, w * T, T);
+  }
+
+  // Lily pads sit on the water, so no shadow and no collision - you never walk
+  // there anyway, the pond rows are blockers.
+  [[3.4, 18.6], [6.2, 20.4], [7.6, 17.8], [2.6, 20.8], [5.0, 22.3]]
+    .forEach(([tx, ty], i) => this.add.image(tx * T, ty * T, `lily${i % 2}`)
+      .setOrigin(.5, 1).setDepth(ty * T - 6));
+  [[1.4, 18.2], [9.4, 19.2], [2.2, 22.6], [8.6, 21.6], [0.8, 20.4]]
+    .forEach(([tx, ty]) => this.add.image(tx * T, ty * T, 'reeds').setOrigin(.5, 1).setDepth(ty * T + 4));
+
+  // --- scenery ---
+  // `shade` puts an ellipse on the ground under a prop. Without it everything
+  // looks pasted on top of the grass rather than standing in it.
+  const place = (key, tx, ty, depthPad, solid, shade) => {
+    if (shade) {
+      const sh = this.add.image(tx * T, ty * T - 2, 'shadow').setOrigin(.5, .5);
+      sh.setScale(shade, shade * .8).setDepth(ty * T - 1).setAlpha(.55);
+    }
+    const img = this.add.image(tx * T, ty * T, key).setOrigin(.5, 1);
+    img.setDepth(ty * T + (depthPad || 0));
+    if (solid) blocker(img.x, img.y - 8, img.width * 0.7, 14);
+    return img;
+  };
+
+  // Nudged off the house plots - four of these used to grow through a wall.
+  [[1,3],[4,1],[9,2],[20,2],[25,1],[34,1],[0,9],[36,4],
+   [2,16],[8,17],[17,21],[15,18],[22,20],[33,22],[31,15],[35,20],[36,16],[18,2],
+   [6,11],[21,9],[33,19],[10,15]]
+    .forEach(([tx,ty], i) => place(`tree${i % 3}`, tx, ty, 40, true, .78));
+
+  [[6,11],[12,11],[23,11],[29,11],[33,12],[3,12],[10,17],[14,20],[22,20],[28,18],[32,21],[16,20]]
+    .forEach(([tx,ty]) => place('bush', tx, ty, 8, false, .42));
+
+  [[7,16],[21,19],[30,16],[13,12],[26,12],[34,18]]
+    .forEach(([tx,ty]) => place('rock', tx, ty, 6, true, .34));
+
+  // fence runs along the bottom edge of the north gardens
+  [[2,11],[3,11],[4,11],[8,11],[9,11],[10,11],[25,11],[26,11],[27,11],[31,11],[32,11]]
+    .forEach(([tx,ty]) => place('fence', tx + .5, ty + .4, 6, false));
+
+  // street lamps down the high street
+  [[6,13],[13,13],[24,13],[31,13],[16.6,11.6],[21.4,11.6]]
+    .forEach(([tx,ty]) => place('lamp', tx, ty, 30, false));
+
+  [[5.5,12.4],[11.5,12.4],[28.5,12.4],[34.5,12.4]]
+    .forEach(([tx,ty]) => place('bed', tx, ty, 4, false));
+
+  // The plaza had nothing in it. A well at the crossroads, stalls beside the
+  // road and stacked goods against the walls give the eye somewhere to land.
+  place('well', 19, 16.4, 20, true, .62);
+  [[16.7, 12.6], [21.3, 12.6]].forEach(([tx, ty]) => place('stall', tx, ty, 18, true, .7));
+  [[15.4, 15.2], [22.6, 15.6], [8.6, 12.4], [26.4, 12.4]]
+    .forEach(([tx,ty], i) => place(i % 2 ? 'barrel' : 'crate', tx, ty, 6, true, .32));
+  [[13.4, 16.4], [24.6, 17.4], [6.4, 16.2], [30.4, 15.4], [11.4, 12.3], [31.4, 12.3]]
+    .forEach(([tx,ty]) => place('sign', tx, ty, 6, false, .22));
+
+  // --- town square notice board ---
+  const board = this.add.image(19 * T, 12.6 * T, 'board').setOrigin(.5, 1).setDepth(12.6 * T + 40);
+  blocker(board.x, board.y - 10, 90, 16);
+  boardText = this.add.text(board.x, board.y - 60, '—', {
+    fontFamily: 'ui-monospace,Menlo,monospace', fontSize: '15px', color: '#1f2e22', fontStyle: 'bold',
+  }).setOrigin(.5).setDepth(board.depth + 2);
+  boardSub = this.add.text(board.x, board.y - 40, 'TOWN LEDGER', {
+    fontFamily: 'ui-monospace,Menlo,monospace', fontSize: '9px', color: '#5c6b52',
+  }).setOrigin(.5).setDepth(board.depth + 2);
+
+  // ---- one house per agent, auto-discovered ----
+  doors = [];
+  const agents = DATA.agents || [];
+  const HW = 128, HH = 116;
+  const statusColor = { active: 0x34d399, idle: 0x22d3ee, stale: 0xfbbf24, waiting: 0x8791a8 };
+  const ROOFS = [0xc0504d, 0x4f81bd, 0x9bbb59, 0x8064a2, 0xd99694, 0x4bacc6];
+  // Tint multiplies, so an agent wearing its roof colour comes out nearly black.
+  // These are the same hues lifted towards white so the little folk stay readable.
+  const SHIRTS = [0xff9f9c, 0xa8c8f0, 0xd4ea9f, 0xcbb6e4, 0xf7c9c6, 0xa6e0ec];
+
+  agents.forEach((a, i) => {
+    const plot = PLOTS[i % PLOTS.length];
+    const bx = plot.x * T;
+    const by = plot.y * T;
+    const house = this.add.image(bx, by, `house-${i % 6}`).setOrigin(0, 0).setDepth(by + HH);
+    if (plot.flip) house.setFlipX(true);
+    blocker(bx + HW/2, by + HH - 26, HW - 10, 50);
+
+    // A garden gives the house a plot rather than leaving it standing loose on
+    // open grass. The fence sits below the name plate, not through it, and
+    // leaves the middle open as a gate so the path to the door reads.
+    const gy = by + HH + 58;
+    [-2, -1, 1, 2].forEach(f =>
+      this.add.image(bx + HW/2 + f * T, gy, 'fence').setOrigin(.5, 1).setDepth(gy - 2));
+    this.add.image(bx + (plot.flip ? HW - 18 : 18), by + HH + 6, 'bed')
+      .setOrigin(.5, 1).setDepth(by + HH + 8);
+    this.add.image(bx + (plot.flip ? -6 : HW + 6), by + HH + 14, 'bush')
+      .setOrigin(.5, 1).setDepth(by + HH + 16);
+
+    const plateW = Math.max(70, a.name.length * 10 + 22);
+    this.add.rectangle(bx + HW/2, by + HH + 18, 6, 14, 0x7a5230).setDepth(by + HH + 24);
+    this.add.rectangle(bx + HW/2, by + HH + 8, plateW, 20, 0xd9c9a3)
+      .setStrokeStyle(2, 0x8a7a5c).setDepth(by + HH + 25);
+    this.add.text(bx + HW/2, by + HH + 8, a.name.toUpperCase(), {
+      fontFamily: 'ui-monospace,Menlo,monospace', fontSize: '12px', color: '#2b3a2e',
+    }).setOrigin(.5).setDepth(by + HH + 26);
+
+    const lamp = this.add.circle(bx + HW/2, by + 22, 6, statusColor[a.status] || 0x8791a8)
+      .setStrokeStyle(1, 0x00000055).setDepth(by + HH + 27);
+    this.tweens.add({ targets: lamp, alpha: .3, duration: 1000, yoyo: true, repeat: -1 });
+
+    const doorX = bx + HW/2, doorY = by + HH;
+    doors.push({ name: a.name, x: doorX, y: doorY });
+
+    // ---- the agent, pottering about outside its own house ----
+    const npc = this.physics.add.sprite(doorX + 34, doorY + 26, 'hero-down-0');
+    npc.setTint(SHIRTS[i % 6]);
+    npc.body.setSize(14, 12).setOffset(5, 16);
+    npc.setDepth(npc.y);
+    this.physics.add.collider(npc, solids);
+    npcs.push({
+      s: npc, homeX: doorX, homeY: doorY + 30,
+      tx: doorX, ty: doorY + 30, wait: 400 + Math.floor(rnd() * 1400), moving: false,
+    });
+  });
+
+  if (!agents.length) {
+    this.add.text(W/2, 7*T, 'No agents yet —\nadd one and a house appears here.', {
+      fontFamily: 'ui-sans-serif,system-ui', fontSize: '17px', color: '#ffffff',
+      align: 'center', backgroundColor: '#00000066', padding: { x: 16, y: 12 },
+    }).setOrigin(.5).setDepth(9000);
+  }
+
+  // ---- player ----
+  ['down','up','side'].forEach(f => {
+    this.anims.create({ key: `walk-${f}`, frames: [{key:`hero-${f}-0`},{key:`hero-${f}-1`}], frameRate: 7, repeat: -1 });
+  });
+  player = this.physics.add.sprite(9*T, ROAD_Y*T + 22, 'hero-down-0');
+  player.setCollideWorldBounds(true);
+  player.body.setSize(14, 12).setOffset(5, 16);
+  this.physics.add.collider(player, solids);
+
+  this.cameras.main.setBounds(0, 0, W, H);
+  this.cameras.main.startFollow(player, true, .12, .12);
+  this.cameras.main.setZoom(zoomForViewport());
+
+  this.input.keyboard.on('keydown', e => {
+    keys[e.key.toLowerCase()] = true;
+    if (e.key.toLowerCase() === 'e' && nearDoor) openPanel(nearDoor.name);
+    // Escape peels one layer at a time: the enlarged image first,
+    // then the panel, so it never dumps you back outside in one press.
+    if (e.key === 'Escape') {
+      if ($('lb').classList.contains('on')) closeLb();
+      else if ($('doc').classList.contains('on')) closeDoc();
+      else closePanel();
+    }
+  });
+  this.input.keyboard.on('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+  this.input.on('pointerdown', pt => {
+    if (openAgent) return;
+    const wp = this.cameras.main.getWorldPoint(pt.x, pt.y);
+    const hit = doors.find(dr => Math.abs(wp.x - dr.x) < 68 && wp.y > dr.y - 118 && wp.y < dr.y + 26);
+    if (hit) openPanel(hit.name);
+  });
+
+  window.__npcs = npcs;          // exposed for debugging / verification
+  window.__openPanel = openPanel; // ditto - lets a panel be opened without walking to it
+  $('boot').style.display = 'none';
+  if (isTouch()) $('stick').style.display = 'block';
+}
+
+function zoomForViewport() {
+  // Show roughly 800px of world width: enough for three or four houses at once.
+  const z = Math.min(window.innerWidth / 800, window.innerHeight / 560);
+  return Math.max(1.0, Math.min(1.9, z));
+}
+
+function update() {
+  if (!player) return;
+  const SP = 170;
+  let vx = 0, vy = 0;
+
+  if (!openAgent) {
+    if (keys['arrowleft'] || keys['a']) vx -= 1;
+    if (keys['arrowright'] || keys['d']) vx += 1;
+    if (keys['arrowup'] || keys['w']) vy -= 1;
+    if (keys['arrowdown'] || keys['s']) vy += 1;
+    if (touch.active) { vx += touch.dx; vy += touch.dy; }
+  }
+
+  const mag = Math.min(1, Math.hypot(vx, vy));
+  const len = Math.hypot(vx, vy) || 1;
+  player.setVelocity((vx/len) * SP * mag, (vy/len) * SP * mag);
+
+  if (mag > .12) {
+    if (Math.abs(vx) > Math.abs(vy)) { player.anims.play('walk-side', true); player.setFlipX(vx < 0); }
+    else if (vy < 0) { player.anims.play('walk-up', true); player.setFlipX(false); }
+    else { player.anims.play('walk-down', true); player.setFlipX(false); }
+  } else {
+    player.anims.stop();
+    const cur = player.anims.currentAnim ? player.anims.currentAnim.key.replace('walk-', 'hero-') : 'hero-down';
+    player.setTexture(cur + '-0');
+  }
+  player.setDepth(player.y);
+
+  // ---- agents pottering about outside their houses ----
+  const now = this.time.now;
+  for (const n of npcs) {
+    const NSP = 40, R = 86;
+    const dx = n.tx - n.s.x, dy = n.ty - n.s.y;
+    const dist = Math.hypot(dx, dy);
+    if (n.moving) {
+      if (dist < 6) {
+        n.moving = false;
+        n.s.setVelocity(0, 0);
+        n.s.anims.stop();
+        n.s.setTexture('hero-down-0');
+        n.wait = now + 900 + Math.random() * 3200;      // stand about for a bit
+      } else {
+        n.s.setVelocity((dx/dist) * NSP, (dy/dist) * NSP);
+        if (Math.abs(dx) > Math.abs(dy)) { n.s.anims.play('walk-side', true); n.s.setFlipX(dx < 0); }
+        else if (dy < 0) { n.s.anims.play('walk-up', true); n.s.setFlipX(false); }
+        else { n.s.anims.play('walk-down', true); n.s.setFlipX(false); }
+      }
+    } else if (now > n.wait) {
+      n.tx = n.homeX + (Math.random() * 2 - 1) * R;
+      n.ty = n.homeY + (Math.random() * 2 - 1) * R * 0.5;
+      n.moving = true;
+    }
+    n.s.setDepth(n.s.y);
+  }
+
+  // ---- town square ledger ----
+  if (boardText) {
+    const k = DATA.kpis || {};
+    if (k.total_value === null || k.total_value === undefined) {
+      boardText.setText('NO LEDGER');
+      boardSub.setText('TOWN LEDGER').setColor('#5c6b52');
+    } else {
+      boardText.setText(money(k.total_value));
+      const sign = k.total_pnl >= 0 ? '+' : '';
+      boardSub.setText(`${sign}${money(k.total_pnl)}  ${pctTxt(k.total_pnl_pct)}`)
+        .setColor(k.total_pnl >= 0 ? '#1d6b45' : '#8c2f3f');
+    }
+  }
+
+  // ---- nearest door ----
+  nearDoor = null;
+  let best = 92;
+  for (const dr of doors) {
+    const dd = Phaser.Math.Distance.Between(player.x, player.y, dr.x, dr.y);
+    if (dd < best) { best = dd; nearDoor = dr; }
+  }
+  const prompt = $('prompt'), act = $('act');
+  if (nearDoor && !openAgent) {
+    prompt.style.display = 'block';
+    prompt.innerHTML = isTouch()
+      ? `<b>${esc(nearDoor.name)}</b> — tap ENTER`
+      : `<b>${esc(nearDoor.name)}</b> — press <b>E</b>`;
+    if (isTouch()) act.style.display = 'block';
+  } else {
+    prompt.style.display = 'none';
+    act.style.display = 'none';
+  }
+}
+
+/* ---------------- the data panel ---------------- */
+
+function openPanel(name) {
+  const a = (DATA.agents || []).find(x => x.name === name);
+  if (!a) return;
+  openAgent = name;
+
+  // Ace renders its own bankroll and open bets inside the ledger below, in a
+  // form built for betting. Showing the generic trader tiles as well just
+  // prints the same numbers twice.
+  const isAce = a.name === 'ace';
+  const isTrader = !isAce && a.has_portfolio && a.value !== null;
+  const stats = isTrader ? [
+    { l: 'Value', v: money(a.value) },
+    { l: 'P&L', v: `<span class="${cls(a.pnl)}">${money(a.pnl)}</span>`, s: pctTxt(a.pnl_pct) },
+    { l: 'Cash', v: money(a.cash) },
+    { l: 'Positions', v: a.positions.length },
+  ] : [
+    { l: 'Status', v: a.status },
+    { l: 'Cycles', v: a.runs ?? 0 },
+    { l: 'Reports', v: a.report_count ?? 0 },
+    { l: 'Last run', v: ago(a.last_run_age_min) },
+  ];
+
+  const rows = (a.positions || []).map(p => `<tr>
+      <td><b>${esc(p.symbol)}</b></td>
+      <td class="num">${p.shares ?? '—'}</td>
+      <td class="num">${money(p.entry)}</td>
+      <td class="num">${p.priced ? money(p.price) : '—'}</td>
+      <td class="num ${cls(p.pnl)}">${p.pnl === null ? '—' : pctTxt(p.pnl_pct)}</td>
+    </tr>`).join('');
+
+  $('card').innerHTML = `
+    <h2>${esc(a.name)}</h2>
+    <div class="sub">${esc(a.status)}${a.mode ? ' · ' + esc(a.mode) : ''} ·
+      last run ${ago(a.last_run_age_min)} · ${a.runs ?? 0} cycles${
+      a.data_age_min !== null ? ' · data ' + ago(a.data_age_min) : ''}</div>
+    ${isAce ? '' : `<div class="grid">${stats.map(s => `<div class="stat">
+        <div class="l">${s.l}</div><div class="v num">${s.v}</div>
+        ${s.s ? `<div class="l ${cls(a.pnl)}">${s.s}</div>` : ''}
+      </div>`).join('')}</div>`}
+    ${isAce ? '' : (rows ? `<table><thead><tr><th>Sym</th><th>Sh</th><th>Entry</th><th>Last</th><th>P&L</th></tr></thead>
+      <tbody>${rows}</tbody></table>`
+      : (isTrader ? `<div class="muted">No open positions.</div>` : ''))}
+    ${a.headline ? `<div class="quote">${esc(a.headline)}</div>` : ''}
+    ${a.latest_report ? `<div class="muted" style="margin-top:10px">📄 <span class="doclink" onclick="openDoc('${esc(a.name)}','${esc(a.latest_report)}')">${esc(a.latest_report)}</span></div>`
+      : `<div class="muted" style="margin-top:10px">📄 <span class="doclink" onclick="openDoc('${esc(a.name)}')">reports…</span></div>`}
+    ${a.name === 'scout' ? `<h2 style="font-size:15px;margin:18px 0 8px">Ideas awaiting you</h2>
+      <div id="scoutIdeas"><div class="muted">loading…</div></div>` : ''}
+    ${a.name === 'emily' ? `<h2 style="font-size:15px;margin:18px 0 8px">The gallery</h2>
+      <div id="emilyBuilds"><div class="muted">loading…</div></div>` : ''}
+    ${a.name === 'ace' ? `<div id="aceLedger"><div class="muted">loading the ledger…</div></div>` : ''}
+    <button id="close">Close</button>`;
+  $('card').className = isAce ? 'wide' : '';
+  $('panel').style.display = 'flex';
+  $('close').onclick = closePanel;
+  if (a.name === 'scout') loadScoutIdeas();
+  if (a.name === 'emily') loadEmilyBuilds();
+  if (a.name === 'ace') loadAceLedger();
+}
+let ideaBusy = false;
+
+async function actOnIdea(id, verb) {
+  if (ideaBusy) return;
+  let reason = '';
+  if (verb === 'reject') {
+    reason = (window.prompt('Why? Scout reads this so it does not propose it again.') || '').trim();
+    if (!reason) return;
+  } else {
+    reason = (window.prompt('Note for the record (optional):', 'approved from the village') || 'approved from the village').trim();
+  }
+  ideaBusy = true;
+  document.querySelectorAll('.acts button').forEach(b => b.disabled = true);
+  try {
+    const r = await fetch(`/api/scout/ideas/${id}/${verb}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+    const j = await r.json();
+    if (!r.ok || j.ok === false) alert((j.error || j.stderr || 'That did not work').slice(0, 300));
+    else if (verb === 'approve') alert('Approved and queued to Emily.\n\n' + (j.stdout || ''));
+  } catch (e) {
+    alert('Could not reach the API: ' + e.message);
+  } finally {
+    ideaBusy = false;
+    loadScoutIdeas();
+  }
+}
+
+async function loadScoutIdeas() {
+  const host = document.getElementById('scoutIdeas');
+  if (!host) return;
+  try {
+    const r = await fetch('/api/scout/ideas', { cache: 'no-store' });
+    const d = await r.json();
+    const pending = (d.ideas || []).filter(i => i.status === 'pending');
+    if (!pending.length) {
+      host.innerHTML = '<div class="muted">No ideas waiting. Scout proposes again tomorrow morning.</div>';
+      return;
+    }
+    host.innerHTML = `<div class="muted" style="margin-bottom:8px">${pending.length} waiting for you</div>` +
+      pending.map(i => `<div class="idea">
+        <div><span class="t">${esc(i.title)}</span><span class="p">${esc(i.product || '')}</span></div>
+        ${i.angle ? `<div class="d">${esc(i.angle)}</div>` : ''}
+        ${i.brief ? `<div class="d">${esc(i.brief)}</div>` : ''}
+        ${i.why_now ? `<div class="w">${esc(i.why_now)}</div>` : ''}
+        <div class="acts">
+          <button class="yes" onclick="actOnIdea(${Number(i.id)},'approve')">\u2713 Approve</button>
+          <button class="no"  onclick="actOnIdea(${Number(i.id)},'reject')">\u2717 Reject</button>
+        </div>
+      </div>`).join('');
+  } catch {
+    host.innerHTML = '<div class="muted">Could not load ideas.</div>';
+  }
+}
+
+/* ---------------- Emily's gallery ---------------- */
+
+let lbFiles = [], lbSlug = '', builds = [];
+
+const buildUrl = (slug, name) =>
+  `/api/emily/builds/${encodeURIComponent(slug)}/file/${encodeURIComponent(name)}`;
+
+function openLb(slug, start) {
+  const b = builds.find(x => x.slug === slug);
+  if (!b || !b.images.length) return;
+  lbFiles = b.images; lbSlug = slug;
+  const i = Math.max(0, lbFiles.findIndex(f => f.name === start));
+  $('lbbar').innerHTML = lbFiles.map((f, n) =>
+    `<button onclick="showLb(${n})">${esc(f.name)}</button>`).join('');
+  $('lbcap').textContent = b.title;
+  showLb(i);
+  $('lb').classList.add('on');
+}
+function showLb(i) {
+  $('lbimg').src = buildUrl(lbSlug, lbFiles[i].name);
+  $('lbimg').alt = lbFiles[i].name;
+  [...$('lbbar').children].forEach((b, n) => b.className = n === i ? 'sel' : '');
+}
+function closeLb() { $('lb').classList.remove('on'); $('lbimg').src = ''; }
+
+const kb = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.round(n / 1024) + ' KB';
+
+// Say plainly whether a build is finished and whether the art is real. A
+// placeholder thumbnail looks like art until you open it.
+function buildPills(b) {
+  const p = [];
+  if (b.status === 'ready_for_review') p.push(['ok', 'ready']);
+  else if (b.status === 'ready_local') p.push(['', 'local only']);
+  else if (b.status === 'in_progress') p.push(['', 'building…']);
+  else p.push(['', String(b.status).replace(/_/g, ' ')]);
+  if (b.art_mode === 'placeholder') p.push(['warn', 'placeholder']);
+  return p.map(([c, t]) => `<span class="pill ${c}">${esc(t)}</span>`).join('');
+}
+
+async function loadEmilyBuilds() {
+  const host = $('emilyBuilds');
+  if (!host) return;
+  try {
+    const r = await fetch('/api/emily/builds', { cache: 'no-store' });
+    const d = await r.json();
+    builds = d.builds || [];
+    if (!builds.length) {
+      host.innerHTML = '<div class="muted">Nothing built yet. Approve one of Scout’s ideas next door and Emily starts a build.</div>';
+      return;
+    }
+    const ready = (d.counts || {}).ready_for_review || 0;
+    host.innerHTML = `<div class="muted" style="margin-bottom:8px">${builds.length} build${
+        builds.length === 1 ? '' : 's'}${ready ? ` · ${ready} ready for review` : ''} · tap to enlarge</div>`
+      + '<div class="gal">' + builds.map(b => {
+        const cover = b.images[0];
+        const shot = cover
+          ? `<img loading="lazy" src="${buildUrl(b.slug, cover.name)}" alt="${esc(b.title)}"
+               onclick="openLb('${esc(b.slug)}','${esc(cover.name)}')">`
+          : '<div class="noart">no image yet</div>';
+        return `<div class="build">${shot}<div class="meta">
+          <div class="bt">${esc(b.title)}</div>
+          <div class="bs">${buildPills(b)}</div>
+          <div class="muted" style="font-size:11px;margin-top:6px">${b.images.length} image${
+            b.images.length === 1 ? '' : 's'} · ${kb(b.bytes)}</div>
+        </div></div>`;
+      }).join('') + '</div>';
+  } catch {
+    host.innerHTML = '<div class="muted">Could not load the gallery.</div>';
+  }
+}
+
+/* ---------------- report reader ---------------- */
+// Reports are written by agents. Escape first, then apply markdown, so any
+// HTML in a report is inert text rather than markup.
+function mdToHtml(src){
+  const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const inline = s => esc(s)
+    .replace(/`([^`]+)`/g,'<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g,'$1<em>$2</em>')
+    .replace(/(^|\s)_([^_\n]+)_(?=\s|$|[.,;:!?])/g,'$1<em>$2</em>');
+  const out=[]; let list=null, table=null;
+  const closeList=()=>{ if(list){out.push(`</${list}>`); list=null;} };
+  const closeTable=()=>{ if(table){out.push('</tbody></table></div>'); table=null;} };
+  for(const raw of String(src||'').split('\n')){
+    const line=raw.replace(/\s+$/,'');
+    const row=line.match(/^\|(.+)\|$/);
+    if(row){
+      const cells=row[1].split('|').map(c=>c.trim());
+      if(cells.every(c=>/^:?-{2,}:?$/.test(c))) continue;      // separator row
+      if(!table){ closeList();
+        out.push('<div class="tw"><table><thead><tr>'+cells.map(c=>`<th>${inline(c)}</th>`).join('')+'</tr></thead><tbody>');
+        table=1; continue; }
+      out.push('<tr>'+cells.map(c=>`<td>${inline(c)}</td>`).join('')+'</tr>'); continue;
+    }
+    closeTable();
+    if(!line.trim()){ closeList(); continue; }
+    let m;
+    if((m=line.match(/^(#{1,4})\s+(.*)$/))){ closeList(); const n=m[1].length; out.push(`<h${n}>${inline(m[2])}</h${n}>`); continue; }
+    if(/^(-{3,}|\*{3,}|_{3,})$/.test(line.trim())){ closeList(); out.push('<hr>'); continue; }
+    if((m=line.match(/^\s*[-*]\s+(.*)$/))){ if(list!=='ul'){closeList(); out.push('<ul>'); list='ul';} out.push(`<li>${inline(m[1])}</li>`); continue; }
+    if((m=line.match(/^\s*\d+[.)]\s+(.*)$/))){ if(list!=='ol'){closeList(); out.push('<ol>'); list='ol';} out.push(`<li>${inline(m[1])}</li>`); continue; }
+    if((m=line.match(/^>\s?(.*)$/))){ closeList(); out.push(`<blockquote>${inline(m[1])}</blockquote>`); continue; }
+    closeList(); out.push(`<p>${inline(line)}</p>`);
+  }
+  closeList(); closeTable();
+  return out.join('\n');
+}
+
+let docAgent = null, docFiles = [];
+
+async function openDoc(agent, file){
+  docAgent = agent;
+  $('docwho').textContent = agent;
+  $('docwhen').textContent = 'loading\u2026';
+  $('docbody').innerHTML = '';
+  $('docdays').innerHTML = '';
+  $('doc').classList.add('on');
+  try{
+    const r = await fetch(`/api/reports/${encodeURIComponent(agent)}`, {cache:'no-store'});
+    docFiles = (await r.json()).reports || [];
+  }catch{ docFiles = []; }
+  if(!docFiles.length){
+    $('docwhen').textContent = '';
+    $('docbody').innerHTML = `<div class="muted">No reports yet. ${esc(agent)} writes one each time it runs.</div>`;
+    return;
+  }
+  $('docdays').innerHTML = docFiles.slice(0,8).map(f =>
+    `<button data-f="${esc(f.name)}" onclick="showDoc('${esc(f.name)}')">${esc(f.name.replace(/\.md$/,''))}</button>`).join('');
+  showDoc(file && docFiles.some(f=>f.name===file) ? file : docFiles[0].name);
+}
+
+async function showDoc(file){
+  [...$('docdays').children].forEach(b => b.className = b.dataset.f === file ? 'sel' : '');
+  $('docbody').innerHTML = '<div class="muted">loading\u2026</div>';
+  try{
+    const r = await fetch(`/api/reports/${encodeURIComponent(docAgent)}/${encodeURIComponent(file)}`, {cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const d = await r.json();
+    $('docwhen').textContent = new Date(d.written_at).toLocaleString();
+    $('docbody').innerHTML = mdToHtml(d.markdown);
+  }catch(e){
+    $('docbody').innerHTML = `<div class="muted">Could not load that report: ${esc(e.message)}</div>`;
+  }
+}
+/* ---------------- Ace's betting console ---------------- */
+
+const pctTxt2 = v => v === null || v === undefined ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
+const priceTxt = v => v === null || v === undefined ? '—' : (v > 0 ? `+${v}` : `${v}`);
+
+function miniTable(title, rows, label){
+  if(!rows || !rows.length) return '';
+  return `<div class="box"><div class="l">${esc(title)}</div>` + rows.slice(0,6).map(r =>
+    `<div class="rowline"><span>${esc(r.key)}</span><span>${r.rows}${
+      r.settled ? ` · ${r.hit_pct}% of ${r.settled}` : ''}</span></div>`).join('') + '</div>';
+}
+
+async function loadAceLedger(){
+  const host = $('aceLedger');
+  if(!host) return;
+  let d;
+  try{
+    const r = await fetch('/api/ace/ledger', {cache:'no-store'});
+    d = await r.json();
+  }catch(e){ host.innerHTML = `<div class="muted">Could not load the ledger.</div>`; return; }
+
+  if(!d.available){
+    host.innerHTML = `<div class="muted">${esc(d.reason || 'No ledger yet.')}</div>`;
+    return;
+  }
+
+  const b = d.bankroll;
+  let out = '';
+
+  if(d.verdict){
+    out += `<div class="verdict"><b>${esc(d.verdict)}</b>${
+      d.slot ? `<div class="muted" style="margin-top:4px">${esc(d.day || '')} · ${esc(d.slot)}</div>` : ''}</div>`;
+  }
+
+  if(b){
+    out += `<div class="sect">Bankroll · paper</div>
+      <div class="grid">
+        <div class="stat"><div class="l">Bankroll</div><div class="v num">${money(b.cash)}</div>
+          ${b.pnl_pct !== null ? `<div class="l ${cls(b.pnl)}">${pctTxt(b.pnl_pct)}</div>` : ''}</div>
+        <div class="stat"><div class="l">Open bets</div><div class="v num">${b.open_count}</div>
+          <div class="l">${b.settled_count} settled</div></div>
+      </div>`;
+  }
+
+  out += `<div class="sect">Candidates tracked · ${d.counts.candidates}</div>`;
+  if(!d.candidates.length){
+    out += `<div class="muted">Nothing on the slate this cycle.</div>`;
+  } else {
+    out += `<div class="board"><table><thead><tr>
+        <th>Selection</th><th class="num">Price</th><th class="num">No-vig</th>
+        <th class="num">Mine</th><th class="num">Edge</th><th>Why not a pick</th><th>Status</th>
+      </tr></thead><tbody>` + d.candidates.map(c => `<tr>
+        <td><div class="sel">${esc(c.selection)}</div>${
+          c.match ? `<div class="mt">${esc(c.match)}</div>` : ''}${
+          c.sport ? `<div class="mt">${esc(c.sport)}</div>` : ''}</td>
+        <td class="num">${priceTxt(c.price)}</td>
+        <td class="num">${c.novig_pct === null ? '—' : c.novig_pct.toFixed(1) + '%'}</td>
+        <td class="num">${c.my_pct === null ? '—' : c.my_pct.toFixed(1) + '%'}</td>
+        <td class="num ${c.edge_pts === null ? '' : (c.edge_pts >= 8 ? 'up' : '')}">${
+          c.edge_pts === null ? '—' : pctTxt2(c.edge_pts).replace('%','')}</td>
+        <td class="why">${c.why_not.length ? esc(c.why_not.join(', ')) : '—'}</td>
+        <td><span class="tagp ${esc(c.status)}">${esc(c.status)}</span></td>
+      </tr>`).join('') + `</tbody></table></div>`;
+  }
+
+  if(d.settled_bets.length){
+    out += `<div class="sect">Results</div><div class="board"><table><thead><tr>
+        <th>Bet</th><th class="num">Stake</th><th>Result</th></tr></thead><tbody>` +
+      d.settled_bets.slice(0,10).map(x => `<tr>
+        <td><div class="sel">${esc(x.selection || x.pick || x.match || 'bet')}</div>${
+          x.note ? `<div class="mt">${esc(x.note)}</div>` : ''}</td>
+        <td class="num">${x.stake === undefined ? '—' : money(x.stake)}</td>
+        <td><span class="tagp ${esc(x.result || '')}">${esc(x.result || 'open')}</span></td>
+      </tr>`).join('') + `</tbody></table></div>`;
+  } else {
+    out += `<div class="sect">Results</div><div class="muted">Nothing settled yet.</div>`;
+  }
+
+  const minis = [
+    miniTable('Criterion that failed', d.by_reason),
+    miniTable('By sport', d.by_sport),
+    miniTable('By status', d.by_status),
+  ].filter(Boolean).join('');
+  if(minis) out += `<div class="sect">How the discipline is holding</div><div class="mini">${minis}</div>`;
+
+  host.innerHTML = out;
+}
+
+function closeDoc(){ $('doc').classList.remove('on'); }
+
+function closePanel() { closeLb(); openAgent = null; $('panel').style.display = 'none'; }
+$('panel').addEventListener('click', e => { if (e.target.id === 'panel') closePanel(); });
+
+/* ---------------- touch ---------------- */
+
+function isTouch() { return window.matchMedia('(pointer: coarse)').matches; }
+
+(function stick() {
+  const el = $('stick'), nub = $('nub');
+  const R = 46;
+  const set = (dx, dy) => { nub.style.transform = `translate(${dx}px,${dy}px)`; };
+  const start = e => {
+    const t = e.changedTouches ? e.changedTouches[0] : e;
+    touch.active = true; touch.id = t.identifier ?? 'mouse';
+    move(e); e.preventDefault();
+  };
+  const move = e => {
+    if (!touch.active) return;
+    const t = e.changedTouches ? [...e.changedTouches].find(x => x.identifier === touch.id) : e;
+    if (!t) return;
+    const r = el.getBoundingClientRect();
+    let dx = t.clientX - (r.left + r.width/2), dy = t.clientY - (r.top + r.height/2);
+    const d = Math.hypot(dx, dy);
+    if (d > R) { dx = dx/d*R; dy = dy/d*R; }
+    set(dx, dy);
+    touch.dx = dx / R; touch.dy = dy / R;
+    e.preventDefault();
+  };
+  const end = e => { touch.active = false; touch.dx = touch.dy = 0; set(0,0); };
+  el.addEventListener('touchstart', start, {passive:false});
+  el.addEventListener('touchmove', move, {passive:false});
+  el.addEventListener('touchend', end);
+  el.addEventListener('touchcancel', end);
+  el.addEventListener('mousedown', start);
+  window.addEventListener('mousemove', e => touch.active && move(e));
+  window.addEventListener('mouseup', end);
+})();
+
+$('act').addEventListener('click', () => { if (nearDoor) openPanel(nearDoor.name); });
+
+/* ---------------- data ---------------- */
+
+async function pull(first) {
+  try {
+    const r = await fetch('/api/dashboard', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const next = await r.json();
+    const changed = first || (next.agents || []).length !== (DATA.agents || []).length;
+    DATA = next;
+    $('chip').textContent = `${DATA.agents.length} agent${DATA.agents.length===1?'':'s'} · ${DATA.health.status}`;
+    if (first) boot();
+    else if (changed && scene) scene.scene.restart();   // a new agent gets a house
+    if (openAgent) openPanel(openAgent);
+  } catch (e) {
+    $('chip').textContent = 'offline';
+    if (first) $('boot').textContent = 'Cannot reach /api/dashboard — is mission-control-api running?';
+  }
+}
+
+function boot() {
+  new Phaser.Game({
+    type: Phaser.AUTO, parent: 'game',
+    backgroundColor: '#5a9e4b',
+    pixelArt: true, roundPixels: true,
+    scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH },
+    physics: { default: 'arcade', arcade: { gravity: { y: 0 }, debug: false } },
+    scene: { preload, create, update },
+  });
+  window.addEventListener('resize', () => {
+    if (scene) scene.cameras.main.setZoom(zoomForViewport());
+  });
+}
+
+pull(true);
+setInterval(() => pull(false), 6000);
+</script>
+</body>
+</html>

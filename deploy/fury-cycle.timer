@@ -1,0 +1,12 @@
+[Unit]
+Description=Wake Fury once each morning for the daily briefing
+
+[Timer]
+# 08:30 CENTRAL (the user's clock): after Scout's 08:00 ideas, before Belfort's 09:35 open, so the
+# briefing covers yesterday's close and this morning's proposals.
+OnCalendar=*-*-* 08:30 America/Chicago
+Persistent=false
+RandomizedDelaySec=180
+
+[Install]
+WantedBy=timers.target

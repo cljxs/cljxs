@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""
+scout-review.py — you approve or reject Scout's ideas.
+
+This is the gate between Scout and Emily. Scout only ever writes proposals
+into agents/scout/state/ideas.json. Nothing reaches Emily until you approve
+it here, and approving is what creates Emily's queue task.
+
+    scout-review.py list
+    scout-review.py approve 3
+    scout-review.py reject 4 "too close to a licensed character"
+
+Rejections are written into Emily's lessons log so Scout stops proposing the
+same direction.
+
+Standard library only.
+"""
+
+import argparse
+import json
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+IDEAS = ROOT / "agents" / "scout" / "state" / "ideas.json"
+LESSONS = ROOT / "agents" / "emily" / "state" / "lessons.md"
+NEW_BUILD = ROOT / "scripts" / "emily-new-build.py"
+
+
+def load():
+    if not IDEAS.is_file():
+        print(f"No ideas yet ({IDEAS} does not exist).\n"
+              "Scout writes it on its first run.", file=sys.stderr)
+        sys.exit(1)
+    d = json.loads(IDEAS.read_text())
+    return d if isinstance(d, dict) else {"ideas": d}
+
+
+def save(d):
+    IDEAS.write_text(json.dumps(d, indent=1) + "\n")
+
+
+def note_lesson(line):
+    LESSONS.parent.mkdir(parents=True, exist_ok=True)
+    if not LESSONS.is_file():
+        LESSONS.write_text("# Lessons — what the user approved and rejected, and why\n\n")
+    with LESSONS.open("a") as f:
+        f.write(line.rstrip() + "\n")
+
+
+def find(d, ident):
+    for i in d.get("ideas", []):
+        if str(i.get("id")) == str(ident):
+            return i
+    print(f"No idea with id {ident}. Run: scout-review.py list", file=sys.stderr)
+    sys.exit(1)
+
+
+def cmd_list(a, d):
+    ideas = d.get("ideas", [])
+    pending = [i for i in ideas if i.get("status", "pending") == "pending"]
+    if not pending and not a.all:
+        print("No pending ideas. Scout proposes on its next run.")
+        return
+    show = ideas if a.all else pending
+    for i in show:
+        st = i.get("status", "pending")
+        mark = {"pending": " ", "approved": "✓", "rejected": "✗"}.get(st, "?")
+        print(f"\n[{mark}] {i.get('id')}  {i.get('title')}")
+        print(f"      product : {i.get('product')}")
+        print(f"      angle   : {i.get('angle','')[:110]}")
+        if i.get("brief"):
+            print(f"      brief   : {i['brief'][:110]}")
+        if st != "pending":
+            print(f"      {st} — {i.get('verdict_reason','')[:90]}")
+    print(f"\n{len(pending)} pending. Approve with: scout-review.py approve <id>")
+
+
+def cmd_approve(a, d):
+    idea = find(d, a.id)
+    if idea.get("status") == "approved":
+        print("Already approved — not queueing twice.", file=sys.stderr)
+        return 1
+    cmd = [sys.executable, str(NEW_BUILD), idea["title"],
+           "--brief", idea.get("brief") or idea.get("angle", ""),
+           "--product", idea.get("product", "poster")]
+    if a.force:
+        cmd.append("--force")
+    print("queueing to emily:", " ".join(cmd[2:5]), "...")
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    sys.stdout.write(r.stdout)
+    sys.stderr.write(r.stderr)
+    if r.returncode != 0:
+        print("\nEmily was NOT queued. The idea stays pending.", file=sys.stderr)
+        return r.returncode
+    idea["status"] = "approved"
+    idea["verdict_reason"] = a.reason or "approved by you"
+    idea["verdict_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    save(d)
+    note_lesson(f"- APPROVED {idea['title']!r} ({idea.get('product')}) — {idea['verdict_reason']}")
+    print("approved, queued, and logged to Emily's lessons.")
+    return 0
+
+
+def cmd_reject(a, d):
+    idea = find(d, a.id)
+    idea["status"] = "rejected"
+    idea["verdict_reason"] = a.reason
+    idea["verdict_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    save(d)
+    note_lesson(f"- REJECTED {idea['title']!r} ({idea.get('product')}) — {a.reason}")
+    print(f"rejected and logged. Scout reads this before proposing again.")
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Approve or reject Scout's ideas")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("list"); p.add_argument("--all", action="store_true")
+    p.set_defaults(fn=cmd_list)
+
+    p = sub.add_parser("approve"); p.add_argument("id")
+    p.add_argument("--reason", default=""); p.add_argument("--force", action="store_true")
+    p.set_defaults(fn=cmd_approve)
+
+    p = sub.add_parser("reject"); p.add_argument("id"); p.add_argument("reason")
+    p.set_defaults(fn=cmd_reject)
+
+    a = ap.parse_args()
+    return a.fn(a, load()) or 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

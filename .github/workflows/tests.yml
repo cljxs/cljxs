@@ -1,0 +1,54 @@
+# Catch a bug on GitHub instead of on the droplet at 10pm.
+#
+# Everything here used to be caught by the droplet, hours later, by a timer,
+# after the model call had been paid for. A syntax error in a verifier, a
+# regex that truncated a model slug, a pattern that read `'schemaChars': 401`
+# as a rejected API key - all of them cheap to catch here and expensive to
+# catch there.
+name: tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # No dependencies by design: the scripts are standard library only, so
+      # the droplet needs nothing installed and neither does this.
+      - name: every script compiles
+        run: python3 -m compileall -q scripts/
+
+      - name: tests
+        run: python3 -m unittest discover -s tests -v
+
+      # Fixtures are captured from a live droplet and committed. If one ever
+      # carries a real credential it would be public the moment it is pushed,
+      # so this fails the build rather than trusting the capture script's
+      # redaction to have been run.
+      - name: no credential-shaped strings in fixtures
+        run: |
+          if grep -rEn 'sk-[A-Za-z0-9_-]{16,}|Bearer [A-Za-z0-9._-]{16,}|[A-Za-z0-9_-]{40,}' tests/fixtures/ ; then
+            echo "::error::a fixture looks like it contains a credential - see the matches above"
+            exit 1
+          fi
+          echo "fixtures are clean"
+
+      # AGENTS.md is generated from a header by scripts/deploy.sh. A tracked
+      # copy would go stale silently and agents would run whichever the merge
+      # happened to win.
+      - name: generated files are not tracked
+        run: |
+          if git ls-files | grep -E 'agents/[^/]+/AGENTS\.md' ; then
+            echo "::error::AGENTS.md is generated - it must stay untracked"
+            exit 1
+          fi
+          echo "no generated AGENTS.md tracked"

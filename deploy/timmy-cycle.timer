@@ -1,0 +1,16 @@
+[Unit]
+Description=Wake Timmy three times per trading day
+
+[Timer]
+Unit=timmy-cycle.service
+# Deliberately offset from the other agents so two cycles never land on the
+# same minute on a 1-vCPU box. Ace runs 09:00/15:00/23:30, Belfort 09:35/15:55,
+# Scout 08:00, Fury 08:30.
+OnCalendar=Mon..Fri 10:15 America/New_York
+OnCalendar=Mon..Fri 12:45 America/New_York
+OnCalendar=Mon..Fri 15:40 America/New_York
+Persistent=false
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,160 @@
+# Timmy — fund analyst
+
+Reads four stocks three times a trading day and writes a signal report on
+each. **Timmy does not trade.** No portfolio, no cash, no orders. It reads
+data and forms opinions; you decide what to do with them.
+
+    Fetcher (free, every 15 min)  ->  data/*.json  ->  Timmy (costs fuel, 3x/day)  ->  reports/
+
+## Install
+
+Register FIRST — `openclaw agents add` seeds `AGENTS.md`, so Timmy's
+instructions have to be merged in on top of it afterwards, not before.
+
+    git -C /root/ecosystem pull
+    openclaw agents add timmy --workspace /root/ecosystem/agents/timmy --non-interactive
+    # merge the instructions on top of the seeded AGENTS.md.
+    # Re-runnable: it REBUILDS AGENTS.md rather than prepending, so editing the
+    # header and running it again does not leave two copies of every rule.
+    # The first run on an already-merged file shows you the seam and asks.
+    /root/ecosystem/scripts/merge-header.sh timmy
+    cp -n /root/ecosystem/agents/timmy/MEMORY.seed.md /root/ecosystem/agents/timmy/MEMORY.md
+    openclaw models auth paste-api-key --provider openrouter --agent timmy
+    openclaw agents list        # confirm timmy's index before the next two lines
+    openclaw config set 'agents.list[6].model' 'openrouter/openai/gpt-4o'
+    openclaw config set 'agents.list[6].thinkingDefault' 'low'
+    openclaw gateway restart
+    cp /root/ecosystem/deploy/timmy-*.service /root/ecosystem/deploy/timmy-*.timer /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable --now timmy-fetch.timer
+    systemctl enable --now timmy-cycle.timer
+
+`--workspace` is not optional. Without it the agent reads
+`~/.openclaw/workspace` instead of its own folder, never sees `data/`, and
+improvises the numbers — which is the exact failure the whole fetcher design
+exists to prevent.
+
+`agents.list[6]` assumes Timmy is the seventh agent. Run `openclaw agents
+list` and use the index it actually shows; setting the wrong index silently
+reconfigures a different agent.
+
+No heartbeat is set, deliberately. The systemd timer is what wakes Timmy. A
+heartbeat on top of it would mean paying for wakes nobody asked for.
+
+## What runs when
+
+    timmy-fetch.timer    every 15 min, Mon-Fri 08:00-17:00 ET      free
+                         every 6 hours otherwise (weekend freshness)  free
+    timmy-cycle.timer    10:15, 12:45, 15:40 ET, Mon-Fri           costs fuel
+
+Offset from the other agents on purpose — Scout runs 08:00, Fury 08:30, Ace
+09:00/15:00/23:30, Belfort 09:35/15:55. Nothing collides on a 1-vCPU box.
+
+## The watchlist
+
+`state/watchlist.json`. Four tickers to start: HIMS, ASTS, UBER, IREN. Edit
+the file — or just ask Claude — and both halves pick it up on the next run.
+No code change, no restart.
+
+## The anti-hallucination rule
+
+`scripts/timmy-fetch.py` is plain Python with no AI in it. It pulls daily
+candles from Yahoo, computes SMA20, SMA50, RSI14, MACD and the 1d/5d/30d
+changes locally, pulls per-ticker headlines, and writes JSON into `data/`.
+
+Timmy only reads those files. **If a number is not in a data file, Timmy is
+not allowed to cite it.** The indicator math lives in `scripts/indicators.py`
+and is bit-identical to Belfort's, so the two agents never disagree about what
+UBER's RSI is.
+
+Headlines are **titles only** — the article bodies are never fetched. Timmy is
+told to treat a headline as something that was published, not something it has
+verified.
+
+## The staleness gate
+
+`timmy-fetch.py --status` prints a verdict, and Timmy's first action every
+cycle is to run it and obey:
+
+    DATA AGE: 12 minutes (fetched 2026-09-14 17:37:54 UTC)
+    VERDICT: PROCEED. Data is fresh enough to analyse.
+
+If the data is older than 24 hours it prints `SKIP THIS CYCLE` instead, and
+Timmy writes no analysis — just a memory line recording the skip. Plain code
+makes that call, not the model: comparing timestamps is exactly the sort of
+thing a language model gets quietly wrong.
+
+This is also why the fetcher runs every six hours overnight and at weekends.
+The market is shut and the prices do not change — but without those runs the
+data file would be 65 hours old by Monday's first cycle, Timmy would correctly
+refuse to run, and it would look broken when it was working perfectly.
+
+## The model
+
+`gpt-4o`. Not a free choice - four were tried:
+
+| Model | Result |
+|---|---|
+| `google/gemini-2.5-flash-lite` | provider internal error, died mid-cycle every time |
+| `google/gemini-2.5-flash` | same |
+| `openai/gpt-4o-mini` | completed, but reports came in at 153-178 words |
+| `openai/gpt-4o` | completes, reports 205-236 words |
+
+Both Gemini models choke on generating four reports in one session through
+OpenRouter - they read the data, form the leans, write the memory line, then
+die before saving anything. If you ever see `provider internal error` in the
+journal, that is what it looks like.
+
+This costs more than the cheap model the original plan suggested. Twelve
+reports a day is still cents, and a cheaper agent that cannot finish a cycle
+costs more than a dearer one that can.
+
+## The verifier
+
+`scripts/timmy-verify.py` runs after every cycle and fails the systemd unit if
+the deliverables are not on disk: four reports for today, each long enough to
+be real, each with a `**Lean: BUY|HOLD|SELL**` line, plus a new line in
+`MEMORY.md`.
+
+This exists because systemd only sees an exit code, and an agent that prints a
+report into the chat instead of writing it exits 0. Belfort and Scout both
+shipped that failure and both were logged as successes. Timmy fails loudly.
+
+## Checking on it
+
+    systemctl list-timers 'timmy-*'                  # when it next runs
+    journalctl -u timmy-cycle -n 40 --no-pager       # what the last cycle did
+    journalctl -u timmy-fetch -n 20 --no-pager       # is the data landing
+    python3 scripts/timmy-fetch.py --status          # how fresh is the data
+    ls -t agents/timmy/reports | head                # the latest reports
+    cat agents/timmy/MEMORY.md                       # every cycle, one line each
+
+## Pausing it
+
+    systemctl disable --now timmy-cycle.timer        # stop the thinking (and the cost)
+    systemctl disable --now timmy-fetch.timer        # stop the data collection too
+
+Stopping `timmy-cycle.timer` alone is usually what you want: the fetcher is
+free, and leaving it running means the data is current whenever you switch
+Timmy back on. Re-enable with `systemctl enable --now timmy-cycle.timer`.
+
+## Files
+
+    agents/timmy/
+      AGENTS.md              what Timmy reads at the start of every run
+      MEMORY.md              append-only, one line per cycle, kept under 2KB
+      state/watchlist.json   the four tickers — edit freely
+      data/                  fetcher-owned, Timmy only reads (gitignored)
+      reports/               one file per ticker per day (gitignored)
+
+    scripts/
+      timmy-fetch.py         the fetcher, and the --status staleness gate
+      timmy-verify.py        the post-cycle check
+      indicators.py          shared SMA / RSI / MACD math
+
+## Changing it
+
+Cadence, tickers, report length, what it looks at — all of it is yours. Ask
+and it changes. The only thing worth knowing: cost scales with how often the
+*cycle* runs, not the fetcher. The fetcher is free. Three cycles a day is the
+starting point, not a rule.

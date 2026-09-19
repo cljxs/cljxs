@@ -1,0 +1,4 @@
+{
+  "note": "Timmy's watchlist. Edit this file (or just ask Claude to) and both the fetcher and the agent pick it up on the next run - no code change, no restart.",
+  "tickers": ["HIMS", "ASTS", "UBER", "IREN"]
+}

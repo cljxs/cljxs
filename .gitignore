@@ -1,0 +1,91 @@
+node_modules/
+tasks/*.db
+tasks/*.db-wal
+tasks/*.db-shm
+*.log
+__pycache__/
+*.pyc
+
+# Belfort runtime state - never tracked, so `git pull` can't clobber a live
+# portfolio, and fetched market data doesn't go stale in the repo.
+agents/belfort/data/*
+!agents/belfort/data/.gitkeep
+agents/belfort/reports/*
+!agents/belfort/reports/.gitkeep
+agents/belfort/state/portfolio.json
+agents/belfort/MEMORY.md
+# Written by the dispatcher when it wakes an agent and removed when the agent
+# exits - it says which task is in flight right now, and nothing about it
+# belongs in history.
+agents/*/state/current-task
+
+agents/*/AGENTS.md
+agents/*/SOUL.md
+agents/*/TOOLS.md
+agents/*/IDENTITY.md
+agents/*/USER.md
+agents/*/HEARTBEAT.md
+agents/*/BOOTSTRAP.md
+
+# dashboard-owned value history (not an agent file)
+tasks/dashboard-snapshots.json
+
+# Ace runtime state
+agents/ace/data/*
+!agents/ace/data/context
+agents/ace/data/context/*
+!agents/ace/data/context/.gitkeep
+agents/ace/reports/*
+!agents/ace/reports/.gitkeep
+agents/ace/state/bankroll.json
+agents/ace/state/ledger.json
+agents/ace/MEMORY.md
+
+# Phaser is fetched at install time, not committed
+mission-control-api/public/vendor/
+
+# Emily runtime state - credentials must NEVER reach this public repo
+agents/*/state/credentials.env
+**/credentials.env
+agents/emily/builds/*
+!agents/emily/builds/.gitkeep
+agents/emily/reports/*
+!agents/emily/reports/.gitkeep
+agents/emily/state/printify-catalog.json
+agents/emily/MEMORY.md
+agents/emily/state/lessons.md
+
+# Scout runtime state
+agents/scout/state/ideas.json
+agents/scout/reports/*
+!agents/scout/reports/.gitkeep
+agents/scout/MEMORY.md
+agents/scout/state/last-run.txt
+agents/fury/state/last-run.txt
+
+# Fury - the collector writes data/ and the briefing skeleton into reports/.
+# Both are live state. They were untracked by omission until a test run here
+# committed system.json and a skeleton, which then blocked git pull on the
+# droplet because its own copies were in the way.
+agents/fury/data/*
+!agents/fury/data/.gitkeep
+agents/fury/reports/*
+!agents/fury/reports/.gitkeep
+agents/fury/MEMORY.md
+
+# Timmy — fetcher-owned data, daily reports and live memory stay local.
+# The seeds (watchlist.json, MEMORY.seed.md) are tracked; the live files are not.
+agents/timmy/data/*
+!agents/timmy/data/.gitkeep
+agents/timmy/reports/*
+!agents/timmy/reports/.gitkeep
+agents/timmy/MEMORY.md
+agents/timmy/state/memory-archive.md
+
+
+# Test fixtures are captured output, not runtime logs. The *.log rule above
+# silently excluded two of them: the tests passed locally where the files
+# existed and failed in CI where they did not - and the 401 regression test
+# went green while testing nothing, because a missing log and a clean log
+# both exit 0.
+!tests/fixtures/*.log
