@@ -53,7 +53,12 @@ SPORTS = {
     # a place in this table. What it does need is PRICE_BAND below: sampled on
     # a real board, CFB carried a moneyline on 9 of 14 games and the ones it
     # did included -1350/+800 and +1300/-2800.
-    "cfb": {"path": "football/college-football", "months": {8, 9, 10, 11, 12, 1}},
+    # groups=80 is FBS and limit lifts ESPN's default page. Without them the
+    # college scoreboard returns 22 events where the real board has 75 - Ace
+    # was judging a third of a Saturday and the rest was never fetched at all.
+    # `limit` alone does nothing; it is `groups` that opens the board.
+    "cfb": {"path": "football/college-football", "months": {8, 9, 10, 11, 12, 1},
+            "query": "?groups=80&limit=300"},
 }
 
 # A candidate has to be a bet Ace's own rule could take. At -2800 the no-vig
@@ -133,6 +138,48 @@ def team_of(comp, home):
         if (c.get("homeAway") == "home") == home:
             return c
     return {}
+
+
+def board_spread(event):
+    """The scoreboard's point spread for a game, or None.
+
+    Free: it rides along with the scoreboard call that was already made. All
+    44 scheduled games on a real college Saturday carried one, while none of
+    them carried a moneyline there - that only appears in the per-game summary,
+    which is the fetch this is deciding whether to spend.
+    """
+    for o in ((event.get("competitions") or [{}])[0].get("odds") or []):
+        spread = o.get("spread")
+        if isinstance(spread, (int, float)):
+            return abs(float(spread))
+    return None
+
+
+def pick_for_context(scheduled, now=None):
+    """Which scheduled games are worth a per-game fetch, best first.
+
+    Inside the betting window, closest game first. A game outside the window
+    cannot be bet on information that does not exist yet, and a 45-point
+    favourite cannot clear an 8-point bar, so neither is worth a call while a
+    three-point game is waiting for one. Games with no spread published are
+    kept, last: unknown is not the same as lopsided.
+    """
+    now = now or datetime.now(timezone.utc)
+    inside, outside = [], []
+    for e in scheduled:
+        try:
+            start = datetime.strptime(e.get("date", ""), "%Y-%m-%dT%H:%MZ") \
+                .replace(tzinfo=timezone.utc)
+            hours = (start - now).total_seconds() / 3600
+        except Exception:
+            hours = 999
+        spread = board_spread(e)
+        # None sorts last within its group without pretending to be a number.
+        key = (spread is None, spread if spread is not None else 0.0, hours)
+        (inside if 0 < hours <= BET_WINDOW_HOURS else outside).append((key, e))
+    inside.sort(key=lambda x: x[0])
+    outside.sort(key=lambda x: x[0])
+    return [e for _k, e in inside] + [e for _k, e in outside]
 
 
 def unplayable(context):
@@ -392,7 +439,7 @@ def main():
     for sport in season:
         path = SPORTS[sport]["path"]
         try:
-            board = get(f"{BASE}/{path}/scoreboard")
+            board = get(f"{BASE}/{path}/scoreboard{SPORTS[sport].get('query', '')}")
         except Exception as e:
             failures.append({"sport": sport, "error": str(e)[:140]})
             log(f"{sport}: scoreboard FAILED — {e}")
@@ -415,8 +462,15 @@ def main():
                 "home_score": h.get("score"), "away_score": a.get("score"),
             })
 
-        # Deep context only for games that can still be bet, capped.
-        for e in scheduled[:DEEP_CAP]:
+        # Deep context only for games that can still be bet, capped - and on a
+        # 44-game college Saturday, WHICH twelve is the whole question. It used
+        # to be the first twelve in ESPN's order, which is neither soonest nor
+        # closest. The scoreboard carries DraftKings' spread for every game at
+        # no extra call, so the twelve are the most competitive games inside
+        # the betting window: a 45.5-point spread is the same fact as a -8000
+        # moneyline, and spending a fetch on it buys a row that can only be
+        # passed.
+        for e in pick_for_context(scheduled)[:DEEP_CAP]:
             try:
                 ctx = build_context(sport, path, e)
                 (CTX / f"{sport}-{e['id']}.json").write_text(json.dumps(ctx, indent=1) + "\n")

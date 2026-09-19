@@ -3336,3 +3336,106 @@ class TheWindowIsSharedBetweenSports(unittest.TestCase):
         self.assertIn("lopsided", why["blowout"])
         self.assertEqual(why["noline"], "no moneyline posted")
         self.assertNotIn("fine", why)
+
+
+class TheWholeBoardNotAThirdOfIt(unittest.TestCase):
+    """"There are dozens playing" - and there were. ESPN's college scoreboard
+    returns 22 events by default where the real board has 75, so Ace was
+    judging a third of a Saturday and never saw the rest. `limit` alone does
+    nothing; it is `groups=80` that opens it.
+
+    That left a second question: the per-game context fetch is capped at
+    DEEP_CAP, and on a 43-game board WHICH twelve is the whole thing. It was
+    the first twelve in ESPN's order - neither soonest nor closest. The
+    scoreboard carries DraftKings' spread for every game at no extra call, so
+    it decides: a 45.5-point spread is the same fact as a -8000 moneyline, and
+    a fetch spent on it buys a row that can only ever be passed.
+    """
+
+    def setUp(self):
+        self.m = load("ace_fetch", "ace-fetch.py")
+
+    def event(self, name, hours_out, spread=None, when=None):
+        start = (when or datetime.now(timezone.utc)) + timedelta(hours=hours_out)
+        odds = [{"provider": {"name": "DraftKings"}, "spread": spread}] if spread is not None else []
+        return {"shortName": name, "date": start.strftime("%Y-%m-%dT%H:%MZ"),
+                "competitions": [{"odds": odds}]}
+
+    def test_the_college_board_is_opened(self):
+        q = self.m.SPORTS["cfb"].get("query", "")
+        self.assertIn("groups=80", q)
+        self.assertIn("limit=", q)
+
+    def test_the_other_sports_are_left_alone(self):
+        # NFL's 16 and MLB's 15 are already whole slates. A query string that
+        # is not needed is a thing that can break.
+        for sport in ("nfl", "mlb", "nba"):
+            self.assertEqual(self.m.SPORTS[sport].get("query", ""), "")
+
+    def test_the_query_is_actually_used_in_the_call(self):
+        src = (SCRIPTS / "ace-fetch.py").read_text()
+        self.assertIn("SPORTS[sport].get('query', '')", src)
+
+    def test_the_ranking_is_actually_used_when_fetching(self):
+        # Ranking correctly and then fetching in ESPN's order anyway is a
+        # function that passes its own tests and changes nothing.
+        src = (SCRIPTS / "ace-fetch.py").read_text()
+        self.assertIn("pick_for_context(scheduled)[:DEEP_CAP]", src)
+        self.assertNotIn("for e in scheduled[:DEEP_CAP]", src)
+
+    # --- the spread off the scoreboard ---------------------------------------
+
+    def test_the_spread_is_read_and_made_positive(self):
+        # Real values: 'IU -45.5' and 'SC -3'. The sign says who is favoured,
+        # which this does not care about - only how lopsided it is.
+        self.assertEqual(self.m.board_spread(self.event("WKU @ IU", 3, -45.5)), 45.5)
+        self.assertEqual(self.m.board_spread(self.event("MSST @ SC", 3, -3.0)), 3.0)
+        self.assertEqual(self.m.board_spread(self.event("X @ Y", 3, 7.5)), 7.5)
+
+    def test_a_game_with_no_spread_is_none_not_zero(self):
+        # Zero would rank an unpriced game as the most competitive on the
+        # board and spend the first fetch on it.
+        self.assertIsNone(self.m.board_spread(self.event("X @ Y", 3)))
+        self.assertIsNone(self.m.board_spread({"competitions": [{}]}))
+        self.assertIsNone(self.m.board_spread({}))
+
+    def test_a_spread_that_is_not_a_number_is_none(self):
+        e = self.event("X @ Y", 3)
+        e["competitions"][0]["odds"] = [{"spread": "EVEN"}]
+        self.assertIsNone(self.m.board_spread(e))
+
+    # --- which games get a fetch ---------------------------------------------
+
+    def test_the_closest_game_is_fetched_before_the_blowout(self):
+        board = [self.event("BLOWOUT", 3, -45.5),
+                 self.event("CLOSE", 4, -3.0),
+                 self.event("MIDDLING", 5, -14.0)]
+        order = [e["shortName"] for e in self.m.pick_for_context(board)]
+        self.assertEqual(order, ["CLOSE", "MIDDLING", "BLOWOUT"])
+
+    def test_games_outside_the_window_go_last_however_close_they_are(self):
+        # A pick-em three days out cannot be bet on information that does not
+        # exist yet, and a fetch spent on it is one a playable game did not get.
+        board = [self.event("TOMORROW_PICKEM", 40, -1.0),
+                 self.event("TONIGHT_BLOWOUT", 2, -38.0)]
+        order = [e["shortName"] for e in self.m.pick_for_context(board)]
+        self.assertEqual(order, ["TONIGHT_BLOWOUT", "TOMORROW_PICKEM"])
+
+    def test_a_game_already_started_is_not_picked_first(self):
+        board = [self.event("STARTED", -2, -2.0), self.event("UPCOMING", 3, -20.0)]
+        order = [e["shortName"] for e in self.m.pick_for_context(board)]
+        self.assertEqual(order[0], "UPCOMING")
+
+    def test_an_unpriced_game_is_kept_but_last_within_the_window(self):
+        # Unknown is not the same as lopsided, so it is not dropped - it just
+        # does not outrank a game whose price we can see.
+        board = [self.event("NOPRICE", 3), self.event("PRICED", 4, -30.0)]
+        order = [e["shortName"] for e in self.m.pick_for_context(board)]
+        self.assertEqual(order, ["PRICED", "NOPRICE"])
+
+    def test_nothing_is_lost_only_reordered(self):
+        # The cap drops games; this function must not drop any itself, or the
+        # two reductions become impossible to tell apart.
+        board = [self.event(f"g{i}", i, -float(i)) for i in range(1, 12)]
+        board.append(self.event("nospread", 2))
+        self.assertEqual(len(self.m.pick_for_context(board)), len(board))

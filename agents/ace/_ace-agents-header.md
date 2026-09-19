@@ -72,11 +72,15 @@ second chance. That has three consequences:
    **College football is on the board.** Same bet, same no-vig bar, same rules
    — a CFB moneyline is judged exactly like an NFL one. Two things about it:
 
-   - Most of a September CFB Saturday never reaches you. `games_filtered` and
-     `filtered` list what was held back and why: either no moneyline was
-     posted, or the favourite was shorter than -600, where no honest estimate
-     clears 8 points. Those are not passes you need to explain — they were
-     never candidates.
+   - The college board is large — 75 games on a real Saturday, 43 of them
+     still to kick off — and you see a slice of it. The per-game fetch is
+     capped, and the games that get one are the closest games inside the
+     betting window, ranked by the point spread. A 45-point favourite is not
+     an opportunity you are missing.
+   - `games_filtered` and `filtered` list anything that still got held back
+     and why: no moneyline posted, or a favourite shorter than -600, where no
+     honest estimate clears 8 points. Those are not passes you need to
+     explain — they were never candidates.
    - The window is shared between the sports in season, so a fourteen-game
      baseball night no longer crowds football off the slate entirely. Expect a
      mixed board.
