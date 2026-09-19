@@ -97,6 +97,16 @@ def reconcile(b, problems):
               f"{', '.join(str(u) for u in unreadable[:3])}")
         return
 
+    # The cap was a sentence in the header with nothing checking it. The
+    # number comes from ace-judge.py, which is also where a bet is refused for
+    # breaking it - this is the backstop for a bankroll edited by hand.
+    open_n = len(b.get("open_bets") or [])
+    if open_n > ace_judge.MAX_OPEN_BETS:
+        problems.append(
+            f"{open_n} bets are open and the cap is {ace_judge.MAX_OPEN_BETS}. "
+            f"Bets are meant to be refused at that point, so this was written "
+            f"into state/bankroll.json by hand.")
+
     expected = start - open_stake - settled_stake + returned
     gap = bank - expected
     if abs(gap) > TOLERANCE:

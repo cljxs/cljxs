@@ -226,6 +226,23 @@ def record(a, status):
         print("--why is required. The reason IS the row - a verdict with no reason "
               "tells the user nothing about why you passed.", file=sys.stderr)
         return 1
+    # A pass naming one or two games is a game Ace actually looked at, and an
+    # estimate for it is the only evidence that ever accumulates about whether
+    # the 8-point bar is set right. Without it every passed row carries
+    # edge_pts: null, which is what a week of "no bets" looks like from the
+    # outside: unanswerable. A sweep of the whole board is exempt - one number
+    # cannot be an estimate for sixteen different games, and pretending it is
+    # would be worse than recording nothing.
+    if (status == "passed" and a.my_pct is None
+            and len(nums) <= ESTIMATE_REQUIRED_UPTO):
+        print(f"--my-pct is required when you pass {len(nums)} game(s) by name: "
+              f"this is one you looked at, and your estimate is the only record "
+              f"of HOW close it was.\n"
+              f"  ace-judge.py pass {a.number} --my-pct 54.5 --why \"{a.why[:40]}\"\n"
+              f"Sweeping the rest with one reason does not need it.",
+              file=sys.stderr)
+        return 1
+
     if status == "bet":
         if len(nums) > 1:
             print("bet one at a time. A stake is a decision per game, and the flat "
@@ -233,6 +250,15 @@ def record(a, status):
             return 1
         if a.stake is None:
             print("a bet needs --stake.", file=sys.stderr)
+            return 1
+        # The entire bar is the gap between your estimate and the no-vig line.
+        # A bet with no estimate is a claim of 8+ points with nothing on record
+        # to check it against - and it is the one row where that matters most,
+        # because it is the one that moves money.
+        if a.my_pct is None:
+            print("a bet needs --my-pct. The bar is 8 points between your "
+                  "estimate and the no-vig line, and without the estimate "
+                  "there is no way to show it was cleared.", file=sys.stderr)
             return 1
 
     led = load_ledger()
@@ -270,7 +296,38 @@ def cmd_pass(a):
     return record(a, "passed")
 
 
+# How many bets may be open at once. It lived only in Ace's header - a
+# sentence, honoured or not, with nothing checking. "Max 2 open bets" was a
+# rule the agent was asked to keep and no one could tell had been broken.
+# ace-verify.py imports this rather than restating it, and a test fails the
+# build if the header stops quoting the same number.
+MAX_OPEN_BETS = 4
+
+# Passing this many games or fewer by name means Ace studied them, so it must
+# say what it estimated. Above this it is sweeping the board with one shared
+# reason, where a single number would be a fiction.
+ESTIMATE_REQUIRED_UPTO = 2
+
+
+def open_bet_count():
+    """How many bets are open right now, from the bankroll file."""
+    try:
+        b = json.loads((AGENT / "state" / "bankroll.json").read_text())
+    except Exception:
+        return 0
+    return len(b.get("open_bets") or [])
+
+
 def cmd_bet(a):
+    # The cap is checked here because this is where a bet becomes a recorded
+    # decision. Refusing after the fact, in the verifier, would mean failing a
+    # cycle for something it could have been stopped from doing.
+    open_now = open_bet_count()
+    if open_now >= MAX_OPEN_BETS:
+        print(f"{open_now} bets are already open and the cap is "
+              f"{MAX_OPEN_BETS}. Grade something before opening another, or "
+              f"pass this one.", file=sys.stderr)
+        return 1
     return record(a, "bet")
 
 

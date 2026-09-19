@@ -3439,3 +3439,147 @@ class TheWholeBoardNotAThirdOfIt(unittest.TestCase):
         board = [self.event(f"g{i}", i, -float(i)) for i in range(1, 12)]
         board.append(self.event("nospread", 2))
         self.assertEqual(len(self.m.pick_for_context(board)), len(board))
+
+
+class ACapIsNotACapUntilSomethingChecksIt(unittest.TestCase):
+    """"Max 2 open bets" lived in Ace's header and nowhere else - a sentence
+    the agent was asked to keep, with nothing able to tell whether it had. The
+    number is a constant now, `bet` refuses past it, the verifier reports a
+    bankroll edited past it by hand, and this fails the build if the header
+    stops quoting the same figure.
+
+    Same shape as MIN_REPORT_WORDS: a header is prose and cannot import a
+    constant, so the test is the only thing holding them together.
+    """
+
+    def setUp(self):
+        self.m = load("ace_judge", "ace-judge.py")
+        self.header = (ROOT / "agents" / "ace" / "_ace-agents-header.md").read_text()
+
+    def test_the_header_quotes_the_real_cap(self):
+        m = re.search(r"Max (\d+) open bets", self.header)
+        self.assertIsNotNone(m, "Ace is capped but never told the number")
+        self.assertEqual(int(m.group(1)), self.m.MAX_OPEN_BETS)
+
+    def test_the_verifier_imports_the_cap_rather_than_restating_it(self):
+        src = (SCRIPTS / "ace-verify.py").read_text()
+        self.assertIn("ace_judge.MAX_OPEN_BETS", src)
+        self.assertNotRegex(src, r"open_n > \d",
+                            "ace-verify has its own copy of the cap again")
+
+    def test_counting_open_bets_survives_a_missing_or_broken_file(self):
+        # It is read at the moment a bet is recorded, and a crash there would
+        # cost a cycle over a file that simply is not there yet.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "agents" / "ace" / "state").mkdir(parents=True)
+            self.m.AGENT = root / "agents" / "ace"
+            self.assertEqual(self.m.open_bet_count(), 0)
+            (root / "agents/ace/state/bankroll.json").write_text("{ not json")
+            self.assertEqual(self.m.open_bet_count(), 0)
+            (root / "agents/ace/state/bankroll.json").write_text(
+                json.dumps({"open_bets": [{"stake": 150}] * 3}))
+            self.assertEqual(self.m.open_bet_count(), 3)
+
+    def test_bet_refuses_once_the_cap_is_reached(self):
+        src = (SCRIPTS / "ace-judge.py").read_text()
+        body = src.split("def cmd_bet(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("open_bet_count()", body)
+        self.assertIn("MAX_OPEN_BETS", body)
+
+
+class AWeekOfPassesShouldSayHowClose(unittest.TestCase):
+    """Ace has not placed a bet in a week, and "is the 8-point bar too hard"
+    could not be answered - because nothing was recorded. --my-pct was
+    optional, a cycle swept all sixteen rows with one shared reason, and every
+    passed row carried edge_pts: null.
+
+    A pass naming one or two games is a game Ace studied, so it must say what
+    it estimated. A sweep of the whole board is exempt: one number cannot be an
+    estimate for sixteen different games, and pretending it is would be worse
+    than recording nothing.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / "agents/ace/state").mkdir(parents=True)
+        (self.root / "agents/ace/data").mkdir(parents=True)
+        self.m = load("ace_judge", "ace-judge.py")
+        self.m.ROOT = self.root
+        self.m.AGENT = self.root / "agents" / "ace"
+        self.m.CANDIDATES = self.m.AGENT / "data" / "candidates.json"
+        self.m.LEDGER = self.m.AGENT / "state" / "ledger.json"
+        self.m.CANDIDATES.write_text(json.dumps({
+            "day": "2026-09-19", "slot": "afternoon",
+            "candidates": [{"selection": f"T{i} ML", "match": f"A@B{i}",
+                            "price": -150, "novig_pct": 57.0, "sport": "cfb"}
+                           for i in range(16)]}))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def judge(self, number, why="no edge", my_pct=None, status="passed"):
+        class A:
+            pass
+        a = A()
+        a.number, a.why, a.my_pct, a.stake = number, why, my_pct, None
+        return self.m.record(a, status)
+
+    def test_passing_one_studied_game_without_an_estimate_is_refused(self):
+        self.assertEqual(self.judge("1"), 1)
+        self.assertFalse(self.m.LEDGER.exists(), "nothing should have been written")
+
+    def test_passing_it_with_an_estimate_records_the_gap(self):
+        self.assertEqual(self.judge("1", my_pct=54.5), 0)
+        row = json.loads(self.m.LEDGER.read_text())["candidates"][0]
+        self.assertEqual(row["my_pct"], 54.5)
+        self.assertEqual(row["edge_pts"], -2.5)
+
+    def test_a_sweep_of_the_whole_board_needs_no_estimate(self):
+        # One number cannot be an estimate for sixteen games.
+        self.assertEqual(self.judge("1-16", why="nothing cleared 8 points"), 0)
+        self.assertEqual(len(json.loads(self.m.LEDGER.read_text())["candidates"]), 16)
+
+    def test_the_boundary_is_where_the_constant_says(self):
+        upto = self.m.ESTIMATE_REQUIRED_UPTO
+        self.assertEqual(self.judge(",".join(str(n) for n in range(1, upto + 1))), 1)
+        self.assertEqual(self.judge(",".join(str(n) for n in range(1, upto + 2))), 0)
+
+    def test_a_bet_needs_an_estimate_of_its_own(self):
+        # The bar IS the gap between the estimate and the no-vig line, so a
+        # bet without one claims 8+ points with nothing on record to check.
+        class A:
+            pass
+        a = A()
+        a.number, a.why, a.my_pct, a.stake = "1", "SP scratched", None, 150.0
+        self.assertEqual(self.m.record(a, "bet"), 1)
+        a.my_pct = 71.0
+        self.assertEqual(self.m.record(a, "bet"), 0)
+        row = json.loads(self.m.LEDGER.read_text())["candidates"][0]
+        self.assertEqual(row["edge_pts"], 14.0)
+
+    def test_a_bet_is_refused_for_bet_reasons_not_pass_reasons(self):
+        # Guarding the pass rule on status is what keeps the advice correct.
+        # Told to "pass it with --my-pct", an agent holding a real edge would
+        # do the one thing it should not - and being given the wrong next step
+        # is a failure this repo has already paid for twice today.
+        import contextlib, io
+        class A:
+            pass
+        a = A()
+        a.number, a.why, a.my_pct, a.stake = "1", "SP scratched", None, 150.0
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.m.record(a, "bet")
+        message = err.getvalue()
+        self.assertIn("--my-pct", message)
+        self.assertNotIn("ace-judge.py pass", message,
+                         "a bet must not be told to pass the game instead")
+
+    def test_the_header_says_to_give_an_estimate(self):
+        # Refusing for a rule the instructions never state is the failure this
+        # repo keeps repeating.
+        header = (ROOT / "agents" / "ace" / "_ace-agents-header.md").read_text()
+        self.assertIn("--my-pct", header)
+        self.assertIn("every game you actually studied", header)

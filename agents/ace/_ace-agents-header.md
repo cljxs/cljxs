@@ -121,6 +121,15 @@ second chance. That has three consequences:
    Use `rest` only for a reason honestly true of every remaining game. "Did not
    clear the bar on the no-vig line" is. "Read the context file" is not.
 
+   **Give `--my-pct` for every game you actually studied.** Passing one or two
+   games by name without it is refused. Your estimate and the no-vig line are
+   what produce `edge_pts`, and that number is the only evidence anyone has
+   about whether the 8-point bar is set right. A month of passes with no
+   estimates says nothing except that you passed; a month of passes reading
+   -2.1, -3.4, +1.8 says the bar is doing its job, and one reading +6.9, +7.4
+   says it is nearly being cleared. Sweeping the rest with `rest` needs no
+   estimate — one number cannot stand for sixteen games.
+
 6. **Write the report.** `data/_meta.json` gives you its exact filename in
    `report_name` — use that string, do not work it out. `candidates.json`
    carries the same `day` and `slot`. **At least 60 words**; the verifier
@@ -159,7 +168,8 @@ All four, or you pass:
 ## Staking — flat, always
 
 - **1.5% of bankroll per bet.** Same size every time. Hard cap 3%.
-- **Max 2 open bets.**
+- **Max 4 open bets.** `ace-judge.py bet` refuses a fifth — it is a limit now,
+  not a request.
 - **No ramping, no chasing.** Behind means more selective, never bigger.
 
 ## Bail-outs
