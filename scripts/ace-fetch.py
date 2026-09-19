@@ -48,7 +48,30 @@ SPORTS = {
     "mlb": {"path": "baseball/mlb", "months": {4, 5, 6, 7, 8, 9, 10}},
     "nfl": {"path": "football/nfl", "months": {9, 10, 11, 12, 1, 2}},
     "nba": {"path": "basketball/nba", "months": {10, 11, 12, 1, 2, 3, 4, 5, 6}},
+    # College football is the same bet Ace already makes - same endpoint, same
+    # pickcenter block, same no-vig maths - so it needs no new judgement, only
+    # a place in this table. What it does need is PRICE_BAND below: sampled on
+    # a real board, CFB carried a moneyline on 9 of 14 games and the ones it
+    # did included -1350/+800 and +1300/-2800.
+    "cfb": {"path": "football/college-football", "months": {8, 9, 10, 11, 12, 1}},
 }
+
+# A candidate has to be a bet Ace's own rule could take. At -2800 the no-vig
+# line is about 96%, so clearing the 8-point bar means believing something no
+# injury report supports; the row can only ever be passed. Before this, the
+# slate was the eight games starting soonest whatever their price, so one CFB
+# Saturday could fill the whole window with blowouts and crowd out the NFL
+# games that were actually playable.
+#
+# Lopsidedness is the FAVOURITE's price - the most negative of the two. The
+# first version of this took the smaller magnitude of the pair, which let
+# -410/+320 through a band its own comment said was "favourite no shorter than
+# -400", because the underdog's +320 was the smaller number. The code and the
+# sentence describing it disagreed, which is the thing this repo keeps finding.
+#
+# 600 rather than 400: -600 is about 86% implied, and an 8-point move from
+# there is still a real opinion about a real game. -1000 and beyond is not.
+MAX_FAVOURITE = 600
 
 
 def log(m):
@@ -110,6 +133,28 @@ def team_of(comp, home):
         if (c.get("homeAway") == "home") == home:
             return c
     return {}
+
+
+def unplayable(context):
+    """Why this game cannot be a candidate, or "" if it can.
+
+    A reason, not a boolean, because "no line was posted" and "the line is
+    -2800" are different facts and the slate summary says which.
+    """
+    odds = (context or {}).get("odds") or {}
+    home, away = odds.get("moneyline_home"), odds.get("moneyline_away")
+    if home is None or away is None:
+        return "no moneyline posted"
+    try:
+        home, away = int(home), int(away)
+    except (TypeError, ValueError):
+        return "moneyline is not a number"
+    # The favourite is the negative price. A pick-em has both near +100 and no
+    # negative side worth worrying about; a blowout has one side at -5000.
+    favourite = min(home, away)          # most negative, or the smaller plus
+    if favourite < 0 and abs(favourite) > MAX_FAVOURITE:
+        return f"lopsided ({home:+d}/{away:+d})"
+    return ""
 
 
 def build_context(sport, path, event):
@@ -254,8 +299,31 @@ def build_ledger(day, ctx_dir, slot):
             continue
         games.append((hours, f.name, c))
     games.sort(key=lambda g: (g[0], g[1]))
-    dropped = max(0, len(games) - MAX_GAMES)
-    games = games[:MAX_GAMES]
+
+    # Unpriced and lopsided games are dropped BEFORE the slate is cut to
+    # MAX_GAMES, so the window fills with games that could actually be bet
+    # rather than with whatever kicks off first.
+    playable, skipped = [], []
+    for g in games:
+        why = unplayable(g[2])
+        (skipped if why else playable).append((g, why))
+
+    # Share the window between the sports in season instead of handing it to
+    # whichever plays most often. Cutting the playable games soonest-first put
+    # fourteen baseball games ahead of every football game on a Saturday, so
+    # college football could be configured, fetched, priced - and never once
+    # reach the slate. Each sport gets its next game in turn, soonest first
+    # within a sport, until the window is full.
+    by_sport = {}
+    for g, _ in playable:
+        by_sport.setdefault(g[2].get("sport") or "?", []).append(g)
+    chosen, order = [], sorted(by_sport)
+    while len(chosen) < MAX_GAMES and any(by_sport.values()):
+        for sport in order:
+            if by_sport.get(sport) and len(chosen) < MAX_GAMES:
+                chosen.append(by_sport[sport].pop(0))
+    dropped = max(0, len(playable) - len(chosen))
+    games = sorted(chosen, key=lambda g: (g[0], g[1]))
 
     rows = []
     for _, _, c in games:
@@ -301,6 +369,14 @@ def build_ledger(day, ctx_dir, slot):
         "window_hours": BET_WINDOW_HOURS,
         "games_shown": len(games),
         "games_outside_window": dropped,
+        # What the price band held back, and why. A filter nobody can see is a
+        # filter that silently decides the slate - and on a CFB Saturday this
+        # one decides most of it. Ace is told these exist so "the board was
+        # quiet" and "most of the board was unbettable" stay different facts.
+        "games_filtered": len(skipped),
+        "filtered": [{"match": g[2].get("short") or g[2].get("match"),
+                      "sport": g[2].get("sport"), "why": why}
+                     for g, why in skipped[:20]],
         "candidates": rows,
     }
 

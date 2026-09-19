@@ -3175,3 +3175,164 @@ class OneParserForCredentialsEnv(unittest.TestCase):
         body = src.split("def image_model_for(", 1)[1].split("\ndef ", 1)[0]
         self.assertNotIn("splitlines", body, "that is a second parser")
         self.assertNotIn('split("=", 1)', body, "that is a second parser")
+
+
+class CollegeFootballIsTheSameBetOnABiggerBoard(unittest.TestCase):
+    """CFB moneylines are the bet Ace already makes - same endpoint, same
+    pickcenter block, same no-vig maths - so they went in the SPORTS table
+    rather than into a second agent that would have needed its own fetch,
+    judge, verify and sign-off.
+
+    What they needed was a price filter. Sampled on a real board, CFB carried
+    a moneyline on 9 of 14 games and the ones it did included -1350/+800 and
+    -8000/+2200. Every value below is one that actually appeared.
+    """
+
+    def setUp(self):
+        self.m = load("ace_fetch", "ace-fetch.py")
+
+    def odds(self, home, away):
+        return {"odds": {"moneyline_home": home, "moneyline_away": away}}
+
+    def test_college_football_is_in_the_table(self):
+        self.assertIn("cfb", self.m.SPORTS)
+        self.assertEqual(self.m.SPORTS["cfb"]["path"], "football/college-football")
+
+    def test_it_is_in_season_in_the_autumn_and_not_in_june(self):
+        months = self.m.SPORTS["cfb"]["months"]
+        self.assertTrue({9, 10, 11}.issubset(months))
+        self.assertNotIn(6, months)
+
+    def test_a_real_playable_game_is_playable(self):
+        # LSU @ MISS +124/-148 and WVU/UVA -410/+320, both off today's board.
+        self.assertEqual(self.m.unplayable(self.odds(124, -148)), "")
+        self.assertEqual(self.m.unplayable(self.odds(-410, 320)), "")
+        self.assertEqual(self.m.unplayable(self.odds(-111, -109)), "")
+
+    def test_a_real_blowout_is_held_back(self):
+        for home, away in ((-8000, 2200), (-5000, 1800), (-2800, 1300),
+                           (-2100, 1100), (650, -1000)):
+            self.assertIn("lopsided", self.m.unplayable(self.odds(home, away)),
+                          f"{home}/{away}")
+
+    def test_lopsidedness_is_the_favourite_not_the_smaller_number(self):
+        # The defect this test exists for: taking min(abs(home), abs(away))
+        # let -410/+320 through a band documented as "favourite no shorter
+        # than -400", because the underdog's 320 was the smaller magnitude.
+        # The rule is the favourite's price, so the band moves with it.
+        band = self.m.MAX_FAVOURITE
+        self.assertEqual(self.m.unplayable(self.odds(-band, band - 100)), "")
+        self.assertIn("lopsided",
+                      self.m.unplayable(self.odds(-(band + 1), band - 100)))
+        # ...and it does not matter which side of the fixture the favourite is.
+        self.assertIn("lopsided",
+                      self.m.unplayable(self.odds(band - 100, -(band + 1))))
+
+    def test_a_game_with_no_line_is_named_as_such_not_called_lopsided(self):
+        # "No line was posted" and "the line is -5000" are different facts and
+        # the slate summary says which. Five of fourteen sampled CFB games had
+        # no moneyline at all.
+        self.assertEqual(self.m.unplayable(self.odds(None, -148)),
+                         "no moneyline posted")
+        self.assertEqual(self.m.unplayable(self.odds(-148, None)),
+                         "no moneyline posted")
+        self.assertEqual(self.m.unplayable({}), "no moneyline posted")
+
+    def test_a_price_that_is_not_a_number_does_not_crash_the_slate(self):
+        self.assertEqual(self.m.unplayable(self.odds("x", 1)),
+                         "moneyline is not a number")
+
+    def test_a_string_price_that_is_a_number_still_works(self):
+        # ESPN has handed back numbers as strings before.
+        self.assertEqual(self.m.unplayable(self.odds("-150", "130")), "")
+
+
+class TheWindowIsSharedBetweenSports(unittest.TestCase):
+    """Adding college football to the table was not enough to get it judged.
+
+    The slate is the playable games starting soonest, capped at MAX_GAMES.
+    Baseball plays fourteen games a night and starts earlier, so on the first
+    real Saturday board every one of the eight slots went to MLB - college
+    football was fetched, priced, filtered and then crowded out before Ace saw
+    any of it. Configured and never used is the same as not configured.
+
+    Each sport now takes its next game in turn, soonest first within a sport.
+    """
+
+    def setUp(self):
+        self.m = load("ace_fetch", "ace-fetch.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ctx = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def game(self, sport, name, hours_out, home=-150, away=130):
+        start = datetime.now(timezone.utc) + timedelta(hours=hours_out)
+        (self.ctx / f"{sport}-{name}.json").write_text(json.dumps({
+            "sport": sport, "short": name, "match": name,
+            "start_utc": start.strftime("%Y-%m-%dT%H:%MZ"),
+            "status": "STATUS_SCHEDULED",
+            "home": {"abbr": "HOM"}, "away": {"abbr": "AWY"},
+            "odds": {"moneyline_home": home, "moneyline_away": away,
+                     "novig_home_pct": 58.0, "novig_away_pct": 42.0},
+        }))
+
+    def slate(self):
+        out = self.m.build_ledger("2026-09-19", self.ctx, "afternoon")
+        seen, games = set(), []
+        for r in out["candidates"]:
+            key = (r["sport"], r["match"])
+            if key not in seen:
+                seen.add(key)
+                games.append(key)
+        return out, games
+
+    def test_baseball_no_longer_takes_every_slot(self):
+        # The board that found this: MLB starting first, football later.
+        for i in range(14):
+            self.game("mlb", f"mlb{i}", 1 + i * 0.1)
+        for i in range(6):
+            self.game("cfb", f"cfb{i}", 5 + i * 0.1)
+        _out, games = self.slate()
+        sports = {s for s, _ in games}
+        self.assertIn("cfb", sports, "college football must reach the slate")
+        self.assertLessEqual(len([s for s, _ in games if s == "mlb"]),
+                             self.m.MAX_GAMES - 1)
+
+    def test_one_sport_alone_still_fills_the_window(self):
+        # Sharing must not mean holding slots empty for a sport with no games.
+        for i in range(12):
+            self.game("mlb", f"mlb{i}", 1 + i * 0.1)
+        _out, games = self.slate()
+        self.assertEqual(len(games), self.m.MAX_GAMES)
+
+    def test_the_slate_is_still_in_kick_off_order(self):
+        for i in range(4):
+            self.game("mlb", f"mlb{i}", 6 - i)
+            self.game("cfb", f"cfb{i}", 6.5 - i)
+        out, _games = self.slate()
+        starts = [r["starts_utc"] for r in out["candidates"]]
+        self.assertEqual(starts, sorted(starts))
+
+    def test_lopsided_games_are_filtered_before_the_window_is_cut(self):
+        # Otherwise blowouts take slots and the playable games behind them are
+        # reported as "outside the window", which is a different claim.
+        for i in range(8):
+            self.game("cfb", f"blowout{i}", 1 + i * 0.1, home=-5000, away=1800)
+        self.game("nfl", "playable", 9)
+        out, games = self.slate()
+        self.assertIn(("nfl", "playable"), games)
+        self.assertEqual(out["games_filtered"], 8)
+
+    def test_what_was_filtered_is_reported_with_its_reason(self):
+        # A filter nobody can see silently decides the slate, and on a CFB
+        # Saturday it decides most of it.
+        self.game("cfb", "blowout", 1, home=-5000, away=1800)
+        self.game("cfb", "noline", 2, home=None, away=None)
+        self.game("nfl", "fine", 3)
+        out, _games = self.slate()
+        why = {f["match"]: f["why"] for f in out["filtered"]}
+        self.assertIn("lopsided", why["blowout"])
+        self.assertEqual(why["noline"], "no moneyline posted")
+        self.assertNotIn("fine", why)

@@ -68,6 +68,21 @@ second chance. That has three consequences:
    begun — around eight, not the whole board. `games_outside_window` says how
    many were held back. You are not missing anything by not looking at them;
    a game three days out cannot be bet on information that does not exist yet.
+
+   **College football is on the board.** Same bet, same no-vig bar, same rules
+   — a CFB moneyline is judged exactly like an NFL one. Two things about it:
+
+   - Most of a September CFB Saturday never reaches you. `games_filtered` and
+     `filtered` list what was held back and why: either no moneyline was
+     posted, or the favourite was shorter than -600, where no honest estimate
+     clears 8 points. Those are not passes you need to explain — they were
+     never candidates.
+   - The window is shared between the sports in season, so a fourteen-game
+     baseball night no longer crowds football off the slate entirely. Expect a
+     mixed board.
+
+   A quiet slate and a slate that was mostly filtered are different things.
+   If you pass on everything, say which one it was.
 3. **Default to PASS.** Most cycles you bet nothing — the correct outcome.
 4. **Record the bets you settled** in `state/bankroll.json` — the bankroll,
    and each graded bet moved to `settled_bets`. Only if something settled;
