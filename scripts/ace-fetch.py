@@ -78,6 +78,23 @@ SPORTS = {
 # there is still a real opinion about a real game. -1000 and beyond is not.
 MAX_FAVOURITE = 600
 
+# How recently an injury has to have been reported to be worth Ace's attention.
+#
+# Rule 2 of Ace's own bar asks for "real information the market has not priced
+# yet - a just-announced injury, a scratched starter". It could not be
+# satisfied: injuries live inside the per-game context files, Ace is told to
+# open three or four of them, so it had no way to scan a board for news and no
+# way to tell a report filed an hour ago from one filed eleven days ago.
+#
+# ESPN timestamps them, and on a real NFL board the ages ran 0h, 2h, 3h, 4h
+# alongside entries 264h and 449h old. Six hours is wide enough to survive the
+# gap between wakes and narrow enough that "fresh" still means something.
+FRESH_INJURY_HOURS = 6.0
+
+# Enough for Ace to see the shape of a team's news without the candidate file
+# turning into an injury report.
+MAX_FRESH_INJURIES = 6
+
 
 def log(m):
     print(f"[ace-fetch {datetime.now(timezone.utc):%H:%M:%S}] {m}", flush=True)
@@ -180,6 +197,44 @@ def pick_for_context(scheduled, now=None):
     inside.sort(key=lambda x: x[0])
     outside.sort(key=lambda x: x[0])
     return [e for _k, e in inside] + [e for _k, e in outside]
+
+
+def fresh_injuries(context, now=None, window_hours=FRESH_INJURY_HOURS):
+    """Injuries reported within the window, newest first.
+
+    Both teams' news is carried on every row of a fixture: a side is priced
+    against its opponent, so the opponent losing a starter is as much a reason
+    to look as your own team losing one.
+
+    An injury with no date, or one whose date will not parse, is NOT fresh.
+    Unknown is not the same as recent, and guessing the other way would put
+    a decade-old entry at the top of the list Ace is told to trust.
+    """
+    now = now or datetime.now(timezone.utc)
+    out = []
+    for inj in ((context or {}).get("injuries") or []):
+        raw = inj.get("date")
+        if not raw:
+            continue
+        try:
+            when = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        hours = (now - when).total_seconds() / 3600
+        # A report dated in the future is a clock problem, not news.
+        if hours < 0 or hours > window_hours:
+            continue
+        out.append({
+            "team": inj.get("team"),
+            "player": inj.get("player"),
+            "position": inj.get("position"),
+            "status": inj.get("status"),
+            "hours_old": round(hours, 1),
+        })
+    out.sort(key=lambda i: i["hours_old"])
+    return out[:MAX_FRESH_INJURIES]
 
 
 def unplayable(context):
@@ -373,7 +428,12 @@ def build_ledger(day, ctx_dir, slot):
     games = sorted(chosen, key=lambda g: (g[0], g[1]))
 
     rows = []
+    news_games = 0
     for _, _, c in games:
+        # Computed once per fixture, carried on both of its rows.
+        fresh = fresh_injuries(c, now)
+        if fresh:
+            news_games += 1
         odds = c.get("odds") or {}
         nh, na = odds.get("novig_home_pct"), odds.get("novig_away_pct")
         # These two keys are the ones build_context actually writes. They were
@@ -400,6 +460,10 @@ def build_ledger(day, ctx_dir, slot):
                 "novig_pct": pct,
                 "my_pct": None,
                 "edge_pts": None,
+                # Rule 2 made visible. An empty list is a real answer: no news
+                # on this game in the last few hours, so nothing here can be
+                # the unpriced information the bar asks for.
+                "fresh_injuries": fresh,
                 "why_not": why,
                 # Nothing here is a pass yet - Ace has not looked. Saying
                 # "passed" before it has would be a lie the board repeats.
@@ -420,6 +484,8 @@ def build_ledger(day, ctx_dir, slot):
         # filter that silently decides the slate - and on a CFB Saturday this
         # one decides most of it. Ace is told these exist so "the board was
         # quiet" and "most of the board was unbettable" stay different facts.
+        "fresh_injury_hours": FRESH_INJURY_HOURS,
+        "games_with_news": news_games,
         "games_filtered": len(skipped),
         "filtered": [{"match": g[2].get("short") or g[2].get("match"),
                       "sport": g[2].get("sport"), "why": why}

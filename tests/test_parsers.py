@@ -3583,3 +3583,158 @@ class AWeekOfPassesShouldSayHowClose(unittest.TestCase):
         header = (ROOT / "agents" / "ace" / "_ace-agents-header.md").read_text()
         self.assertIn("--my-pct", header)
         self.assertIn("every game you actually studied", header)
+
+
+class RuleTwoNeedsSomethingToPointAt(unittest.TestCase):
+    """Ace's own bar asks for "real information the market has not priced yet -
+    a just-announced injury, a scratched starter". It could not be satisfied:
+    injuries lived inside the per-game context files, Ace is told to open three
+    or four of them, so it could not scan a board for news and could not tell a
+    report filed an hour ago from one filed eleven days ago.
+
+    On a real NFL board the ages ran 0h, 2h, 3h and 4h alongside entries 264h
+    and 449h old, so the distinction is there to be made. Every timestamp in
+    these tests is one that actually appeared.
+    """
+
+    def setUp(self):
+        self.m = load("ace_fetch", "ace-fetch.py")
+        self.now = datetime(2026, 9, 19, 20, 0, tzinfo=timezone.utc)
+
+    def ctx(self, *injuries):
+        return {"injuries": [dict(i) for i in injuries]}
+
+    def inj(self, player, hours_ago, team="PIT", status="Out", position="CB"):
+        when = self.now - timedelta(hours=hours_ago)
+        return {"team": team, "player": player, "position": position,
+                "status": status, "date": when.strftime("%Y-%m-%dT%H:%M") + "Z"}
+
+    def test_a_report_from_three_hours_ago_is_fresh(self):
+        # Joey Porter Jr., Out, 3h - exactly the case rule 2 describes.
+        got = self.m.fresh_injuries(self.ctx(self.inj("Joey Porter Jr.", 3)), self.now)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["player"], "Joey Porter Jr.")
+        self.assertAlmostEqual(got[0]["hours_old"], 3.0, places=1)
+
+    def test_a_report_from_eleven_days_ago_is_not(self):
+        # Kyler Gordon, Out, 261h. Real, and not news.
+        self.assertEqual(
+            self.m.fresh_injuries(self.ctx(self.inj("Kyler Gordon", 261)), self.now), [])
+
+    def test_the_window_boundary_is_where_the_constant_says(self):
+        w = self.m.FRESH_INJURY_HOURS
+        self.assertEqual(len(self.m.fresh_injuries(
+            self.ctx(self.inj("inside", w - 0.1)), self.now)), 1)
+        self.assertEqual(self.m.fresh_injuries(
+            self.ctx(self.inj("outside", w + 0.1)), self.now), [])
+
+    def test_an_undated_injury_is_not_treated_as_fresh(self):
+        # Unknown is not recent. Guessing the other way puts an entry of
+        # unknown age at the top of the list Ace is told to trust.
+        bad = self.inj("no date", 1)
+        bad["date"] = None
+        self.assertEqual(self.m.fresh_injuries(self.ctx(bad), self.now), [])
+        del bad["date"]
+        self.assertEqual(self.m.fresh_injuries(self.ctx(bad), self.now), [])
+
+    def test_a_date_that_will_not_parse_is_not_fresh_either(self):
+        bad = self.inj("garbage", 1)
+        bad["date"] = "last Tuesday"
+        self.assertEqual(self.m.fresh_injuries(self.ctx(bad), self.now), [])
+
+    def test_a_report_dated_in_the_future_is_a_clock_problem_not_news(self):
+        ahead = self.inj("tomorrow", -4)
+        self.assertEqual(self.m.fresh_injuries(self.ctx(ahead), self.now), [])
+
+    def test_the_newest_comes_first(self):
+        got = self.m.fresh_injuries(self.ctx(
+            self.inj("four", 4), self.inj("half", 0.5), self.inj("two", 2)), self.now)
+        self.assertEqual([i["player"] for i in got], ["half", "two", "four"])
+
+    def test_both_teams_news_is_carried(self):
+        # A side is priced against its opponent, so the opponent losing a
+        # starter is as much a reason to look as your own team losing one.
+        got = self.m.fresh_injuries(self.ctx(
+            self.inj("theirs", 1, team="NE"), self.inj("ours", 2, team="PIT")), self.now)
+        self.assertEqual({i["team"] for i in got}, {"NE", "PIT"})
+
+    def test_the_list_is_capped(self):
+        many = [self.inj(f"p{i}", i * 0.1) for i in range(20)]
+        got = self.m.fresh_injuries(self.ctx(*many), self.now)
+        self.assertEqual(len(got), self.m.MAX_FRESH_INJURIES)
+
+    def test_no_injuries_at_all_is_an_empty_list_not_a_crash(self):
+        self.assertEqual(self.m.fresh_injuries({}, self.now), [])
+        self.assertEqual(self.m.fresh_injuries(None, self.now), [])
+        self.assertEqual(self.m.fresh_injuries({"injuries": None}, self.now), [])
+
+
+class EveryCandidateSaysWhetherThereIsNews(unittest.TestCase):
+    """The list is only useful if it reaches the file Ace actually reads.
+    `candidates.json` carries it per row, and an empty list is a real answer -
+    no news on this game, so nothing here can be the unpriced information the
+    bar asks for.
+    """
+
+    def setUp(self):
+        self.m = load("ace_fetch", "ace-fetch.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ctx = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def game(self, name, hours_out, injuries=()):
+        start = datetime.now(timezone.utc) + timedelta(hours=hours_out)
+        (self.ctx / f"nfl-{name}.json").write_text(json.dumps({
+            "sport": "nfl", "short": name, "match": name,
+            "start_utc": start.strftime("%Y-%m-%dT%H:%MZ"),
+            "status": "STATUS_SCHEDULED",
+            "home": {"abbr": "HOM"}, "away": {"abbr": "AWY"},
+            "odds": {"moneyline_home": -150, "moneyline_away": 130,
+                     "novig_home_pct": 58.0, "novig_away_pct": 42.0},
+            "injuries": list(injuries),
+        }))
+
+    def slate(self):
+        return self.m.build_ledger("2026-09-19", self.ctx, "afternoon")
+
+    def recent(self, player, hours_ago):
+        when = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+        return {"team": "HOM", "player": player, "position": "QB",
+                "status": "Out", "date": when.strftime("%Y-%m-%dT%H:%MZ")}
+
+    def test_a_game_with_news_carries_it_on_both_of_its_rows(self):
+        self.game("NEWS", 4, [self.recent("Joey Porter Jr.", 3)])
+        rows = [r for r in self.slate()["candidates"] if r["match"] == "NEWS"]
+        self.assertEqual(len(rows), 2, "home and away")
+        for r in rows:
+            self.assertEqual(len(r["fresh_injuries"]), 1)
+            self.assertEqual(r["fresh_injuries"][0]["player"], "Joey Porter Jr.")
+
+    def test_a_quiet_game_says_so_rather_than_leaving_the_field_out(self):
+        # Missing and empty read differently. Ace is told an empty list means
+        # there is nothing here, which only works if the key is always present.
+        self.game("QUIET", 4)
+        for r in self.slate()["candidates"]:
+            self.assertIn("fresh_injuries", r)
+            self.assertEqual(r["fresh_injuries"], [])
+
+    def test_the_slate_counts_how_many_games_have_news(self):
+        # 2 of 8 on the board this was built against.
+        self.game("NEWS", 4, [self.recent("a", 1)])
+        self.game("ALSO", 5, [self.recent("b", 2)])
+        self.game("QUIET", 6)
+        out = self.slate()
+        self.assertEqual(out["games_with_news"], 2)
+        self.assertEqual(out["games_shown"], 3)
+
+    def test_stale_news_does_not_count_as_news(self):
+        self.game("OLD", 4, [self.recent("Kyler Gordon", 261)])
+        out = self.slate()
+        self.assertEqual(out["games_with_news"], 0)
+        self.assertEqual(out["candidates"][0]["fresh_injuries"], [])
+
+    def test_the_window_is_published_so_the_number_can_be_checked(self):
+        self.game("X", 4)
+        self.assertEqual(self.slate()["fresh_injury_hours"], self.m.FRESH_INJURY_HOURS)

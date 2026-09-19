@@ -61,8 +61,11 @@ second chance. That has three consequences:
    slate. No context file, no bet, no exceptions — but reading all of them is
    how a cycle runs out of time before it writes anything.
 
-   `candidates.json` already carries the price and the no-vig line for every
-   game. That is enough to rule most of them out without opening anything.
+   `candidates.json` already carries the price, the no-vig line and
+   `fresh_injuries` for every game. That is enough to rule most of them out
+   without opening anything: no news and no gap is a pass you can make from
+   the candidate list alone. `games_with_news` says how many had anything at
+   all — on a normal board it is one or two out of eight.
 
    It now lists only games starting within the next 14 hours that have not
    begun — around eight, not the whole board. `games_outside_window` says how
@@ -162,6 +165,17 @@ All four, or you pass:
 2. Rooted in **real information the market has not priced yet** — a
    just-announced injury, a scratched starter, a lineup or weather change.
    Something that happened, not something you computed.
+
+   **`fresh_injuries` on the candidate row is where you look for this.** It
+   lists anything reported in the last few hours, newest first, for both
+   teams, with how old it is. An empty list is a real answer: nothing has
+   happened on that game, so nothing about it can satisfy this rule, and you
+   can pass it without opening anything.
+
+   Whether a name on that list *matters* is yours to judge — a starting
+   quarterback ruled out is not a backup guard placed on IR. But you are no
+   longer guessing which games to look at, and an eleven-day-old entry no
+   longer reads the same as one filed an hour ago.
 3. You have **read the context file** for that game.
 4. Data is fresh and the game has not started.
 
