@@ -1328,10 +1328,14 @@ function forecastCard(f){
   const keys = Object.keys(probs).map(Number).sort((x, y) => x - y);
   // The headline is the middle threshold, the way his cards lead with 60+.
   const lead = keys.length ? keys[Math.floor((keys.length - 1) / 2)] : null;
-  const graded = f.actual_yards !== null && f.actual_yards !== undefined;
+  // The unit comes off the row: these are no longer all yards, and a card
+  // reading "FINAL 6 yds" under a receptions forecast would be a lie the
+  // script it came from does not tell.
+  const unit = f.unit || 'yds';
+  const graded = f.actual !== null && f.actual !== undefined;
 
   const tiles = keys.map(t => fcTile(t + '+', probs[String(t)], t === lead)).join('');
-  const hit = graded && lead !== null ? Number(f.actual_yards) >= lead : null;
+  const hit = graded && lead !== null ? Number(f.actual) >= lead : null;
 
   return `<div class="fcard${graded ? ' done' : ''}">
     <div class="fchead">
@@ -1346,14 +1350,15 @@ function forecastCard(f){
     </div>
     <div class="fctiles">${tiles}</div>
     <div class="fcfoot">
-      <span>EXP ${f.sample_mean === undefined ? '—' : Number(f.sample_mean).toFixed(1)}</span>
-      <span>RANGE ${f.sample_low ?? '—'}–${f.sample_high ?? '—'}</span>
+      <span>EXP ${f.sample_mean === undefined ? '—' : Number(f.sample_mean).toFixed(1)} ${esc(unit)}</span>
+      <span>P25–P75 ${f.p25 ?? '—'}–${f.p75 ?? '—'}</span>
       <span>${f.sample_games ?? '?'} GAMES</span>
-      <span>${(f.draws || 0).toLocaleString()} DRAWS</span>
+      ${f.availability && f.availability.thin
+        ? `<span class="fcwarn">PLAYED ${f.availability.played}/${f.availability.team_games}</span>` : ''}
       ${f.coarse ? `<span class="fcwarn">COARSE</span>` : ''}
     </div>
     ${graded ? `<div class="fcres ${hit ? 'up' : 'down'}">
-        FINAL ${Number(f.actual_yards).toFixed(0)} yds · ${lead}+ ${hit ? 'HIT' : 'MISS'}</div>`
+        FINAL ${Number(f.actual).toFixed(0)} ${esc(unit)} · ${lead}+ ${hit ? 'HIT' : 'MISS'}</div>`
       : `<div class="fcres pend">awaiting the final score</div>`}
   </div>`;
 }
@@ -1373,7 +1378,10 @@ async function loadAceForecasts(){
     + (c.pending ? ` · ${c.pending} awaiting a result` : '')
     + (c.graded ? ` · ${c.graded} graded` : '') + `</div>`
     + `<div class="muted" style="margin-bottom:10px">Probabilities only — no odds are
-       held or shown. Grade them, then judge the calibration.</div>`
+       held or shown${c.markets ? ` · ${c.markets} market${c.markets === 1 ? '' : 's'}` : ''}.
+       A percentage is what he does <em>when he plays</em>; PLAYED n/m marks the rows
+       where that is a different question from the one a book prices.
+       Grade them, then judge the calibration.</div>`
     + `<div class="fcards">` + d.forecasts.map(forecastCard).join('') + `</div>`;
 }
 

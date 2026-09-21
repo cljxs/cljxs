@@ -4091,20 +4091,21 @@ class ForecastsAreGradedOrTheyAreDecoration(unittest.TestCase):
         # Five games, two of them over 60. A bootstrap claims no shape beyond
         # the one he produced.
         probs = self.m.simulate([10.0, 20.0, 65.0, 80.0, 30.0],
-                                thresholds=(60,), draws=10_000, seed="x")
+                                (60,), draws=10_000, seed="x")
         self.assertAlmostEqual(probs[60], 40.0, delta=2.0)
 
     def test_the_same_seed_gives_the_same_forecast(self):
         # A number nobody can reproduce cannot be audited after the game.
         sample = [12.0, 45.0, 77.0, 31.0, 66.0, 9.0, 52.0, 88.0]
-        a = self.m.simulate(sample, seed="game-1-player-2")
-        b = self.m.simulate(sample, seed="game-1-player-2")
-        c = self.m.simulate(sample, seed="game-1-player-9")
+        bars = self.m.MARKETS["receiving_yards"]["thresholds"]
+        a = self.m.simulate(sample, bars, seed="game-1-player-2")
+        b = self.m.simulate(sample, bars, seed="game-1-player-2")
+        c = self.m.simulate(sample, bars, seed="game-1-player-9")
         self.assertEqual(a, b)
         self.assertNotEqual(a, c)
 
     def test_an_empty_sample_forecasts_nothing(self):
-        self.assertEqual(self.m.simulate([]), {})
+        self.assertEqual(self.m.simulate([], (40, 50)), {})
 
     def test_a_thin_sample_is_refused_by_the_minimum(self):
         # Week 3 gives two games. A confident number off two games is the
@@ -4113,7 +4114,9 @@ class ForecastsAreGradedOrTheyAreDecoration(unittest.TestCase):
 
     def test_probabilities_fall_as_the_bar_rises(self):
         sample = [5.0, 18.0, 33.0, 44.0, 55.0, 61.0, 72.0, 90.0, 101.0]
-        probs = self.m.simulate(sample, seed="s")
+        probs = self.m.simulate(sample,
+                                self.m.MARKETS["receiving_yards"]["thresholds"],
+                                seed="s")
         ordered = [probs[t] for t in sorted(probs)]
         self.assertEqual(ordered, sorted(ordered, reverse=True))
 
@@ -4121,8 +4124,8 @@ class ForecastsAreGradedOrTheyAreDecoration(unittest.TestCase):
 
     def forecast_row(self, probs, actual=None):
         return {"event_id": "1", "athlete_id": "2", "player": "A Receiver",
-                "probabilities": probs, "actual_yards": actual,
-                "graded_utc": None}
+                "probabilities": probs, "actual": actual,
+                "market": "receiving_yards", "graded_utc": None}
 
     def test_calibration_compares_what_was_said_to_what_happened(self):
         # Ten calls at ~70%, seven of which landed. That is a forecast telling
@@ -4177,19 +4180,29 @@ class ForecastsAreGradedOrTheyAreDecoration(unittest.TestCase):
     def test_identical_thresholds_are_reported_as_coarse(self):
         # Tutu Atwell came back 17.7% at every threshold off a real game log,
         # because he has no game between 40 and 70 yards.
-        self.assertTrue(self.m.is_coarse({40: 17.7, 50: 17.7, 60: 17.7, 70: 17.7}))
-        self.assertTrue(self.m.is_coarse({40: 66.4, 50: 66.4, 60: 44.4, 70: 32.7}))
+        bars = (40, 50, 60, 70)
+        self.assertTrue(self.m.is_coarse({40: 17.7, 50: 17.7, 60: 17.7, 70: 17.7}, bars))
+        self.assertTrue(self.m.is_coarse({40: 66.4, 50: 66.4, 60: 44.4, 70: 32.7}, bars))
 
     def test_a_forecast_with_resolution_is_not_flagged(self):
-        self.assertFalse(self.m.is_coarse({40: 86.0, 50: 69.9, 60: 47.1, 70: 21.0}))
+        self.assertFalse(self.m.is_coarse({40: 86.0, 50: 69.9, 60: 47.1, 70: 21.0},
+                                          (40, 50, 60, 70)))
 
     def test_nothing_forecast_is_not_coarse(self):
-        self.assertFalse(self.m.is_coarse({}))
+        self.assertFalse(self.m.is_coarse({}, (40, 50, 60, 70)))
 
-    def test_the_coarse_flag_is_what_the_label_is_driven_by(self):
-        src = (SCRIPTS / "props-forecast.py").read_text()
-        self.assertIn("coarse = is_coarse(probs)", src)
-        self.assertIn('"  COARSE" if coarse else ""', src)
+    def test_a_row_carries_the_coarse_flag_its_own_numbers_earn(self):
+        # Asserted on the row, not on the source line that sets it: the
+        # earlier version of this checked for the text "coarse = is_coarse("
+        # and would have passed against a flag nothing ever read.
+        flat = [20.0] * 12          # no game between any two bars
+        spread = [5.0, 25.0, 45.0, 55.0, 65.0, 75.0, 85.0, 95.0, 105.0, 115.0]
+        rows = self.m.rows_for_player(
+            "1", "A @ B", None, "2", "A Receiver", "WR", "AAA",
+            {"receiving_yards": spread, "receptions": flat}, ["2026"], None)
+        by = {r["market"]: r for r in rows}
+        self.assertFalse(by["receiving_yards"]["coarse"])
+        self.assertTrue(by["receptions"]["coarse"])
 
 
 class TheForecastCardShowsNoPrice(unittest.TestCase):
@@ -4238,7 +4251,7 @@ class TheForecastCardShowsNoPrice(unittest.TestCase):
         # A probability off 11 games is not the same claim as one off 21, and
         # printing them identically is the failure being designed against.
         card = self.html.split("function forecastCard(", 1)[1].split("\nasync function", 1)[0]
-        for field in ("sample_games", "sample_mean", "sample_low", "sample_high", "draws"):
+        for field in ("sample_games", "sample_mean", "p25", "p75"):
             self.assertIn(field, card, f"the card must show {field}")
 
     def test_an_ungraded_forecast_is_not_drawn_as_a_result(self):
@@ -4246,7 +4259,7 @@ class TheForecastCardShowsNoPrice(unittest.TestCase):
         # like a failure before a ball was thrown.
         card = self.html.split("function forecastCard(", 1)[1].split("\nasync function", 1)[0]
         self.assertIn("awaiting the final score", card)
-        self.assertIn("actual_yards !== null", card)
+        self.assertIn("f.actual !== null", card)
 
     def test_the_panel_is_loaded_for_ace(self):
         # Assert the CALL, not the name: `async function loadAceForecasts(){`
@@ -4260,3 +4273,455 @@ class TheForecastCardShowsNoPrice(unittest.TestCase):
         # It rendered as "MODEL FORECAST · NOT / A BET", which reads as two
         # separate claims. Found by screenshotting it rather than reading it.
         self.assertRegex(self.html, r"\.fclabel\{[^}]*white-space:nowrap")
+
+
+class AStatIsFoundByNameNotByColumn(unittest.TestCase):
+    """The forecaster read a game log by column number and got the wrong stat
+    for most of the league.
+
+    It took labels.index("YDS") - the first YDS column - with a comment saying
+    that was the receiving one. It is, for a tight end. ESPN orders a game
+    log's columns by what the player mostly does, so the arrays below (both
+    captured from the live API) put receivingYards at index 2 for Kelce and at
+    index 7 for Gibbs. Every running back in the file was being forecast on
+    his rushing yards under a heading that said receiving, and nothing in the
+    output could have shown it: the numbers looked entirely plausible.
+
+    The box score then orders the same stats a third way - TGTS is second in
+    the game log and last in the box score - so a fix that hard-coded the
+    other order would have broken grading instead.
+
+    Both payloads name their columns. That is what is read now, and this is
+    the test that the names are the ones ESPN actually uses.
+    """
+
+    # Captured 2026-09-21 from site.web.api.espn.com, verbatim.
+    TE_NAMES = ['receptions', 'receivingTargets', 'receivingYards',
+                'yardsPerReception', 'receivingTouchdowns', 'longReception',
+                'rushingAttempts', 'rushingYards', 'yardsPerRushAttempt',
+                'longRushing', 'rushingTouchdowns', 'fumbles', 'fumblesLost',
+                'fumblesForced', 'kicksBlocked']
+    TE_LABELS = ['REC', 'TGTS', 'YDS', 'AVG', 'TD', 'LNG', 'CAR', 'YDS', 'AVG',
+                 'LNG', 'TD', 'FUM', 'LST', 'FF', 'KB']
+    RB_NAMES = ['rushingAttempts', 'rushingYards', 'yardsPerRushAttempt',
+                'rushingTouchdowns', 'longRushing', 'receptions',
+                'receivingTargets', 'receivingYards', 'yardsPerReception',
+                'receivingTouchdowns', 'longReception', 'fumbles',
+                'fumblesLost', 'fumblesForced', 'kicksBlocked']
+    RB_LABELS = ['CAR', 'YDS', 'AVG', 'TD', 'LNG', 'REC', 'TGTS', 'YDS', 'AVG',
+                 'TD', 'LNG', 'FUM', 'LST', 'FF', 'KB']
+    # A box score receiving category, captured from the same game.
+    BOX_KEYS = ['receptions', 'receivingYards', 'yardsPerReception',
+                'receivingTouchdowns', 'longReception', 'receivingTargets']
+
+    def setUp(self):
+        self.m = load("props_forecast", "props-forecast.py")
+
+    def log(self, names, stats):
+        return {"names": names, "seasonTypes": [
+            {"displayName": "2026 Regular Season", "categories": [
+                {"events": [{"stats": stats}]}]}]}
+
+    def test_the_first_yards_column_is_not_the_same_stat_twice(self):
+        # The premise of the bug, asserted so the fixtures cannot rot into
+        # agreeing with each other.
+        self.assertEqual(self.TE_LABELS.index("YDS"), 2)
+        self.assertEqual(self.RB_LABELS.index("YDS"), 1)
+        self.assertEqual(self.TE_NAMES[2], "receivingYards")
+        self.assertEqual(self.RB_NAMES[1], "rushingYards")
+
+    def test_a_tight_ends_receiving_yards_are_his_receiving_yards(self):
+        stats = ["7", "9", "82", "11.7", "1", "24",
+                 "0", "0", "0.0", "0", "0", "0", "0", "0", "0"]
+        out = self.m.values_from_log(self.log(self.TE_NAMES, stats))
+        self.assertEqual([v for _s, v in out["receiving_yards"]], [82.0])
+        self.assertEqual([v for _s, v in out["receptions"]], [7.0])
+        self.assertEqual([v for _s, v in out["receiving_targets"]], [9.0])
+
+    def test_a_running_backs_receiving_yards_are_not_his_rushing_yards(self):
+        # 118 rushing, 24 receiving. By column this read 118 as a receiving
+        # forecast, which is how a third-down back gets quoted over 70 yards
+        # receiving every week.
+        stats = ["21", "118", "5.6", "2", "37",
+                 "3", "4", "24", "8.0", "0", "12", "0", "0", "0", "0"]
+        out = self.m.values_from_log(self.log(self.RB_NAMES, stats))
+        self.assertEqual([v for _s, v in out["receiving_yards"]], [24.0])
+        self.assertEqual([v for _s, v in out["rushing_yards"]], [118.0])
+        self.assertEqual([v for _s, v in out["rushing_attempts"]], [21.0])
+
+    def test_the_box_score_orders_them_differently_and_is_read_the_same_way(self):
+        # TGTS is index 1 in the game log and index 5 here. One resolver
+        # handles both because both name their columns.
+        self.assertEqual(self.m.column_of(self.BOX_KEYS, "receivingYards"), 1)
+        self.assertEqual(self.m.column_of(self.BOX_KEYS, "receivingTargets"), 5)
+        self.assertEqual(self.m.column_of(self.TE_NAMES, "receivingTargets"), 1)
+
+    def test_a_stat_that_is_not_in_the_payload_is_missing_not_zero(self):
+        # A quarterback's log has no receiving column at all. Reading that as
+        # index 0 would forecast his completions as receptions.
+        self.assertIsNone(self.m.column_of(
+            ['passingYards', 'passingTouchdowns'], "receivingYards"))
+
+    def test_every_market_names_a_stat_espn_actually_publishes(self):
+        # A typo in MARKETS costs nothing at import and everything at 1pm on
+        # Sunday: the column simply is not found and the market silently
+        # disappears from the file. Checked against captured names.
+        known = set(self.TE_NAMES) | set(self.RB_NAMES) | set(self.BOX_KEYS)
+        for market, spec in self.m.MARKETS.items():
+            self.assertIn(spec["stat"], known,
+                          f"{market} reads a stat no captured payload has")
+
+    def test_no_column_number_is_written_down_anywhere(self):
+        src = (SCRIPTS / "props-forecast.py").read_text()
+        self.assertNotIn('labels.index(', src)
+        self.assertNotIn('.index("YDS")', src)
+
+
+class WhichMarketsAreHisAtAll(unittest.TestCase):
+    """A wide receiver has a rushingYards column and it reads zero every week.
+
+    The first rule was "cleared the lowest bar at least twice", and against
+    real logs it let Davis Allen through on receptions - 2 games over 3 in 21,
+    printing 14.4%, 0.0%, 0.0%, 0.0%. Four numbers, no information, and they
+    crowd out the rows that mean something. Twice is nothing in twenty-one
+    games and a lot in nine, so the rule is a rate: a quarter of his games
+    have to clear the lowest bar.
+
+    It is read off percentile(), which the same row prints as P25-P75, so the
+    filter and the spread beside it cannot come to different conclusions.
+    """
+
+    def setUp(self):
+        self.m = load("props_forecast", "props-forecast.py")
+
+    def test_a_market_he_almost_never_reaches_is_not_his(self):
+        # Davis Allen's receptions, 21 real games.
+        allen = [0, 1, 0, 2, 1, 0, 3, 1, 0, 0, 2, 1, 1, 0, 3, 0, 1, 2, 1, 0, 1]
+        self.assertFalse(self.m.is_relevant(
+            [float(v) for v in allen],
+            self.m.MARKETS["receptions"]["thresholds"]))
+
+    def test_the_same_two_clearances_in_nine_games_is_a_role(self):
+        # 2 of 21 is 10% and not his; 3 of 9 is a third of his games. The
+        # first draft of this test used 2 of 9 - 22%, just under the bar - and
+        # failed, which is the rule being a rate rather than a count.
+        nine = [0.0, 1.0, 2.0, 3.0, 4.0, 1.0, 0.0, 3.0, 5.0]
+        self.assertTrue(self.m.is_relevant(
+            nine, self.m.MARKETS["receptions"]["thresholds"]))
+        self.assertFalse(self.m.is_relevant(
+            [0.0, 1.0, 2.0, 3.0, 4.0, 1.0, 0.0, 2.0, 1.0],
+            self.m.MARKETS["receptions"]["thresholds"]))
+
+    def test_a_receiver_is_not_forecast_on_carries_he_never_takes(self):
+        self.assertFalse(self.m.is_relevant(
+            [0.0] * 17, self.m.MARKETS["rushing_attempts"]["thresholds"]))
+
+    def test_a_feature_back_keeps_his_market(self):
+        kyren = [17.0, 19.0, 12.0, 23.0, 14.0, 16.0, 11.0, 20.0, 18.0]
+        self.assertTrue(self.m.is_relevant(
+            kyren, self.m.MARKETS["rushing_attempts"]["thresholds"]))
+
+    def test_an_empty_sample_is_nobody_s_market(self):
+        self.assertFalse(self.m.is_relevant([], (3, 4, 5, 6)))
+
+    def test_the_rule_and_the_printed_spread_come_off_one_function(self):
+        # If these could drift, a row would show P75 = 2.0 next to a market it
+        # was admitted to for reaching 3.
+        sample = [0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 9.0]
+        p75 = self.m.percentile(sample, self.m.RELEVANT_PERCENTILE)
+        self.assertEqual(self.m.is_relevant(sample, (3,)), p75 >= 3)
+        self.assertEqual(self.m.is_relevant(sample, (4,)), p75 >= 4)
+
+    def test_percentiles_are_exact_not_resampled(self):
+        # Taken off the sample, not off the draws: two runs of a forecast
+        # that did not change must not print a different P25.
+        sample = [10.0, 20.0, 30.0, 40.0]
+        self.assertEqual(self.m.percentile(sample, 50), 25.0)
+        self.assertEqual(self.m.percentile(sample, 0), 10.0)
+        self.assertEqual(self.m.percentile(sample, 100), 40.0)
+        self.assertIsNone(self.m.percentile([], 50))
+
+
+class TheSixPlayersWorthForecasting(unittest.TestCase):
+    """ESPN returns a roster in alphabetical order.
+
+    Taking the first six skill players off it gave Adams, Allen, Atwell,
+    Corum, Daniels for the Rams - and no Puka Nacua, no Kyren Williams. The
+    output looked complete; it was a list of surnames beginning with A.
+
+    Rank by volume instead: targets plus carries, this season, falling back to
+    last season for a side that has not played yet - which in week one is
+    every side, and is when a silent fallback to alphabetical would return.
+    """
+
+    def setUp(self):
+        self.m = load("props_forecast", "props-forecast.py")
+        self.m.LOG_CACHE.clear()
+
+    def tearDown(self):
+        self.m.LOG_CACHE.clear()
+
+    def cache(self, aid, season, targets, carries):
+        self.m.LOG_CACHE[(str(aid), season)] = {
+            "receiving_targets": [("s", float(t)) for t in targets],
+            "rushing_attempts": [("s", float(c)) for c in carries],
+        }
+
+    def cand(self, aid, name):
+        return (str(aid), name, "WR", "LAR", "14")
+
+    def test_the_alphabet_does_not_decide_who_is_forecast(self):
+        self.m.PER_TEAM = 2
+        self.cache(1, None, [2, 1], [0, 0])      # Adams, first alphabetically
+        self.cache(2, None, [12, 11], [0, 0])    # Nacua
+        self.cache(3, None, [0, 0], [19, 21])    # Williams
+        picked = self.m.top_by_usage(
+            [self.cand(1, "A Adams"), self.cand(2, "P Nacua"),
+             self.cand(3, "K Williams")],
+            now=datetime(2026, 9, 21, tzinfo=timezone.utc))
+        self.assertEqual([p[1] for p in picked], ["K Williams", "P Nacua"])
+
+    def test_carries_count_as_much_as_targets(self):
+        # A feature back takes no targets and must not rank below a decoy.
+        self.assertEqual(self.m.usage_of(
+            {"receiving_targets": [], "rushing_attempts": [("s", 20.0)]}), 20.0)
+        self.assertEqual(self.m.usage_of(
+            {"receiving_targets": [("s", 9.0)], "rushing_attempts": []}), 9.0)
+
+    def test_week_one_falls_back_to_last_season_not_to_the_alphabet(self):
+        # Nobody has played. Without the fallback every score is zero and the
+        # sort returns the roster order it was built to replace.
+        now = datetime(2026, 9, 21, tzinfo=timezone.utc)
+        self.cache(1, None, [], []); self.cache(1, 2025, [30], [0])
+        self.cache(2, None, [], []); self.cache(2, 2025, [180], [0])
+        self.m.PER_TEAM = 1
+        picked = self.m.top_by_usage(
+            [self.cand(1, "A Adams"), self.cand(2, "Z Nacua")], now=now)
+        self.assertEqual([p[1] for p in picked], ["Z Nacua"])
+
+    def test_the_cap_is_per_side_not_per_slate(self):
+        # Six from each team, or one lopsided offence takes every slot and the
+        # other side of the game is not forecast at all.
+        self.m.PER_TEAM = 1
+        for i in (1, 2, 3, 4):
+            self.cache(i, None, [i * 5], [0])
+        cands = [(str(i), f"P{i}", "WR", "LAR" if i < 3 else "NYG",
+                  "14" if i < 3 else "19") for i in (1, 2, 3, 4)]
+        picked = self.m.top_by_usage(
+            cands, now=datetime(2026, 9, 21, tzinfo=timezone.utc))
+        self.assertEqual(sorted(p[3] for p in picked), ["LAR", "NYG"])
+
+    def test_a_log_is_fetched_once_and_read_twice(self):
+        # It is read to rank him and again to forecast him. Two fetches of one
+        # URL are two chances to disagree about the same player, and 40 extra
+        # requests a game.
+        calls = []
+        real_get = self.m.get
+        self.m.get = lambda url: (calls.append(url), {"names": [], "seasonTypes": []})[1]
+        try:
+            self.m.game_values("99")
+            self.m.game_values("99")
+        finally:
+            self.m.get = real_get
+        self.assertEqual(len(calls), 1)
+
+
+class TheStrongestClaimIsNotTheHighestNumber(unittest.TestCase):
+    """Asked for "the best prop per player - the highest percentage".
+
+    Ranking by percentage picks the lowest bar every time: 3+ receptions at
+    96% for everyone, which is a sentence about the bar and not about the
+    player. Without a price there is no way to prefer one probability to
+    another, so what is ranked is distance from a coin flip - the same
+    question a book answers with its longest and shortest odds - and an UNDER
+    counts as much as an OVER.
+
+    COARSE rows are excluded: a claim whose resolution is an artifact has no
+    business being the single line shown for a player.
+    """
+
+    def setUp(self):
+        self.m = load("props_forecast", "props-forecast.py")
+
+    def row(self, player, market, probs, coarse=False, games=20):
+        return {"athlete_id": player, "player": player, "market": market,
+                "unit": "rec", "probabilities": probs, "coarse": coarse,
+                "sample_games": games, "sample_mean": 4.0, "p25": 2.0,
+                "p75": 6.0, "availability": None}
+
+    def test_a_confident_under_beats_a_middling_over(self):
+        picks = self.m.strongest([
+            self.row("A", "receptions", {"3": 61.0, "6": 8.0})])
+        self.assertEqual(picks[0]["side"], "UNDER")
+        self.assertEqual(picks[0]["threshold"], 6.0)
+        self.assertEqual(picks[0]["confidence"], 92.0)
+
+    def test_a_confident_over_is_picked_as_an_over(self):
+        picks = self.m.strongest([
+            self.row("A", "receptions", {"3": 96.0, "6": 44.0})])
+        self.assertEqual(picks[0]["side"], "OVER")
+        self.assertEqual(picks[0]["threshold"], 3.0)
+
+    def test_one_line_per_player_across_every_market(self):
+        picks = self.m.strongest([
+            self.row("A", "receptions", {"3": 70.0}),
+            self.row("A", "rushing_yards", {"30": 97.0}),
+            self.row("B", "receptions", {"3": 55.0})])
+        self.assertEqual(len(picks), 2)
+        best = {p["row"]["player"]: p for p in picks}
+        self.assertEqual(best["A"]["row"]["market"], "rushing_yards")
+
+    def test_the_list_is_ordered_by_confidence(self):
+        picks = self.m.strongest([
+            self.row("A", "receptions", {"3": 60.0}),
+            self.row("B", "receptions", {"3": 99.0}),
+            self.row("C", "receptions", {"3": 80.0})])
+        self.assertEqual([p["row"]["player"] for p in picks], ["B", "C", "A"])
+
+    def test_a_coarse_row_is_never_the_one_shown(self):
+        picks = self.m.strongest([
+            self.row("A", "receptions", {"3": 99.0, "6": 99.0}, coarse=True),
+            self.row("A", "rushing_yards", {"30": 71.0})])
+        self.assertEqual(len(picks), 1)
+        self.assertEqual(picks[0]["row"]["market"], "rushing_yards")
+
+    def test_a_player_with_only_coarse_rows_is_left_out_entirely(self):
+        # Better absent than represented by a number whose resolution is
+        # invented.
+        self.assertEqual(self.m.strongest([
+            self.row("A", "receptions", {"3": 99.0, "6": 99.0}, coarse=True)]), [])
+
+    def test_it_says_out_loud_that_the_winner_is_flattered(self):
+        # A maximum over many noisy estimates is biased upward. Printing the
+        # ranking without that line invites reading 100.0% as a certainty.
+        src = (SCRIPTS / "props-forecast.py").read_text()
+        body = src.split("def cmd_best(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("noisy", body)
+        self.assertIn("print(NOT_A_BET)", body)
+
+
+class WhatHeDoesWhenHePlaysIsADifferentQuestion(unittest.TestCase):
+    """A bootstrap over a player's game log conditions on him having played.
+
+    Every game in the sample is one he was active for, so the number is
+    P(clears the bar | he plays). A book prices P(plays) x that. Where the two
+    differ the gap looks like an enormous edge and is an artifact of the
+    sample - the single most likely way this file produces a confident wrong
+    answer.
+
+    It is reported and never applied: multiplying by a three-game attendance
+    record would invent precision, and a player back from injury would be
+    marked down for the weeks he missed.
+    """
+
+    def setUp(self):
+        self.m = load("props_forecast", "props-forecast.py")
+
+    def test_a_player_who_has_missed_games_is_flagged(self):
+        a = self.m.availability(10, 6)
+        self.assertEqual(a["rate"], 0.6)
+        self.assertTrue(a["thin"])
+
+    def test_an_ever_present_player_is_not_flagged(self):
+        self.assertFalse(self.m.availability(10, 10)["thin"])
+
+    def test_it_never_exceeds_one(self):
+        # ESPN's team record and its game logs update on different clocks.
+        self.assertEqual(self.m.availability(1, 2)["rate"], 1.0)
+
+    def test_an_unknown_team_count_is_no_claim_at_all(self):
+        self.assertIsNone(self.m.availability(None, 4))
+        self.assertIsNone(self.m.availability(0, 0))
+
+    def test_availability_does_not_change_the_probability(self):
+        # The correction is a label, not a multiplier. If this ever starts
+        # scaling the number, the row stops being reproducible from its seed.
+        sample = [55.0, 62.0, 71.0, 48.0, 90.0, 33.0, 66.0, 77.0, 41.0, 58.0]
+        args = ("1", "A @ B", None, "2", "A Receiver", "WR", "AAA",
+                {"receiving_yards": sample}, ["2026"])
+        full = self.m.rows_for_player(*args, {"team_games": 10, "played": 10,
+                                              "rate": 1.0, "thin": False})
+        part = self.m.rows_for_player(*args, {"team_games": 10, "played": 4,
+                                              "rate": 0.4, "thin": True})
+        self.assertEqual(full[0]["probabilities"], part[0]["probabilities"])
+        self.assertTrue(part[0]["availability"]["thin"])
+
+    def test_the_flagged_rows_are_counted_in_the_summary(self):
+        src = (SCRIPTS / "props-forecast.py").read_text()
+        body = src.split("def cmd_forecast(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn('PLAYED', body)
+        self.assertIn("flagged += 1", body)
+
+
+class EveryMarketIsGradedAgainstItsOwnStat(unittest.TestCase):
+    """Grading read the receiving category and called the answer yards.
+
+    With five markets that is wrong four ways: a receptions forecast scored
+    against yards would be marked HIT on every row. The stat name travels on
+    the forecast, and the box score category that carries it is found by that
+    name.
+    """
+
+    def setUp(self):
+        self.m = load("props_forecast", "props-forecast.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.m.STORE = Path(self.tmp.name) / "forecasts.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_each_market_carries_the_stat_it_will_be_graded_on(self):
+        rows = self.m.rows_for_player(
+            "1", "A @ B", None, "2", "A Back", "RB", "AAA",
+            {"rushing_yards": [40.0, 55.0, 71.0, 33.0, 88.0, 62.0, 29.0, 90.0,
+                               47.0, 51.0],
+             "receptions": [3.0, 4.0, 2.0, 5.0, 3.0, 6.0, 4.0, 2.0, 5.0, 3.0]},
+            ["2026"], None)
+        by = {r["market"]: r for r in rows}
+        self.assertEqual(by["rushing_yards"]["stat"], "rushingYards")
+        self.assertEqual(by["receptions"]["stat"], "receptions")
+        self.assertEqual(by["rushing_yards"]["unit"], "yds")
+        self.assertEqual(by["receptions"]["unit"], "rec")
+
+    def test_a_receptions_forecast_is_scored_in_receptions(self):
+        # 82 yards on 7 catches: graded against yards, "6+ receptions" is a
+        # hit; graded against receptions it is also a hit but for the right
+        # reason, and "8+ receptions" correctly is not.
+        box = {"header": {"competitions": [{"status": {"type": {
+                   "name": "STATUS_FINAL"}}}]},
+               "boxscore": {"players": [{"statistics": [
+                   {"name": "receiving",
+                    "keys": ["receptions", "receivingYards",
+                             "yardsPerReception", "receivingTouchdowns",
+                             "longReception", "receivingTargets"],
+                    "athletes": [{"athlete": {"id": "2"},
+                                  "stats": ["7", "82", "11.7", "1", "24", "9"]}]}]}]}}
+        real_get = self.m.get
+        self.m.get = lambda url: box
+        try:
+            self.assertEqual(self.m.actual_value("1", "2", "receptions")[0], 7.0)
+            self.assertEqual(self.m.actual_value("1", "2", "receivingYards")[0], 82.0)
+            self.assertEqual(self.m.actual_value("1", "2", "receivingTargets")[0], 9.0)
+        finally:
+            self.m.get = real_get
+
+    def test_a_game_still_being_played_is_not_graded(self):
+        live = {"header": {"competitions": [{"status": {"type": {
+            "name": "STATUS_IN_PROGRESS"}}}]}, "boxscore": {"players": []}}
+        real_get = self.m.get
+        self.m.get = lambda url: live
+        try:
+            value, why = self.m.actual_value("1", "2", "receptions")
+        finally:
+            self.m.get = real_get
+        self.assertIsNone(value)
+        self.assertIn("not final", why)
+
+    def test_calibration_is_reported_market_by_market(self):
+        # Receptions are integers off a four-value list and yards are not.
+        # Pooled, one market can be badly off while the average looks fine.
+        rows = [{"market": "receptions", "probabilities": {"3": 90.0}, "actual": 1.0},
+                {"market": "receiving_yards", "probabilities": {"40": 60.0}, "actual": 70.0}]
+        split = self.m.by_market(rows)
+        self.assertEqual(sorted(split), ["receiving_yards", "receptions"])
+        self.assertLess(self.m.buckets(split["receptions"])[90]["gap"], 0)

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-props-forecast.py — player receiving-yard forecasts, and the scorekeeping
-that says whether they are any good.
+props-forecast.py — player prop forecasts across several markets, and the
+scorekeeping that says whether they are any good.
 
     props-forecast.py forecast 401872947     write forecasts for one game
+    props-forecast.py best 401872947         the strongest claim per player
     props-forecast.py grade                  score the ones whose game is over
     props-forecast.py calibration            when it says 70%, does it happen?
+    props-forecast.py markets                what it prices, and off which stat
 
 NO MODEL IS CALLED. This is arithmetic over ESPN's free game logs: resample a
 player's own past games, count how often the threshold is cleared. Fury's
@@ -22,11 +24,20 @@ report says it is honest, that is when a price becomes interesting.
 
 WHAT THE NUMBER ASSUMES. A bootstrap over a player's own games assumes his
 role has not changed. It has no opinion about the opponent, the weather, or
-who else is injured - all of which the book has priced. That is why every
-forecast carries its sample size and which seasons it came from: a number
-built on three games is not the same claim as one built on nineteen, and
-printing them identically is how two different running backs end up quoted at
-27.5% and 27.4%.
+who else is injured - all of which the book has priced. It also assumes he
+plays: every game in the sample is a game he was active for, so the number is
+P(clears the bar GIVEN he takes the field), while a book prices P(plays) x
+that. Where the two differ the gap looks like an enormous edge and is an
+artifact, which is why every forecast carries an availability line as well as
+its sample size and seasons.
+
+A MARKET IS READ BY NAME, NEVER BY COLUMN. ESPN orders a game log's columns
+by position: a tight end's first YDS is receiving, a running back's is
+rushing, a quarterback's is passing. The box score then reorders them again
+(TGTS is second in the log, last in the box score). Both payloads label every
+column with a stat name - receivingYards, rushingAttempts - so MARKETS below
+names the stat and column_of() finds it in whichever payload is in hand. This
+file contains no column numbers.
 
 Standard library only.
 """
@@ -55,7 +66,6 @@ NOT_A_BET = ("NOT A BET and UNPRICED - there are no odds in this file. "
              "  python3 scripts/props-forecast.py grade")
 
 DRAWS = 10_000
-THRESHOLDS = (40, 50, 60, 70)     # receiving yards
 POSITIONS = ("WR", "TE", "RB")
 PER_TEAM = 6                      # deepest part of a depth chart worth pricing
 
@@ -65,6 +75,38 @@ PER_TEAM = 6                      # deepest part of a depth chart worth pricing
 MIN_GAMES = 8
 SEASONS_BACK = 1                  # current season plus this many previous
 
+# Every market, once: the ESPN stat name it is read from, the unit it is
+# quoted in, and the bars worth asking about. Adding a market is a line here -
+# the log reader, the box score reader, the forecast rows and the Deck all
+# come off this table, so there is nowhere else for a second opinion to live.
+MARKETS = {
+    "receiving_yards":   {"stat": "receivingYards",    "unit": "yds",
+                          "thresholds": (40, 50, 60, 70)},
+    "receptions":        {"stat": "receptions",        "unit": "rec",
+                          "thresholds": (3, 4, 5, 6)},
+    "receiving_targets": {"stat": "receivingTargets",  "unit": "tgts",
+                          "thresholds": (4, 5, 6, 8)},
+    "rushing_yards":     {"stat": "rushingYards",      "unit": "yds",
+                          "thresholds": (30, 50, 70, 90)},
+    "rushing_attempts":  {"stat": "rushingAttempts",   "unit": "att",
+                          "thresholds": (8, 12, 15, 18)},
+}
+
+# A market belongs to a player only if he has actually done it. A wide
+# receiver has a rushingYards column and it is zero every week, and a blocking
+# tight end has a receptions column he clears twice a season; forecasting
+# either prints "0.0%  0.0%  0.0%" and buries the rows that mean something.
+# The bar is a rate, not a count - cleared in at least a quarter of his games -
+# because "twice" is nothing in twenty-one games and a lot in nine. It is read
+# off percentile(), so the rule and the P25-P75 on the same row cannot drift
+# apart.
+RELEVANT_PERCENTILE = 75
+
+# Below this share of his team's games, the sample is a different claim from
+# the one a book prices: it says what he does when he plays, and says nothing
+# about whether he will. Flagged, never silently multiplied away.
+AVAILABILITY_FLOOR = 0.80
+
 
 def get(url):
     req = urllib.request.Request(url, headers={"User-Agent": UA})
@@ -73,46 +115,114 @@ def get(url):
         return json.load(r)
 
 
-def receiving_yards(athlete_id, season=None):
-    """[(season, yards)] from a game log, newest season first."""
+def column_of(keys, stat):
+    """Where a stat sits in a row of numbers, by ESPN's name for it.
+
+    The one resolver, used on the game log's `names` and on the box score's
+    `keys` alike. Both name their columns; neither orders them the same way
+    twice, which is why nothing here counts columns.
+    """
+    try:
+        return [str(k) for k in (keys or [])].index(stat)
+    except ValueError:
+        return None
+
+
+LOG_CACHE = {}
+
+
+def game_values(athlete_id, season=None):
+    """{market: [(season_label, value)]} from one game log.
+
+    One fetch fills every market at once: the log carries rushing and
+    receiving columns side by side, so asking five times would be five
+    identical requests. Cached for the same reason at the other end: the
+    current season's log is read to rank a player and again to forecast him,
+    and two fetches of the same URL are two chances to disagree about him.
+    """
+    key = (str(athlete_id), season)
+    if key in LOG_CACHE:
+        return LOG_CACHE[key]
     url = f"{LOGS}/{athlete_id}/gamelog" + (f"?season={season}" if season else "")
     try:
         log = get(url)
     except Exception:
-        return []
-    labels = [str(x).upper() for x in (log.get("labels") or [])]
-    # REC, TGTS, YDS, ... - the receiving YDS is the first one, and taking
-    # "YDS" blindly finds the rushing column on a running back.
-    try:
-        idx = labels.index("YDS")
-    except ValueError:
-        return []
-    out = []
+        LOG_CACHE[key] = {}
+        return {}
+    LOG_CACHE[key] = values_from_log(log)
+    return LOG_CACHE[key]
+
+
+def values_from_log(log):
+    """The parsing half of game_values, with no network in it.
+
+    Split out so it can be run against a captured payload. Every parser bug
+    in this repo was a format assumption, and the only thing that catches one
+    is a real sample.
+    """
+    names = log.get("names") or []
+    cols = {m: column_of(names, spec["stat"]) for m, spec in MARKETS.items()}
+    out = {m: [] for m in MARKETS}
     for st in (log.get("seasonTypes") or []):
-        name = str(st.get("displayName") or "")
+        label = str(st.get("displayName") or "")
         for cat in (st.get("categories") or []):
             for ev in (cat.get("events") or []):
                 stats = ev.get("stats") or []
-                if idx >= len(stats):
-                    continue
-                try:
-                    out.append((name, float(stats[idx])))
-                except (TypeError, ValueError):
-                    continue
+                for market, idx in cols.items():
+                    if idx is None or idx >= len(stats):
+                        continue
+                    try:
+                        out[market].append((label, float(stats[idx])))
+                    except (TypeError, ValueError):
+                        continue
     return out
 
 
-def sample_for(athlete_id, now=None):
-    """(yards, seasons) - the games this forecast will be built on."""
+def games_in(log):
+    """How many games a log covers, whichever columns it happens to carry.
+
+    Every market in a log has one entry per game, so the longest list is the
+    game count - asked this way rather than off a named market, because a
+    player with no receiving column would then look like he had played none.
+    """
+    return max((len(rows) for rows in log.values()), default=0)
+
+
+def samples_for(athlete_id, now=None):
+    """({market: [values]}, seasons, games this season).
+
+    The current season's log is fetched once and used for both the sample and
+    the availability count. Asking for it twice would be two identical
+    requests and two chances for them to disagree.
+    """
     now = now or datetime.now(timezone.utc)
-    games = receiving_yards(athlete_id)
+    current = game_values(athlete_id)
+    logs = [current]
     for back in range(1, SEASONS_BACK + 1):
-        games += receiving_yards(athlete_id, now.year - back)
-    return [y for _s, y in games], sorted({s for s, _y in games})
+        logs.append(game_values(athlete_id, now.year - back))
+    seasons, out = set(), {m: [] for m in MARKETS}
+    for log in logs:
+        for market, rows in log.items():
+            for label, value in rows:
+                seasons.add(label)
+                out[market].append(value)
+    return out, sorted(seasons), games_in(current)
 
 
-def simulate(sample, thresholds=THRESHOLDS, draws=DRAWS, seed=None):
-    """P(yards >= t) for each threshold, by resampling the player's own games.
+def is_relevant(sample, thresholds):
+    """Has he done this often enough for the market to be about him?
+
+    His 75th percentile has to reach the lowest bar: a quarter of his games
+    clear it, or the market is somebody else's.
+    """
+    if not sample:
+        return False
+    p = percentile(sample, RELEVANT_PERCENTILE)
+    return p is not None and p >= thresholds[0]
+
+
+def simulate(sample, thresholds, draws=DRAWS, seed=None):
+    """P(value >= t) for each threshold, by resampling the player's own games.
 
     A bootstrap, not a fitted curve: the only shape claimed is the one he has
     actually produced. Seeded so a forecast can be reproduced from its record -
@@ -130,10 +240,27 @@ def simulate(sample, thresholds=THRESHOLDS, draws=DRAWS, seed=None):
     return {t: round(100.0 * n / draws, 1) for t, n in hits.items()}
 
 
-def is_coarse(probs, thresholds=THRESHOLDS):
+def percentile(sample, pct):
+    """The usual linear-interpolated percentile, off the sample itself.
+
+    Not off the draws: a bootstrap draw IS one of his games, so the draws'
+    quartiles are the sample's quartiles plus sampling noise. Taking them
+    exactly means P25-P75 does not wobble between two runs of a number that
+    did not change.
+    """
+    s = sorted(sample)
+    if not s:
+        return None
+    k = (len(s) - 1) * (pct / 100.0)
+    lo = int(k)
+    hi = min(lo + 1, len(s) - 1)
+    return round(s[lo] + (s[hi] - s[lo]) * (k - lo), 1)
+
+
+def is_coarse(probs, thresholds):
     """Did two thresholds come back identical?
 
-    A bootstrap cannot produce a yardage the player has never produced, so
+    A bootstrap cannot produce a value the player has never produced, so
     thresholds with no observed game between them are indistinguishable. The
     number is real; the resolution it appears to have is not.
     """
@@ -142,8 +269,41 @@ def is_coarse(probs, thresholds=THRESHOLDS):
     return len(set(probs.values())) < len(thresholds)
 
 
+def team_games(team_id):
+    """How many games the team has played, for the availability line."""
+    try:
+        team = (get(f"{API}/teams/{team_id}") or {}).get("team") or {}
+    except Exception:
+        return None
+    for item in ((team.get("record") or {}).get("items") or []):
+        if str(item.get("type") or "") != "total":
+            continue
+        for stat in (item.get("stats") or []):
+            if str(stat.get("name")) == "gamesPlayed":
+                try:
+                    return int(float(stat.get("value")))
+                except (TypeError, ValueError):
+                    return None
+    return None
+
+
+def availability(season_games, played):
+    """What share of his team's games he has been active for.
+
+    Reported, never applied. The forecast is conditional on him playing and
+    saying so is honest; multiplying it by a three-game attendance record
+    would be inventing precision, and a player back from injury would be
+    marked down for the weeks he missed.
+    """
+    if not season_games:
+        return None
+    rate = round(min(1.0, played / float(season_games)), 3)
+    return {"team_games": season_games, "played": played, "rate": rate,
+            "thin": rate < AVAILABILITY_FLOOR}
+
+
 def players_in(event_id):
-    """[(athlete_id, name, position, team)] for both sides of a fixture."""
+    """[(athlete_id, name, position, team_abbr, team_id)] for both sides."""
     summary = get(f"{API}/summary?event={event_id}")
     header = (summary.get("header") or {})
     comps = ((header.get("competitions") or [{}])[0].get("competitors") or [])
@@ -157,7 +317,6 @@ def players_in(event_id):
             roster = get(f"{API}/teams/{tid}/roster")
         except Exception:
             continue
-        picked = 0
         for group in (roster.get("athletes") or []):
             # Only players who might take the field. injuredReserveOrOut,
             # suspended and practiceSquad are separate groups and stay out.
@@ -166,9 +325,44 @@ def players_in(event_id):
                 continue
             for a in (group.get("items") if isinstance(group, dict) else [group]):
                 pos = ((a.get("position") or {}).get("abbreviation") or "")
-                if pos in POSITIONS and picked < PER_TEAM:
-                    out.append((str(a.get("id")), a.get("displayName"), pos, abbr))
-                    picked += 1
+                if pos in POSITIONS:
+                    out.append((str(a.get("id")), a.get("displayName"), pos,
+                                abbr, str(tid)))
+    return out
+
+
+def usage_of(log):
+    """How much of the offence goes through him: targets plus carries.
+
+    Yards are the thing being forecast, so ranking by yards would prefer the
+    player who had one good afternoon over the one who gets the ball every
+    week. Volume is what survives to next Sunday.
+    """
+    return (sum(v for _s, v in (log.get("receiving_targets") or []))
+            + sum(v for _s, v in (log.get("rushing_attempts") or [])))
+
+
+def top_by_usage(candidates, now=None):
+    """The PER_TEAM players per side who actually touch the ball.
+
+    ESPN returns a roster in alphabetical order, so taking the first six gave
+    Adams, Allen, Atwell, Corum, Daniels - and left the team's best receiver
+    out of the file entirely. Rank by this season's volume instead, and fall
+    back to last season's for a side that has not played yet, which is every
+    side in week one.
+    """
+    now = now or datetime.now(timezone.utc)
+    by_team = {}
+    for cand in candidates:
+        by_team.setdefault(cand[4], []).append(cand)
+    out = []
+    for _tid, group in by_team.items():
+        scored = [(usage_of(game_values(c[0])), c) for c in group]
+        if not any(u for u, _c in scored):
+            scored = [(usage_of(game_values(c[0], now.year - 1)), c)
+                      for c in group]
+        scored.sort(key=lambda row: (-row[0], str(row[1][1])))
+        out += [c for _u, c in scored[:PER_TEAM]]
     return out
 
 
@@ -184,77 +378,189 @@ def save(data):
     STORE.write_text(json.dumps(data, indent=1) + "\n")
 
 
+def fixture_of(summary):
+    header = summary.get("header") or {}
+    comp = ((header.get("competitions") or [{}])[0])
+    name = " @ ".join(reversed([
+        ((c.get("team") or {}).get("abbreviation") or "?")
+        for c in (comp.get("competitors") or [])]))
+    return name, (comp.get("date") or header.get("date"))
+
+
+def rows_for_player(event_id, fixture, kickoff, aid, name, pos, team,
+                    samples, seasons, avail):
+    """One row per market this player actually has a history in."""
+    rows = []
+    for market, spec in MARKETS.items():
+        sample = samples.get(market) or []
+        thresholds = spec["thresholds"]
+        if len(sample) < MIN_GAMES or not is_relevant(sample, thresholds):
+            continue
+        seed = f"{event_id}-{aid}-{market}"
+        probs = simulate(sample, thresholds, seed=seed)
+        rows.append({
+            "event_id": str(event_id), "fixture": fixture, "kickoff_utc": kickoff,
+            "athlete_id": aid, "player": name, "position": pos, "team": team,
+            "market": market, "stat": spec["stat"], "unit": spec["unit"],
+            "thresholds": list(thresholds),
+            "probabilities": {str(t): p for t, p in probs.items()},
+            "sample_games": len(sample), "sample_seasons": seasons,
+            "sample_mean": round(sum(sample) / len(sample), 1),
+            "sample_low": min(sample), "sample_high": max(sample),
+            "sample_distinct": len(set(sample)),
+            "p25": percentile(sample, 25), "p50": percentile(sample, 50),
+            "p75": percentile(sample, 75),
+            "availability": avail,
+            "coarse": is_coarse(probs, thresholds),
+            "draws": DRAWS, "seed": seed,
+            "forecast_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            "actual": None, "graded_utc": None,
+        })
+    return rows
+
+
 def cmd_forecast(event_id):
     try:
         summary = get(f"{API}/summary?event={event_id}")
     except Exception as exc:
         print(f"cannot read event {event_id}: {exc}", file=sys.stderr)
         return 1
-    header = summary.get("header") or {}
-    comp = ((header.get("competitions") or [{}])[0])
-    fixture = " @ ".join(reversed([
-        ((c.get("team") or {}).get("abbreviation") or "?")
-        for c in (comp.get("competitors") or [])]))
-    kickoff = comp.get("date") or header.get("date")
+    fixture, kickoff = fixture_of(summary)
+    now = datetime.now(timezone.utc)
 
     data = load()
-    made = thin = 0
-    for aid, name, pos, team in players_in(event_id):
-        sample, seasons = sample_for(aid)
-        if len(sample) < MIN_GAMES:
+    made = thin = flagged = 0
+    played_in = {}
+    for aid, name, pos, team, tid in top_by_usage(players_in(event_id), now):
+        if tid not in played_in:
+            played_in[tid] = team_games(tid)
+        samples, seasons, current = samples_for(aid, now)
+        deepest = games_in(samples)
+        if deepest < MIN_GAMES:
             # Named, not silently dropped: "no forecast" and "a forecast from
             # three games" are different, and only one of them is honest.
-            print(f"  {name:<24} {pos:<3} {team:<4} SKIPPED - {len(sample)} game(s), "
+            print(f"  {name:<24} {pos:<3} {team:<4} SKIPPED - {deepest} game(s), "
                   f"need {MIN_GAMES}")
             thin += 1
             continue
-        seed = f"{event_id}-{aid}"
-        probs = simulate(sample, seed=seed)
-        avg = sum(sample) / len(sample)
-        # A bootstrap cannot produce a yardage the player has never produced,
-        # so two thresholds with no observed game between them come back
-        # identical. That is the method being honest, not a bug - but printed
-        # without comment it reads as one, and it is the sharpest limit on how
-        # much this number is worth. It is the thing to fix next.
-        coarse = is_coarse(probs)
-        row = {
-            "event_id": str(event_id), "fixture": fixture, "kickoff_utc": kickoff,
-            "athlete_id": aid, "player": name, "position": pos, "team": team,
-            "market": "receiving_yards",
-            "probabilities": {str(t): p for t, p in probs.items()},
-            "sample_games": len(sample), "sample_seasons": seasons,
-            "sample_mean": round(avg, 1),
-            "sample_low": min(sample), "sample_high": max(sample),
-            "sample_distinct": len(set(sample)),
-            "coarse": coarse,
-            "draws": DRAWS, "seed": seed,
-            "forecast_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-            "actual_yards": None, "graded_utc": None,
-        }
-        data["forecasts"] = [f for f in data["forecasts"]
-                             if not (f["event_id"] == row["event_id"]
-                                     and f["athlete_id"] == row["athlete_id"])]
-        data["forecasts"].append(row)
-        made += 1
-        line = "  ".join(f"{t}+: {probs[t]:>5.1f}%" for t in THRESHOLDS)
-        note = "  COARSE" if coarse else ""
-        print(f"  {name:<24} {pos:<3} {team:<4} {line}   "
-              f"(mean {avg:.1f}, {len(sample)} games){note}")
+        avail = availability(played_in.get(tid), current)
+        rows = rows_for_player(event_id, fixture, kickoff, aid, name, pos, team,
+                               samples, seasons, avail)
+        if not rows:
+            print(f"  {name:<24} {pos:<3} {team:<4} SKIPPED - no market he "
+                  f"reaches in a quarter of his games")
+            thin += 1
+            continue
+        for row in rows:
+            data["forecasts"] = [
+                f for f in data["forecasts"]
+                if not (f.get("event_id") == row["event_id"]
+                        and f.get("athlete_id") == row["athlete_id"]
+                        and f.get("market") == row["market"])]
+            data["forecasts"].append(row)
+            made += 1
+            probs = row["probabilities"]
+            line = "  ".join(f"{t}+: {probs[str(t)]:>5.1f}%"
+                             for t in row["thresholds"])
+            note = "  COARSE" if row["coarse"] else ""
+            if avail and avail["thin"]:
+                note += f"  PLAYED {avail['played']}/{avail['team_games']}"
+                flagged += 1
+            print(f"  {name:<20} {row['market']:<17} {line}   "
+                  f"(exp {row['sample_mean']:.1f} {row['unit']}, "
+                  f"P25-P75 {row['p25']}-{row['p75']}, "
+                  f"{row['sample_games']}g){note}")
 
     save(data)
     rough = sum(1 for f in data["forecasts"]
-                if f["event_id"] == str(event_id) and f.get("coarse"))
-    print(f"\n{made} forecast(s) written, {thin} skipped for a thin sample.")
+                if f.get("event_id") == str(event_id) and f.get("coarse"))
+    print(f"\n{made} forecast(s) written across {len(MARKETS)} markets, "
+          f"{thin} player(s) skipped.")
     if rough:
         print(f"{rough} marked COARSE: two thresholds came back identical because "
               f"the player has\nno game between them. The number is real, its "
               f"resolution is not - treat those\nas the weakest rows here.")
+    if flagged:
+        print(f"{flagged} marked PLAYED n/m: he has missed games, so the "
+              f"percentage is what he\ndoes WHEN HE PLAYS. A book prices that "
+              f"times the chance he is active, which is\nwhy a row like this "
+              f"can look like a huge edge and be nothing of the kind.")
     print(NOT_A_BET)
     return 0 if made else 1
 
 
-def actual_receiving_yards(event_id, athlete_id):
-    """Yards from a finished game's box score, or None if it is not final.
+def strongest(rows):
+    """One row per player: the claim furthest from a coin flip.
+
+    'Best' cannot mean 'highest percentage' while there is no price in this
+    file. The highest percentage is always the lowest bar, so that ranking
+    would print "3+ receptions, 96%" for everyone and tell you nothing - the
+    market's answer to an easy bar is a short price, and without the price
+    there is no way to prefer one number over another. What can be ranked
+    without a price is how far a call is from 50/50, which is the same
+    question a book answers with its longest and shortest odds.
+
+    COARSE rows are excluded: a claim whose resolution is an artifact has no
+    business being the one shown.
+
+    It is a maximum over many noisy estimates, so the winner is biased
+    upward - the pick is optimistic by construction, and by how much is
+    exactly what `calibration` is there to measure.
+    """
+    best = {}
+    for r in rows:
+        if r.get("coarse"):
+            continue
+        for t, pct in (r.get("probabilities") or {}).items():
+            conf = max(float(pct), 100.0 - float(pct))
+            key = r.get("athlete_id")
+            have = best.get(key)
+            if have is None or (conf, r.get("sample_games", 0)) > (
+                    have["confidence"], have["row"].get("sample_games", 0)):
+                best[key] = {
+                    "row": r, "threshold": float(t), "probability": float(pct),
+                    "confidence": round(conf, 1),
+                    "side": "OVER" if float(pct) >= 50.0 else "UNDER",
+                }
+    return sorted(best.values(), key=lambda b: -b["confidence"])
+
+
+def cmd_best(event_id):
+    rows = [f for f in load()["forecasts"] if f.get("event_id") == str(event_id)]
+    if not rows:
+        print(f"no forecasts for event {event_id}. Write them first:\n"
+              f"  python3 scripts/props-forecast.py forecast {event_id}",
+              file=sys.stderr)
+        return 1
+    picks = strongest(rows)
+    if not picks:
+        print("every row for this game is COARSE - nothing here is worth "
+              "singling out.")
+        return 1
+    print(f"  {'player':<20}{'market':<18}{'call':<22}{'conf':>7}   context")
+    print("  " + "-" * 86)
+    for b in picks:
+        r = b["row"]
+        t = b["threshold"]
+        call = f"{b['side']} {t:g} {r['unit']}"
+        ctx = (f"exp {r['sample_mean']:g}, P25-P75 {r['p25']}-{r['p75']}, "
+               f"{r['sample_games']}g")
+        a = r.get("availability") or {}
+        if a.get("thin"):
+            ctx += f", PLAYED {a['played']}/{a['team_games']}"
+        print(f"  {r['player']:<20}{r['market']:<18}{call:<22}"
+              f"{b['confidence']:>6.1f}%   {ctx}")
+    print(f"\n  One line per player: his call that sits furthest from 50/50, "
+          f"not his\n  highest percentage - the highest percentage is always "
+          f"the easiest bar, and\n  without a price that ranking says nothing. "
+          f"Picking the maximum of many\n  noisy numbers flatters the winner, "
+          f"so these read high by construction.")
+    print(NOT_A_BET)
+    return 0
+
+
+def actual_value(event_id, athlete_id, stat):
+    """A stat from a finished game's box score, or None if it is not final.
 
     None is not zero. A player who did not play and a player held to nothing
     look identical in a total, and grading a forecast against a game that has
@@ -271,12 +577,8 @@ def actual_receiving_yards(event_id, athlete_id):
 
     for team in ((summary.get("boxscore") or {}).get("players") or []):
         for cat in (team.get("statistics") or []):
-            if str(cat.get("name") or "").lower() != "receiving":
-                continue
-            labels = [str(x).upper() for x in (cat.get("labels") or [])]
-            try:
-                idx = labels.index("YDS")
-            except ValueError:
+            idx = column_of(cat.get("keys"), stat)
+            if idx is None:
                 continue
             for a in (cat.get("athletes") or []):
                 if str((a.get("athlete") or {}).get("id")) != str(athlete_id):
@@ -288,14 +590,14 @@ def actual_receiving_yards(event_id, athlete_id):
                     return float(stats[idx]), "final"
                 except (TypeError, ValueError):
                     return None, "unreadable stat line"
-    # Final, and he is not in the receiving table: he caught nothing, or did
-    # not play. Those are different and the box score does not say which.
-    return None, "final, no receiving line (did not play, or no targets)"
+    # Final, and he is not in that table: he did nothing in it, or did not
+    # play. Those are different and the box score does not say which.
+    return None, "final, no line for that stat (did not play, or no touches)"
 
 
 def cmd_grade():
     data = load()
-    pending = [f for f in data["forecasts"] if f.get("actual_yards") is None
+    pending = [f for f in data["forecasts"] if f.get("actual") is None
                and f.get("graded_utc") is None]
     if not pending:
         print("nothing waiting to be graded.")
@@ -303,9 +605,10 @@ def cmd_grade():
 
     graded = skipped = 0
     for f in pending:
-        yards, why = actual_receiving_yards(f["event_id"], f["athlete_id"])
-        if yards is None:
-            print(f"  {f['player']:<24} {why}")
+        stat = f.get("stat") or (MARKETS.get(f.get("market")) or {}).get("stat")
+        value, why = actual_value(f["event_id"], f["athlete_id"], stat)
+        if value is None:
+            print(f"  {f['player']:<20} {f.get('market',''):<18} {why}")
             if why.startswith("final"):
                 # Record that it was looked at, so it is not retried forever.
                 f["graded_utc"] = datetime.now(timezone.utc).strftime(
@@ -315,15 +618,16 @@ def cmd_grade():
             else:
                 skipped += 1
             continue
-        f["actual_yards"] = yards
+        f["actual"] = value
         f["graded_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        hits = {t: (yards >= float(t)) for t in f["probabilities"]}
+        hits = {t: (value >= float(t)) for t in f["probabilities"]}
         f["hits"] = {t: bool(v) for t, v in hits.items()}
         graded += 1
         marks = "  ".join(
             f"{t}+ {'HIT ' if hits[t] else 'miss'} ({f['probabilities'][t]}%)"
-            for t in sorted(f["probabilities"], key=int))
-        print(f"  {f['player']:<24} {yards:>5.0f} yds   {marks}")
+            for t in sorted(f["probabilities"], key=float))
+        print(f"  {f['player']:<20} {f.get('market',''):<18} "
+              f"{value:>5.0f} {f.get('unit','')}   {marks}")
 
     save(data)
     print(f"\n{graded} graded, {skipped} still waiting on a final score.")
@@ -338,14 +642,14 @@ def buckets(forecasts, width=10):
     """
     out = {}
     for f in forecasts:
-        if f.get("actual_yards") is None:
+        if f.get("actual") is None:
             continue
         for t, pct in (f.get("probabilities") or {}).items():
             lo = int(float(pct) // width) * width
             b = out.setdefault(lo, {"n": 0, "hits": 0, "predicted": 0.0})
             b["n"] += 1
             b["predicted"] += float(pct)
-            if float(f["actual_yards"]) >= float(t):
+            if float(f["actual"]) >= float(t):
                 b["hits"] += 1
     for b in out.values():
         b["predicted"] = round(b["predicted"] / b["n"], 1)
@@ -354,9 +658,24 @@ def buckets(forecasts, width=10):
     return dict(sorted(out.items()))
 
 
+def by_market(forecasts):
+    """Calibration one market at a time.
+
+    Pooling them hides the answer that matters: receptions are integers off a
+    short list and receiving yards are not, so one market can be honest while
+    another is badly off and the average looks fine.
+    """
+    out = {}
+    for f in forecasts:
+        if f.get("actual") is None:
+            continue
+        out.setdefault(f.get("market") or "?", []).append(f)
+    return dict(sorted(out.items()))
+
+
 def cmd_calibration():
     data = load()
-    done = [f for f in data["forecasts"] if f.get("actual_yards") is not None]
+    done = [f for f in data["forecasts"] if f.get("actual") is not None]
     if not done:
         print("nothing graded yet. Forecast a game, wait for it to finish, "
               "then:\n  python3 scripts/props-forecast.py grade")
@@ -370,6 +689,20 @@ def cmd_calibration():
     for lo, b in rows.items():
         print(f"  {lo}-{lo + 9}%{'':<3}{b['predicted']:>9.1f}%{b['observed']:>9.1f}%"
               f"{b['gap']:>+8.1f}{b['n']:>7}")
+
+    markets = by_market(done)
+    if len(markets) > 1:
+        print(f"\n  {'market':<20}{'predicted':>10}{'happened':>10}{'gap':>8}"
+              f"{'calls':>7}")
+        print("  " + "-" * 55)
+        for market, rs in markets.items():
+            mb = buckets(rs)
+            calls = sum(b["n"] for b in mb.values())
+            pred = sum(b["predicted"] * b["n"] for b in mb.values()) / calls
+            obs = 100.0 * sum(b["hits"] for b in mb.values()) / calls
+            print(f"  {market:<20}{pred:>9.1f}%{obs:>9.1f}%{obs - pred:>+8.1f}"
+                  f"{calls:>7}")
+
     print(f"\n  A row whose gap is near zero is a forecast that means what it "
           f"says.\n  Consistently positive means it is too cautious; negative "
           f"means too\n  confident, which is the one that costs money.")
@@ -380,23 +713,38 @@ def cmd_calibration():
     return 0
 
 
+def cmd_markets():
+    print(f"  {'market':<20}{'ESPN stat':<20}{'unit':<7}thresholds")
+    print("  " + "-" * 62)
+    for market, spec in MARKETS.items():
+        bars = ", ".join(f"{t:g}+" for t in spec["thresholds"])
+        print(f"  {market:<20}{spec['stat']:<20}{spec['unit']:<7}{bars}")
+    print(f"\n  Read by name, never by column: a tight end's first YDS column "
+          f"is receiving\n  and a running back's is rushing, and the box score "
+          f"orders them differently\n  again. Adding a market is one line in "
+          f"MARKETS.")
+    return 0
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
-    if cmd == "forecast":
+    if cmd in ("forecast", "best"):
         if len(sys.argv) < 3:
-            print("usage: props-forecast.py forecast <event_id>\n"
+            print(f"usage: props-forecast.py {cmd} <event_id>\n"
                   "  find one with: curl -s "
                   "'https://site.web.api.espn.com/apis/site/v2/sports/football/"
                   "nfl/scoreboard' | python3 -m json.tool | grep -A2 shortName",
                   file=sys.stderr)
             return 2
-        return cmd_forecast(sys.argv[2])
+        return cmd_forecast(sys.argv[2]) if cmd == "forecast" else cmd_best(sys.argv[2])
     if cmd == "grade":
         return cmd_grade()
     if cmd == "calibration":
         return cmd_calibration()
-    print("usage: props-forecast.py forecast <event_id> | grade | calibration",
-          file=sys.stderr)
+    if cmd == "markets":
+        return cmd_markets()
+    print("usage: props-forecast.py forecast <event_id> | best <event_id> | "
+          "grade | calibration | markets", file=sys.stderr)
     return 2
 
 

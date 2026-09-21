@@ -173,9 +173,9 @@ function register(app) {
     }
     const rows = Array.isArray(data.forecasts) ? data.forecasts : [];
     // Ungraded first (they are the live ones), then newest.
-    rows.sort((a, b) => (a.actual_yards === null ? 0 : 1) - (b.actual_yards === null ? 0 : 1)
+    rows.sort((a, b) => (a.actual === null ? 0 : 1) - (b.actual === null ? 0 : 1)
                       || String(b.forecast_utc || '').localeCompare(String(a.forecast_utc || '')));
-    const graded = rows.filter(r => r.actual_yards !== null && r.actual_yards !== undefined);
+    const graded = rows.filter(r => r.actual !== null && r.actual !== undefined);
     res.json({
       available: true,
       counts: {
@@ -183,6 +183,7 @@ function register(app) {
         pending: rows.length - graded.length,
         graded: graded.length,
         coarse: rows.filter(r => r.coarse).length,
+        markets: new Set(rows.map(r => r.market)).size,
       },
       forecasts: rows,
     });
