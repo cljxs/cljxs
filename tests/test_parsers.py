@@ -4190,3 +4190,73 @@ class ForecastsAreGradedOrTheyAreDecoration(unittest.TestCase):
         src = (SCRIPTS / "props-forecast.py").read_text()
         self.assertIn("coarse = is_coarse(probs)", src)
         self.assertIn('"  COARSE" if coarse else ""', src)
+
+
+class TheForecastCardShowsNoPrice(unittest.TestCase):
+    """The village renders forecasts as cards, shaped after a tool the owner
+    was shown. The one thing they must never grow is a price beside the
+    probability: "mine says 70, the line says 60" is the reasoning Ace's
+    instructions open by forbidding, and a card putting the two side by side
+    would be an invitation to it in the interface rather than the prompt.
+    """
+
+    def setUp(self):
+        self.js = (ROOT / "mission-control-api" / "ace.js").read_text()
+        self.html = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+
+    def test_the_endpoint_serves_the_forecasts(self):
+        self.assertIn("/api/ace/forecasts", self.js)
+        self.assertIn("forecasts.json", self.js)
+
+    def test_a_missing_file_is_a_reason_not_a_crash(self):
+        # Nothing has been forecast yet is the normal state on a fresh
+        # droplet, and it must not read as a broken endpoint.
+        body = self.js.split("/api/ace/forecasts", 1)[1].split("app.get(", 1)[0]
+        self.assertIn("available: false", body)
+        self.assertIn("reason", body)
+
+    def test_neither_the_endpoint_nor_the_card_carries_odds(self):
+        card = self.html.split("function forecastCard(", 1)[1].split("\nasync function", 1)[0]
+        feed = self.js.split("/api/ace/forecasts", 1)[1].split("app.get(", 1)[0]
+        for word in ("price", "odds", "novig", "moneyline", "stake", "edge"):
+            self.assertNotIn(word, card.lower(), f"a forecast card must not show {word}")
+            self.assertNotIn(word, feed.lower().replace("no odds", ""),
+                             f"the forecast feed must not carry {word}")
+
+    def test_the_card_says_it_is_not_a_bet(self):
+        card = self.html.split("function forecastCard(", 1)[1].split("\nasync function", 1)[0]
+        self.assertIn("NOT A BET", card)
+
+    def test_a_coarse_forecast_is_marked_in_the_interface_too(self):
+        # It is flagged in the script's output; a card that dropped the flag
+        # would present the weakest rows as if they were the strongest.
+        card = self.html.split("function forecastCard(", 1)[1].split("\nasync function", 1)[0]
+        self.assertIn("f.coarse", card)
+        self.assertIn("COARSE", card)
+
+    def test_the_sample_is_shown_beside_the_number(self):
+        # A probability off 11 games is not the same claim as one off 21, and
+        # printing them identically is the failure being designed against.
+        card = self.html.split("function forecastCard(", 1)[1].split("\nasync function", 1)[0]
+        for field in ("sample_games", "sample_mean", "sample_low", "sample_high", "draws"):
+            self.assertIn(field, card, f"the card must show {field}")
+
+    def test_an_ungraded_forecast_is_not_drawn_as_a_result(self):
+        # Showing a pending forecast as a miss would make every new slate look
+        # like a failure before a ball was thrown.
+        card = self.html.split("function forecastCard(", 1)[1].split("\nasync function", 1)[0]
+        self.assertIn("awaiting the final score", card)
+        self.assertIn("actual_yards !== null", card)
+
+    def test_the_panel_is_loaded_for_ace(self):
+        # Assert the CALL, not the name: `async function loadAceForecasts(){`
+        # contains "loadAceForecasts()" as a substring, so the first version
+        # of this passed on the definition of a function nothing invoked.
+        self.assertIn('id="aceForecasts"', self.html)
+        self.assertRegex(self.html,
+                         r"if \(a\.name === 'ace'\) \{[^}]*loadAceForecasts\(\);")
+
+    def test_the_label_does_not_wrap_mid_phrase(self):
+        # It rendered as "MODEL FORECAST · NOT / A BET", which reads as two
+        # separate claims. Found by screenshotting it rather than reading it.
+        self.assertRegex(self.html, r"\.fclabel\{[^}]*white-space:nowrap")

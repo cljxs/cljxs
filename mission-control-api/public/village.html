@@ -142,6 +142,35 @@
   /* Ace's betting console */
   .verdict{background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:11px;
     padding:12px 14px;font-size:13px;line-height:1.5;margin-bottom:12px}
+  /* Player forecast cards. Shaped after a tool the owner was shown: a label
+     that says it is not a bet, the headline probability, the thresholds
+     either side of it, and the sample it was built from - so the number is
+     never separated from how much it is worth. */
+  .fcards{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));margin-bottom:18px}
+  .fcard{border:1px solid var(--line);border-radius:12px;background:var(--card);padding:14px}
+  .fcard.done{opacity:.72}
+  .fchead{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+  .fchead>div:first-child{flex:1;min-width:0}
+  /* The label is one phrase; wrapping it mid-way reads as two claims. */
+  .fclabel{font-size:9px;letter-spacing:.08em;color:#5aa9f0;font-weight:700;white-space:nowrap}
+  .fcname{font-size:17px;font-weight:700;margin-top:3px;overflow-wrap:anywhere}
+  .fcsub{font-size:12px;color:var(--mute);margin-top:2px}
+  .fcbig{font-size:23px;font-weight:700;color:#5aa9f0;text-align:right;line-height:1.1;
+    flex:0 0 auto;white-space:nowrap;
+    border:1px solid rgba(90,169,240,.35);border-radius:9px;padding:6px 9px;background:rgba(90,169,240,.07)}
+  .fcbigl{font-size:10px;color:var(--mute);font-weight:600}
+  .fctiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(60px,1fr));gap:6px;margin:12px 0 8px}
+  .fct{border:1px solid var(--line);border-radius:8px;padding:6px 4px;text-align:center}
+  .fct.on{border-color:rgba(90,169,240,.45);background:rgba(90,169,240,.09)}
+  .fctl{font-size:10px;color:var(--mute)}
+  .fctv{font-size:15px;font-weight:700}
+  /* One line per fact, wrapping as a unit - a footer that breaks between
+     "10,000" and "DRAWS" reads as two different numbers. */
+  .fcfoot{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:10px;letter-spacing:.04em;color:var(--mute)}
+  .fcfoot span{white-space:nowrap}
+  .fcwarn{color:#e8b566;font-weight:700}
+  .fcres{margin-top:10px;padding-top:8px;border-top:1px solid var(--line);font-size:12px;font-weight:600}
+  .fcres.pend{color:var(--mute);font-weight:400}
   .verdict b{color:var(--ink)}
   .sect{font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute);
     margin:18px 0 8px;font-family:ui-monospace,Menlo,monospace}
@@ -1059,14 +1088,14 @@ function openPanel(name) {
       <div id="scoutIdeas"><div class="muted">loading…</div></div>` : ''}
     ${a.name === 'emily' ? `<h2 style="font-size:15px;margin:18px 0 8px">The gallery</h2>
       <div id="emilyBuilds"><div class="muted">loading…</div></div>` : ''}
-    ${a.name === 'ace' ? `<div id="aceLedger"><div class="muted">loading the ledger…</div></div>` : ''}
+    ${a.name === 'ace' ? `<div id="aceForecasts"></div><div id="aceLedger"><div class="muted">loading the ledger…</div></div>` : ''}
     <button id="close">Close</button>`;
   $('card').className = isAce ? 'wide' : '';
   $('panel').style.display = 'flex';
   $('close').onclick = closePanel;
   if (a.name === 'scout') loadScoutIdeas();
   if (a.name === 'emily') loadEmilyBuilds();
-  if (a.name === 'ace') loadAceLedger();
+  if (a.name === 'ace') { loadAceForecasts(); loadAceLedger(); }
 }
 let ideaBusy = false;
 
@@ -1279,6 +1308,73 @@ function miniTable(title, rows, label){
   return `<div class="box"><div class="l">${esc(title)}</div>` + rows.slice(0,6).map(r =>
     `<div class="rowline"><span>${esc(r.key)}</span><span>${r.rows}${
       r.settled ? ` · ${r.hit_pct}% of ${r.settled}` : ''}</span></div>`).join('') + '</div>';
+}
+
+// ------------------------------------------------- player forecasts
+//
+// A forecast is a probability and nothing else. There is no price in the
+// payload and none is shown: "my number says 70, the line says 60" is the
+// reasoning Ace's instructions open by forbidding, and a card that put the
+// two side by side would be inviting it. NOT A BET is on every one of these
+// for the same reason it is printed by the script that writes them.
+
+function fcTile(label, pct, on){
+  return `<div class="fct${on ? ' on' : ''}"><div class="fctl">${esc(label)}</div>`
+       + `<div class="fctv num">${pct === undefined || pct === null ? '—' : Number(pct).toFixed(1) + '%'}</div></div>`;
+}
+
+function forecastCard(f){
+  const probs = f.probabilities || {};
+  const keys = Object.keys(probs).map(Number).sort((x, y) => x - y);
+  // The headline is the middle threshold, the way his cards lead with 60+.
+  const lead = keys.length ? keys[Math.floor((keys.length - 1) / 2)] : null;
+  const graded = f.actual_yards !== null && f.actual_yards !== undefined;
+
+  const tiles = keys.map(t => fcTile(t + '+', probs[String(t)], t === lead)).join('');
+  const hit = graded && lead !== null ? Number(f.actual_yards) >= lead : null;
+
+  return `<div class="fcard${graded ? ' done' : ''}">
+    <div class="fchead">
+      <div>
+        <div class="fclabel">MODEL FORECAST · NOT A BET</div>
+        <div class="fcname">${esc(f.player)}</div>
+        <div class="fcsub">${esc(f.team || '')} · ${esc((f.market || '').replace(/_/g, ' '))}${
+          lead !== null ? ' · ' + lead + '+' : ''}</div>
+      </div>
+      <div class="fcbig num">${lead === null ? '—' : Number(probs[String(lead)]).toFixed(1) + '%'}
+        <div class="fcbigl">${lead === null ? '' : lead + '+'}</div></div>
+    </div>
+    <div class="fctiles">${tiles}</div>
+    <div class="fcfoot">
+      <span>EXP ${f.sample_mean === undefined ? '—' : Number(f.sample_mean).toFixed(1)}</span>
+      <span>RANGE ${f.sample_low ?? '—'}–${f.sample_high ?? '—'}</span>
+      <span>${f.sample_games ?? '?'} GAMES</span>
+      <span>${(f.draws || 0).toLocaleString()} DRAWS</span>
+      ${f.coarse ? `<span class="fcwarn">COARSE</span>` : ''}
+    </div>
+    ${graded ? `<div class="fcres ${hit ? 'up' : 'down'}">
+        FINAL ${Number(f.actual_yards).toFixed(0)} yds · ${lead}+ ${hit ? 'HIT' : 'MISS'}</div>`
+      : `<div class="fcres pend">awaiting the final score</div>`}
+  </div>`;
+}
+
+async function loadAceForecasts(){
+  const host = $('aceForecasts');
+  if(!host) return;
+  let d;
+  try{
+    const r = await fetch('/api/ace/forecasts', {cache:'no-store'});
+    d = await r.json();
+  }catch(e){ host.innerHTML = ''; return; }
+
+  if(!d.available || !d.forecasts.length){ host.innerHTML = ''; return; }
+  const c = d.counts;
+  host.innerHTML = `<div class="sect">Player forecasts · ${c.total}`
+    + (c.pending ? ` · ${c.pending} awaiting a result` : '')
+    + (c.graded ? ` · ${c.graded} graded` : '') + `</div>`
+    + `<div class="muted" style="margin-bottom:10px">Probabilities only — no odds are
+       held or shown. Grade them, then judge the calibration.</div>`
+    + `<div class="fcards">` + d.forecasts.map(forecastCard).join('') + `</div>`;
 }
 
 async function loadAceLedger(){

@@ -156,6 +156,38 @@ function build() {
 }
 
 function register(app) {
+  // Player forecasts from props-forecast.py. Read-only, and deliberately
+  // carries no odds: the script that writes this holds none, and a price
+  // appearing here would invite exactly the comparison Ace's instructions
+  // open by warning against.
+  app.get('/api/ace/forecasts', (req, res) => {
+    let data;
+    try {
+      data = JSON.parse(fs.readFileSync(path.join(DIR, 'data', 'forecasts.json'), 'utf8'));
+    } catch {
+      return res.json({
+        available: false,
+        reason: 'no forecasts yet - run props-forecast.py forecast <event_id>',
+        forecasts: [],
+      });
+    }
+    const rows = Array.isArray(data.forecasts) ? data.forecasts : [];
+    // Ungraded first (they are the live ones), then newest.
+    rows.sort((a, b) => (a.actual_yards === null ? 0 : 1) - (b.actual_yards === null ? 0 : 1)
+                      || String(b.forecast_utc || '').localeCompare(String(a.forecast_utc || '')));
+    const graded = rows.filter(r => r.actual_yards !== null && r.actual_yards !== undefined);
+    res.json({
+      available: true,
+      counts: {
+        total: rows.length,
+        pending: rows.length - graded.length,
+        graded: graded.length,
+        coarse: rows.filter(r => r.coarse).length,
+      },
+      forecasts: rows,
+    });
+  });
+
   app.get('/api/ace/ledger', (req, res) => {
     const d = build();
     if (!d.available) {
