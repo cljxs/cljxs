@@ -4157,6 +4157,12 @@ class ForecastsAreGradedOrTheyAreDecoration(unittest.TestCase):
         self.assertEqual(b[80]["hits"], 1, "55 clears 40")
         self.assertEqual(b[30]["hits"], 0, "55 does not clear 70")
 
+    def test_a_certainty_does_not_open_a_bucket_above_one_hundred(self):
+        # A real run printed a "100-109%" row, which is not a thing a
+        # probability can be. 100% belongs in the top bucket with 90-99.
+        rows = [self.forecast_row({"3": 100.0}, actual=5.0)]
+        self.assertEqual(list(self.m.buckets(rows)), [90])
+
     def test_it_says_when_there_is_not_enough_to_conclude(self):
         # A coin lands 7 of 10 often enough that it means nothing, and a
         # calibration table printed without that warning invites a conclusion.
@@ -4716,6 +4722,37 @@ class EveryMarketIsGradedAgainstItsOwnStat(unittest.TestCase):
             self.m.get = real_get
         self.assertIsNone(value)
         self.assertIn("not final", why)
+
+    def test_a_grade_run_that_dies_halfway_keeps_what_it_had(self):
+        # `grade | head -18` broke the pipe, killed the process before the
+        # single save at the end, and threw away every grade it had just
+        # collected - silently, because the rows simply stayed pending. A
+        # dropped connection on the nineteenth player does the same thing.
+        rows = [{"event_id": "1", "athlete_id": str(i), "player": f"P{i}",
+                 "market": "receptions", "stat": "receptions", "unit": "rec",
+                 "probabilities": {"3": 50.0}, "actual": None,
+                 "graded_utc": None} for i in range(3)]
+        self.m.save({"forecasts": rows})
+
+        seen = []
+
+        def flaky(event_id, athlete_id, stat):
+            seen.append(athlete_id)
+            if len(seen) > 1:
+                raise KeyboardInterrupt("the pipe went away")
+            return 7.0, "final"
+
+        real = self.m.actual_value
+        self.m.actual_value = flaky
+        try:
+            with self.assertRaises(KeyboardInterrupt):
+                self.m.cmd_grade()
+        finally:
+            self.m.actual_value = real
+
+        kept = self.m.load()["forecasts"]
+        self.assertEqual(kept[0]["actual"], 7.0, "the finished grade survived")
+        self.assertIsNone(kept[2]["actual"], "the unreached one is still pending")
 
     def test_calibration_is_reported_market_by_market(self):
         # Receptions are integers off a four-value list and yards are not.

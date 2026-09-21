@@ -603,6 +603,20 @@ def cmd_grade():
         print("nothing waiting to be graded.")
         return 0
 
+    # Saved in a finally: grading walks the whole file making network calls,
+    # and the first version wrote the results only after the last one. Piping
+    # the output through `head` broke the pipe, killed the process mid-print,
+    # and threw away every grade it had just collected - silently, because the
+    # rows simply stayed pending. A dropped connection would do the same.
+    try:
+        graded, skipped = grade_all(pending)
+    finally:
+        save(data)
+    print(f"\n{graded} graded, {skipped} still waiting on a final score.")
+    return 0
+
+
+def grade_all(pending):
     graded = skipped = 0
     for f in pending:
         stat = f.get("stat") or (MARKETS.get(f.get("market")) or {}).get("stat")
@@ -628,10 +642,7 @@ def cmd_grade():
             for t in sorted(f["probabilities"], key=float))
         print(f"  {f['player']:<20} {f.get('market',''):<18} "
               f"{value:>5.0f} {f.get('unit','')}   {marks}")
-
-    save(data)
-    print(f"\n{graded} graded, {skipped} still waiting on a final score.")
-    return 0
+    return graded, skipped
 
 
 def buckets(forecasts, width=10):
@@ -645,7 +656,9 @@ def buckets(forecasts, width=10):
         if f.get("actual") is None:
             continue
         for t, pct in (f.get("probabilities") or {}).items():
-            lo = int(float(pct) // width) * width
+            # 100.0% would otherwise open a "100-109%" bucket, which is not
+            # a thing a probability can be. It belongs in the top one.
+            lo = min(int(float(pct) // width) * width, 100 - width)
             b = out.setdefault(lo, {"n": 0, "hits": 0, "predicted": 0.0})
             b["n"] += 1
             b["predicted"] += float(pct)
@@ -687,7 +700,7 @@ def cmd_calibration():
     print(f"  {'said':<10}{'predicted':>10}{'happened':>10}{'gap':>8}{'calls':>7}")
     print("  " + "-" * 45)
     for lo, b in rows.items():
-        print(f"  {lo}-{lo + 9}%{'':<3}{b['predicted']:>9.1f}%{b['observed']:>9.1f}%"
+        print(f"  {f'{lo}-{lo + 9}%':<10}{b['predicted']:>9.1f}%{b['observed']:>9.1f}%"
               f"{b['gap']:>+8.1f}{b['n']:>7}")
 
     markets = by_market(done)
