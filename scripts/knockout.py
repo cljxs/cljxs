@@ -35,6 +35,20 @@ MIN_REMOVED_PCT = 2.0       # below this, no background was found
 BORDER_MIN_PCT = 70.0       # the border must actually BE one colour
 MAX_REMOVED_PCT = 92.0      # above this, the art matched the background
 
+# After the background is gone, whatever the model drew outside the design is
+# still there. A compass emblem came back with two pen-stroke scratches beside
+# it: not background, so the flood left them, and they went onto a hoodie.
+#
+# A stroke like that is a tiny fraction of the artwork. Anything under this
+# share of the remaining opaque pixels is a speck, not a design element.
+SPECK_MAX_PCT = 1.5
+
+# ...but only when there IS one main subject. A design that is genuinely two
+# or three parts - an icon over a word, a pair of crests - has no speck to
+# find, and guessing at one would delete half the art. If the largest piece
+# does not hold at least this much, nothing is touched and the caller is told.
+DOMINANT_MIN_PCT = 80.0
+
 
 class PngError(Exception):
     pass
@@ -251,9 +265,72 @@ def knockout(w, h, px, tolerance=DEFAULT_TOLERANCE, bg=None):
     return removed, bg
 
 
+def components(w, h, px):
+    """Connected runs of opaque pixels, largest first, as [(size, [indices])].
+
+    Four-connected, same as the flood above - a diagonal touch is not a join,
+    and treating it as one merges a speck into the art it sits beside.
+    """
+    seen = bytearray(w * h)
+    out = []
+    for start in range(w * h):
+        if seen[start] or px[start * 4 + 3] == 0:
+            continue
+        members = []
+        q = deque([start])
+        seen[start] = 1
+        while q:
+            i = q.popleft()
+            members.append(i)
+            x, y = i % w, i // w
+            for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if 0 <= nx < w and 0 <= ny < h:
+                    n = ny * w + nx
+                    if not seen[n] and px[n * 4 + 3] != 0:
+                        seen[n] = 1
+                        q.append(n)
+        out.append((len(members), members))
+    out.sort(key=lambda c: -c[0])
+    return out
+
+
+def despeckle(w, h, px, max_pct=SPECK_MAX_PCT, dominant_pct=DOMINANT_MIN_PCT):
+    """Erase stray marks left beside the artwork. Returns (pixels, count, why).
+
+    `why` is always a sentence, because "nothing was removed" has two very
+    different causes - there was nothing to remove, or this design has several
+    real parts and removing the smaller ones would have been vandalism - and
+    the caller prints whichever it was.
+    """
+    parts = components(w, h, px)
+    if len(parts) <= 1:
+        return 0, 0, "one connected piece - nothing beside the art"
+
+    total = sum(size for size, _ in parts)
+    biggest = parts[0][0]
+    if total == 0 or biggest * 100.0 / total < dominant_pct:
+        return 0, 0, (f"{len(parts)} pieces and no dominant one "
+                      f"({biggest * 100.0 / total:.0f}% largest) - this looks "
+                      f"like a multi-part design, so nothing was removed")
+
+    wiped = wiped_parts = 0
+    for size, members in parts[1:]:
+        if size * 100.0 / total > max_pct:
+            continue
+        for i in members:
+            px[i * 4 + 3] = 0
+        wiped += size
+        wiped_parts += 1
+    if not wiped_parts:
+        return 0, 0, f"{len(parts)} pieces, none small enough to be a speck"
+    return wiped, wiped_parts, (f"removed {wiped_parts} stray mark(s), "
+                                f"{wiped:,} px ({wiped * 100.0 / total:.2f}% "
+                                f"of the artwork)")
+
+
 def main():
     if len(sys.argv) < 3:
-        print("usage: knockout.py <in.png> <out.png> [--tolerance N]", file=sys.stderr)
+        print("usage: knockout.py <in.png> <out.png> [--tolerance N] [--keep-specks]", file=sys.stderr)
         return 2
     src, dst = sys.argv[1], sys.argv[2]
     tol = DEFAULT_TOLERANCE
@@ -291,6 +368,13 @@ def main():
               f"  Lower --tolerance, or ask for art that contrasts with its "
               f"background.", file=sys.stderr)
         return 1
+
+    # Only after the refusals above: despeckling a file that was never going
+    # to be written is work for nothing, and despeckling one whose background
+    # was not found would be measuring specks against noise.
+    if "--keep-specks" not in sys.argv:
+        wiped, parts, why = despeckle(w, h, px)
+        print(f"despeckle: {why}")
 
     n = encode(dst, w, h, px)
     print(f"wrote {dst} ({n:,} bytes, RGBA)")

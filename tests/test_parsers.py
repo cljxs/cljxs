@@ -3927,3 +3927,142 @@ class ACycleOwesEstimates(unittest.TestCase):
     def test_the_verifier_does_not_keep_its_own_copy_of_the_number(self):
         src = (SCRIPTS / "ace-verify.py").read_text()
         self.assertIn("ace_judge.MIN_ESTIMATES", src)
+
+
+class StrayMarksBesideTheArt(unittest.TestCase):
+    """A compass emblem reached a hoodie with two pen-stroke scratches beside
+    it. knockout floods the background inward from the border, so it removes
+    what is background-coloured AND connected to the edge - a dark mark the
+    model drew in the middle of the canvas is neither, and it survived all the
+    way onto the garment.
+
+    Removing it is a second pass over what the flood left, and it obeys the
+    same rule as the rest of this script: refuse rather than guess. A design
+    that is genuinely several parts has no speck to find, and deleting its
+    smaller half would be worse than the scratch.
+    """
+
+    def setUp(self):
+        self.k = load("knockout", "knockout.py")
+
+    def canvas(self, blocks, size=120):
+        px = bytearray()
+        for _ in range(size * size):
+            px += bytes((245, 245, 240, 255))
+        for (x0, y0, x1, y1) in blocks:
+            for y in range(y0, y1):
+                for x in range(x0, x1):
+                    i = (y * size + x) * 4
+                    px[i:i + 3] = bytes((30, 60, 45))
+        self.k.knockout(size, size, px)
+        return size, size, px
+
+    def sizes(self, w, h, px):
+        return [s for s, _ in self.k.components(w, h, px)]
+
+    def test_a_speck_beside_the_emblem_is_removed(self):
+        w, h, px = self.canvas([(40, 40, 90, 90), (12, 12, 16, 16)])
+        self.assertEqual(self.sizes(w, h, px), [2500, 16])
+        wiped, parts, why = self.k.despeckle(w, h, px)
+        self.assertEqual(parts, 1)
+        self.assertEqual(wiped, 16)
+        self.assertEqual(self.sizes(w, h, px), [2500])
+        self.assertIn("stray mark", why)
+
+    def test_a_two_part_design_is_left_alone(self):
+        # An icon over a word. Neither half is a speck, and picking one to
+        # delete would be vandalism dressed as a fix.
+        w, h, px = self.canvas([(30, 20, 90, 60), (28, 70, 92, 88)])
+        before = self.sizes(w, h, px)
+        wiped, parts, why = self.k.despeckle(w, h, px)
+        self.assertEqual((wiped, parts), (0, 0))
+        self.assertEqual(self.sizes(w, h, px), before)
+        self.assertIn("multi-part", why)
+
+    def test_a_single_piece_says_so_rather_than_claiming_a_clean_up(self):
+        # "Nothing removed" has two causes and the caller prints which.
+        w, h, px = self.canvas([(40, 40, 90, 90)])
+        wiped, parts, why = self.k.despeckle(w, h, px)
+        self.assertEqual((wiped, parts), (0, 0))
+        self.assertIn("one connected piece", why)
+
+    def test_the_threshold_is_where_the_constant_says(self):
+        # A piece just under the limit goes, one just over stays.
+        w, h, px = self.canvas([(20, 20, 100, 100)])          # 6400 px
+        big = self.sizes(w, h, px)[0]
+        small = int(big * self.k.SPECK_MAX_PCT / 100.0) - 20
+        side = max(2, int(small ** 0.5))
+        w, h, px = self.canvas([(20, 20, 100, 100), (5, 5, 5 + side, 5 + side)])
+        wiped, parts, _why = self.k.despeckle(w, h, px)
+        self.assertEqual(parts, 1, "a piece under the threshold is a speck")
+
+    def test_a_piece_over_the_threshold_survives(self):
+        w, h, px = self.canvas([(20, 20, 100, 100), (2, 2, 30, 30)])
+        wiped, parts, _why = self.k.despeckle(w, h, px)
+        self.assertEqual((wiped, parts), (0, 0))
+
+    def test_several_specks_all_go(self):
+        w, h, px = self.canvas([(40, 40, 95, 95), (5, 5, 8, 8),
+                                (110, 5, 113, 8), (5, 110, 8, 113)])
+        wiped, parts, _why = self.k.despeckle(w, h, px)
+        self.assertEqual(parts, 3)
+        self.assertEqual(len(self.sizes(w, h, px)), 1)
+
+    def test_pieces_touching_only_at_a_corner_are_two_pieces(self):
+        # Four-connected, same as the flood. Treating a diagonal touch as a
+        # join would merge a speck into the art it sits beside and hide it.
+        w, h, px = self.canvas([(20, 20, 40, 40), (40, 40, 44, 44)])
+        self.assertEqual(len(self.sizes(w, h, px)), 2)
+
+    def test_an_empty_image_does_not_crash(self):
+        px = bytearray(bytes((245, 245, 240, 255)) * (20 * 20))
+        self.k.knockout(20, 20, px)
+        self.assertEqual(self.k.despeckle(20, 20, px)[:2], (0, 0))
+
+    def test_the_script_reports_what_it_did(self):
+        # Silent cleanup is how you stop noticing it is happening.
+        src = (SCRIPTS / "knockout.py").read_text()
+        self.assertIn("despeckle:", src)
+
+    def test_keep_specks_really_keeps_them(self):
+        # Asserting the flag's name appears in the file proves only that the
+        # usage line mentions it. This runs the script both ways.
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "in.png"
+            size = 120
+            px = bytearray()
+            for _ in range(size * size):
+                px += bytes((245, 245, 240, 255))
+            for (x0, y0, x1, y1) in ((40, 40, 95, 95), (8, 8, 12, 12)):
+                for y in range(y0, y1):
+                    for x in range(x0, x1):
+                        i = (y * size + x) * 4
+                        px[i:i + 3] = bytes((30, 60, 45))
+            self.k.encode(src, size, size, px)
+
+            def run(*flags):
+                out = Path(tmp) / f"out{len(flags)}.png"
+                r = subprocess.run(
+                    [sys.executable, str(SCRIPTS / "knockout.py"), str(src),
+                     str(out), *flags],
+                    capture_output=True, text=True, timeout=120)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                w, h, got = self.k.decode(out)
+                return r.stdout, len(self.k.components(w, h, got))
+
+            cleaned_out, cleaned_parts = run()
+            kept_out, kept_parts = run("--keep-specks")
+
+        self.assertEqual(cleaned_parts, 1, "the speck should be gone by default")
+        self.assertIn("stray mark", cleaned_out)
+        self.assertEqual(kept_parts, 2, "--keep-specks must leave it alone")
+        self.assertNotIn("despeckle:", kept_out)
+
+    def test_despeckling_happens_only_after_the_refusals(self):
+        # Cleaning a file that will not be written is work for nothing, and
+        # measuring specks against art whose background was never found is
+        # measuring against noise.
+        src = (SCRIPTS / "knockout.py").read_text()
+        body = src.split("def main(", 1)[1]
+        self.assertLess(body.index("MAX_REMOVED_PCT"), body.index("despeckle(w, h, px)"))
+        self.assertLess(body.index("despeckle(w, h, px)"), body.index("encode(dst"))
