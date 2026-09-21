@@ -4088,25 +4088,32 @@ class ForecastsAreGradedOrTheyAreDecoration(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_the_simulation_counts_what_the_player_has_actually_done(self):
-        # Five games, two of them over 60. A bootstrap claims no shape beyond
-        # the one he produced.
-        probs = self.m.simulate([10.0, 20.0, 65.0, 80.0, 30.0],
-                                (60,), draws=10_000, seed="x")
-        self.assertAlmostEqual(probs[60], 40.0, delta=2.0)
+    def test_the_forecast_stays_anchored_to_what_he_actually_did(self):
+        # Five games, two of them over 60. Smoothing fills the gaps between
+        # his games; it must not drag the answer away from them.
+        probs = self.m.smoothed_probs([10.0, 20.0, 65.0, 80.0, 30.0], (60,))
+        self.assertAlmostEqual(probs[60], 40.0, delta=12.0)
 
-    def test_the_same_seed_gives_the_same_forecast(self):
-        # A number nobody can reproduce cannot be audited after the game.
+    def test_the_same_games_give_the_same_forecast(self):
+        # A number nobody can reproduce cannot be audited after the game. It
+        # used to need a seed for that; the percentage is exact arithmetic
+        # now, so it is reproducible without one.
         sample = [12.0, 45.0, 77.0, 31.0, 66.0, 9.0, 52.0, 88.0]
         bars = self.m.MARKETS["receiving_yards"]["thresholds"]
-        a = self.m.simulate(sample, bars, seed="game-1-player-2")
-        b = self.m.simulate(sample, bars, seed="game-1-player-2")
-        c = self.m.simulate(sample, bars, seed="game-1-player-9")
-        self.assertEqual(a, b)
-        self.assertNotEqual(a, c)
+        self.assertEqual(self.m.smoothed_probs(sample, bars),
+                         self.m.smoothed_probs(sample, bars))
+
+    def test_the_interval_is_reproducible_from_its_seed(self):
+        sample = [12.0, 45.0, 77.0, 31.0, 66.0, 9.0, 52.0, 88.0]
+        bars = self.m.MARKETS["receiving_yards"]["thresholds"]
+        self.assertEqual(self.m.interval(sample, bars, seed="g1-p2"),
+                         self.m.interval(sample, bars, seed="g1-p2"))
+        self.assertNotEqual(self.m.interval(sample, bars, seed="g1-p2"),
+                            self.m.interval(sample, bars, seed="g1-p9"))
 
     def test_an_empty_sample_forecasts_nothing(self):
-        self.assertEqual(self.m.simulate([], (40, 50)), {})
+        self.assertEqual(self.m.smoothed_probs([], (40, 50)), {})
+        self.assertEqual(self.m.interval([], (40, 50)), {})
 
     def test_a_thin_sample_is_refused_by_the_minimum(self):
         # Week 3 gives two games. A confident number off two games is the
@@ -4115,9 +4122,8 @@ class ForecastsAreGradedOrTheyAreDecoration(unittest.TestCase):
 
     def test_probabilities_fall_as_the_bar_rises(self):
         sample = [5.0, 18.0, 33.0, 44.0, 55.0, 61.0, 72.0, 90.0, 101.0]
-        probs = self.m.simulate(sample,
-                                self.m.MARKETS["receiving_yards"]["thresholds"],
-                                seed="s")
+        probs = self.m.smoothed_probs(
+            sample, self.m.MARKETS["receiving_yards"]["thresholds"])
         ordered = [probs[t] for t in sorted(probs)]
         self.assertEqual(ordered, sorted(ordered, reverse=True))
 
@@ -4202,7 +4208,7 @@ class ForecastsAreGradedOrTheyAreDecoration(unittest.TestCase):
         # Asserted on the row, not on the source line that sets it: the
         # earlier version of this checked for the text "coarse = is_coarse("
         # and would have passed against a flag nothing ever read.
-        flat = [20.0] * 12          # no game between any two bars
+        flat = [20.0] * 12          # every game identical: nothing to spread
         spread = [5.0, 25.0, 45.0, 55.0, 65.0, 75.0, 85.0, 95.0, 105.0, 115.0]
         rows = self.m.rows_for_player(
             "1", "A @ B", None, "2", "A Receiver", "WR", "AAA",
@@ -4247,12 +4253,23 @@ class TheForecastCardShowsNoPrice(unittest.TestCase):
         card = self.html.split("function forecastCard(", 1)[1].split("\nasync function", 1)[0]
         self.assertIn("NOT A BET", card)
 
-    def test_a_coarse_forecast_is_marked_in_the_interface_too(self):
+    def test_a_flat_forecast_is_marked_in_the_interface_too(self):
         # It is flagged in the script's output; a card that dropped the flag
-        # would present the weakest rows as if they were the strongest.
+        # would present the weakest rows as if they were the strongest. The
+        # flag is FLAT now rather than COARSE - it used to fire on any two
+        # bars with no game between them, which smoothing fixed, and it now
+        # fires only on a player whose games are all the identical value.
         card = self.html.split("function forecastCard(", 1)[1].split("\nasync function", 1)[0]
         self.assertIn("f.coarse", card)
-        self.assertIn("COARSE", card)
+        self.assertIn("FLAT", card)
+
+    def test_the_card_shows_how_firm_each_percentage_is(self):
+        # Stored and not drawn is the same as not computed.
+        card = self.html.split("function fcTile(", 1)[1].split("\nfunction forecastCard", 1)[0]
+        self.assertIn("band[0]", card)
+        self.assertIn("band[1]", card)
+        body = self.html.split("function forecastCard(", 1)[1].split("\nasync function", 1)[0]
+        self.assertIn("f.interval", body)
 
     def test_the_sample_is_shown_beside_the_number(self):
         # A probability off 11 games is not the same claim as one off 21, and
@@ -4648,18 +4665,48 @@ class TheStrongestClaimIsNotTheHighestNumber(unittest.TestCase):
     def setUp(self):
         self.m = load("props_forecast", "props-forecast.py")
 
-    def row(self, player, market, probs, coarse=False, games=20):
+    def row(self, player, market, probs, coarse=False, games=20, width=4.0):
+        # A tight interval unless a test asks for a wide one.
+        band = {t: [max(0.0, p - width), min(100.0, p + width)]
+                for t, p in probs.items()}
         return {"athlete_id": player, "player": player, "market": market,
-                "unit": "rec", "probabilities": probs, "coarse": coarse,
-                "sample_games": games, "sample_mean": 4.0, "p25": 2.0,
-                "p75": 6.0, "availability": None}
+                "unit": "rec", "probabilities": probs, "interval": band,
+                "coarse": coarse, "sample_games": games, "sample_mean": 4.0,
+                "p25": 2.0, "p75": 6.0, "availability": None}
+
+    def test_a_shrug_does_not_outrank_a_claim(self):
+        # 95% off nine games, bracket (54-99), against 90% off twenty-one,
+        # bracket (86-94). Ranked on the estimate the nine-game sample wins
+        # for having less idea; ranked on the near edge of its bracket it
+        # does not.
+        picks = self.m.strongest([
+            self.row("Shrug", "receptions", {"3": 95.0}, games=9, width=22.0),
+            self.row("Claim", "receptions", {"3": 90.0}, games=21, width=4.0)])
+        self.assertEqual([p["row"]["player"] for p in picks], ["Claim", "Shrug"])
+
+    def test_the_floor_is_the_near_edge_whichever_side_it_is(self):
+        over = self.m.strongest([self.row("A", "receptions", {"3": 80.0})])[0]
+        under = self.m.strongest([self.row("B", "receptions", {"6": 20.0})])[0]
+        self.assertEqual(over["side"], "OVER")
+        self.assertEqual(over["confidence"], 76.0)       # the LOW end
+        self.assertEqual(under["side"], "UNDER")
+        self.assertEqual(under["confidence"], 76.0)      # 100 - the HIGH end
+
+    def test_a_row_with_no_interval_still_ranks(self):
+        # Rows written before intervals existed must not vanish from the list.
+        bare = {"athlete_id": "A", "player": "A", "market": "receptions",
+                "unit": "rec", "probabilities": {"3": 88.0}, "coarse": False,
+                "sample_games": 20, "sample_mean": 4.0, "p25": 2.0, "p75": 6.0,
+                "availability": None}
+        picks = self.m.strongest([bare])
+        self.assertEqual(picks[0]["confidence"], 88.0)
 
     def test_a_confident_under_beats_a_middling_over(self):
         picks = self.m.strongest([
             self.row("A", "receptions", {"3": 61.0, "6": 8.0})])
         self.assertEqual(picks[0]["side"], "UNDER")
         self.assertEqual(picks[0]["threshold"], 6.0)
-        self.assertEqual(picks[0]["confidence"], 92.0)
+        self.assertEqual(picks[0]["probability"], 8.0)
 
     def test_a_confident_over_is_picked_as_an_over(self):
         picks = self.m.strongest([
@@ -4702,6 +4749,7 @@ class TheStrongestClaimIsNotTheHighestNumber(unittest.TestCase):
         src = (SCRIPTS / "props-forecast.py").read_text()
         body = src.split("def cmd_best(", 1)[1].split("\ndef ", 1)[0]
         self.assertIn("noisy", body)
+        self.assertIn("FLOOR", body)
         self.assertIn("print(NOT_A_BET)", body)
 
 
@@ -4861,3 +4909,229 @@ class EveryMarketIsGradedAgainstItsOwnStat(unittest.TestCase):
         split = self.m.by_market(rows)
         self.assertEqual(sorted(split), ["receiving_yards", "receptions"])
         self.assertLess(self.m.buckets(split["receptions"])[90]["gap"], 0)
+
+
+class TwoBarsWithNoGameBetweenThem(unittest.TestCase):
+    """Stafford came back 76.2% for 200+ AND 76.2% for 225+.
+
+    A plain bootstrap draws one of the player's own games, so it can only ever
+    produce a value he has already produced. Twenty-one games and a bar every
+    twenty-five yards means bars with no game between them are literally the
+    same question, and the answer is identical - correctly. The number was
+    real; the resolution it appeared to have was not, and three of four
+    quarterback rows carried the flag.
+
+    The fix is to let each past game stand for a small neighbourhood instead
+    of a single point. The width of that neighbourhood is the whole argument,
+    so it is Silverman's rule computed off his own games - a streaky player
+    gets a wide one, a metronome a narrow one, and nobody chose either.
+
+    Two things this must not do: move the answer away from what he actually
+    did, and invent a spread for a player who has none.
+    """
+
+    # Matthew Stafford's real passing yards, 21 games, captured 2026-09-21
+    # from the live game log - the exact sample that produced the bug. Note
+    # the gap between 196 and 243: no game lands between the 200 and 225 bars,
+    # which is the whole of it. An invented fixture with a game at 211 in it
+    # passed the "it is fixed" tests and failed this one, which is why the
+    # numbers here are pulled and not written.
+    STAFFORD = [130.0, 155.0, 181.0, 182.0, 196.0, 243.0, 245.0, 258.0, 259.0,
+                269.0, 273.0, 280.0, 281.0, 281.0, 298.0, 304.0, 368.0, 374.0,
+                375.0, 389.0, 457.0]
+
+    def setUp(self):
+        self.m = load("props_forecast", "props-forecast.py")
+        self.bars = self.m.MARKETS["passing_yards"]["thresholds"]
+
+    def unsmoothed(self, sample, thresholds, counts=False):
+        """What the old bootstrap answered, exactly: h = 0 is a step."""
+        return self.m.smoothed_probs(sample, thresholds, counts, h=0.0)
+
+    def test_the_bug_is_real_and_the_old_answer_still_shows_it(self):
+        # The premise, asserted rather than remembered: with no smoothing two
+        # of these bars are the same number.
+        old = self.unsmoothed(self.STAFFORD, self.bars)
+        self.assertEqual(old[200], 76.2)
+        self.assertEqual(old[225], 76.2)
+        self.assertTrue(self.m.is_coarse(old, self.bars))
+
+    def test_smoothing_tells_the_two_bars_apart(self):
+        new = self.m.smoothed_probs(self.STAFFORD, self.bars)
+        self.assertNotEqual(new[200], new[225])
+        self.assertEqual(len(set(new.values())), len(self.bars))
+        self.assertFalse(self.m.is_coarse(new, self.bars))
+
+    def test_it_does_not_drag_the_answer_off_his_own_games(self):
+        # Filling the gaps between his afternoons is the point; moving the
+        # estimate somewhere else would be fitting a curve to him, which is
+        # the thing this file refuses to do.
+        old = self.unsmoothed(self.STAFFORD, self.bars)
+        new = self.m.smoothed_probs(self.STAFFORD, self.bars)
+        for t in self.bars:
+            self.assertLess(abs(new[t] - old[t]), 12.0,
+                            f"{t}+ moved from {old[t]} to {new[t]}")
+
+    def test_the_bars_still_fall_as_they_rise(self):
+        new = self.m.smoothed_probs(self.STAFFORD, self.bars)
+        ordered = [new[t] for t in sorted(new)]
+        self.assertEqual(ordered, sorted(ordered, reverse=True))
+
+    def test_a_player_with_no_spread_gets_none_invented(self):
+        # Every game identical. There is genuinely nothing to smooth, and a
+        # bandwidth conjured for him would be the one piece of fiction here.
+        self.assertEqual(self.m.bandwidth([20.0] * 12), 0.0)
+        flat = self.m.smoothed_probs([20.0] * 12, (10, 15, 18))
+        self.assertTrue(self.m.is_coarse(flat, (10, 15, 18)))
+        # A bar he has never been on either side of is 0 or 100, not a
+        # fraction: with no spread there is no room for doubt to live in.
+        self.assertEqual(set(flat.values()), {100.0})
+        self.assertEqual(self.m.smoothed_probs([20.0] * 12, (25,))[25], 0.0)
+
+    def test_the_bandwidth_comes_off_the_sample_not_off_a_constant(self):
+        # A streaky player gets a wide neighbourhood and a metronome a narrow
+        # one. If this were a hand-picked number the two would match.
+        steady = [250.0, 252.0, 248.0, 251.0, 249.0, 250.0, 253.0, 247.0,
+                  250.0, 251.0]
+        streaky = [120.0, 380.0, 160.0, 410.0, 200.0, 340.0, 95.0, 430.0,
+                   180.0, 360.0]
+        self.assertLess(self.m.bandwidth(steady), self.m.bandwidth(streaky))
+        self.assertGreater(self.m.bandwidth(streaky), 20.0)
+
+    def test_the_bandwidth_shrinks_as_the_games_pile_up(self):
+        # n^(-1/5): more games, less need to borrow from the neighbours.
+        # The same games three times over - identical spread, triple the
+        # sample - so only the count can move the answer. Comparing two
+        # DIFFERENT slices instead let a version with the n term deleted pass,
+        # because the slices had different spreads.
+        once = self.STAFFORD
+        thrice = self.STAFFORD * 3
+        self.assertGreater(self.m.bandwidth(once), 0.0)
+        self.assertLess(self.m.bandwidth(thrice), self.m.bandwidth(once) * 0.85)
+
+    def test_no_bandwidth_is_written_down_in_the_file(self):
+        # The one number that was not invented. A literal here would be the
+        # whole answer smuggled in as a constant.
+        src = (SCRIPTS / "props-forecast.py").read_text()
+        body = src.split("def bandwidth(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("0.9", body, "Silverman's rule, and only it")
+        self.assertIn("1.34", body)
+        self.assertIn("-0.2", body)
+
+
+class ACatchIsAWholeNumber(unittest.TestCase):
+    """Smoothing receptions the way yards are smoothed is wrong.
+
+    3.4 receptions is not a thing. A book settles 4+ on whether the count is
+    four or more, so a counting market has to be asked at the bar minus a
+    half - the same question asked of a number that is going to be rounded.
+    Asked at the bar itself, a smoothed count loses half the mass sitting
+    exactly on it, and every counting market reads low.
+    """
+
+    NACUA = [5.0, 8.0, 11.0, 6.0, 9.0, 7.0, 12.0, 5.0, 10.0, 8.0,
+             6.0, 9.0, 7.0, 11.0, 8.0, 5.0, 10.0, 6.0, 9.0, 7.0]
+
+    def setUp(self):
+        self.m = load("props_forecast", "props-forecast.py")
+
+    def test_a_count_is_asked_at_the_half(self):
+        # Eight catches, bar of 8. As a count that is a clear hit, so it is
+        # asked at 7.5 and lands well above a coin flip. Asked at 8.0 the
+        # smear splits in half and it reads 50%.
+        h = 1.0
+        self.assertAlmostEqual(self.m.point_prob(8.0, 8, h, True), 0.69, delta=0.02)
+        self.assertAlmostEqual(self.m.point_prob(8.0, 8, h, False), 0.50, delta=0.001)
+
+    def test_every_counting_market_is_declared_one(self):
+        counts = {m for m, spec in self.m.MARKETS.items() if spec["counts"]}
+        self.assertEqual(counts, {"receptions", "receiving_targets",
+                                  "rushing_attempts", "passing_tds"})
+
+    def test_yards_are_not_treated_as_counts(self):
+        for market in ("passing_yards", "receiving_yards", "rushing_yards"):
+            self.assertFalse(self.m.MARKETS[market]["counts"],
+                             f"{market} is a distance, not a tally")
+
+    def test_a_receiver_who_never_caught_four_still_gets_a_number_for_it(self):
+        # He has 5s and 6s and no 4s at all, so a plain bootstrap said 100%
+        # for 3+, 4+ and 5+ alike. Smoothed as a count, they separate.
+        probs = self.m.smoothed_probs(
+            self.NACUA, self.m.MARKETS["receptions"]["thresholds"], counts=True)
+        self.assertEqual(len(set(probs.values())), 4)
+        self.assertGreater(probs[3], probs[6])
+
+    def test_a_count_market_does_not_smear_below_zero_into_a_hit(self):
+        # Nobody catches minus one pass. The bar is what moves by a half, not
+        # the floor.
+        never = [0.0] * 8 + [1.0, 0.0]
+        probs = self.m.smoothed_probs(never, (3, 4), counts=True)
+        self.assertLess(probs[3], 5.0)
+
+
+class HowFirmIsThatPercentage(unittest.TestCase):
+    """COARSE was a flag firing on a symptom of a small sample.
+
+    The underlying question it could not answer is how much a percentage
+    would move if the player had happened to play a different twenty-one
+    games. That has an answer - resample his games and look - and it is worth
+    more than a flag, because it is a number and it appears on every row
+    rather than on the ones that tripped a test.
+    """
+
+    def setUp(self):
+        self.m = load("props_forecast", "props-forecast.py")
+
+    def test_fewer_games_means_a_wider_interval(self):
+        # The whole point: "76.2% off fifteen games" and "76.2% off a hundred"
+        # stop being printed identically.
+        long_career = [40.0, 55.0, 70.0, 35.0, 90.0, 60.0, 45.0, 75.0] * 12
+        short = long_career[:8]
+        wide = self.m.interval(short, (60,), seed="s")[60]
+        tight = self.m.interval(long_career, (60,), seed="s")[60]
+        self.assertGreater(wide[1] - wide[0], (tight[1] - tight[0]) * 2)
+
+    def test_the_interval_brackets_the_estimate(self):
+        sample = [40.0, 55.0, 70.0, 35.0, 90.0, 60.0, 45.0, 75.0, 50.0, 65.0]
+        probs = self.m.smoothed_probs(sample, (60,))
+        lo, hi = self.m.interval(sample, (60,), seed="s")[60]
+        self.assertLessEqual(lo, probs[60])
+        self.assertGreaterEqual(hi, probs[60])
+
+    def test_one_resampled_set_of_games_answers_every_bar(self):
+        # Drawing a fresh set per bar would let 250+ come back above 225+ in
+        # the interval even though it cannot in the estimate.
+        sample = [40.0, 55.0, 70.0, 35.0, 90.0, 60.0, 45.0, 75.0, 50.0, 65.0]
+        band = self.m.interval(sample, (40, 60, 80), seed="s")
+        self.assertGreaterEqual(band[40][0], band[60][0])
+        self.assertGreaterEqual(band[60][0], band[80][0])
+
+    def test_a_bars_interval_does_not_depend_on_which_others_were_asked(self):
+        # The sharp version of the same property. One resampled set per
+        # iteration is shared by every bar, so asking about 60 alone and
+        # asking about 40 and 60 together must give 60 the identical answer.
+        # A fresh resample per bar hands 60 a different draw depending on how
+        # many bars precede it - which the monotonicity test above does not
+        # notice, because far-apart bars stay in order by luck.
+        sample = [40.0, 55.0, 70.0, 35.0, 90.0, 60.0, 45.0, 75.0, 50.0, 65.0]
+        alone = self.m.interval(sample, (60,), seed="s")
+        together = self.m.interval(sample, (40, 60, 80), seed="s")
+        self.assertEqual(alone[60], together[60])
+
+    def test_every_row_carries_one(self):
+        sample = [40.0, 55.0, 70.0, 35.0, 90.0, 60.0, 45.0, 75.0, 50.0, 65.0]
+        rows = self.m.rows_for_player(
+            "1", "A @ B", None, "2", "A Receiver", "WR", "AAA",
+            {"receiving_yards": sample}, ["2026"], None)
+        row = rows[0]
+        self.assertEqual(sorted(row["interval"]), sorted(row["probabilities"]))
+        self.assertIn("bandwidth", row)
+
+    def test_the_interval_is_printed_beside_the_percentage(self):
+        # Stored and not shown would be the same as not computed. Asserted on
+        # the f-string that builds the line, not on the word "interval"
+        # appearing somewhere in the file.
+        src = (SCRIPTS / "props-forecast.py").read_text()
+        body = src.split("def cmd_forecast(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn('band[str(t)][0]', body)
+        self.assertIn('band[str(t)][1]', body)

@@ -9,10 +9,10 @@ scorekeeping that says whether they are any good.
     props-forecast.py calibration            when it says 70%, does it happen?
     props-forecast.py markets                what it prices, and off which stat
 
-NO MODEL IS CALLED. This is arithmetic over ESPN's free game logs: resample a
-player's own past games, count how often the threshold is cleared. Fury's
-cycle wakes no model either, and for the same reason - there is no judgement
-here, only counting.
+NO MODEL IS CALLED. This is arithmetic over ESPN's free game logs: take the
+player's own past games and ask how often the bar is cleared. Fury's cycle
+wakes no model either, and for the same reason - there is no judgement here,
+only counting.
 
 IT DOES NOT PRICE ANYTHING AND IT IS NOT A BET. There are no odds in this
 file. A forecast is a probability; whether it is worth backing needs a price,
@@ -21,6 +21,11 @@ written into the top of Ace's instructions - a projection was deleted from
 that agent because every report ended up reasoning "mine says 58, the line
 says 54, that's value". This exists to be GRADED first. If the calibration
 report says it is honest, that is when a price becomes interesting.
+
+HOW MUCH TO TRUST ONE. Every percentage carries a 90% interval, because
+"76.2% off fifteen games" and "76.2% off a hundred" are not the same claim
+and printing them identically is how two different players end up quoted at
+27.5% and 27.4%. The width of the bracket is the sample being honest.
 
 WHAT THE NUMBER ASSUMES. A bootstrap over a player's own games assumes his
 role has not changed. It has no opinion about the opponent, the weather, or
@@ -43,6 +48,7 @@ Standard library only.
 """
 
 import json
+import math
 import os
 import random
 import ssl
@@ -65,7 +71,11 @@ NOT_A_BET = ("NOT A BET and UNPRICED - there are no odds in this file. "
              "Grade it after the game:\n"
              "  python3 scripts/props-forecast.py grade")
 
-DRAWS = 10_000
+# How many times the game log is resampled to say how firm a percentage is.
+# The percentage itself is exact (see smoothed_probs) - this is only for the
+# interval around it.
+RESAMPLES = 400
+INTERVAL_SPAN = 90                # a 90% interval: the 5th to the 95th
 
 # Who gets forecast, and how they are ranked against each other. A
 # quarterback throws thirty-five times a game and a receiver is targeted
@@ -96,19 +106,26 @@ SEASONS_BACK = 1                  # current season plus this many previous
 # come off this table, so there is nowhere else for a second opinion to live.
 MARKETS = {
     "passing_yards":     {"stat": "passingYards",      "unit": "yds",
-                          "thresholds": (200, 225, 250, 275)},
+                          "thresholds": (200, 225, 250, 275),
+                          "counts": False},
     "passing_tds":       {"stat": "passingTouchdowns", "unit": "td",
-                          "thresholds": (1, 2, 3)},
+                          "thresholds": (1, 2, 3),
+                          "counts": True},
     "receiving_yards":   {"stat": "receivingYards",    "unit": "yds",
-                          "thresholds": (40, 50, 60, 70)},
+                          "thresholds": (40, 50, 60, 70),
+                          "counts": False},
     "receptions":        {"stat": "receptions",        "unit": "rec",
-                          "thresholds": (3, 4, 5, 6)},
+                          "thresholds": (3, 4, 5, 6),
+                          "counts": True},
     "receiving_targets": {"stat": "receivingTargets",  "unit": "tgts",
-                          "thresholds": (4, 5, 6, 8)},
+                          "thresholds": (4, 5, 6, 8),
+                          "counts": True},
     "rushing_yards":     {"stat": "rushingYards",      "unit": "yds",
-                          "thresholds": (30, 50, 70, 90)},
+                          "thresholds": (30, 50, 70, 90),
+                          "counts": False},
     "rushing_attempts":  {"stat": "rushingAttempts",   "unit": "att",
-                          "thresholds": (8, 12, 15, 18)},
+                          "thresholds": (8, 12, 15, 18),
+                          "counts": True},
 }
 
 # A market belongs to a player only if he has actually done it. A wide
@@ -240,23 +257,106 @@ def is_relevant(sample, thresholds):
     return p is not None and p >= thresholds[0]
 
 
-def simulate(sample, thresholds, draws=DRAWS, seed=None):
-    """P(value >= t) for each threshold, by resampling the player's own games.
+def bandwidth(sample):
+    """How far a game is allowed to smear, in the units of the market.
 
-    A bootstrap, not a fitted curve: the only shape claimed is the one he has
-    actually produced. Seeded so a forecast can be reproduced from its record -
-    an unrepeatable number cannot be audited after the fact.
+    THE ONE NUMBER THAT WAS NOT INVENTED. A plain bootstrap can only produce
+    a value the player has already produced, so with twenty-one games and a
+    bar every twenty-five yards, two bars with no game between them come back
+    identical - Stafford at 76.2% for both 200+ and 225+. The fix is to let
+    each past game stand for a small neighbourhood rather than a single point,
+    and that needs a width.
+
+    A width picked by hand would be the whole answer smuggled in as a
+    constant, so this is Silverman's rule: 0.9 x min(sd, IQR/1.34) x n^(-1/5),
+    the standard estimate, computed from his own games. A streaky player gets
+    a wide one and a metronome gets a narrow one, and nobody here chose
+    either.
+
+    Zero when his games are all identical - there is genuinely nothing to
+    spread, and smoothing a point mass would invent the spread outright.
     """
-    rng = random.Random(seed)
+    n = len(sample)
+    if n < 2:
+        return 0.0
+    mean = sum(sample) / n
+    var = sum((x - mean) ** 2 for x in sample) / (n - 1)
+    sd = math.sqrt(var)
+    iqr = (percentile(sample, 75) or 0.0) - (percentile(sample, 25) or 0.0)
+    spread = min(sd, iqr / 1.34) if iqr > 0 else sd
+    return 0.9 * spread * (n ** -0.2)
+
+
+def point_prob(x, threshold, h, counts):
+    """P(this one game, smeared, clears the bar).
+
+    Exact, not sampled: a Gaussian smear has a closed form, so the whole
+    Monte Carlo it replaces was 10,000 draws spent approximating a number
+    arithmetic gives outright - and giving it a different answer each run.
+
+    `counts` is what separates receptions from yards. A catch is a whole
+    number: 3.4 receptions is not a thing, and a book settles 4+ on whether
+    the count rounds to 4 or more. So a counting market asks the bar at
+    t - 0.5, which is the same question asked of a number that will be
+    rounded. Yards are asked at the bar itself.
+    """
+    bar = (threshold - 0.5) if counts else float(threshold)
+    if h <= 0:
+        return 1.0 if x >= bar else 0.0
+    return 0.5 * math.erfc((bar - x) / (h * math.sqrt(2.0)))
+
+
+def smoothed_probs(sample, thresholds, counts=False, h=None):
+    """P(value >= t) for each threshold, over his own games, smoothed.
+
+    Still a bootstrap over the games he actually played - the centre of every
+    smear is one of his own afternoons, and no curve is fitted to him. The
+    only thing assumed is that a player who has gone for 243 and 304 could
+    have gone for 260, which is the assumption that makes two neighbouring
+    bars different numbers.
+
+    Reproducible by construction: same games in, same percentages out, no
+    seed involved.
+    """
     if not sample:
         return {}
-    hits = {t: 0 for t in thresholds}
-    for _ in range(draws):
-        y = rng.choice(sample)
+    h = bandwidth(sample) if h is None else h
+    n = len(sample)
+    return {t: round(100.0 * sum(point_prob(x, t, h, counts) for x in sample) / n, 1)
+            for t in thresholds}
+
+
+def interval(sample, thresholds, counts=False, seed=None,
+             resamples=RESAMPLES, span=INTERVAL_SPAN):
+    """How firm each percentage is, as a range.
+
+    This is what COARSE was reaching for and could not say. "76.2%" off
+    fifteen games and "76.2%" off a hundred are different claims, and the
+    honest way to print the difference is the width of the interval rather
+    than a flag that fires on a symptom.
+
+    Resample his games, recompute, and take the middle span% of the answers.
+    The bandwidth is held at the full sample's - recomputing it inside each
+    resample would be more correct and much slower, and it moves the interval
+    by less than the rounding.
+    """
+    if not sample:
+        return {}
+    h = bandwidth(sample)
+    n = len(sample)
+    points = {t: [point_prob(x, t, h, counts) for x in sample] for t in thresholds}
+    rng = random.Random(seed)
+    spread = {t: [] for t in thresholds}
+    for _ in range(resamples):
+        # One resampled set of games, scored at every bar - drawing a fresh
+        # set per bar would let 250+ come back above 225+.
+        idx = [rng.randrange(n) for _ in range(n)]
         for t in thresholds:
-            if y >= t:
-                hits[t] += 1
-    return {t: round(100.0 * n / draws, 1) for t, n in hits.items()}
+            col = points[t]
+            spread[t].append(100.0 * sum(col[i] for i in idx) / n)
+    edge = (100.0 - span) / 2.0
+    return {t: (percentile(v, edge), percentile(v, 100.0 - edge))
+            for t, v in spread.items()}
 
 
 def percentile(sample, pct):
@@ -277,11 +377,16 @@ def percentile(sample, pct):
 
 
 def is_coarse(probs, thresholds):
-    """Did two thresholds come back identical?
+    """Did two thresholds STILL come back identical?
 
-    A bootstrap cannot produce a value the player has never produced, so
-    thresholds with no observed game between them are indistinguishable. The
-    number is real; the resolution it appears to have is not.
+    This used to fire constantly: a plain bootstrap cannot produce a value the
+    player has never produced, so any two bars with no game between them were
+    the same number. Smoothing is what fixed that, and this stayed - because a
+    flag that no longer fires is the cheapest possible test of the fix, and
+    because there is one case smoothing cannot help with. If every one of his
+    games is the identical value the bandwidth is zero, there is genuinely
+    nothing to spread, and a spread invented for that player would be the one
+    piece of fiction in the file.
     """
     if not probs:
         return False
@@ -427,13 +532,17 @@ def rows_for_player(event_id, fixture, kickoff, aid, name, pos, team,
         if len(sample) < MIN_GAMES or not is_relevant(sample, thresholds):
             continue
         seed = f"{event_id}-{aid}-{market}"
-        probs = simulate(sample, thresholds, seed=seed)
+        counts = spec["counts"]
+        h = bandwidth(sample)
+        probs = smoothed_probs(sample, thresholds, counts, h=h)
+        band = interval(sample, thresholds, counts, seed=seed)
         rows.append({
             "event_id": str(event_id), "fixture": fixture, "kickoff_utc": kickoff,
             "athlete_id": aid, "player": name, "position": pos, "team": team,
             "market": market, "stat": spec["stat"], "unit": spec["unit"],
             "thresholds": list(thresholds),
             "probabilities": {str(t): p for t, p in probs.items()},
+            "interval": {str(t): [lo, hi] for t, (lo, hi) in band.items()},
             "sample_games": len(sample), "sample_seasons": seasons,
             "sample_mean": round(sum(sample) / len(sample), 1),
             "sample_low": min(sample), "sample_high": max(sample),
@@ -442,7 +551,9 @@ def rows_for_player(event_id, fixture, kickoff, aid, name, pos, team,
             "p75": percentile(sample, 75),
             "availability": avail,
             "coarse": is_coarse(probs, thresholds),
-            "draws": DRAWS, "seed": seed,
+            "counts": counts, "bandwidth": round(h, 2),
+            "resamples": RESAMPLES, "interval_span": INTERVAL_SPAN,
+            "seed": seed,
             "forecast_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             "actual": None, "graded_utc": None,
         })
@@ -489,27 +600,35 @@ def cmd_forecast(event_id):
                         and f.get("market") == row["market"])]
             data["forecasts"].append(row)
             made += 1
-            probs = row["probabilities"]
-            line = "  ".join(f"{t}+: {probs[str(t)]:>5.1f}%"
-                             for t in row["thresholds"])
-            note = "  COARSE" if row["coarse"] else ""
+            probs, band = row["probabilities"], row["interval"]
+            # The interval is printed beside every percentage, not saved for
+            # the weak ones: "76.2%" off fifteen games and "76.2%" off a
+            # hundred are different claims, and only one of them survives
+            # being written down without its width.
+            line = "  ".join(
+                f"{t}+: {probs[str(t)]:>5.1f}% ({band[str(t)][0]:.0f}-"
+                f"{band[str(t)][1]:.0f})" for t in row["thresholds"])
+            note = "  FLAT" if row["coarse"] else ""
             if avail and avail["thin"]:
                 note += f"  PLAYED {avail['played']}/{avail['team_games']}"
                 flagged += 1
             print(f"  {name:<20} {row['market']:<17} {line}   "
                   f"(exp {row['sample_mean']:.1f} {row['unit']}, "
-                  f"P25-P75 {row['p25']}-{row['p75']}, "
-                  f"{row['sample_games']}g){note}")
+                  f"{row['sample_games']}g, h={row['bandwidth']:g}){note}")
 
     save(data)
     rough = sum(1 for f in data["forecasts"]
                 if f.get("event_id") == str(event_id) and f.get("coarse"))
     print(f"\n{made} forecast(s) written across {len(MARKETS)} markets, "
           f"{thin} player(s) skipped.")
+    print(f"Each percentage carries its {INTERVAL_SPAN}% interval in brackets - how far it "
+          f"moves when his\nown games are resampled. A wide one is a small "
+          f"sample saying so out loud.")
     if rough:
-        print(f"{rough} marked COARSE: two thresholds came back identical because "
-              f"the player has\nno game between them. The number is real, its "
-              f"resolution is not - treat those\nas the weakest rows here.")
+        print(f"{rough} marked FLAT: two bars came back identical even after "
+              f"smoothing, which\ntakes every one of his games being the same "
+              f"value. There is nothing to spread\nthere and none was "
+              f"invented - treat those as the weakest rows here.")
     if flagged:
         print(f"{flagged} marked PLAYED n/m: he has missed games, so the "
               f"percentage is what he\ndoes WHEN HE PLAYS. A book prices that "
@@ -533,16 +652,22 @@ def strongest(rows):
     COARSE rows are excluded: a claim whose resolution is an artifact has no
     business being the one shown.
 
-    It is a maximum over many noisy estimates, so the winner is biased
-    upward - the pick is optimistic by construction, and by how much is
-    exactly what `calibration` is there to measure.
+    Ranked on the CAUTIOUS END of each interval, not on the estimate. A
+    maximum over many noisy numbers is biased upward - whichever estimate got
+    luckiest wins - and taking the near edge of the bracket is what stops a
+    nine-game sample beating a twenty-one game one on the strength of having
+    less idea. 95% from (54-99) loses to 90% from (86-94), which is the right
+    answer: one of those is a claim and the other is a shrug.
     """
     best = {}
     for r in rows:
         if r.get("coarse"):
             continue
+        band = r.get("interval") or {}
         for t, pct in (r.get("probabilities") or {}).items():
-            conf = max(float(pct), 100.0 - float(pct))
+            lo, hi = band.get(t) or [float(pct), float(pct)]
+            over = float(pct) >= 50.0
+            conf = float(lo) if over else 100.0 - float(hi)
             key = r.get("athlete_id")
             have = best.get(key)
             if have is None or (conf, r.get("sample_games", 0)) > (
@@ -550,7 +675,8 @@ def strongest(rows):
                 best[key] = {
                     "row": r, "threshold": float(t), "probability": float(pct),
                     "confidence": round(conf, 1),
-                    "side": "OVER" if float(pct) >= 50.0 else "UNDER",
+                    "interval": [lo, hi],
+                    "side": "OVER" if over else "UNDER",
                 }
     return sorted(best.values(), key=lambda b: -b["confidence"])
 
@@ -567,8 +693,9 @@ def cmd_best(event_id):
         print("every row for this game is COARSE - nothing here is worth "
               "singling out.")
         return 1
-    print(f"  {'player':<20}{'market':<18}{'call':<22}{'conf':>7}   context")
-    print("  " + "-" * 86)
+    print(f"  {'player':<20}{'market':<18}{'call':<22}{'model':>7}{'floor':>8}"
+          f"   context")
+    print("  " + "-" * 94)
     for b in picks:
         r = b["row"]
         t = b["threshold"]
@@ -578,13 +705,17 @@ def cmd_best(event_id):
         a = r.get("availability") or {}
         if a.get("thin"):
             ctx += f", PLAYED {a['played']}/{a['team_games']}"
+        model = b["probability"] if b["side"] == "OVER" else 100.0 - b["probability"]
         print(f"  {r['player']:<20}{r['market']:<18}{call:<22}"
-              f"{b['confidence']:>6.1f}%   {ctx}")
+              f"{model:>6.1f}%{b['confidence']:>7.1f}%   {ctx}")
     print(f"\n  One line per player: his call that sits furthest from 50/50, "
           f"not his\n  highest percentage - the highest percentage is always "
-          f"the easiest bar, and\n  without a price that ranking says nothing. "
-          f"Picking the maximum of many\n  noisy numbers flatters the winner, "
-          f"so these read high by construction.")
+          f"the easiest bar, and\n  without a price that ranking says nothing.")
+    print(f"\n  MODEL is the estimate. FLOOR is the cautious end of its 90% "
+          f"interval, and\n  it is what the list is SORTED on: a maximum over "
+          f"many noisy numbers is won\n  by whichever got luckiest, so ranking "
+          f"on the estimate would put every\n  nine-game sample on top. Read "
+          f"the floor.")
     print(NOT_A_BET)
     return 0
 

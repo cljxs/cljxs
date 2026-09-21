@@ -164,6 +164,7 @@
   .fct.on{border-color:rgba(90,169,240,.45);background:rgba(90,169,240,.09)}
   .fctl{font-size:10px;color:var(--mute)}
   .fctv{font-size:15px;font-weight:700}
+  .fctr{font-size:9px;opacity:.5;letter-spacing:.04em;margin-top:1px}
   /* One line per fact, wrapping as a unit - a footer that breaks between
      "10,000" and "DRAWS" reads as two different numbers. */
   .fcfoot{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:10px;letter-spacing:.04em;color:var(--mute)}
@@ -1318,9 +1319,16 @@ function miniTable(title, rows, label){
 // two side by side would be inviting it. NOT A BET is on every one of these
 // for the same reason it is printed by the script that writes them.
 
-function fcTile(label, pct, on){
+function fcTile(label, pct, on, band){
+  // The interval rides under every tile, not just the shaky ones. "76% off
+  // fifteen games" and "76% off a hundred" are different claims and a card
+  // that printed them identically would be making the weaker one look like
+  // the stronger.
+  const range = Array.isArray(band)
+    ? `<div class="fctr num">${Math.round(band[0])}–${Math.round(band[1])}</div>` : '';
   return `<div class="fct${on ? ' on' : ''}"><div class="fctl">${esc(label)}</div>`
-       + `<div class="fctv num">${pct === undefined || pct === null ? '—' : Number(pct).toFixed(1) + '%'}</div></div>`;
+       + `<div class="fctv num">${pct === undefined || pct === null ? '—' : Number(pct).toFixed(1) + '%'}</div>`
+       + range + `</div>`;
 }
 
 function forecastCard(f){
@@ -1334,7 +1342,9 @@ function forecastCard(f){
   const unit = f.unit || 'yds';
   const graded = f.actual !== null && f.actual !== undefined;
 
-  const tiles = keys.map(t => fcTile(t + '+', probs[String(t)], t === lead)).join('');
+  const band = f.interval || {};
+  const tiles = keys.map(t => fcTile(t + '+', probs[String(t)], t === lead,
+                                     band[String(t)])).join('');
   const hit = graded && lead !== null ? Number(f.actual) >= lead : null;
 
   return `<div class="fcard${graded ? ' done' : ''}">
@@ -1346,7 +1356,10 @@ function forecastCard(f){
           lead !== null ? ' · ' + lead + '+' : ''}</div>
       </div>
       <div class="fcbig num">${lead === null ? '—' : Number(probs[String(lead)]).toFixed(1) + '%'}
-        <div class="fcbigl">${lead === null ? '' : lead + '+'}</div></div>
+        <div class="fcbigl">${lead === null ? '' : lead + '+'}${
+          Array.isArray(band[String(lead)])
+            ? ` · ${Math.round(band[String(lead)][0])}–${Math.round(band[String(lead)][1])}`
+            : ''}</div></div>
     </div>
     <div class="fctiles">${tiles}</div>
     <div class="fcfoot">
@@ -1355,7 +1368,7 @@ function forecastCard(f){
       <span>${f.sample_games ?? '?'} GAMES</span>
       ${f.availability && f.availability.thin
         ? `<span class="fcwarn">PLAYED ${f.availability.played}/${f.availability.team_games}</span>` : ''}
-      ${f.coarse ? `<span class="fcwarn">COARSE</span>` : ''}
+      ${f.coarse ? `<span class="fcwarn">FLAT</span>` : ''}
     </div>
     ${graded ? `<div class="fcres ${hit ? 'up' : 'down'}">
         FINAL ${Number(f.actual).toFixed(0)} ${esc(unit)} · ${lead}+ ${hit ? 'HIT' : 'MISS'}</div>`
