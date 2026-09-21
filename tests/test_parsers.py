@@ -4066,3 +4066,127 @@ class StrayMarksBesideTheArt(unittest.TestCase):
         body = src.split("def main(", 1)[1]
         self.assertLess(body.index("MAX_REMOVED_PCT"), body.index("despeckle(w, h, px)"))
         self.assertLess(body.index("despeckle(w, h, px)"), body.index("encode(dst"))
+
+
+class ForecastsAreGradedOrTheyAreDecoration(unittest.TestCase):
+    """A player-prop forecaster is easy to build and easy to fool yourself
+    with: ten thousand draws of a weak distribution is still weak, and the
+    precision is cosmetic. Two different running backs came back at 27.5% and
+    27.4% in the tool this was modelled on, both flagged "limited role data" -
+    a generic prior wearing a specific number.
+
+    So the grading was built at the same time as the forecasting, not after.
+    Every value below comes from a real ESPN game log.
+    """
+
+    def setUp(self):
+        self.m = load("props_forecast", "props-forecast.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.m.STORE = Path(self.tmp.name) / "forecasts.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_the_simulation_counts_what_the_player_has_actually_done(self):
+        # Five games, two of them over 60. A bootstrap claims no shape beyond
+        # the one he produced.
+        probs = self.m.simulate([10.0, 20.0, 65.0, 80.0, 30.0],
+                                thresholds=(60,), draws=10_000, seed="x")
+        self.assertAlmostEqual(probs[60], 40.0, delta=2.0)
+
+    def test_the_same_seed_gives_the_same_forecast(self):
+        # A number nobody can reproduce cannot be audited after the game.
+        sample = [12.0, 45.0, 77.0, 31.0, 66.0, 9.0, 52.0, 88.0]
+        a = self.m.simulate(sample, seed="game-1-player-2")
+        b = self.m.simulate(sample, seed="game-1-player-2")
+        c = self.m.simulate(sample, seed="game-1-player-9")
+        self.assertEqual(a, b)
+        self.assertNotEqual(a, c)
+
+    def test_an_empty_sample_forecasts_nothing(self):
+        self.assertEqual(self.m.simulate([]), {})
+
+    def test_a_thin_sample_is_refused_by_the_minimum(self):
+        # Week 3 gives two games. A confident number off two games is the
+        # failure being copied, not the feature.
+        self.assertGreaterEqual(self.m.MIN_GAMES, 8)
+
+    def test_probabilities_fall_as_the_bar_rises(self):
+        sample = [5.0, 18.0, 33.0, 44.0, 55.0, 61.0, 72.0, 90.0, 101.0]
+        probs = self.m.simulate(sample, seed="s")
+        ordered = [probs[t] for t in sorted(probs)]
+        self.assertEqual(ordered, sorted(ordered, reverse=True))
+
+    # --- grading -----------------------------------------------------------
+
+    def forecast_row(self, probs, actual=None):
+        return {"event_id": "1", "athlete_id": "2", "player": "A Receiver",
+                "probabilities": probs, "actual_yards": actual,
+                "graded_utc": None}
+
+    def test_calibration_compares_what_was_said_to_what_happened(self):
+        # Ten calls at ~70%, seven of which landed. That is a forecast telling
+        # the truth, and the only test of one that matters.
+        rows = []
+        for i in range(10):
+            rows.append(self.forecast_row({"60": 70.0}, actual=80.0 if i < 7 else 10.0))
+        b = self.m.buckets(rows)
+        self.assertEqual(b[70]["n"], 10)
+        self.assertEqual(b[70]["observed"], 70.0)
+        self.assertEqual(b[70]["gap"], 0.0)
+
+    def test_an_overconfident_forecaster_shows_a_negative_gap(self):
+        # Said 90%, happened 30%. This is the direction that costs money.
+        rows = [self.forecast_row({"60": 90.0}, actual=80.0 if i < 3 else 10.0)
+                for i in range(10)]
+        b = self.m.buckets(rows)
+        self.assertLess(b[90]["gap"], 0)
+
+    def test_ungraded_forecasts_are_not_counted_as_anything(self):
+        # Counting a pending forecast as a miss would make every new week look
+        # like a failure.
+        rows = [self.forecast_row({"60": 70.0}, actual=None) for _ in range(5)]
+        self.assertEqual(self.m.buckets(rows), {})
+
+    def test_every_threshold_of_a_graded_forecast_is_scored(self):
+        rows = [self.forecast_row({"40": 80.0, "70": 30.0}, actual=55.0)]
+        b = self.m.buckets(rows)
+        self.assertEqual(b[80]["hits"], 1, "55 clears 40")
+        self.assertEqual(b[30]["hits"], 0, "55 does not clear 70")
+
+    def test_it_says_when_there_is_not_enough_to_conclude(self):
+        # A coin lands 7 of 10 often enough that it means nothing, and a
+        # calibration table printed without that warning invites a conclusion.
+        src = (SCRIPTS / "props-forecast.py").read_text()
+        self.assertIn("not enough to conclude", src)
+
+    # --- what it refuses to claim ------------------------------------------
+
+    def test_it_holds_no_odds_and_says_it_is_not_a_bet(self):
+        # The trap written into Ace's own header: comparing a number you
+        # computed to a line you did not is not an edge. There is no price in
+        # this file to compare against.
+        src = (SCRIPTS / "props-forecast.py").read_text()
+        self.assertIn("NOT A BET", self.m.NOT_A_BET)
+        self.assertIn("print(NOT_A_BET)", src,
+                      "the disclaimer has to be printed, not just documented")
+        for word in ("moneyline", "novig", "stake", "bankroll"):
+            self.assertNotIn(word, src.lower().replace("no odds", ""),
+                             f"{word} does not belong in a forecaster")
+
+    def test_identical_thresholds_are_reported_as_coarse(self):
+        # Tutu Atwell came back 17.7% at every threshold off a real game log,
+        # because he has no game between 40 and 70 yards.
+        self.assertTrue(self.m.is_coarse({40: 17.7, 50: 17.7, 60: 17.7, 70: 17.7}))
+        self.assertTrue(self.m.is_coarse({40: 66.4, 50: 66.4, 60: 44.4, 70: 32.7}))
+
+    def test_a_forecast_with_resolution_is_not_flagged(self):
+        self.assertFalse(self.m.is_coarse({40: 86.0, 50: 69.9, 60: 47.1, 70: 21.0}))
+
+    def test_nothing_forecast_is_not_coarse(self):
+        self.assertFalse(self.m.is_coarse({}))
+
+    def test_the_coarse_flag_is_what_the_label_is_driven_by(self):
+        src = (SCRIPTS / "props-forecast.py").read_text()
+        self.assertIn("coarse = is_coarse(probs)", src)
+        self.assertIn('"  COARSE" if coarse else ""', src)
