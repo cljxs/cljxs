@@ -13,6 +13,7 @@ with nothing installed:
     python3 -m unittest discover -s tests -v
 """
 
+import copy
 import importlib.util
 import json
 import os
@@ -4316,9 +4317,21 @@ class AStatIsFoundByNameNotByColumn(unittest.TestCase):
                 'fumblesLost', 'fumblesForced', 'kicksBlocked']
     RB_LABELS = ['CAR', 'YDS', 'AVG', 'TD', 'LNG', 'REC', 'TGTS', 'YDS', 'AVG',
                  'TD', 'LNG', 'FUM', 'LST', 'FF', 'KB']
-    # A box score receiving category, captured from the same game.
+    QB_NAMES = ['completions', 'passingAttempts', 'passingYards',
+                'completionPct', 'yardsPerPassAttempt', 'passingTouchdowns',
+                'interceptions', 'longPassing', 'sacks', 'QBRating', 'adjQBR',
+                'rushingAttempts', 'rushingYards', 'yardsPerRushAttempt',
+                'rushingTouchdowns', 'longRushing']
+    QB_LABELS = ['CMP', 'ATT', 'YDS', 'CMP%', 'AVG', 'TD', 'INT', 'LNG',
+                 'SACK', 'RTG', 'QBR', 'CAR', 'YDS', 'AVG', 'TD', 'LNG']
+    # Box score categories from the same game, keyed the same way.
     BOX_KEYS = ['receptions', 'receivingYards', 'yardsPerReception',
                 'receivingTouchdowns', 'longReception', 'receivingTargets']
+    BOX_RUSHING = ['rushingAttempts', 'rushingYards', 'yardsPerRushAttempt',
+                   'rushingTouchdowns', 'longRushing']
+    BOX_PASSING = ['completions/passingAttempts', 'passingYards',
+                   'yardsPerPassAttempt', 'passingTouchdowns', 'interceptions',
+                   'sacks-sackYardsLost', 'adjQBR', 'QBRating']
 
     def setUp(self):
         self.m = load("props_forecast", "props-forecast.py")
@@ -4362,6 +4375,48 @@ class AStatIsFoundByNameNotByColumn(unittest.TestCase):
         self.assertEqual(self.m.column_of(self.BOX_KEYS, "receivingTargets"), 5)
         self.assertEqual(self.m.column_of(self.TE_NAMES, "receivingTargets"), 1)
 
+    def test_one_stat_sits_at_three_different_columns(self):
+        # rushingYards: index 1 for a back, 7 for a tight end, 12 for a
+        # quarterback. Any hard-coded column is wrong for two thirds of the
+        # league, and the wrong number looks perfectly reasonable.
+        self.assertEqual(self.RB_NAMES.index("rushingYards"), 1)
+        self.assertEqual(self.TE_NAMES.index("rushingYards"), 7)
+        self.assertEqual(self.QB_NAMES.index("rushingYards"), 12)
+
+    def test_a_quarterbacks_first_yards_column_is_passing(self):
+        # And his rushing yards are eleven columns further along. Read by
+        # label, a quarterback's rushing prop would have been his passing
+        # yards - a 280 on a bar of 30.
+        stats = ["24", "35", "287", "68.6", "8.2", "3", "1", "44", "2",
+                 "112.4", "78.1", "6", "41", "6.8", "1", "19"]
+        out = self.m.values_from_log(self.log(self.QB_NAMES, stats))
+        self.assertEqual([v for _s, v in out["passing_yards"]], [287.0])
+        self.assertEqual([v for _s, v in out["passing_tds"]], [3.0])
+        self.assertEqual([v for _s, v in out["rushing_yards"]], [41.0])
+        self.assertEqual([v for _s, v in out["rushing_attempts"]], [6.0])
+        self.assertEqual(self.QB_LABELS.index("YDS"), 2)
+
+    def test_a_quarterback_has_no_receiving_columns_at_all(self):
+        # Not zeroes - absent. Reading a missing column as 0 would forecast
+        # every quarterback UNDER on receptions, forever.
+        stats = ["24", "35", "287", "68.6", "8.2", "3", "1", "44", "2",
+                 "112.4", "78.1", "6", "41", "6.8", "1", "19"]
+        out = self.m.values_from_log(self.log(self.QB_NAMES, stats))
+        self.assertEqual(out["receptions"], [])
+        self.assertEqual(out["receiving_yards"], [])
+
+    def test_every_market_can_also_be_graded_off_a_box_score(self):
+        # A market that cannot be found in a box score is forecast every week
+        # and scored never - it just sits pending, which reads like the game
+        # has not finished. passingAttempts is the trap: the box score carries
+        # it only inside the combined "completions/passingAttempts" column, so
+        # a completions or attempts market would be ungradeable.
+        box = set(self.BOX_KEYS) | set(self.BOX_RUSHING) | set(self.BOX_PASSING)
+        for market, spec in self.m.MARKETS.items():
+            self.assertIn(spec["stat"], box,
+                          f"{market} could be forecast but never graded")
+        self.assertNotIn("passingAttempts", box)
+
     def test_a_stat_that_is_not_in_the_payload_is_missing_not_zero(self):
         # A quarterback's log has no receiving column at all. Reading that as
         # index 0 would forecast his completions as receptions.
@@ -4372,7 +4427,8 @@ class AStatIsFoundByNameNotByColumn(unittest.TestCase):
         # A typo in MARKETS costs nothing at import and everything at 1pm on
         # Sunday: the column simply is not found and the market silently
         # disappears from the file. Checked against captured names.
-        known = set(self.TE_NAMES) | set(self.RB_NAMES) | set(self.BOX_KEYS)
+        known = (set(self.TE_NAMES) | set(self.RB_NAMES) | set(self.QB_NAMES)
+                 | set(self.BOX_KEYS))
         for market, spec in self.m.MARKETS.items():
             self.assertIn(spec["stat"], known,
                           f"{market} reads a stat no captured payload has")
@@ -4463,21 +4519,30 @@ class TheSixPlayersWorthForecasting(unittest.TestCase):
     def setUp(self):
         self.m = load("props_forecast", "props-forecast.py")
         self.m.LOG_CACHE.clear()
+        self.pools = copy.deepcopy(self.m.POOLS)
 
     def tearDown(self):
         self.m.LOG_CACHE.clear()
+        self.m.POOLS[:] = self.pools
 
-    def cache(self, aid, season, targets, carries):
+    def only(self, per_team, name="skill"):
+        """Shrink one pool's cap so a three-player fixture can fill it."""
+        for pool in self.m.POOLS:
+            if pool["name"] == name:
+                pool["per_team"] = per_team
+
+    def cache(self, aid, season, targets=(), carries=(), passing=()):
         self.m.LOG_CACHE[(str(aid), season)] = {
             "receiving_targets": [("s", float(t)) for t in targets],
             "rushing_attempts": [("s", float(c)) for c in carries],
+            "passing_yards": [("s", float(y)) for y in passing],
         }
 
-    def cand(self, aid, name):
-        return (str(aid), name, "WR", "LAR", "14")
+    def cand(self, aid, name, pos="WR"):
+        return (str(aid), name, pos, "LAR", "14")
 
     def test_the_alphabet_does_not_decide_who_is_forecast(self):
-        self.m.PER_TEAM = 2
+        self.only(2)
         self.cache(1, None, [2, 1], [0, 0])      # Adams, first alphabetically
         self.cache(2, None, [12, 11], [0, 0])    # Nacua
         self.cache(3, None, [0, 0], [19, 21])    # Williams
@@ -4489,18 +4554,52 @@ class TheSixPlayersWorthForecasting(unittest.TestCase):
 
     def test_carries_count_as_much_as_targets(self):
         # A feature back takes no targets and must not rank below a decoy.
+        skill = ("receiving_targets", "rushing_attempts")
         self.assertEqual(self.m.usage_of(
-            {"receiving_targets": [], "rushing_attempts": [("s", 20.0)]}), 20.0)
+            {"receiving_targets": [], "rushing_attempts": [("s", 20.0)]},
+            skill), 20.0)
         self.assertEqual(self.m.usage_of(
-            {"receiving_targets": [("s", 9.0)], "rushing_attempts": []}), 9.0)
+            {"receiving_targets": [("s", 9.0)], "rushing_attempts": []},
+            skill), 9.0)
+
+    def test_a_quarterback_does_not_compete_with_his_own_receivers(self):
+        # He throws thirty-five times a game and they are targeted eight. One
+        # list ranked by volume gives a side its quarterback and nobody else,
+        # so the pools are ranked separately and both get their slots.
+        self.only(1)
+        self.cache(1, None, passing=[280, 310])          # the starter
+        self.cache(2, None, targets=[12, 11])            # the WR1
+        picked = self.m.top_by_usage(
+            [self.cand(1, "A Passer", "QB"), self.cand(2, "Z Receiver")],
+            now=datetime(2026, 9, 21, tzinfo=timezone.utc))
+        self.assertEqual(sorted(p[1] for p in picked),
+                         ["A Passer", "Z Receiver"])
+
+    def test_the_backup_quarterback_is_not_the_one_forecast(self):
+        # He is on the roster and he has thrown nothing. Alphabetically he
+        # comes first, which is how the old selection would have chosen him.
+        self.cache(1, None, passing=[0])                 # the backup
+        self.cache(2, None, passing=[280, 310, 260])     # the starter
+        picked = self.m.top_by_usage(
+            [self.cand(1, "A Backup", "QB"), self.cand(2, "Z Starter", "QB")],
+            now=datetime(2026, 9, 21, tzinfo=timezone.utc))
+        self.assertEqual([p[1] for p in picked], ["Z Starter"])
+
+    def test_every_position_forecast_belongs_to_a_pool(self):
+        # POSITIONS is derived from POOLS rather than restated beside it. If
+        # it were a second list, a position could be taken off the roster and
+        # then ranked by nothing at all.
+        for pos in self.m.POSITIONS:
+            self.assertIsNotNone(self.m.pool_of(pos), f"{pos} has no pool")
+        self.assertIsNone(self.m.pool_of("K"))
 
     def test_week_one_falls_back_to_last_season_not_to_the_alphabet(self):
         # Nobody has played. Without the fallback every score is zero and the
         # sort returns the roster order it was built to replace.
         now = datetime(2026, 9, 21, tzinfo=timezone.utc)
-        self.cache(1, None, [], []); self.cache(1, 2025, [30], [0])
-        self.cache(2, None, [], []); self.cache(2, 2025, [180], [0])
-        self.m.PER_TEAM = 1
+        self.cache(1, None); self.cache(1, 2025, [30], [0])
+        self.cache(2, None); self.cache(2, 2025, [180], [0])
+        self.only(1)
         picked = self.m.top_by_usage(
             [self.cand(1, "A Adams"), self.cand(2, "Z Nacua")], now=now)
         self.assertEqual([p[1] for p in picked], ["Z Nacua"])
@@ -4508,7 +4607,7 @@ class TheSixPlayersWorthForecasting(unittest.TestCase):
     def test_the_cap_is_per_side_not_per_slate(self):
         # Six from each team, or one lopsided offence takes every slot and the
         # other side of the game is not forecast at all.
-        self.m.PER_TEAM = 1
+        self.only(1)
         for i in (1, 2, 3, 4):
             self.cache(i, None, [i * 5], [0])
         cands = [(str(i), f"P{i}", "WR", "LAR" if i < 3 else "NYG",

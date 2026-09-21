@@ -66,8 +66,23 @@ NOT_A_BET = ("NOT A BET and UNPRICED - there are no odds in this file. "
              "  python3 scripts/props-forecast.py grade")
 
 DRAWS = 10_000
-POSITIONS = ("WR", "TE", "RB")
-PER_TEAM = 6                      # deepest part of a depth chart worth pricing
+
+# Who gets forecast, and how they are ranked against each other. A
+# quarterback throws thirty-five times a game and a receiver is targeted
+# eight, so one list ranked by volume would give a side six quarterbacks and
+# no receivers - they are different jobs and they compete in different pools.
+# Each pool names the markets that measure its volume, which is why a backup
+# quarterback (no passing yards) never displaces the starter.
+POOLS = [
+    {"name": "passer", "positions": ("QB",),
+     "volume": ("passing_yards",), "per_team": 1},
+    {"name": "skill", "positions": ("WR", "TE", "RB"),
+     "volume": ("receiving_targets", "rushing_attempts"), "per_team": 6},
+]
+# Derived, not restated: a position this file forecasts is a position some
+# pool claims. The two lists drifting apart would mean a player selected off
+# the roster and then ranked by nothing.
+POSITIONS = tuple(p for pool in POOLS for p in pool["positions"])
 
 # Below this many games there is no distribution to resample, only a rumour.
 # Week 3 gives two games; the fix is prior seasons, not a confident number off
@@ -80,6 +95,10 @@ SEASONS_BACK = 1                  # current season plus this many previous
 # the log reader, the box score reader, the forecast rows and the Deck all
 # come off this table, so there is nowhere else for a second opinion to live.
 MARKETS = {
+    "passing_yards":     {"stat": "passingYards",      "unit": "yds",
+                          "thresholds": (200, 225, 250, 275)},
+    "passing_tds":       {"stat": "passingTouchdowns", "unit": "td",
+                          "thresholds": (1, 2, 3)},
     "receiving_yards":   {"stat": "receivingYards",    "unit": "yds",
                           "thresholds": (40, 50, 60, 70)},
     "receptions":        {"stat": "receptions",        "unit": "rec",
@@ -331,19 +350,27 @@ def players_in(event_id):
     return out
 
 
-def usage_of(log):
-    """How much of the offence goes through him: targets plus carries.
+def usage_of(log, markets):
+    """How much of the offence goes through him, across the given markets.
 
     Yards are the thing being forecast, so ranking by yards would prefer the
     player who had one good afternoon over the one who gets the ball every
-    week. Volume is what survives to next Sunday.
+    week. Volume is what survives to next Sunday - targets and carries for a
+    skill player, and for a quarterback the only volume that matters is
+    whether he is the one throwing.
     """
-    return (sum(v for _s, v in (log.get("receiving_targets") or []))
-            + sum(v for _s, v in (log.get("rushing_attempts") or [])))
+    return sum(v for m in markets for _s, v in (log.get(m) or []))
+
+
+def pool_of(position):
+    for pool in POOLS:
+        if position in pool["positions"]:
+            return pool
+    return None
 
 
 def top_by_usage(candidates, now=None):
-    """The PER_TEAM players per side who actually touch the ball.
+    """The players per side worth forecasting, ranked inside their own pool.
 
     ESPN returns a roster in alphabetical order, so taking the first six gave
     Adams, Allen, Atwell, Corum, Daniels - and left the team's best receiver
@@ -352,17 +379,20 @@ def top_by_usage(candidates, now=None):
     side in week one.
     """
     now = now or datetime.now(timezone.utc)
-    by_team = {}
+    groups = {}
     for cand in candidates:
-        by_team.setdefault(cand[4], []).append(cand)
+        pool = pool_of(cand[2])
+        if pool:
+            groups.setdefault((cand[4], pool["name"]), (pool, []))[1].append(cand)
     out = []
-    for _tid, group in by_team.items():
-        scored = [(usage_of(game_values(c[0])), c) for c in group]
+    for (_tid, _pool_name), (pool, group) in groups.items():
+        volume = pool["volume"]
+        scored = [(usage_of(game_values(c[0]), volume), c) for c in group]
         if not any(u for u, _c in scored):
-            scored = [(usage_of(game_values(c[0], now.year - 1)), c)
+            scored = [(usage_of(game_values(c[0], now.year - 1), volume), c)
                       for c in group]
         scored.sort(key=lambda row: (-row[0], str(row[1][1])))
-        out += [c for _u, c in scored[:PER_TEAM]]
+        out += [c for _u, c in scored[:pool["per_team"]]]
     return out
 
 
