@@ -39,6 +39,18 @@ function readJson(p) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
 }
 
+// Same read, but it says which of the two things went wrong. `readJson` maps
+// "no such file" and "this file is malformed" onto the same null, and the
+// gallery then drew a card with no title, no product and no price and no way
+// to tell those apart - which is exactly what a build with a broken
+// listing.json looked like for two days.
+function readJsonOrWhy(p) {
+  let raw;
+  try { raw = fs.readFileSync(p, 'utf8'); } catch { return { data: null, error: null }; }
+  try { return { data: JSON.parse(raw), error: null }; }
+  catch (e) { return { data: null, error: String(e.message || e).slice(0, 200) }; }
+}
+
 // Belt and braces: the regex above should make traversal impossible, but the
 // resolved path is checked against the builds root anyway. A future caller
 // that loosens the regex then still cannot walk out of the folder.
@@ -76,7 +88,8 @@ function describe(slug) {
   });
 
   const build = readJson(path.join(dir, 'build.json')) || {};
-  const listing = readJson(path.join(dir, 'listing.json')) || {};
+  const read = readJsonOrWhy(path.join(dir, 'listing.json'));
+  const listing = read.data || {};
 
   // Emily records the art mode in build.json, but the field name has moved
   // around in her reports. Accept the spellings she actually writes.
@@ -101,6 +114,13 @@ function describe(slug) {
     // showing READY FOR REVIEW for something a customer could buy.
     published: build.published === true,
     etsy_url: build.etsy_url || null,
+    // Why there is no Printify draft, in the drafter's own words, recorded by
+    // emily-finish.py. A card that says LOCAL ONLY and nothing else sends the
+    // owner to the dispatcher log to find out, which is where this used to
+    // live and die.
+    draft_blocked: (build.draft_blocked && typeof build.draft_blocked === 'object')
+      ? build.draft_blocked : null,
+    listing_error: read.error,
     price_low: build.price_low ?? null,
     price_high: build.price_high ?? null,
     mockup_count: build.mockup_count ?? null,
@@ -204,6 +224,7 @@ function register(app) {
         ready_for_review: builds.filter(b => b.status === 'ready_for_review' && !b.published).length,
         ready_local: builds.filter(b => b.status === 'ready_local').length,
         placeholder: builds.filter(b => b.art_mode === 'placeholder').length,
+        blocked: builds.filter(b => b.draft_blocked || b.listing_error).length,
       },
       builds,
     });

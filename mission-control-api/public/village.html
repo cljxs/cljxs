@@ -165,6 +165,14 @@
   .fctl{font-size:10px;color:var(--mute)}
   .fctv{font-size:15px;font-weight:700}
   .fctr{font-size:9px;opacity:.5;letter-spacing:.04em;margin-top:1px}
+  /* The drafter's own refusal, under the build it refused. Monospace and
+     pre-line: these quote a file path and a parser error, and folding them
+     into one line loses where the error was. */
+  .bwhy{margin-top:6px;padding:6px 8px;border-radius:6px;font-size:10.5px;
+        line-height:1.45;white-space:pre-line;word-break:break-word;
+        color:#fbbf24;background:rgba(251,191,36,.08);
+        border:1px solid rgba(251,191,36,.22);
+        font-family:ui-monospace,Menlo,monospace}
   .ptabs{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 4px}
   .ptab{background:#1b2330;border:1px solid #2c3647;color:#8fa0b8;border-radius:7px;
         padding:6px 10px;font:600 11px ui-monospace,Menlo,monospace;cursor:pointer;
@@ -1370,7 +1378,18 @@ function buildPills(b) {
   else if (b.status === 'in_progress') p.push(['', 'building…']);
   else p.push(['', String(b.status).replace(/_/g, ' ')]);
   if (b.art_mode === 'placeholder') p.push(['warn', 'placeholder']);
+  if (b.listing_error) p.push(['warn', 'listing unreadable']);
   return p.map(([c, t]) => `<span class="pill ${c}">${esc(t)}</span>`).join('');
+}
+
+// Why there is no Printify draft, in the drafter's own words. The village
+// gallery said LOCAL ONLY and stopped, same as the Deck did, and the reason
+// sat in a dispatcher log nobody reads.
+function blockedReason(b){
+  if (b.published || b.printify) return '';
+  if (b.draft_blocked && b.draft_blocked.reason) return b.draft_blocked.reason;
+  if (b.listing_error) return `listing.json will not parse — ${b.listing_error}`;
+  return '';
 }
 
 async function loadEmilyBuilds() {
@@ -1398,6 +1417,7 @@ async function loadEmilyBuilds() {
           <div class="bs">${buildPills(b)}</div>
           <div class="muted" style="font-size:11px;margin-top:6px">${b.images.length} image${
             b.images.length === 1 ? '' : 's'} · ${kb(b.bytes)}</div>
+          ${blockedReason(b) ? `<div class="bwhy">${esc(blockedReason(b))}</div>` : ''}
         </div></div>`;
       }).join('') + '</div>';
   } catch {

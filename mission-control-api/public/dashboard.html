@@ -157,6 +157,14 @@
   .pill.ok{border-color:rgba(52,211,153,.45);color:var(--up)}
   .pill.warn{border-color:rgba(245,158,11,.45);color:var(--warn)}
   .build .bd{font-size:11.5px;color:var(--dim);margin-top:7px;line-height:1.45}
+  /* The drafter's own refusal. Monospace because it usually quotes a file
+     path and a parser error, and pre-line because some of them run to two
+     lines and folding them into one loses where the error was. */
+  .build .bwhy{margin-top:7px;padding:6px 8px;border-radius:6px;font-size:11px;
+        line-height:1.45;white-space:pre-line;word-break:break-word;
+        color:#fbbf24;background:rgba(251,191,36,.08);
+        border:1px solid rgba(251,191,36,.22);
+        font-family:ui-monospace,Menlo,monospace}
   .noart{display:flex;align-items:center;justify-content:center;width:100%;aspect-ratio:1;
     color:var(--dim);font-size:11.5px;background:rgba(255,255,255,.03)}
   .lightbox{
@@ -573,6 +581,11 @@ function buildPills(b){
   else if (b.status === 'in_progress')  p.push(['','building…']);
   else p.push(['', String(b.status).replace(/_/g,' ')]);
   if (b.art_mode === 'placeholder') p.push(['warn','placeholder art']);
+  // The listing file is where the title, the product type and the price all
+  // come from, so when it will not parse the card goes blank in three places
+  // at once. Said out loud rather than left to be worked out from what is
+  // missing.
+  if (b.listing_error) p.push(['warn','listing unreadable']);
   if (b.product_type) p.push(['', b.product_type]);
   if (b.price_low != null){
     const hi = (b.price_high != null && b.price_high !== b.price_low)
@@ -584,6 +597,19 @@ function buildPills(b){
   if (!b.published && b.printify && b.price_low != null && b.price_low < 1)
     p.push(['warn','prices not set']);
   return p.map(([c,t]) => `<span class="pill ${c}">${esc(t)}</span>`).join('');
+}
+
+// Why a build has no Printify draft, in one line, from whichever of the two
+// sources actually knows. The drafter's own words win when it has any: it
+// tried and was refused, which is a stronger fact than the API noticing it
+// cannot parse a file. Only shown when there is nothing to buy yet - a
+// drafted build carrying a stale reason from an earlier failed attempt would
+// be worse than saying nothing.
+function blockedReason(b){
+  if (b.published || b.printify) return '';
+  if (b.draft_blocked && b.draft_blocked.reason) return b.draft_blocked.reason;
+  if (b.listing_error) return `listing.json will not parse — ${b.listing_error}`;
+  return '';
 }
 
 async function loadBuilds(){
@@ -616,6 +642,7 @@ async function loadBuilds(){
         <div class="bs">${buildPills(b)}</div>
         <div class="bd">${b.images.length} image${b.images.length===1?'':'s'} · ${kb(b.bytes)}${
           b.price_suggestion ? ' · suggests ' + money(b.price_suggestion) : ''}</div>
+        ${blockedReason(b) ? `<div class="bwhy">${esc(blockedReason(b))}</div>` : ''}
         <div class="bact"><button class="rm" onclick="removeBuild('${esc(b.slug)}')"
           title="Archive this build">Remove</button></div>
       </div></div>`;

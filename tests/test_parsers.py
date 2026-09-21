@@ -18,10 +18,12 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
 import tempfile
+import types
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -5365,3 +5367,272 @@ class OneScreenPerMarket(unittest.TestCase):
     def test_each_screen_shows_only_its_own_market(self):
         panel = self.html.split("function drawProps(", 1)[1].split("\n}", 1)[0]
         self.assertIn("f.market === propsTab", panel)
+
+
+class ADeadEndSaysWhyItIsADeadEnd(unittest.TestCase):
+    """The gallery said LOCAL ONLY and stopped there.
+
+    A build sat like that for two days. emily-finish.py knew exactly why -
+    listing.json would not parse, and it said so on two separate attempts -
+    but it said so into the dispatcher log, which nobody reads. The card
+    showed a badge and no reason, and the only way to find out was to open a
+    terminal and re-run the drafter by hand.
+
+    Worse, the API was throwing the same fact away a second time: readJson
+    mapped "no such file" and "this file is malformed" onto the same null, so
+    a broken listing.json produced a card with no title, no product type and
+    no price and nothing to say why all three were blank.
+
+    The reason is recorded on the build now, in the drafter's own words,
+    cleared the moment a draft succeeds.
+    """
+
+    def setUp(self):
+        self.m = load("emily_finish", "emily-finish.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name) / "maple-leaf-pocket-sticker"
+        self.d.mkdir()
+        (self.d / "build.json").write_text(
+            '{"status": "ready_local", "idea": "Maple Leaf Pocket Sticker"}')
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def res(self, stderr="", stdout="", code=1):
+        return types.SimpleNamespace(stderr=stderr, stdout=stdout, returncode=code)
+
+    def build(self):
+        return json.loads((self.d / "build.json").read_text())
+
+    # --- what the reason is ------------------------------------------------
+
+    def test_the_refusal_is_the_drafter_s_own_words(self):
+        # The real one, from the real incident.
+        said = ("cannot read /root/ecosystem/agents/emily/builds/"
+                "maple-leaf-pocket-sticker/listing.json: Expecting ',' "
+                "delimiter: line 2 column 63 (char 64)")
+        self.assertEqual(self.m.reason_from(self.res(stderr=said)), said)
+
+    def test_stdout_is_the_fallback_when_it_never_reached_stderr(self):
+        self.assertEqual(self.m.reason_from(self.res(stdout="ran out of disk")),
+                         "ran out of disk")
+
+    def test_a_crash_is_reduced_to_the_line_that_says_something(self):
+        # Truncating a traceback from the front puts "Traceback (most recent
+        # call last):" on the card and throws the exception away, which is the
+        # wrong half of it.
+        crash = ('Traceback (most recent call last):\n'
+                 '  File "emily-printify.py", line 43, in <module>\n'
+                 '    import disclosures\n'
+                 "ModuleNotFoundError: No module named 'disclosures'\n")
+        got = self.m.reason_from(self.res(stderr=crash))
+        self.assertIn("ModuleNotFoundError: No module named 'disclosures'", got)
+        self.assertNotIn("Traceback (most recent", got)
+
+    def test_a_silent_failure_still_says_something(self):
+        # "" on a card is indistinguishable from not looking.
+        got = self.m.reason_from(self.res(code=7))
+        self.assertIn("7", got)
+        self.assertTrue(got.strip())
+
+    def test_a_long_reason_is_cut_down_to_a_card(self):
+        got = self.m.reason_from(self.res(stderr="x" * 5000))
+        self.assertLessEqual(len(got), self.m.REASON_CHARS + 8)
+        self.assertTrue(got.endswith("..."))
+
+    # --- where it goes -----------------------------------------------------
+
+    def test_the_reason_is_written_onto_the_build(self):
+        self.m.note_draft(self.d, {"reason": "listing.json will not parse",
+                                   "exit": 1, "when_utc": "2026-09-21 16:41:02"})
+        blocked = self.build()["draft_blocked"]
+        self.assertEqual(blocked["reason"], "listing.json will not parse")
+        self.assertEqual(blocked["exit"], 1)
+        self.assertEqual(blocked["when_utc"], "2026-09-21 16:41:02")
+
+    def test_emily_s_own_account_of_the_build_is_not_disturbed(self):
+        self.m.note_draft(self.d, {"reason": "x", "exit": 1, "when_utc": "now"})
+        self.assertEqual(self.build()["status"], "ready_local")
+        self.assertEqual(self.build()["idea"], "Maple Leaf Pocket Sticker")
+
+    def test_a_success_clears_it(self):
+        # A stale reason on a build that has since drafted is worse than no
+        # reason: it describes a problem that is over.
+        self.m.note_draft(self.d, {"reason": "x", "exit": 1, "when_utc": "now"})
+        self.m.note_draft(self.d, None)
+        self.assertNotIn("draft_blocked", self.build())
+
+    def test_clearing_a_build_that_was_never_blocked_rewrites_nothing(self):
+        before = (self.d / "build.json").read_text()
+        self.m.note_draft(self.d, None)
+        self.assertEqual((self.d / "build.json").read_text(), before)
+
+    def test_a_build_json_that_will_not_parse_is_left_exactly_as_it_is(self):
+        # Overwriting Emily's own account of what she made, in order to
+        # explain that a different file would not parse, would destroy the
+        # more valuable of the two.
+        broken = '{"status": "ready_local",,}'
+        (self.d / "build.json").write_text(broken)
+        self.m.note_draft(self.d, {"reason": "x", "exit": 1, "when_utc": "now"})
+        self.assertEqual((self.d / "build.json").read_text(), broken)
+
+    def test_a_build_json_holding_something_other_than_an_object_is_too(self):
+        (self.d / "build.json").write_text('["not", "an", "object"]')
+        self.m.note_draft(self.d, {"reason": "x", "exit": 1, "when_utc": "now"})
+        self.assertEqual(json.loads((self.d / "build.json").read_text()),
+                         ["not", "an", "object"])
+
+    # --- end to end --------------------------------------------------------
+
+    def run_finish(self, stub_body, exit_code, already_blocked=False):
+        """emily-finish against a stub drafter, in a throwaway ecosystem."""
+        root = Path(self.tmp.name) / "root"
+        (root / "scripts").mkdir(parents=True, exist_ok=True)
+        build = root / "agents" / "emily" / "builds" / "a-build"
+        build.mkdir(parents=True, exist_ok=True)
+        start = {"status": "ready_local"}
+        if already_blocked:
+            start["draft_blocked"] = {"reason": "an earlier attempt failed",
+                                      "exit": 1, "when_utc": "2026-09-20 09:00:00"}
+        (build / "build.json").write_text(json.dumps(start))
+        (root / "scripts" / "emily-printify.py").write_text(
+            "import sys\n"
+            f"sys.stderr.write({stub_body!r})\n"
+            f"sys.exit({exit_code})\n")
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(root))
+        r = subprocess.run([sys.executable, str(SCRIPTS / "emily-finish.py"),
+                            "a-build"], capture_output=True, text=True, env=env)
+        return r, json.loads((build / "build.json").read_text())
+
+    def test_a_refused_draft_leaves_the_reason_behind(self):
+        r, build = self.run_finish("no such catalogue entry: 'sticker'\n", 2)
+        self.assertEqual(r.returncode, 0, "a local build is still a real build")
+        self.assertEqual(build["draft_blocked"]["reason"],
+                         "no such catalogue entry: 'sticker'")
+        self.assertEqual(build["draft_blocked"]["exit"], 2)
+        self.assertEqual(build["status"], "ready_local")
+
+    def test_a_drafted_build_leaves_none(self):
+        r, build = self.run_finish("", 0)
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("draft_blocked", build)
+
+    def test_a_build_that_finally_drafts_stops_showing_why_it_did_not(self):
+        # The version of the test above started from a build with nothing to
+        # clear, so deleting the clear entirely still passed it. This one
+        # starts from a build already carrying yesterday's refusal.
+        r, build = self.run_finish("", 0, already_blocked=True)
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("draft_blocked", build,
+                         "a reason that describes a solved problem is worse "
+                         "than none")
+
+    def test_a_second_refusal_replaces_the_first(self):
+        _, build = self.run_finish("the catalogue has no such entry\n", 2,
+                                   already_blocked=True)
+        self.assertEqual(build["draft_blocked"]["reason"],
+                         "the catalogue has no such entry")
+        self.assertEqual(build["draft_blocked"]["exit"], 2)
+
+    def test_the_finisher_never_fails_the_task_over_the_last_mile(self):
+        # The whole premise: the artwork is good work and throwing it away
+        # over a missing draft would be the expensive mistake.
+        r, _ = self.run_finish("everything is on fire\n", 9)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("ready_local", r.stdout)
+
+
+class TheApiSaysWhichFileIsBroken(unittest.TestCase):
+    """readJson turned two different problems into the same null.
+
+    "there is no listing.json" and "listing.json is malformed" produce
+    identical cards - no title, no product type, no price - and the gallery
+    had no way to tell the owner which one it was looking at.
+
+    The JavaScript is exercised through node where node is available, and the
+    test skips where it is not, so the suite still runs anywhere with no
+    dependencies. Asserting on the source text instead would pass against a
+    function nothing called.
+    """
+
+    NODE = shutil.which("node")
+    API = ROOT / "mission-control-api" / "emily.js"
+    DECK = ROOT / "mission-control-api" / "public" / "dashboard.html"
+
+    def node_eval(self, body):
+        r = subprocess.run([self.NODE, "-e", body], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip()
+
+    def source_of(self, path, start, end):
+        src = path.read_text()
+        a = src.index(start)
+        return src[a:src.index(end, a)]
+
+    @unittest.skipUnless(NODE, "node is not installed")
+    def test_a_missing_file_and_a_broken_one_are_told_apart(self):
+        fn = self.source_of(self.API, "function readJsonOrWhy(", "\n// Belt and braces")
+        out = self.node_eval(
+            "const fs = require('fs'), os = require('os'), path = require('path');\n"
+            + fn +
+            "const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ej'));\n"
+            "const gone = path.join(dir, 'gone.json');\n"
+            "const bad = path.join(dir, 'bad.json');\n"
+            "const good = path.join(dir, 'good.json');\n"
+            "fs.writeFileSync(bad, '{\"title\": \"x\" \"product_type\": \"sticker\"}');\n"
+            "fs.writeFileSync(good, '{\"title\": \"x\"}');\n"
+            "const g = readJsonOrWhy(gone), b = readJsonOrWhy(bad), k = readJsonOrWhy(good);\n"
+            "console.log(JSON.stringify({gone: [g.data, g.error === null],"
+            " bad: [b.data, typeof b.error], good: [k.data.title, k.error === null]}));")
+        got = json.loads(out)
+        self.assertEqual(got["gone"], [None, True], "absent is not an error")
+        self.assertEqual(got["bad"], [None, "string"], "malformed says so")
+        self.assertEqual(got["good"], ["x", True])
+
+    @unittest.skipUnless(NODE, "node is not installed")
+    def test_the_card_prefers_the_drafter_s_reason_and_drops_a_stale_one(self):
+        # Three rules at once: the drafter's own refusal wins over the API's
+        # guess, the API's read failure is the fallback, and a build that HAS
+        # a Printify draft shows nothing at all - a reason left over from an
+        # earlier failed attempt describes a problem that is over.
+        fn = self.source_of(self.DECK, "function blockedReason(", "\nasync function loadBuilds")
+        out = self.node_eval(
+            fn +
+            "const drafter = {draft_blocked: {reason: 'the drafter said so'},"
+            " listing_error: 'the api noticed'};\n"
+            "const apionly = {listing_error: 'Unexpected token'};\n"
+            "const stale = {printify: 'abc123', draft_blocked: {reason: 'old news'}};\n"
+            "const sold = {published: true, draft_blocked: {reason: 'old news'}};\n"
+            "const fine = {};\n"
+            "console.log(JSON.stringify([drafter, apionly, stale, sold, fine]"
+            ".map(blockedReason)));")
+        got = json.loads(out)
+        self.assertEqual(got[0], "the drafter said so")
+        self.assertIn("Unexpected token", got[1])
+        self.assertEqual(got[2], "", "a drafted build shows no stale reason")
+        self.assertEqual(got[3], "", "nor does one that is on sale")
+        self.assertEqual(got[4], "")
+
+    def test_both_galleries_draw_it(self):
+        # Recorded and not shown is the same as not recorded. Asserted on the
+        # call inside the card template, not on the function's definition.
+        for page in ("dashboard.html", "village.html"):
+            html = (ROOT / "mission-control-api" / "public" / page).read_text()
+            self.assertIn("blockedReason(b) ? `<div class=\"bwhy\">", html, page)
+            self.assertIn(".bwhy{", html.replace(".build .bwhy{", ".bwhy{"), page)
+
+    def test_the_unreadable_listing_gets_its_own_pill(self):
+        # The title, the product type and the price all come from that file,
+        # so when it will not parse the card goes blank in three places at
+        # once and the pill is what explains all three.
+        for page in ("dashboard.html", "village.html"):
+            html = (ROOT / "mission-control-api" / "public" / page).read_text()
+            pills = html.split("function buildPills(", 1)[1].split("\n}", 1)[0]
+            self.assertIn("b.listing_error", pills, page)
+            self.assertIn("listing unreadable", pills, page)
+
+    def test_the_api_serves_both_fields(self):
+        js = self.API.read_text()
+        body = js.split("return {\n    slug,", 1)[1].split("\n}", 1)[0]
+        self.assertIn("draft_blocked:", body)
+        self.assertIn("listing_error:", body)
