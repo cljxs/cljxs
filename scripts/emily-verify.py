@@ -25,6 +25,46 @@ ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.par
 # file, so anything this small means something else produced it.
 MIN_IMAGE_BYTES = 2000
 
+# What a listing has to be. Etsy's limits, and they live here because this is
+# the file that decides whether a build is finished - emily-listing.py imports
+# them rather than keeping its own copy, so the writer cannot produce a file
+# the verifier will then reject.
+LISTING_REQUIRED = ("title", "description", "tags")
+MAX_TITLE = 140
+MAX_TAGS = 13
+MAX_TAG_CHARS = 20
+
+
+def listing_problems(j):
+    """Everything wrong with a listing, or an empty list.
+
+    Shared with the writer. Two copies of "13 tags" drift, and the direction
+    they drift in is a writer that happily produces what the verifier fails.
+    """
+    problems = []
+    if not isinstance(j, dict):
+        return ["listing.json does not hold an object"]
+    missing = [k for k in LISTING_REQUIRED if not j.get(k)]
+    if missing:
+        problems.append(f"listing.json is missing {', '.join(missing)}")
+    title = str(j.get("title") or "")
+    # Documented in Emily's instructions since the beginning and enforced
+    # nowhere, which is the shape of failure this repo keeps repeating: a rule
+    # that exists only in prose is a rule nothing applies.
+    if len(title) > MAX_TITLE:
+        problems.append(f"title is {len(title)} characters - Etsy allows {MAX_TITLE}")
+    tags = j.get("tags") or []
+    if not isinstance(tags, list):
+        problems.append("tags is not a list")
+        return problems
+    if len(tags) > MAX_TAGS:
+        problems.append(f"listing.json has {len(tags)} tags - Etsy allows {MAX_TAGS}")
+    long_tags = [t for t in tags if len(str(t)) > MAX_TAG_CHARS]
+    if long_tags:
+        problems.append(f"tags over {MAX_TAG_CHARS} characters: "
+                        f"{', '.join(map(str, long_tags[:3]))}")
+    return problems
+
 
 def main():
     if len(sys.argv) < 2:
@@ -68,16 +108,10 @@ def main():
     else:
         try:
             j = json.loads(listing.read_text())
-            missing = [k for k in ("title", "description", "tags") if not j.get(k)]
-            if missing:
-                problems.append(f"listing.json is missing {', '.join(missing)}")
-            tags = j.get("tags") or []
-            if len(tags) > 13:
-                problems.append(f"listing.json has {len(tags)} tags - Etsy allows 13")
-            long_tags = [t for t in tags if len(str(t)) > 20]
-            if long_tags:
-                problems.append(f"tags over 20 characters: {', '.join(map(str, long_tags[:3]))}")
-            if not problems:
+            found = listing_problems(j)
+            problems += found
+            if not found:
+                tags = j.get("tags") or []
                 notes.append(f"listing '{str(j.get('title'))[:40]}' - {len(tags)} tags")
         except Exception as exc:
             problems.append(f"listing.json will not parse ({type(exc).__name__})")

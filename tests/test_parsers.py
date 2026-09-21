@@ -14,6 +14,8 @@ with nothing installed:
 """
 
 import copy
+import contextlib
+import io
 import importlib.util
 import json
 import os
@@ -5636,3 +5638,236 @@ class TheApiSaysWhichFileIsBroken(unittest.TestCase):
         body = js.split("return {\n    slug,", 1)[1].split("\n}", 1)[0]
         self.assertIn("draft_blocked:", body)
         self.assertIn("listing_error:", body)
+
+
+class AModelAskedForJsonWillEventuallyEmitNearlyJson(unittest.TestCase):
+    """One missing comma cost a finished build.
+
+    listing.json read `{"title": "Maple Leaf Pocket Sticker" "product_type":
+    "sticker", ...}`. The verifier rejected it, the drafter never got past
+    reading it, the gallery showed LOCAL ONLY with no reason, and Emily wrote
+    the same broken file again on the retry. The artwork was fine and the copy
+    was fine.
+
+    So she stops being asked. She passes strings on a command line and
+    json.dumps does the quoting, the escaping and the commas - none of which
+    needed judgement, all of which she was being asked to get exactly right by
+    hand every cycle forever. The same argument as the indicators, the ledger
+    rows and the cycle arithmetic.
+    """
+
+    def setUp(self):
+        self.m = load("emily_listing", "emily-listing.py")
+        self.ev = load("emily_verify2", "emily-verify.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.d = self.root / "agents" / "emily" / "builds" / "a-build"
+        self.d.mkdir(parents=True)
+        self.m.ROOT = self.root
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_listing(self, *extra, title="A Sticker", desc="Some copy.",
+                    tags=("fall",)):
+        argv = ["listing", "a-build", "--title", title, "--description", desc]
+        for t in tags:
+            argv += ["--tag", t]
+        argv += list(extra)
+        return self.invoke(argv)
+
+    def invoke(self, argv):
+        real = sys.argv
+        sys.argv = ["emily-listing.py"] + argv
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = self.m.main()
+        finally:
+            sys.argv = real
+        return code, out.getvalue() + err.getvalue()
+
+    def listing(self):
+        return json.loads((self.d / "listing.json").read_text())
+
+    # --- the thing that broke ----------------------------------------------
+
+    def test_the_copy_that_broke_the_build_round_trips(self):
+        # Quotes, an apostrophe, an em dash, a newline and a backslash - every
+        # character a hand-written JSON file gets wrong.
+        title = 'Maple Leaf "Pocket" Sticker — Emily\'s Fall Drop'
+        desc = 'Line one.\nLine two with a \\ backslash and "quotes".'
+        code, _ = self.run_listing(title=title, desc=desc)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.listing()["title"], title)
+        self.assertEqual(self.listing()["description"], desc)
+
+    def test_the_file_it_writes_always_parses(self):
+        # The whole claim, made against the characters most likely to break it.
+        for nasty in ('a "quoted" thing', "an apostrophe's", "a\nnewline",
+                      "a\\backslash", "a\ttab", "emoji 🍁", 'trailing comma,',
+                      '}{[]"'):
+            with self.subTest(nasty=nasty):
+                self.run_listing(title=nasty, desc=nasty, tags=(nasty[:20],))
+                json.loads((self.d / "listing.json").read_text())
+
+    # --- what it refuses ---------------------------------------------------
+
+    def test_it_refuses_copy_the_verifier_would_reject(self):
+        code, out = self.run_listing(tags=tuple(f"t{i}" for i in range(14)))
+        self.assertEqual(code, 2)
+        self.assertIn("13", out)
+        self.assertFalse((self.d / "listing.json").exists(),
+                         "a file that exists and fails looks like finished work")
+
+    def test_a_title_too_long_for_etsy_is_refused(self):
+        code, out = self.run_listing(title="x" * 200)
+        self.assertEqual(code, 2)
+        self.assertIn("140", out)
+
+    def test_a_refusal_never_leaves_a_half_written_file(self):
+        self.run_listing()                       # a good one first
+        good = (self.d / "listing.json").read_text()
+        self.run_listing(title="x" * 200)        # then a bad one
+        self.assertEqual((self.d / "listing.json").read_text(), good)
+
+    def test_the_rules_are_the_verifier_s_rules(self):
+        # Not a second copy. Two spellings of "13 tags" drift, and the
+        # direction they drift in is a writer that cheerfully produces what
+        # the verifier then fails.
+        src = (SCRIPTS / "emily-listing.py").read_text()
+        self.assertIn("ev.listing_problems(", src)
+        for number in ("13", "140", "20"):
+            self.assertNotIn(f"= {number}", src,
+                             f"{number} belongs to emily-verify.py")
+
+    def test_a_listing_it_wrote_passes_the_verifier(self):
+        # The round trip that matters: writer to verifier, no hands.
+        self.run_listing(title="Maple Leaf Pocket Sticker",
+                         desc="A small maple leaf.", tags=("fall", "autumn"))
+        self.assertEqual(self.ev.listing_problems(self.listing()), [])
+
+    # --- build.json --------------------------------------------------------
+
+    def test_the_byte_counts_are_measured_not_reported(self):
+        # She was asked for "every file produced and its real byte count",
+        # which is an invitation to state a number nobody checked.
+        (self.d / "design.png").write_bytes(b"x" * 4096)
+        (self.d / "cover.png").write_bytes(b"y" * 1024)
+        code, _ = self.invoke(["build", "a-build", "--art", "generated"])
+        self.assertEqual(code, 0)
+        build = json.loads((self.d / "build.json").read_text())
+        self.assertEqual({f["name"]: f["bytes"] for f in build["files"]},
+                         {"design.png": 4096, "cover.png": 1024})
+        self.assertEqual(build["bytes"], 5120)
+
+    def test_she_cannot_claim_a_printify_draft_exists(self):
+        # ready_for_review means a draft exists and only emily-finish.py knows
+        # whether one does. She set it by hand once on a build with no product.
+        code, out = self.invoke(["build", "a-build", "--art", "generated",
+                                 "--status", "ready_for_review"])
+        self.assertEqual(code, 2)
+        self.assertIn("emily-finish.py", out)
+        self.assertFalse((self.d / "build.json").exists())
+
+    def test_rewriting_the_build_keeps_what_code_recorded(self):
+        # The finisher's reason, the Printify id and the prices read back from
+        # Printify are not hers, and a rewrite must not lose them.
+        (self.d / "build.json").write_text(json.dumps({
+            "printify_product_id": "abc123", "published": True,
+            "price_low": 6.99, "draft_blocked": {"reason": "old"},
+            "status": "ready_local", "files": [{"name": "stale", "bytes": 1}]}))
+        (self.d / "design.png").write_bytes(b"x" * 4096)
+        self.invoke(["build", "a-build", "--art", "generated"])
+        build = json.loads((self.d / "build.json").read_text())
+        self.assertEqual(build["printify_product_id"], "abc123")
+        self.assertEqual(build["published"], True)
+        self.assertEqual(build["price_low"], 6.99)
+        self.assertEqual(build["draft_blocked"], {"reason": "old"})
+        self.assertEqual([f["name"] for f in build["files"]], ["design.png"],
+                         "her own fields are replaced, not merged")
+
+    def test_a_build_json_that_will_not_parse_is_simply_replaced(self):
+        # The opposite of note_draft's rule, on purpose: this command is how
+        # she fixes a broken file, so it must not refuse to write over one.
+        (self.d / "build.json").write_text('{"status": "ready_local",,}')
+        (self.d / "design.png").write_bytes(b"x" * 4096)
+        code, _ = self.invoke(["build", "a-build", "--art", "placeholder"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads((self.d / "build.json").read_text())["art_mode"],
+                         "placeholder")
+
+    def test_a_placeholder_build_is_called_unsellable_where_she_will_see_it(self):
+        (self.d / "design.png").write_bytes(b"x" * 4096)
+        _, out = self.invoke(["build", "a-build", "--art", "placeholder"])
+        self.assertIn("NOT SELLABLE", out)
+
+    def test_art_mode_cannot_be_invented(self):
+        # It is whatever emily-assets.py reported, not a word she chooses.
+        with self.assertRaises(SystemExit):
+            self.invoke(["build", "a-build", "--art", "beautiful"])
+
+    # --- being told about it -----------------------------------------------
+
+    def test_a_missing_folder_lists_the_ones_that_exist(self):
+        code, out = self.invoke(["build", "nope", "--art", "generated"])
+        self.assertEqual(code, 1)
+        self.assertIn("a-build", out)
+
+    def test_her_instructions_tell_her_to_use_it(self):
+        # A rule enforced in code and absent from the instructions is the
+        # failure this repo keeps repeating. This is the mirror: a command
+        # nothing tells her to run is a command she will not run.
+        header = (ROOT / "agents" / "emily" /
+                  "_emily-agents-header.md").read_text()
+        self.assertIn("emily-listing.py listing builds/<slug>", header)
+        self.assertIn("emily-listing.py build builds/<slug>", header)
+        self.assertNotRegex(header, r"\*\*Write `builds/<slug>/build\.json`\*\*")
+        self.assertIn("never by hand", header)
+
+
+class TheListingRulesLiveInOnePlace(unittest.TestCase):
+    """The title limit was documented for months and enforced nowhere.
+
+    Emily's instructions said "title (≤140 chars)" from the beginning; nothing
+    checked it. That is the same failure as a rule enforced in code and absent
+    from the instructions, pointing the other way - and both end with the
+    agent and the checker believing different things.
+    """
+
+    def setUp(self):
+        self.m = load("emily_verify3", "emily-verify.py")
+
+    def test_an_empty_listing_names_everything_it_needs(self):
+        self.assertEqual(self.m.listing_problems({}),
+                         ["listing.json is missing title, description, tags"])
+
+    def test_a_good_listing_has_no_problems(self):
+        self.assertEqual(self.m.listing_problems(
+            {"title": "A Sticker", "description": "copy", "tags": ["fall"]}), [])
+
+    def test_the_documented_title_limit_is_now_enforced(self):
+        long = {"title": "x" * (self.m.MAX_TITLE + 1), "description": "d",
+                "tags": ["t"]}
+        self.assertTrue(any("title" in p for p in self.m.listing_problems(long)))
+        ok = dict(long, title="x" * self.m.MAX_TITLE)
+        self.assertEqual(self.m.listing_problems(ok), [])
+
+    def test_etsy_s_tag_limits(self):
+        many = {"title": "t", "description": "d",
+                "tags": ["t"] * (self.m.MAX_TAGS + 1)}
+        self.assertTrue(any(str(self.m.MAX_TAGS) in p
+                            for p in self.m.listing_problems(many)))
+        longtag = {"title": "t", "description": "d",
+                   "tags": ["x" * (self.m.MAX_TAG_CHARS + 1)]}
+        self.assertTrue(any("characters" in p
+                            for p in self.m.listing_problems(longtag)))
+
+    def test_tags_that_are_not_a_list_do_not_crash_the_verifier(self):
+        # len("notalist") is 8, which used to read as eight tags.
+        self.assertEqual(self.m.listing_problems(
+            {"title": "t", "description": "d", "tags": "notalist"}),
+            ["tags is not a list"])
+
+    def test_something_that_is_not_an_object_at_all(self):
+        self.assertTrue(self.m.listing_problems(["a", "list"]))

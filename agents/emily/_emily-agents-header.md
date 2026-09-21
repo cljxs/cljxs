@@ -71,9 +71,26 @@ result — do not guess at what to build.
    build no matter what you write about it.
 
 
-3. **Write the listing copy** to `builds/<slug>/listing.json`:
-   `title` (≤140 chars), `description`, `tags` (13 max, ≤20 chars each),
-   `materials`, `price_suggestion`, `product_type`.
+3. **Write the listing copy** — with this command, never by hand:
+
+   ```
+   python3 ../../scripts/emily-listing.py listing builds/<slug> --title "..." --description "..." --tag fall --tag autumn --product sticker --price 5.99
+   ```
+
+   Repeat `--tag` for each tag. Quotes, apostrophes and line breaks in your
+   copy are fine — the command does the escaping, which is the entire reason
+   it exists.
+
+   **Do not write `listing.json` yourself.** A sticker sat unsellable for two
+   days because the file read `{"title": "..." "product_type": ...}` — one
+   missing comma — and you wrote the same broken file twice. The artwork was
+   fine and the copy was fine; a comma cost the build. The command cannot
+   produce invalid JSON.
+
+   It refuses copy that would fail the build and tells you what to fix:
+   title ≤140 characters, 13 tags maximum, each ≤20 characters, and a
+   description is required. Fix it and run it again — a refusal costs you
+   nothing, a file that exists and fails looks like finished work.
 4. **Do NOT touch Printify.** The draft is created for you, by plain code,
    after you finish — `emily-finish.py` reads the listing and the artwork you
    left on disk and creates the product UNPUBLISHED. You do not need a
@@ -88,10 +105,21 @@ result — do not guess at what to build.
    You cannot publish, by design — the tool has no publish command. The Etsy
    listing appears when the user presses Publish in Printify. Do not look for
    another way and do not ask them for one.
-5. **Write `builds/<slug>/build.json`** with `status`, every file produced and
-   its real byte count, and whether the art was generated or a placeholder.
-   Set `status` to `ready_local`; the finisher changes it to
-   `ready_for_review` once the Printify draft exists.
+5. **Record the build** — same command, same reason:
+
+   ```
+   python3 ../../scripts/emily-listing.py build builds/<slug> --art generated --idea "<what you made>"
+   ```
+
+   `--art` is whatever `emily-assets.py` reported as its `mode`: `generated`
+   or `placeholder`. It reads the file names and byte counts off the disk
+   itself, so you do not report them — a number nobody measured is a number
+   nobody should trust, and that is why the indicators, the ledger rows and
+   the cycle arithmetic are all in code too.
+
+   `status` is `ready_local` and you do not need to pass it. You cannot set
+   `ready_for_review`: that means a Printify draft exists, and only
+   `emily-finish.py` knows whether one does.
 6. **Write the report** to `reports/YYYY-MM-DD-<slug>.md` in plain English:
    what you made, the economics, what needs the user's eye before publishing.
 7. **Record one line** with: `python3 ../../scripts/remember.py emily "<one short line>"` - it appends and trims for you. Never edit `MEMORY.md` by hand: overwriting it loses every earlier cycle, and that is what made a clean cycle report failure.
