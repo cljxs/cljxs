@@ -508,7 +508,23 @@ def load():
         return {"forecasts": []}
 
 
+def catalogue():
+    """MARKETS, in a form something other than Python can read.
+
+    The Deck draws a tab per market and has to know their order, units and
+    bars. It could hold its own list - and then adding a market here would
+    quietly leave a tab missing there, which is the drift this repo keeps
+    paying for. So the catalogue travels with the data: written on every
+    save, served by the API, rendered by the village. MARKETS stays the only
+    place a market is defined.
+    """
+    return {m: {"unit": spec["unit"], "thresholds": list(spec["thresholds"]),
+                "counts": spec["counts"], "stat": spec["stat"]}
+            for m, spec in MARKETS.items()}
+
+
 def save(data):
+    data["markets"] = catalogue()
     STORE.parent.mkdir(parents=True, exist_ok=True)
     STORE.write_text(json.dumps(data, indent=1) + "\n")
 

@@ -4242,7 +4242,7 @@ class TheForecastCardShowsNoPrice(unittest.TestCase):
         self.assertIn("reason", body)
 
     def test_neither_the_endpoint_nor_the_card_carries_odds(self):
-        card = self.html.split("function forecastCard(", 1)[1].split("\nasync function", 1)[0]
+        card = self.html.split("function forecastCard(", 1)[1].split("\n/* -", 1)[0]
         feed = self.js.split("/api/ace/forecasts", 1)[1].split("app.get(", 1)[0]
         for word in ("price", "odds", "novig", "moneyline", "stake", "edge"):
             self.assertNotIn(word, card.lower(), f"a forecast card must not show {word}")
@@ -4250,7 +4250,7 @@ class TheForecastCardShowsNoPrice(unittest.TestCase):
                              f"the forecast feed must not carry {word}")
 
     def test_the_card_says_it_is_not_a_bet(self):
-        card = self.html.split("function forecastCard(", 1)[1].split("\nasync function", 1)[0]
+        card = self.html.split("function forecastCard(", 1)[1].split("\n/* -", 1)[0]
         self.assertIn("NOT A BET", card)
 
     def test_a_flat_forecast_is_marked_in_the_interface_too(self):
@@ -4259,7 +4259,7 @@ class TheForecastCardShowsNoPrice(unittest.TestCase):
         # flag is FLAT now rather than COARSE - it used to fire on any two
         # bars with no game between them, which smoothing fixed, and it now
         # fires only on a player whose games are all the identical value.
-        card = self.html.split("function forecastCard(", 1)[1].split("\nasync function", 1)[0]
+        card = self.html.split("function forecastCard(", 1)[1].split("\n/* -", 1)[0]
         self.assertIn("f.coarse", card)
         self.assertIn("FLAT", card)
 
@@ -4268,30 +4268,32 @@ class TheForecastCardShowsNoPrice(unittest.TestCase):
         card = self.html.split("function fcTile(", 1)[1].split("\nfunction forecastCard", 1)[0]
         self.assertIn("band[0]", card)
         self.assertIn("band[1]", card)
-        body = self.html.split("function forecastCard(", 1)[1].split("\nasync function", 1)[0]
+        body = self.html.split("function forecastCard(", 1)[1].split("\n/* -", 1)[0]
         self.assertIn("f.interval", body)
 
     def test_the_sample_is_shown_beside_the_number(self):
         # A probability off 11 games is not the same claim as one off 21, and
         # printing them identically is the failure being designed against.
-        card = self.html.split("function forecastCard(", 1)[1].split("\nasync function", 1)[0]
+        card = self.html.split("function forecastCard(", 1)[1].split("\n/* -", 1)[0]
         for field in ("sample_games", "sample_mean", "p25", "p75"):
             self.assertIn(field, card, f"the card must show {field}")
 
     def test_an_ungraded_forecast_is_not_drawn_as_a_result(self):
         # Showing a pending forecast as a miss would make every new slate look
         # like a failure before a ball was thrown.
-        card = self.html.split("function forecastCard(", 1)[1].split("\nasync function", 1)[0]
+        card = self.html.split("function forecastCard(", 1)[1].split("\n/* -", 1)[0]
         self.assertIn("awaiting the final score", card)
         self.assertIn("f.actual !== null", card)
 
-    def test_the_panel_is_loaded_for_ace(self):
-        # Assert the CALL, not the name: `async function loadAceForecasts(){`
-        # contains "loadAceForecasts()" as a substring, so the first version
-        # of this passed on the definition of a function nothing invoked.
-        self.assertIn('id="aceForecasts"', self.html)
+    def test_the_panel_is_loaded_when_the_hall_is_entered(self):
+        # Assert the CALL, not the name: `function openPropsPanel(){` contains
+        # "openPropsPanel()" as a substring, so a version of this asserting
+        # the bare name passed on the definition of a function nothing
+        # invoked. It used to hang off Ace's door; it hangs off the hall's.
+        self.assertIn('id="propsBody"', self.html)
         self.assertRegex(self.html,
-                         r"if \(a\.name === 'ace'\) \{[^}]*loadAceForecasts\(\);")
+                         r"name === PROPS_DOOR\) return openPropsPanel\(\);")
+        self.assertRegex(self.html, r"loadProps\(\);\n\}")
 
     def test_the_label_does_not_wrap_mid_phrase(self):
         # It rendered as "MODEL FORECAST · NOT / A BET", which reads as two
@@ -5135,3 +5137,231 @@ class HowFirmIsThatPercentage(unittest.TestCase):
         body = src.split("def cmd_forecast(", 1)[1].split("\ndef ", 1)[0]
         self.assertIn('band[str(t)][0]', body)
         self.assertIn('band[str(t)][1]', body)
+
+
+class ThePropsHallIsItsOwnBuilding(unittest.TestCase):
+    """The forecasts used to live inside Ace's house.
+
+    They are not his work and were never his to keep: he places bets against
+    posted odds, and this thing holds no odds at all and is forbidden to. A
+    door of its own says that in the one place the owner actually looks.
+    """
+
+    def setUp(self):
+        self.html = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        self.js = (ROOT / "mission-control-api" / "ace.js").read_text()
+
+    def test_the_hall_has_a_door_of_its_own(self):
+        self.assertRegex(self.html, r"doors\.push\(\{ name: PROPS_DOOR")
+
+    def test_a_door_with_no_agent_behind_it_still_opens(self):
+        # openPanel looks the name up in DATA.agents and returns if it finds
+        # nothing, so the hall had to be handled BEFORE that lookup or the key
+        # press would do nothing at all and look like a broken door.
+        body = self.html.split("function openPanel(", 1)[1].split("\nlet ideaBusy", 1)[0]
+        before = body.split("DATA.agents", 1)[0]
+        self.assertIn("PROPS_DOOR", before,
+                      "the hall must be handled before the agent lookup")
+        self.assertIn("openPropsPanel()", before)
+
+    def test_ace_no_longer_carries_the_forecasts(self):
+        self.assertNotIn("aceForecasts", self.html)
+        self.assertNotIn("loadAceForecasts", self.html)
+        body = self.html.split("function openPanel(", 1)[1].split("\nlet ideaBusy", 1)[0]
+        self.assertIn("loadAceLedger()", body, "the ledger is still his")
+
+    def test_the_hall_is_not_standing_on_a_house_plot(self):
+        # PLOTS is indexed by agent, so an agent added later takes the next
+        # one. If the hall were sitting on it they would be built on top of
+        # each other, which is only visible once that agent exists.
+        plots = [(float(a), float(b)) for a, b in
+                 re.findall(r"\{ x:\s*([\d.]+),\s*y:\s*([\d.]+),\s*flip", self.html)]
+        self.assertEqual(len(plots), 8)
+        hx, hy = self.props_plot()
+        for (px, py) in plots:
+            apart = (hx + 5 <= px or px + 4 <= hx or hy + 4.4 <= py or py + 4.3 <= hy)
+            self.assertTrue(apart, f"the hall overlaps the plot at {px},{py}")
+
+    def props_plot(self):
+        m = re.search(r"PROPS_PLOT = \{ x: ([\d.]+), y: ([\d.]+) \}", self.html)
+        return float(m.group(1)), float(m.group(2))
+
+    def test_the_hall_gets_a_path_out_to_the_lane(self):
+        # Without one it stands on grass with no way in, which is what made
+        # the houses read as scenery before they were given theirs.
+        self.assertRegex(self.html,
+                         r"PROPS_PLOT\.x \+ 2\.5[\s\S]{0,400}PAVED\[y\]\[dx\] = true")
+
+
+class NothingGrowsThroughAWall(unittest.TestCase):
+    """Three trees grew through the props hall.
+
+    The comment above the tree list already said "nudged off the house plots -
+    four of these used to grow through a wall", and the nudge was done by
+    hand against PLOTS. The hall is not in PLOTS, so it was invisible to that
+    nudge and the same bug happened again immediately - including a tree
+    standing in front of the name plate, which then read "P    PROPS".
+
+    Nudging is something a person remembers to do. This is the version that
+    does not need remembering: every scenery coordinate in the file, against
+    every building's wall and name plate, with depth taken into account so a
+    prop drawn BEHIND a building does not count.
+
+    It checks all eight plots, not just the occupied ones. A sixth agent
+    takes the next plot, and the tree that has been sitting on it harmlessly
+    for months is through its wall the moment it is built.
+    """
+
+    T = 32
+
+    def setUp(self):
+        self.html = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+
+    def scenery(self):
+        """[(kind, [(x, y)], half width, height, depth pad)] straight out of the file."""
+        out = []
+        sizes = {"tree": (0.65, 2.4, 40), "bush": (0.50, 0.80, 8),
+                 "rock": (0.40, 0.65, 6)}
+        for m in re.finditer(r"\.forEach\(\(\[tx\s*,\s*ty\][^\n]*place\(`?'?([a-z]+)",
+                             self.html):
+            kind = m.group(1)
+            if kind not in sizes:
+                continue
+            before = self.html[:m.start()]
+            end = before.rfind("]]") + 2
+            start = before.rfind("[[", 0, end)
+            pts = [tuple(float(v) for v in p.split(","))
+                   for p in re.findall(r"\[\s*([-\d.]+\s*,\s*[-\d.]+)\s*\]",
+                                       before[start:end])]
+            out.append((kind, pts) + sizes[kind])
+        return out
+
+    def buildings(self):
+        """(name, x, y, w, h, depth, plate width) in tiles, for all eight plots."""
+        T = self.T
+        for i, (x, y) in enumerate(
+                (float(a), float(b)) for a, b in
+                re.findall(r"\{ x:\s*([\d.]+),\s*y:\s*([\d.]+),\s*flip", self.html)):
+            yield (f"house plot {i}", x, y, 128 / T, 116 / T, y * T + 116,
+                   max(70, 8 * 10 + 22) / T)
+        m = re.search(r"PROPS_PLOT = \{ x: ([\d.]+), y: ([\d.]+) \}", self.html)
+        x, y = float(m.group(1)), float(m.group(2))
+        yield ("the props hall", x, y, 160 / T, 124 / T, y * T + 124,
+               max(96, len("Player Props") * 10 + 22) / T)
+
+    def collisions(self):
+        bad = []
+        blds = list(self.buildings())
+        for kind, pts, hw, hh, pad in self.scenery():
+            for (sx, sy) in pts:
+                for (name, bx, by, bw, bh, bdepth, plate) in blds:
+                    if sy * self.T + pad < bdepth:
+                        continue                       # drawn behind it
+                    for (rx0, rx1, ry0, ry1, what) in (
+                            (bx, bx + bw, by, by + bh, "wall"),
+                            (bx + bw / 2 - plate / 2, bx + bw / 2 + plate / 2,
+                             by + bh, by + bh + 0.9, "name plate")):
+                        if (sx + hw > rx0 and sx - hw < rx1
+                                and sy > ry0 and sy - hh < ry1):
+                            bad.append(f"{kind} at ({sx:g},{sy:g}) covers "
+                                       f"{name}'s {what}")
+        return bad
+
+    def test_the_file_really_does_list_scenery_to_check(self):
+        # A parser that silently finds nothing would make the test below pass
+        # for the wrong reason - the failure mode this repo keeps hitting.
+        found = self.scenery()
+        self.assertEqual(sorted(k for k, *_ in found), ["bush", "rock", "tree"])
+        for kind, pts, *_ in found:
+            self.assertGreater(len(pts), 5, f"only {len(pts)} {kind} found")
+
+    def test_the_check_can_actually_fail(self):
+        # Stand a tree on the hall's doorstep and confirm it is reported.
+        m = re.search(r"PROPS_PLOT = \{ x: ([\d.]+), y: ([\d.]+) \}", self.html)
+        hx, hy = float(m.group(1)), float(m.group(2))
+        planted = self.html.replace("[2,16],[8,17]",
+                                    f"[{hx + 2:g},{hy + 3:g}],[8,17]", 1)
+        real, self.html = self.html, planted
+        try:
+            self.assertTrue(any("props hall" in b for b in self.collisions()))
+        finally:
+            self.html = real
+
+    def test_nothing_covers_a_wall_or_a_name_plate(self):
+        self.assertEqual(self.collisions(), [])
+
+
+class OneScreenPerMarket(unittest.TestCase):
+    """Seven markets on one scroll read as one long answer.
+
+    A quarterback's passing yards and a tight end's targets are different
+    questions and were stacked in the same list. A tab each.
+
+    The tabs come from the catalogue props-forecast.py writes into
+    forecasts.json, never from a list kept in the page: MARKETS is where a
+    market is defined, and a second list in JavaScript would quietly leave a
+    tab missing the next time one is added there.
+    """
+
+    def setUp(self):
+        self.m = load("props_forecast", "props-forecast.py")
+        self.html = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        self.js = (ROOT / "mission-control-api" / "ace.js").read_text()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.m.STORE = Path(self.tmp.name) / "forecasts.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_the_catalogue_is_every_market_and_nothing_else(self):
+        cat = self.m.catalogue()
+        self.assertEqual(list(cat), list(self.m.MARKETS))
+        for name, spec in self.m.MARKETS.items():
+            self.assertEqual(cat[name]["unit"], spec["unit"])
+            self.assertEqual(cat[name]["thresholds"], list(spec["thresholds"]))
+            self.assertEqual(cat[name]["counts"], spec["counts"])
+
+    def test_it_is_written_every_time_the_file_is_saved(self):
+        # Not only when forecasting: a grade run rewrites the file too, and a
+        # save that dropped the catalogue would empty the tab bar.
+        self.m.save({"forecasts": []})
+        on_disk = json.loads(self.m.STORE.read_text())
+        self.assertEqual(list(on_disk["markets"]), list(self.m.MARKETS))
+
+    def test_the_order_survives_the_round_trip(self):
+        # The tab order is the catalogue's order, so passing markets stay
+        # first. A dict that came back sorted would put attempts before yards.
+        self.m.save({"forecasts": []})
+        self.assertEqual(list(json.loads(self.m.STORE.read_text())["markets"])[0],
+                         list(self.m.MARKETS)[0])
+
+    def test_the_api_passes_the_catalogue_through(self):
+        feed = self.js.split("/api/ace/forecasts", 1)[1].split("app.get(", 1)[0]
+        self.assertIn("markets:", feed)
+        self.assertIn("data.markets", feed)
+
+    def test_the_page_holds_no_market_list_of_its_own(self):
+        # The whole point. If any market name is spelled out in the page, the
+        # two lists have already started to drift.
+        panel = self.html.split("function propsTabs(", 1)[1].split(
+            "\nasync function loadAceLedger", 1)[0]
+        for market in self.m.MARKETS:
+            self.assertNotIn(market, panel,
+                             f"{market} is named in the page; it belongs to MARKETS")
+
+    def test_the_tabs_are_built_from_the_catalogue(self):
+        panel = self.html.split("function propsTabs(", 1)[1].split(
+            "\nasync function loadAceLedger", 1)[0]
+        self.assertIn("PROPS.markets", panel)
+        self.assertIn("propsPick(", panel)
+
+    def test_a_market_with_no_forecasts_keeps_its_tab(self):
+        # "nobody qualified for this one today" and "this market does not
+        # exist" are different, and a missing tab says the second.
+        panel = self.html.split("function drawProps(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("rows.length", panel)
+        self.assertIn("quarter of his games", panel)
+
+    def test_each_screen_shows_only_its_own_market(self):
+        panel = self.html.split("function drawProps(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("f.market === propsTab", panel)

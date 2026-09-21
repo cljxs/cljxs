@@ -185,6 +185,10 @@ function register(app) {
         coarse: rows.filter(r => r.coarse).length,
         markets: new Set(rows.map(r => r.market)).size,
       },
+      // The market catalogue rides along with the forecasts rather than
+      // being restated here: props-forecast.py writes it on every save, so a
+      // market added there cannot leave a tab missing in the village.
+      markets: (data.markets && typeof data.markets === 'object') ? data.markets : {},
       forecasts: rows,
     });
   });

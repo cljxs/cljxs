@@ -165,6 +165,13 @@
   .fctl{font-size:10px;color:var(--mute)}
   .fctv{font-size:15px;font-weight:700}
   .fctr{font-size:9px;opacity:.5;letter-spacing:.04em;margin-top:1px}
+  .ptabs{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 4px}
+  .ptab{background:#1b2330;border:1px solid #2c3647;color:#8fa0b8;border-radius:7px;
+        padding:6px 10px;font:600 11px ui-monospace,Menlo,monospace;cursor:pointer;
+        letter-spacing:.04em;text-transform:uppercase;display:flex;align-items:center;gap:6px}
+  .ptab:hover{border-color:#3d4a60;color:#c7d3e4}
+  .ptab.on{background:#26344a;border-color:#4d6a96;color:#e8f0fa}
+  .ptn{font-size:10px;opacity:.6;font-weight:400}
   /* One line per fact, wrapping as a unit - a footer that breaks between
      "10,000" and "DRAWS" reads as two different numbers. */
   .fcfoot{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:10px;letter-spacing:.04em;color:var(--mute)}
@@ -256,6 +263,13 @@ const PLOTS = [
   { x: 11.6, y: 18.6, flip: false },
   { x: 33.4, y: 8.6,  flip: true  },
 ];
+
+// The props hall stands apart from the houses on purpose: the forecasts are
+// not Ace's work and were never his to keep - he places bets off odds and
+// this thing holds no odds at all. Its own plot, kept out of PLOTS so an
+// agent added later cannot be given the same ground.
+const PROPS_PLOT = { x: 31.0, y: 15.6 };
+const PROPS_DOOR = 'Player Props';
 
 // The pond, one x-span per row. A rectangle of water in a field looks like a
 // swimming pool; the point of listing rows is that the edge can wander.
@@ -575,6 +589,134 @@ function makeTextures(s) {
     gg.generateTexture(`house-${i}`, HW, HH); gg.destroy();
   });
 
+  /* --- the props hall: brick, floodlights, a scoreboard over the door ---
+   * Deliberately not a house. Same drawing language - tonal bands, a hard
+   * shadow line under every overhang - but a wider footprint, a shallower
+   * roof, brick instead of plaster and turf instead of a stone footing, so
+   * it reads as a different KIND of building from across the lane rather
+   * than as a house with a sign on it.
+   */
+  {
+    const gg = s.add.graphics();
+    const SW = 160, SH = 124;
+    const br = rng(9311);
+
+    // floodlight masts, drawn first so the roof overlaps their feet
+    [26, SW - 34].forEach(mx => {
+      px(gg, mx + 2, 8, 4, 40, 0x6b7280);                // mast
+      px(gg, mx + 2, 8, 2, 40, 0x8d949f);
+      px(gg, mx - 6, 0, 20, 12, 0x3f4653);               // lamp housing
+      px(gg, mx - 6, 0, 20, 2, 0x59616f);
+      for (let ly = 2; ly < 10; ly += 4)
+        for (let lx = mx - 4; lx < mx + 12; lx += 5)
+          px(gg, lx, ly, 4, 3, 0xffe9a3);                // bulbs
+      px(gg, mx - 6, 10, 20, 2, 0x000000, .3);
+    });
+
+    // brick walls in courses, every other course offset by half a brick
+    px(gg, 6, 40, SW - 12, SH - 46, 0x9c5442);
+    for (let r = 0, y = 42; y < SH - 8; y++, r++) {
+      if ((y - 42) % 6 === 5) { px(gg, 6, y, SW - 12, 1, 0xb87a63, .5); continue; }
+      if ((y - 42) % 6) continue;
+      for (let bx = 6 + (((y - 42) / 6) % 2 ? 0 : 7); bx < SW - 12; bx += 14) {
+        const tone = br() < .3 ? 0xb06450 : (br() < .5 ? 0x8c4a39 : 0xa35a46);
+        px(gg, bx, y, 12, 5, tone);
+      }
+    }
+    px(gg, 6, 40, 9, SH - 46, 0x000000, .16);            // left wall in shade
+    px(gg, SW - 15, 40, 9, SH - 46, 0xffffff, .10);      // right wall lit
+
+    // turf apron instead of a stone footing, with yard lines on it
+    px(gg, 4, SH - 12, SW - 8, 12, 0x3f7d3a);
+    px(gg, 4, SH - 12, SW - 8, 2, 0x55a04c);
+    for (let gx = 10; gx < SW - 10; gx += 16) px(gg, gx, SH - 10, 2, 9, 0xf2f7ee, .8);
+    px(gg, 4, SH - 2, SW - 8, 2, 0x000000, .2);
+
+    // shallow gable, six courses - half the pitch of a house roof
+    for (let r = 0; r < 7; r++) {
+      const half = 22 + r * 8.6, y = 12 + r * 4, x0 = SW / 2 - half, w = half * 2;
+      px(gg, x0, y, w, 5, 0x24543a);
+      for (let sx = x0 + (r % 2 ? 0 : 6); sx < x0 + w - 5; sx += 12)
+        px(gg, sx, y, 7, 4, r < 3 ? 0x58a06e : 0x3a7a52);
+      px(gg, x0, y + 4, w, 1, 0x000000, .22);
+    }
+    px(gg, 0, 36, SW, 9, 0x3a7a52);                      // eaves board
+    px(gg, 0, 36, SW, 2, 0x58a06e);
+    px(gg, 0, 43, SW, 2, 0x24543a);
+    px(gg, 0, 45, SW, 4, 0x000000, .26);                 // shadow it throws
+    px(gg, 0, 49, SW, 3, 0x000000, .12);
+
+    // bunting along the eaves - pennants, alternating
+    for (let bx = 8, k = 0; bx < SW - 10; bx += 14, k++) {
+      const c = [0xe0556a, 0xf2e06a, 0x9fd3e8, 0xffffff][k % 4];
+      px(gg, bx, 45, 10, 2, c);
+      px(gg, bx + 2, 47, 6, 2, c);
+      px(gg, bx + 4, 49, 2, 2, c);
+    }
+
+    // scoreboard over the door: amber on black, the way one actually reads
+    const sbx = SW / 2 - 34, sby = 56;
+    px(gg, sbx - 3, sby - 3, 74, 28, 0x2a2f38);
+    px(gg, sbx - 3, sby - 3, 74, 2, 0x444b57);
+    px(gg, sbx, sby, 68, 22, 0x11141a);
+    for (let dx = 0; dx < 4; dx++) {                     // four glowing digits
+      const ox = sbx + 5 + dx * 17;
+      px(gg, ox, sby + 4, 9, 2, 0xffb454);
+      px(gg, ox, sby + 4, 2, 7, 0xffb454);
+      px(gg, ox + 7, sby + 4, 2, 7, dx % 2 ? 0x5a3f22 : 0xffb454);
+      px(gg, ox, sby + 10, 9, 2, 0xffb454);
+      px(gg, ox, sby + 11, 2, 7, dx % 2 ? 0x5a3f22 : 0xffb454);
+      px(gg, ox + 7, sby + 11, 2, 7, 0xffb454);
+      px(gg, ox, sby + 17, 9, 2, 0xffb454);
+    }
+    px(gg, sbx - 3, sby + 25, 74, 3, 0x000000, .3);
+
+    // Double doors under it, drawn last so they sit on the turf rather than
+    // behind it. This is the thing the player actually walks up to, so it
+    // gets a pale stone surround - against brick the bare timber read as a
+    // dark patch rather than as a way in.
+    const dw = 56, dx0 = SW / 2 - dw / 2, dy0 = 84;
+    px(gg, dx0 - 7, dy0 - 7, dw + 14, SH - dy0, 0xcbbfa6);        // surround
+    px(gg, dx0 - 7, dy0 - 7, dw + 14, 3, 0xe4dac4);
+    px(gg, dx0 - 7, dy0 - 7, 3, SH - dy0, 0xe4dac4);
+    px(gg, dx0 + dw + 4, dy0 - 7, 3, SH - dy0, 0xa89b83);
+    px(gg, dx0, dy0, dw, SH - dy0 - 4, 0x7d5738);                 // the doors
+    px(gg, dx0, dy0, dw, 3, 0x9a6d47);
+    px(gg, dx0, dy0, 2, SH - dy0 - 4, 0x9a6d47);
+    px(gg, SW / 2 - 1, dy0, 2, SH - dy0 - 4, 0x4a3220);           // the split
+    [-24, 4].forEach(dx2 => {
+      px(gg, SW / 2 + dx2, dy0 + 6, 20, 13, 0x5c4028, .45);
+      px(gg, SW / 2 + dx2, dy0 + 23, 20, 13, 0x5c4028, .45);
+    });
+    px(gg, SW / 2 - 8, dy0 + 20, 4, 5, 0xffd76e);                 // handles
+    px(gg, SW / 2 + 4, dy0 + 20, 4, 5, 0xffd76e);
+    px(gg, dx0 - 7, SH - 4, dw + 14, 4, 0xb3a68d);                // step
+
+    // high windows, the wire-glass kind a gym has
+    [16, SW - 50].forEach(wx => {
+      px(gg, wx - 3, 74, 37, 26, 0x5c4630);
+      px(gg, wx, 77, 31, 20, 0x8fb7c4);
+      px(gg, wx, 77, 31, 7, 0xb4d6e0);
+      for (let gx = wx + 6; gx < wx + 31; gx += 6) px(gg, gx, 77, 1, 20, 0x5c4630, .45);
+      for (let gy = 83; gy < 97; gy += 6) px(gg, wx, gy, 31, 1, 0x5c4630, .45);
+      px(gg, wx - 5, 98, 41, 4, 0x7d6448);
+    });
+
+    gg.generateTexture('sportshall', SW, SH); gg.destroy();
+  }
+
+  {                                                      // goalpost
+    const gp = s.add.graphics();
+    gp.fillStyle(0x000000, .18); gp.fillEllipse(20, 52, 22, 5);
+    px(gp, 18, 16, 4, 36, 0xf2c744);                     // upright
+    px(gp, 18, 16, 2, 36, 0xffe08a);
+    px(gp, 6, 14, 28, 4, 0xf2c744);                      // crossbar
+    px(gp, 6, 14, 28, 2, 0xffe08a);
+    px(gp, 6, 0, 4, 16, 0xf2c744); px(gp, 6, 0, 2, 16, 0xffe08a);
+    px(gp, 30, 0, 4, 16, 0xf2c744); px(gp, 30, 0, 2, 16, 0xffe08a);
+    gp.generateTexture('goalpost', 40, 56); gp.destroy();
+  }
+
   /* --- decoration --- */
   let d = s.add.graphics();                              // bush
   d.fillStyle(0x000000, .18); d.fillEllipse(15, 20, 26, 6);
@@ -718,6 +860,14 @@ function create() {
     else              for (let y = ROAD_Y + 1; y <= dy; y++) { if (!WET[y][dx]) PAVED[y][dx] = true; }
   }
 
+  // ...and one for the props hall, which is wider, so its door sits further in.
+  {
+    const dx = Math.round(PROPS_PLOT.x + 2.5);
+    const dy = Math.round(PROPS_PLOT.y + 3.9);
+    if (dy <= ROAD_Y) for (let y = dy; y <= ROAD_Y; y++) { if (!WET[y][dx]) PAVED[y][dx] = true; }
+    else              for (let y = ROAD_Y + 1; y <= dy; y++) { if (!WET[y][dx]) PAVED[y][dx] = true; }
+  }
+
   const at = (grid, x, y) => (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) ? false : grid[y][x];
 
   for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) {
@@ -799,16 +949,22 @@ function create() {
     return img;
   };
 
-  // Nudged off the house plots - four of these used to grow through a wall.
+  // Nudged off the house plots - four of these used to grow through a wall,
+  // and then three more grew through the props hall, which is not in PLOTS
+  // and so was invisible to the first nudge. tests/test_parsers.py now checks
+  // every coordinate below against every building's footprint, because
+  // "nudged" is a thing someone remembers to do and a test is not.
   [[1,3],[4,1],[9,2],[20,2],[25,1],[34,1],[0,9],[36,4],
-   [2,16],[8,17],[17,21],[15,18],[22,20],[33,22],[31,15],[35,20],[36,16],[18,2],
-   [6,11],[21,9],[33,19],[10,15]]
+   [2,16],[8,17],[17,21],[15,18],[22,20],[24,21],[29,15],[37,18],[24,15],[18,2],
+   [7,11],[21,9],[13,16],[10,15]]
     .forEach(([tx,ty], i) => place(`tree${i % 3}`, tx, ty, 40, true, .78));
 
-  [[6,11],[12,11],[23,11],[29,11],[33,12],[3,12],[10,17],[14,20],[22,20],[28,18],[32,21],[16,20]]
+  // [32,21] stood exactly in front of the props hall's name plate, which then
+  // read "P    PROPS". Found by screenshotting the village, not by reading it.
+  [[6,11],[14,11],[23,11],[29,11],[32,12],[3,12],[10,17],[14,20],[22,20],[28,18],[31,22],[16,20]]
     .forEach(([tx,ty]) => place('bush', tx, ty, 8, false, .42));
 
-  [[7,16],[21,19],[30,16],[13,12],[26,12],[34,18]]
+  [[7,16],[21,19],[30,16],[13,12],[26,12],[37,21]]
     .forEach(([tx,ty]) => place('rock', tx, ty, 6, true, .34));
 
   // fence runs along the bottom edge of the north gardens
@@ -896,6 +1052,27 @@ function create() {
       tx: doorX, ty: doorY + 30, wait: 400 + Math.floor(rnd() * 1400), moving: false,
     });
   });
+
+  // ---- the props hall ----
+  {
+    const SW = 160, SH = 124;
+    const bx = PROPS_PLOT.x * T, by = PROPS_PLOT.y * T;
+    this.add.image(bx, by, 'sportshall').setOrigin(0, 0).setDepth(by + SH);
+    blocker(bx + SW / 2, by + SH - 26, SW - 12, 52);
+
+    this.add.image(bx - 10, by + SH + 10, 'goalpost').setOrigin(.5, 1).setDepth(by + SH + 12);
+    this.add.image(bx + SW + 10, by + SH + 10, 'goalpost').setOrigin(.5, 1).setDepth(by + SH + 12);
+
+    const plateW = Math.max(96, PROPS_DOOR.length * 10 + 22);
+    this.add.rectangle(bx + SW / 2, by + SH + 18, 6, 14, 0x7a5230).setDepth(by + SH + 24);
+    this.add.rectangle(bx + SW / 2, by + SH + 8, plateW, 20, 0xd9c9a3)
+      .setStrokeStyle(2, 0x8a7a5c).setDepth(by + SH + 25);
+    this.add.text(bx + SW / 2, by + SH + 8, PROPS_DOOR.toUpperCase(), {
+      fontFamily: 'ui-monospace,Menlo,monospace', fontSize: '12px', color: '#2b3a2e',
+    }).setOrigin(.5).setDepth(by + SH + 26);
+
+    doors.push({ name: PROPS_DOOR, x: bx + SW / 2, y: by + SH });
+  }
 
   if (!agents.length) {
     this.add.text(W/2, 7*T, 'No agents yet —\nadd one and a house appears here.', {
@@ -1041,6 +1218,9 @@ function update() {
 /* ---------------- the data panel ---------------- */
 
 function openPanel(name) {
+  // The hall is a door without an agent behind it. Checked before the lookup
+  // below, which would otherwise find nothing and silently do nothing.
+  if (name === PROPS_DOOR) return openPropsPanel();
   const a = (DATA.agents || []).find(x => x.name === name);
   if (!a) return;
   openAgent = name;
@@ -1089,14 +1269,14 @@ function openPanel(name) {
       <div id="scoutIdeas"><div class="muted">loading…</div></div>` : ''}
     ${a.name === 'emily' ? `<h2 style="font-size:15px;margin:18px 0 8px">The gallery</h2>
       <div id="emilyBuilds"><div class="muted">loading…</div></div>` : ''}
-    ${a.name === 'ace' ? `<div id="aceForecasts"></div><div id="aceLedger"><div class="muted">loading the ledger…</div></div>` : ''}
+    ${a.name === 'ace' ? `<div id="aceLedger"><div class="muted">loading the ledger…</div></div>` : ''}
     <button id="close">Close</button>`;
   $('card').className = isAce ? 'wide' : '';
   $('panel').style.display = 'flex';
   $('close').onclick = closePanel;
   if (a.name === 'scout') loadScoutIdeas();
   if (a.name === 'emily') loadEmilyBuilds();
-  if (a.name === 'ace') { loadAceForecasts(); loadAceLedger(); }
+  if (a.name === 'ace') loadAceLedger();
 }
 let ideaBusy = false;
 
@@ -1376,26 +1556,98 @@ function forecastCard(f){
   </div>`;
 }
 
-async function loadAceForecasts(){
-  const host = $('aceForecasts');
+/* ---------------- the props hall ----------------
+ * One screen per market. They were all on one scroll inside Ace's house,
+ * which put a quarterback's passing yards and a tight end's targets in the
+ * same list - seven different questions reading as one long answer. The tabs
+ * are built from the catalogue the forecaster writes, never from a list kept
+ * here: a market added in MARKETS has to appear here without anyone
+ * remembering to add it.
+ */
+
+let PROPS = null;          // the last payload, so switching tabs is instant
+let propsTab = null;
+
+function openPropsPanel(){
+  openAgent = PROPS_DOOR;
+  $('card').innerHTML = `
+    <h2>${esc(PROPS_DOOR)}</h2>
+    <div class="sub">model forecasts · no odds are held or shown</div>
+    <div id="propsBody"><div class="muted">loading the forecasts…</div></div>
+    <button id="close">Close</button>`;
+  $('card').className = 'wide';
+  $('panel').style.display = 'flex';
+  $('close').onclick = closePanel;
+  loadProps();
+}
+
+async function loadProps(){
+  const host = $('propsBody');
   if(!host) return;
-  let d;
   try{
     const r = await fetch('/api/ace/forecasts', {cache:'no-store'});
-    d = await r.json();
-  }catch(e){ host.innerHTML = ''; return; }
+    PROPS = await r.json();
+  }catch(e){
+    host.innerHTML = `<div class="muted">the forecasts could not be read.</div>`;
+    return;
+  }
+  if(!PROPS.available || !(PROPS.forecasts || []).length){
+    host.innerHTML = `<div class="muted">Nothing forecast yet. On the droplet:<br>
+      <code>python3 scripts/props-forecast.py forecast &lt;event id&gt;</code></div>`;
+    return;
+  }
+  const tabs = propsTabs();
+  if(!tabs.includes(propsTab)) propsTab = tabs[0] || null;
+  drawProps();
+}
 
-  if(!d.available || !d.forecasts.length){ host.innerHTML = ''; return; }
-  const c = d.counts;
-  host.innerHTML = `<div class="sect">Player forecasts · ${c.total}`
-    + (c.pending ? ` · ${c.pending} awaiting a result` : '')
-    + (c.graded ? ` · ${c.graded} graded` : '') + `</div>`
-    + `<div class="muted" style="margin-bottom:10px">Probabilities only — no odds are
-       held or shown${c.markets ? ` · ${c.markets} market${c.markets === 1 ? '' : 's'}` : ''}.
-       A percentage is what he does <em>when he plays</em>; PLAYED n/m marks the rows
-       where that is a different question from the one a book prices.
-       Grade them, then judge the calibration.</div>`
-    + `<div class="fcards">` + d.forecasts.map(forecastCard).join('') + `</div>`;
+// The tab order is the catalogue's order. Markets with no forecasts still get
+// a tab: "nobody qualified for this one today" and "this market does not
+// exist" are different, and a missing tab says the second.
+function propsTabs(){
+  const cat = Object.keys((PROPS && PROPS.markets) || {});
+  if(cat.length) return cat;
+  // No catalogue in the payload - an older forecasts.json. Fall back to what
+  // the rows themselves carry rather than showing no tabs at all.
+  return [...new Set((PROPS.forecasts || []).map(f => f.market))];
+}
+
+function propsPick(tab){ propsTab = tab; drawProps(); }
+
+function marketLabel(m){ return String(m || '').replace(/_/g, ' '); }
+
+function drawProps(){
+  const host = $('propsBody');
+  if(!host || !PROPS) return;
+  const tabs = propsTabs();
+  const rows = (PROPS.forecasts || []).filter(f => f.market === propsTab);
+  const spec = ((PROPS.markets || {})[propsTab]) || {};
+  const graded = rows.filter(f => f.actual !== null && f.actual !== undefined).length;
+
+  const bar = tabs.map(t => {
+    const n = (PROPS.forecasts || []).filter(f => f.market === t).length;
+    return `<button class="ptab${t === propsTab ? ' on' : ''}" onclick="propsPick('${esc(t)}')">`
+         + `${esc(marketLabel(t))}<span class="ptn">${n}</span></button>`;
+  }).join('');
+
+  const bars = Array.isArray(spec.thresholds)
+    ? spec.thresholds.map(t => `${t}+`).join(' · ') : '';
+
+  host.innerHTML = `<div class="ptabs">${bar}</div>`
+    + `<div class="sect">${esc(marketLabel(propsTab))}${bars ? ' · ' + esc(bars) : ''}${
+        spec.unit ? ' ' + esc(spec.unit) : ''}</div>`
+    + (rows.length
+        ? `<div class="muted" style="margin-bottom:10px">${rows.length} forecast${
+            rows.length === 1 ? '' : 's'}${graded ? ` · ${graded} graded` : ''}. Each
+            percentage carries its 90% interval — how far it moves when his own games
+            are resampled, so a small sample says so rather than reading like a big one.
+            A percentage is what he does <em>when he plays</em>; PLAYED n/m marks the rows
+            where that is a different question from the one a book prices.</div>`
+          + `<div class="fcards">` + rows.map(forecastCard).join('') + `</div>`
+        : `<div class="muted">Nobody on the fixtures forecast so far reaches
+           ${esc(marketLabel(propsTab))} in a quarter of his games. That is the filter
+           working rather than a gap — a market a player barely touches would print
+           four zeroes and bury the rows that mean something.</div>`);
 }
 
 async function loadAceLedger(){
