@@ -63,6 +63,8 @@ tp = _load("trend_probe", "trend-probe.py")
 # listing about three weeks old and every favs/day figure enormous.
 EPOCH_FLOOR = 1104537600          # 2005-01-01
 CANDIDATES = 12                   # Etsy calls per scan. 5 QPS, 5000 a day.
+LOOSE = 0.5                       # below this share of matching titles,
+                                  # a phrase is not comparable at all
 
 
 def age_days(row, now=None):
@@ -326,6 +328,27 @@ def cmd_scan(key, words):
         return 1
     usable.sort(key=lambda cm: -opportunity(cm[1]))
 
+    # LOOSELY MATCHED PHRASES COME OUT OF THE RANKING ENTIRELY.
+    #
+    # 'nail sticker japan' ranked third on 273 listings and the best
+    # favourites-per-view in the table - with 4% match. One of the
+    # twenty-five listings Etsy returned actually contained the phrase; the
+    # rest were generic nail stickers it fell back to. Its numbers describe
+    # a market nobody asked about.
+    #
+    # The warning about it printed BELOW the table, while the row itself sat
+    # near the top. Anyone reading a ranking reads the top of it. A number
+    # that cannot be compared must not be sorted alongside numbers that can.
+    loose = [(c, m) for c, m in usable
+             if m.get("match") is not None and m["match"] < LOOSE]
+    ranked = [cm for cm in usable if cm not in loose]
+    if not ranked:
+        print(f"\n  Every phrase came back loosely matched - Etsy returned "
+              f"listings that do\n  not contain the phrase asked about. "
+              f"There is nothing here to rank.",
+              file=sys.stderr)
+        ranked, loose = usable, []
+
     print(f"\n  RANKED - most demand per unit of competition first\n")
     # The match column is ALWAYS shown, never only when it trips a
     # threshold. A warning that appears below 50% and is silent above it
@@ -334,7 +357,7 @@ def cmd_scan(key, words):
     # distinguish them. A number every row is unambiguous.
     print(f"  {'phrase':<32}{'supply':>9}{'favs/day':>10}{'n':>4}"
           f"{'favs/view':>11}{'n':>4}{'match':>7}{'score':>9}")
-    for cand, m in usable:
+    for cand, m in ranked:
         match = m.get("match")
         shown = f"{match * 100:>5.0f}%" if match is not None else "    ?"
         print(f"  {cand[:31]:<32}{m['supply']:>9,}{m['heat']:>10.3f}"
@@ -342,20 +365,24 @@ def cmd_scan(key, words):
               f"{(m['pull'] if m['pull'] is not None else 0):>11.4f}"
               f"{m['pull_n']:>4}{shown:>7}{opportunity(m):>9.4f}")
 
-    thin = [(c, m) for c, m in usable
+    thin = [(c, m) for c, m in ranked
             if min(m["heat_n"], m["pull_n"]) < m["returned"]]
     if thin:
-        print(f"\n  The n columns are how many of the {usable[0][1]['returned']} "
-              f"returned listings each\n  median was actually computed from. "
-              f"Where they differ, the two numbers\n  describe different "
-              f"listings and should not be read against each other:")
+        # No count in this sentence. It used to say 'of the 25 returned
+        # listings', taken from the FIRST row - and 'nail sticker company'
+        # returned 17, not 25. The per-row numbers below carry it correctly;
+        # the header was the only thing generalising from one phrase.
+        print(f"\n  The n columns are how many of the listings Etsy returned "
+              f"each median\n  was actually computed from. Where they differ, "
+              f"the two numbers\n  describe different listings and should not "
+              f"be read against each other:")
         for c, m in thin:
             print(f"      {c:<32}favs/day from {m['heat_n']}, "
                   f"favs/view from {m['pull_n']}, of {m['returned']}")
 
-    best, bm = usable[0]
-    dead = [(c, m) for c, m in usable if opportunity(m) <= 0]
-    alive = [(c, m) for c, m in usable if opportunity(m) > 0]
+    best, bm = ranked[0]
+    dead = [(c, m) for c, m in ranked if opportunity(m) <= 0]
+    alive = [(c, m) for c, m in ranked if opportunity(m) > 0]
 
     # The first version divided by max(score, 1e-9) and printed
     # '19508025.0x' when the bottom phrase scored exactly zero. A ratio
@@ -378,23 +405,24 @@ def cmd_scan(key, words):
         print(f"  That is a finding, not a gap. People are listing into these "
               f"phrases\n  and nobody is saving the results.")
 
-    loose = [(c, m) for c, m in usable
-             if m.get("match") is not None and m["match"] < 0.5]
     if loose:
-        print(f"\n  READ THE SUPPLY COLUMN CAREFULLY for these - fewer than "
-              f"half the\n  listings Etsy returned actually contain the "
-              f"phrase, so the count is\n  the size of a looser market than "
-              f"the one asked about:")
+        print(f"\n  LEFT OUT OF THE RANKING ({len(loose)}) - fewer than half "
+              f"the listings Etsy\n  returned contain the phrase at all, so "
+              f"their numbers describe some\n  other market and cannot be "
+              f"compared with the rows above:")
         for c, m in loose:
-            print(f"      {c:<34}{m['match'] * 100:>3.0f}% of results match")
+            print(f"      {c:<32}{m['match'] * 100:>3.0f}% match, "
+                  f"{m['supply']:>8,} listings, would have scored "
+                  f"{opportunity(m):.4f}")
     else:
         print(f"\n  match is the share of returned listings whose title "
-              f"really contains\n  the phrase. All {len(usable)} are at or "
-              f"above 50%, so every supply count\n  above is the market that "
-              f"was actually asked about.")
+              f"really contains\n  the phrase. All {len(ranked)} are at or "
+              f"above {LOOSE:.0%}, so every supply count\n  above is the "
+              f"market that was actually asked about.")
 
-    print(f"\n  A comparison between these {len(usable)} phrases and nothing "
-          f"more.\n  It is not a sales forecast.")
+    print(f"\n  A comparison between "
+          f"{'these ' + str(len(ranked)) + ' phrases' if len(ranked) > 1 else 'one phrase'}"
+          f" and nothing more.\n  It is not a sales forecast.")
     skipped = len(scored) - len(usable)
     if skipped:
         print(f"\n  {skipped} phrase(s) left out of the ranking: a field the "

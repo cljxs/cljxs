@@ -7965,10 +7965,20 @@ class ARatioAgainstZeroIsNotALargeNumber(unittest.TestCase):
                 self.NOW, phrase="fall nail stickers"),
         }
         said = self.scan_output(table)
-        self.assertIn("READ THE SUPPLY COLUMN CAREFULLY", said)
-        self.assertIn("fall sticker emojis", said)
-        self.assertNotIn("fall nail stickers                  ", said.split(
-            "READ THE SUPPLY COLUMN CAREFULLY")[1])
+        head, _, tail = said.partition("LEFT OUT OF THE RANKING")
+        self.assertTrue(tail, said)
+        # The loose phrase must not appear in the ranked table at all - it
+        # ranked THIRD in the live scan on 4% match, and anyone reading a
+        # ranking reads the top of it.
+        ranked = head.split("RANKED")[1]
+        self.assertNotIn("fall sticker emojis", ranked)
+        self.assertIn("fall nail stickers", ranked)
+        # But it is still shown, with what it would have scored, because
+        # deleting it would hide that the check changed the answer.
+        self.assertIn("fall sticker emojis", tail)
+        # The NUMBER, not just the words: it would have scored 0.0980 and
+        # taken first place, which is the whole reason to print it.
+        self.assertRegex(tail, r"would have scored 0\.0\d\d\d")
 
     def test_the_match_number_is_shown_on_every_row_not_just_bad_ones(self):
         # A warning that only appears below a threshold cannot be told apart
@@ -8037,6 +8047,112 @@ class ARatioAgainstZeroIsNotALargeNumber(unittest.TestCase):
         self.assertEqual(m["pull_n"], 1)          # one row short
         said = self.scan_output({"fall sticker roll": m})
         self.assertIn("should not be read against each other", said)
+
+    def test_a_loose_phrase_cannot_take_the_top_of_the_ranking(self):
+        # The live scan of 'nail sticker' put 'nail sticker japan' THIRD on
+        # 4% match - one of 25 returned listings contained the phrase - with
+        # the best favourites-per-view in the table. The warning printed
+        # below the table while the row sat near the top of it.
+        table = {
+            "nail sticker japan": self.m.measure(
+                {"count": 273, "results": self.rows(50, views=100,
+                                                    title="Nail Decal Set")},
+                self.NOW, phrase="nail sticker japan"),
+            "nail sticker glue": self.m.measure(
+                {"count": 404, "results": self.rows(2, views=100,
+                                                    title="Nail Sticker Glue")},
+                self.NOW, phrase="nail sticker glue"),
+        }
+        said = self.scan_output(table)
+        ranked = said.split("RANKED")[1].split("LEFT OUT")[0]
+        first_row = [l for l in ranked.splitlines()
+                     if "0.0" in l and "phrase" not in l][0]
+        self.assertIn("nail sticker glue", first_row)
+        self.assertNotIn("nail sticker japan", ranked)
+        # And the sentence underneath must name the ranked winner, not the
+        # loose phrase that was excluded from the table above it.
+        summary = said.split("LEFT OUT")[0]
+        self.assertNotIn("'nail sticker japan' has", summary)
+
+    def test_the_summary_names_the_ranked_winner_not_the_excluded_one(self):
+        # Needs TWO survivors, or the ratio sentence never prints and a
+        # mutation taking `best` from the unfiltered list stays invisible.
+        table = {
+            "nail sticker japan": self.m.measure(      # loose, would win
+                {"count": 273, "results": self.rows(50, views=100,
+                                                    title="Nail Decal Set")},
+                self.NOW, phrase="nail sticker japan"),
+            "nail sticker glue": self.m.measure(
+                {"count": 404, "results": self.rows(8, views=100,
+                                                    title="Nail Sticker Glue")},
+                self.NOW, phrase="nail sticker glue"),
+            "nail sticker kit": self.m.measure(
+                {"count": 382, "results": self.rows(2, views=100,
+                                                    title="Nail Sticker Kit")},
+                self.NOW, phrase="nail sticker kit"),
+        }
+        said = self.scan_output(table)
+        self.assertIn("'nail sticker glue' has", said)
+        self.assertNotIn("'nail sticker japan' has", said)
+        self.assertIn("nail sticker kit", said.split(" has ")[1])
+
+    def test_an_excluded_phrase_is_not_the_ratio_denominator(self):
+        # The other end of the same mistake. When the loose phrase scores
+        # LOWEST rather than highest, taking it as 'the lowest phrase here
+        # that scored at all' quotes a ratio against a market nobody
+        # searched.
+        table = {
+            "nail sticker glue": self.m.measure(
+                {"count": 404, "results": self.rows(50, views=100,
+                                                    title="Nail Sticker Glue")},
+                self.NOW, phrase="nail sticker glue"),
+            "nail sticker kit": self.m.measure(
+                {"count": 382, "results": self.rows(20, views=100,
+                                                    title="Nail Sticker Kit")},
+                self.NOW, phrase="nail sticker kit"),
+            "nail sticker japan": self.m.measure(     # loose, scores lowest
+                {"count": 273, "results": self.rows(1, views=100,
+                                                    title="Nail Decal Set")},
+                self.NOW, phrase="nail sticker japan"),
+        }
+        said = self.scan_output(table)
+        ratio = said.split(" has ")[1].split("\n\n")[0]
+        self.assertIn("nail sticker kit", ratio)
+        self.assertNotIn("nail sticker japan", ratio)
+
+    def test_an_excluded_phrase_is_not_reported_as_a_dead_market(self):
+        # A loosely matched phrase scoring zero says nothing about the
+        # phrase - Etsy never searched for it. Listing it under SCORED ZERO
+        # would report a dead market that was never measured.
+        table = {
+            "nail sticker japan": self.m.measure(
+                {"count": 273, "results": self.rows(0, views=100,
+                                                    title="Nail Decal Set")},
+                self.NOW, phrase="nail sticker japan"),
+            "nail sticker glue": self.m.measure(
+                {"count": 404, "results": self.rows(8, views=100,
+                                                    title="Nail Sticker Glue")},
+                self.NOW, phrase="nail sticker glue"),
+        }
+        said = self.scan_output(table)
+        zeros = said.split("SCORED ZERO")[1] if "SCORED ZERO" in said else ""
+        self.assertNotIn("nail sticker japan", zeros)
+        self.assertIn("nail sticker japan", said.split("LEFT OUT")[1])
+
+    def test_the_n_footnote_does_not_generalise_from_one_row(self):
+        # It said 'of the 25 returned listings', taken from the first row.
+        # 'nail sticker company' returned 17.
+        short = [{"original_creation_timestamp": int(self.NOW - 100 * 86400),
+                  "num_favorers": 10, "views": 0, "title": "fall sticker roll"},
+                 {"original_creation_timestamp": int(self.NOW - 100 * 86400),
+                  "num_favorers": 10, "views": 50, "title": "fall sticker roll"}]
+        table = {"fall sticker roll": self.m.measure(
+            {"count": 272, "results": short}, self.NOW,
+            phrase="fall sticker roll")}
+        said = self.scan_output(table)
+        self.assertIn("how many of the listings Etsy returned", said)
+        self.assertNotIn("of the 25 returned listings", said)
+        self.assertIn("of 2", said)
 
     def test_everything_zero_says_so_rather_than_ranking_nothing(self):
         table = {
