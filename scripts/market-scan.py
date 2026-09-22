@@ -299,12 +299,19 @@ def cmd_scan(key, words):
     usable.sort(key=lambda cm: -opportunity(cm[1]))
 
     print(f"\n  RANKED - most demand per unit of competition first\n")
+    # The match column is ALWAYS shown, never only when it trips a
+    # threshold. A warning that appears below 50% and is silent above it
+    # cannot be told apart from a warning that is broken - the absence means
+    # 'all fine' and 'the check never ran' equally, and the reader cannot
+    # distinguish them. A number every row is unambiguous.
     print(f"  {'phrase':<34}{'supply':>10}{'favs/day':>11}"
-          f"{'favs/view':>11}{'score':>9}")
+          f"{'favs/view':>11}{'match':>7}{'score':>9}")
     for cand, m in usable:
+        match = m.get("match")
+        shown = f"{match * 100:>6.0f}%" if match is not None else "     ?"
         print(f"  {cand[:33]:<34}{m['supply']:>10,}{m['heat']:>11.3f}"
               f"{(m['pull'] if m['pull'] is not None else 0):>11.4f}"
-              f"{opportunity(m):>9.4f}")
+              f"{shown:>7}{opportunity(m):>9.4f}")
 
     best, bm = usable[0]
     dead = [(c, m) for c, m in usable if opportunity(m) <= 0]
@@ -340,6 +347,11 @@ def cmd_scan(key, words):
               f"the one asked about:")
         for c, m in loose:
             print(f"      {c:<34}{m['match'] * 100:>3.0f}% of results match")
+    else:
+        print(f"\n  match is the share of returned listings whose title "
+              f"really contains\n  the phrase. All {len(usable)} are at or "
+              f"above 50%, so every supply count\n  above is the market that "
+              f"was actually asked about.")
 
     print(f"\n  A comparison between these {len(usable)} phrases and nothing "
           f"more.\n  It is not a sales forecast.")

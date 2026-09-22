@@ -7963,6 +7963,24 @@ class ARatioAgainstZeroIsNotALargeNumber(unittest.TestCase):
         self.assertNotIn("fall nail stickers                  ", said.split(
             "READ THE SUPPLY COLUMN CAREFULLY")[1])
 
+    def test_the_match_number_is_shown_on_every_row_not_just_bad_ones(self):
+        # A warning that only appears below a threshold cannot be told apart
+        # from a warning that is broken: the reader sees silence either way.
+        # The real run printed no warning at all, and there was no way to
+        # know whether that meant 'all fine' or 'never ran'.
+        table = {
+            "fall nail stickers": self.m.measure(
+                {"count": 1260, "results": self.rows(10, title="Fall Nail Stickers Set")},
+                self.NOW, phrase="fall nail stickers"),
+            "fall sticker roll": self.m.measure(
+                {"count": 272, "results": self.rows(5, title="Fall Sticker Roll")},
+                self.NOW, phrase="fall sticker roll"),
+        }
+        said = self.scan_output(table)
+        self.assertIn("match", said)
+        self.assertEqual(said.count("100%"), 2, said)
+        self.assertIn("at or above 50%", said)
+
     def test_everything_zero_says_so_rather_than_ranking_nothing(self):
         table = {
             "fall sticker pack": self.m.measure(
