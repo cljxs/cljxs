@@ -6871,10 +6871,21 @@ class GettingOneKeyOntoTheDroplet(unittest.TestCase):
     def good_key(self):
         return "yg4czc1wc6jkiyyzxg29wj9q" + ":" + "0a1b2c3d4e5f"
 
-    def run_with(self, value, agent="scout", name="ETSY_API_KEY"):
+    def run_with(self, *answers, agent="scout", name="ETSY_API_KEY"):
+        """Feed the prompts in order. It asks twice for a two-part key, and
+        retries in-process rather than making the user re-run the command -
+        which is when the clipboard stopped holding the key."""
         real_argv, real_getpass = sys.argv, self.m.getpass.getpass
         sys.argv = ["set-credential.py", agent, name]
-        self.m.getpass.getpass = lambda prompt="": value
+        queue = list(answers)
+        # The prompts themselves are recorded. getpass writes them to the
+        # terminal rather than stdout, so asserting on captured output would
+        # be testing this stub rather than what the user is asked.
+        self.prompts = []
+        def ask(prompt=""):
+            self.prompts.append(prompt)
+            return queue.pop(0) if queue else answers[-1]
+        self.m.getpass.getpass = ask
         out, err = io.StringIO(), io.StringIO()
         try:
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -6890,15 +6901,73 @@ class GettingOneKeyOntoTheDroplet(unittest.TestCase):
         # was meant to run after it.
         mangled = ("yg4czc1wc6jkiyyzxg29wj9q: cd /root/ecosystem && python3 -c "
                    "\" import pathlib\"")
-        code, said = self.run_with(mangled)
+        code, said = self.run_with(mangled, mangled, mangled)
         self.assertEqual(code, 2)
-        self.assertIn("two things got pasted at once", said)
+        self.assertIn("COMMAND, not the key", said,
+                      "it should name the clipboard, not just say 'a space'")
         self.assertFalse(self.path.exists(), "nothing should have been written")
 
-    def test_a_keystring_with_no_secret_is_refused(self):
-        code, said = self.run_with("yg4czc1wc6jkiyyzxg29wj9q")
+    def test_the_command_in_the_clipboard_is_named_as_such(self):
+        # Five real attempts failed this way. "it has a space in it" is true
+        # and useless; "your clipboard still holds the command" is the fix.
+        for pasted in ("cd /root/ecosystem && git pull",
+                       "python3 scripts/set-credential.py scout ETSY_API_KEY",
+                       "python3 scripts/etsy-probe.py ping"):
+            with self.subTest(pasted=pasted):
+                _code, said = self.run_with(pasted, pasted, pasted)
+                self.assertIn("clipboard", said)
+
+    def test_it_retries_without_re_running_the_command(self):
+        # THE fix. Every retry used to mean pasting the command again, which
+        # is exactly when the clipboard stopped holding the key.
+        code, said = self.run_with(
+            "python3 scripts/set-credential.py scout ETSY_API_KEY",
+            "yg4czc1wc6jkiyyzxg29wj9q", "0a1b2c3d4e5f")
+        self.assertEqual(code, 0, said)
+        self.assertIn("no need to re-run the command", said)
+        self.assertIn(f"ETSY_API_KEY={self.good_key()}", self.path.read_text())
+
+    def test_it_gives_up_rather_than_looping_forever(self):
+        code, said = self.run_with(*(["nonsense with spaces"] * 9))
         self.assertEqual(code, 2)
-        self.assertIn("colon", said)
+        self.assertIn("type it instead", said)
+        self.assertIn("--show", said)
+
+    def test_the_two_halves_are_asked_for_separately(self):
+        # The colon is put in by code that cannot forget it. Asking someone to
+        # assemble "keystring:shared_secret" from a web page on a tablet, one
+        # clipboard at a time, failed five times out of five.
+        code, said = self.run_with("yg4czc1wc6jkiyyzxg29wj9q", "0a1b2c3d4e5f")
+        self.assertEqual(code, 0, said)
+        self.assertEqual(len(self.prompts), 2, self.prompts)
+        self.assertIn("keystring", self.prompts[0])
+        self.assertIn("shared secret", self.prompts[1])
+        self.assertIn(f"ETSY_API_KEY={self.good_key()}", self.path.read_text())
+
+    def test_an_empty_half_is_refused(self):
+        code, _said = self.run_with("yg4czc1wc6jkiyyzxg29wj9q", "", "", "")
+        self.assertEqual(code, 2)
+        self.assertFalse(self.path.exists())
+
+    def test_an_empty_half_is_refused_even_with_no_shape_to_catch_it(self):
+        # For ETSY_API_KEY the shape check happens to catch "keystring:" on
+        # its way past, so the empty-half guard never fires and a mutation
+        # removing it went unnoticed. A two-part key with no known shape is
+        # the case that guard is actually for.
+        self.m.PARTS["TWO_PART_TOKEN"] = ("first part", "second part")
+        self.addCleanup(self.m.PARTS.pop, "TWO_PART_TOKEN", None)
+        code, _said = self.run_with("aaaaaaaaaaaa", "", "", "",
+                                    name="TWO_PART_TOKEN")
+        self.assertEqual(code, 2)
+        self.assertFalse(self.path.exists())
+
+    def test_the_whole_key_pasted_at_the_first_prompt_is_taken(self):
+        # If it is already in hand, do not ask for a half of it.
+        code, said = self.run_with(self.good_key())
+        self.assertEqual(code, 0, said)
+        self.assertEqual(len(self.prompts), 1,
+                         "it should not ask for a second half it already has")
+        self.assertIn(f"ETSY_API_KEY={self.good_key()}", self.path.read_text())
 
     def test_a_shell_operator_is_refused(self):
         # No spaces in these, deliberately. The first version of this test
@@ -6962,8 +7031,10 @@ class GettingOneKeyOntoTheDroplet(unittest.TestCase):
         # getpass, not input(). The last key reached a screenshot because the
         # prompt echoed it.
         src = (SCRIPTS / "set-credential.py").read_text()
-        self.assertIn("getpass.getpass(", src)
-        self.assertNotIn("input(", src)
+        self.assertIn("getpass.getpass", src)
+        # input() is reachable, but only behind --show, for someone typing it
+        # by hand who needs to see what they typed.
+        self.assertIn("asker = input if show else getpass.getpass", src)
 
     # --- being told what went wrong -----------------------------------------
 

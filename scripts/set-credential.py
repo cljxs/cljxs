@@ -60,7 +60,38 @@ SHAPES = {
                      "    Both are on your app's page in the Etsy developer portal."),
 }
 
+# Keys that are really two values. ASKED FOR SEPARATELY, and joined here.
+#
+# Five attempts to paste "keystring:shared_secret" failed in two alternating
+# ways: no colon, or the whole thing replaced by the command that was still in
+# the clipboard. Both are the same root cause - the person is asked to
+# assemble a string out of two values from a web page, on a tablet, one
+# clipboard at a time, while the clipboard also holds the command they had to
+# paste to get here. So stop asking. Two prompts, one value each, and the
+# colon is put in by code that cannot forget it.
+PARTS = {
+    "ETSY_API_KEY": ("keystring", "shared secret"),
+}
+
+# Things that are obviously this tool's own instructions rather than a secret.
+# Worth naming exactly, because "it has a space in it" does not tell you that
+# your clipboard still holds the command.
+OURS = re.compile(r"set-credential|etsy-probe|python3|/root/ecosystem|git pull",
+                  re.I)
+
+ATTEMPTS = 3
+
 MIN_LEN, MAX_LEN = 8, 400
+
+
+def clean(raw):
+    """Whitespace, wrapping quotes and a stray trailing colon, all removed.
+
+    A tablet paste arrives with a newline on the end often enough that
+    refusing it would be pedantry rather than safety.
+    """
+    v = (raw or "").strip().strip('"').strip("'").strip()
+    return v.rstrip(":").lstrip(":")
 
 
 def problems(name, value):
@@ -73,6 +104,11 @@ def problems(name, value):
     if len(value) > MAX_LEN:
         out.append(f"it is {len(value)} characters - something else got pasted "
                    f"in with it")
+    if OURS.search(value):
+        out.append("that is the COMMAND, not the key - your clipboard still "
+                   "holds\n      what you pasted to get here. Copy the value "
+                   "from Etsy, then\n      answer this prompt.")
+        return out                  # naming it once is enough
     for pattern, why in NONSENSE:
         if pattern.search(value):
             out.append(why)
@@ -119,22 +155,61 @@ def main():
               file=sys.stderr)
         return 1
 
-    # Hidden, because the last one ended up in a screenshot.
-    try:
-        value = getpass.getpass(f"paste {name} (it will not be shown), then Enter: ")
-    except (EOFError, KeyboardInterrupt):
-        print("\nnothing written.", file=sys.stderr)
-        return 1
-    value = value.strip()
+    show = "--show" in sys.argv
+    parts = PARTS.get(name)
+    asker = input if show else getpass.getpass
 
-    found = problems(name, value)
-    if found:
-        print(f"\nnot written - that does not look like a {name}:", file=sys.stderr)
+    # Retries happen HERE, not by running the command again. Re-running means
+    # pasting the command again, which is exactly when the clipboard stops
+    # holding the key - five attempts died that way.
+    value = None
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            if parts:
+                print(f"\n{name} is two values from your Etsy app page. "
+                      f"One at a time.")
+                first = clean(asker(f"  1/2  {parts[0]}: "))
+                # Checked BEFORE asking for the second half. Asking for a
+                # shared secret after the keystring prompt has plainly
+                # received a shell command wastes the one thing in short
+                # supply here, which is the person's patience.
+                bad = problems("", first)
+                if bad:
+                    value, found = first, bad
+                elif ":" in first:
+                    # The whole colon-joined key arrived at prompt one. Take
+                    # it rather than asking for a half already in hand.
+                    value, found = first, problems(name, first)
+                else:
+                    second = clean(asker(f"  2/2  {parts[1]}: "))
+                    bad = problems("", second)
+                    value = f"{first}:{second}" if first and second else ""
+                    found = bad or problems(name, value)
+            else:
+                value = clean(asker(f"paste {name}"
+                                    f"{'' if show else ' (it will not be shown)'}"
+                                    f", then Enter: "))
+                found = problems(name, value)
+        except (EOFError, KeyboardInterrupt):
+            print("\nnothing written.", file=sys.stderr)
+            return 1
+
+        if not found:
+            break
+        print(f"\n  that does not look like a {name}:", file=sys.stderr)
         for p in found:
-            print(f"    {p}", file=sys.stderr)
-        print(f"\n  Nothing was saved and nothing was changed. Run it again.",
-              file=sys.stderr)
-        return 2
+            print(f"    - {p}", file=sys.stderr)
+        if attempt < ATTEMPTS:
+            print(f"\n  Nothing was written. Try again ({attempt} of "
+                  f"{ATTEMPTS}) - no need to re-run the command.\n",
+                  file=sys.stderr)
+        else:
+            print(f"\n  Giving up after {ATTEMPTS} tries. Nothing was written "
+                  f"and nothing changed.\n"
+                  f"  If pasting will not work, type it instead - the two "
+                  f"values are short.\n"
+                  f"  Add --show to see what you are typing.", file=sys.stderr)
+            return 2
 
     count = write(path, name, value)
     print(f"\nwrote {name} to {path}")
