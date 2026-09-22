@@ -1245,25 +1245,33 @@ class ApparelIsCutOutBeforeItIsUploaded(unittest.TestCase):
         self.pf = load("emily_printify", "emily-printify.py")
 
     def test_the_hoodie_entry_saved_before_the_flag_existed(self):
-        # No "cutout" key - it was picked yesterday. Inferred from the sizes.
+        # No "cutout" key - it was picked yesterday, and it still gets one.
         self.assertTrue(self.pf.needs_cutout(
             {"variant_titles": ["Black / S", "Navy / 2XL", "Maroon / 5XL"]}))
 
-    def test_stickers_are_left_alone(self):
-        # Die-cut already; an opaque square is correct for them.
-        self.assertFalse(self.pf.needs_cutout(
+    def test_stickers_are_cut_out_too(self):
+        # This test used to assert the opposite, with the comment "die-cut
+        # already; an opaque square is correct for them". That was the bug,
+        # written down as a guarantee - and it held the wrong answer in place
+        # while a real sticker came back as a disc with the whole square
+        # printed inside it. A die cut follows the artwork's transparency;
+        # given an opaque square it has nothing to follow.
+        self.assertTrue(self.pf.needs_cutout(
             {"variant_titles": ['2" x 2"', '4" x 4"', '5.5" x 5.5"']}))
 
-    def test_an_explicit_flag_beats_the_inference(self):
+    def test_an_explicit_flag_beats_the_default(self):
         self.assertFalse(self.pf.needs_cutout({"cutout": False,
                                                "variant_titles": ["Black / S"]}))
         self.assertTrue(self.pf.needs_cutout({"cutout": True,
                                               "variant_titles": ['2" x 2"']}))
 
-    def test_an_empty_entry_does_not_crash(self):
+    def test_an_empty_entry_does_not_crash_and_gets_the_cutout(self):
+        # Silence used to mean "leave it opaque". It means "cut it out" now,
+        # which is the safe way round: a product type added next year is
+        # opaque-by-accident under the old default.
         for entry in ({}, None, {"variant_titles": []}):
             with self.subTest(entry=entry):
-                self.assertFalse(self.pf.needs_cutout(entry))
+                self.assertTrue(self.pf.needs_cutout(entry))
 
     def test_draft_refuses_rather_than_uploading_the_opaque_file(self):
         src = (SCRIPTS / "emily-printify.py").read_text()
@@ -6417,3 +6425,75 @@ class APhotographIsNotAPrintFile(unittest.TestCase):
         # The direction is added to her idea, not instead of it.
         self.assertTrue(self.ea.directed("a fox in a scarf")
                         .startswith("a fox in a scarf"))
+
+
+class ADieCutFollowsTransparency(unittest.TestCase):
+    """The sticker came back as a disc with the whole square printed inside it.
+
+    A cream band straight across, white in the corners, the leaf somewhere in
+    the middle. needs_cutout() answered "a sticker is die-cut, so an opaque
+    square is fine" and skipped the background removal - but the die cut has
+    nothing to follow except the artwork's transparency. Given an opaque
+    square it falls back to its own shape and prints everything inside it.
+
+    It looked right in every thumbnail, because a thumbnail of a square IS a
+    square. It only showed up in Printify's mockup library, on a laptop lid.
+
+    The default inverts: cut the background out unless the catalogue entry
+    says this product prints one. That is the safe way round - a product type
+    added next year is opaque-by-accident under the old rule and
+    transparent-by-default under this one.
+    """
+
+    def setUp(self):
+        self.m = load("emily_printify4", "emily-printify.py")
+
+    def test_a_sticker_needs_its_background_removed(self):
+        # The exact entry that shipped the bug: sticker sizes, no garment
+        # sizes for the old rule to infer from.
+        self.assertTrue(self.m.needs_cutout(
+            {"variant_titles": ['2" × 2"', '3" × 3"', '4" × 4"']}))
+
+    def test_a_garment_still_does(self):
+        self.assertTrue(self.m.needs_cutout(
+            {"variant_titles": ["Black / S", "Black / M", "Black / 2XL"]}))
+
+    def test_an_entry_that_says_nothing_gets_the_cutout(self):
+        # Silence is the safe answer, not the old one.
+        self.assertTrue(self.m.needs_cutout({}))
+        self.assertTrue(self.m.needs_cutout(None))
+
+    def test_a_product_that_really_prints_its_background_can_say_so(self):
+        self.assertFalse(self.m.needs_cutout(
+            {"cutout": False, "variant_titles": ['24" × 36"']}))
+
+    def test_pick_records_that_choice_and_only_that_choice(self):
+        # Absent means the default. Writing "cutout": true on every entry
+        # would freeze today's default into every catalogue row, so changing
+        # it later would change nothing.
+        src = (SCRIPTS / "emily-printify.py").read_text()
+        body = src.split("def cmd_pick(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn('cat[a.product]["cutout"] = False', body)
+        self.assertNotIn('"cutout": True', body)
+
+    def test_the_flag_exists_to_set_it(self):
+        r = subprocess.run([sys.executable, str(SCRIPTS / "emily-printify.py"),
+                            "pick", "--help"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("--no-cutout", r.stdout)
+
+    def test_the_draft_no_longer_calls_everything_apparel(self):
+        # The message ran for garments only when it was written. It runs for
+        # stickers now, and "sticker is apparel" is the kind of line that
+        # makes someone distrust the rest of the output.
+        src = (SCRIPTS / "emily-printify.py").read_text()
+        body = src.split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
+        self.assertNotIn("is apparel", body)
+
+    def test_a_cutout_that_fails_still_stops_the_draft(self):
+        # Unchanged, and worth pinning: uploading the opaque file instead is
+        # exactly how this shipped.
+        src = (SCRIPTS / "emily-printify.py").read_text()
+        body = src.split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
+        after = body[body.index("if needs_cutout(cat):"):]
+        self.assertIn("sys.exit(1)", after[:after.index("upload_from = cut")])

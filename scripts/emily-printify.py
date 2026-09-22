@@ -530,6 +530,10 @@ def cmd_pick(a):
         "variant_titles": [v.get("title") for v in chosen],
         "chosen_at": _now(),
     }
+    # Recorded only when asked for. Absent means the default, and the default
+    # is to cut the background out - see needs_cutout().
+    if getattr(a, "no_cutout", False):
+        cat[a.product]["cutout"] = False
     CATALOG.parent.mkdir(parents=True, exist_ok=True)
     CATALOG.write_text(json.dumps(cat, indent=1) + "\n")
     print(f"saved '{a.product}' -> blueprint {a.blueprint}, provider {a.provider}, "
@@ -560,21 +564,27 @@ def size_of(title):
 
 
 def needs_cutout(entry):
-    """Does this product need a transparent background?
+    """Does this product need a transparent background? Yes, unless told.
 
-    A sticker is die-cut, so an opaque square is fine. A garment prints the
-    background as a visible rectangle - a white box on a black hoodie. Emily
-    generates opaque art, so without this step the drafted product is wrong in
-    a way that looks fine in a thumbnail and arrives wrong on the doorstep.
+    This used to answer "a sticker is die-cut, so an opaque square is fine",
+    and infer apparel from whether the variants carried garment sizes. Both
+    halves were wrong and a real product showed how.
 
-    Decided once, from the catalogue entry: an explicit "cutout" if pick set
-    one, otherwise inferred from whether the variants carry garment sizes. The
-    hoodie entry was saved before the flag existed, so the inference is what
-    covers it.
+    A die cut follows the artwork's TRANSPARENCY. Given an opaque square, the
+    cut has nothing to follow, so Printify falls back to its own shape and
+    prints the whole square inside it: the maple leaf came back as a disc with
+    a cream band straight across it and white in the corners. It looked right
+    in every thumbnail, because a thumbnail of a square IS a square.
+
+    So the default inverts. A background that is meant to print is the unusual
+    case and says so - `pick --no-cutout` records it on the catalogue entry.
+    Silence now means "cut it out", which is the safe way round: a new product
+    type added next year is opaque-by-accident under the old default and
+    transparent-by-default under this one.
     """
     if "cutout" in (entry or {}):
         return bool(entry["cutout"])
-    return any(size_of(t) for t in (entry or {}).get("variant_titles") or [])
+    return True
 
 
 def colour_of(title):
@@ -835,14 +845,17 @@ def cmd_draft(a):
     upload_from = design
     if needs_cutout(cat):
         cut = d / "design-cutout.png"
-        print(f"{product_type} is apparel - cutting the background out first ...")
+        print(f"cutting the background out of {design.name} so the print has "
+              f"none ...")
         r = subprocess.run([sys.executable, str(ko), str(design), str(cut)],
                            capture_output=True, text=True)
         sys.stdout.write(r.stdout)
         if r.returncode != 0:
             sys.stderr.write(r.stderr)
             print(f"\nnot drafting: the artwork cannot be cut out, and an opaque "
-                  f"file prints its background as a rectangle on the garment.\n"
+                  f"file prints its\n  background - as a rectangle on a garment, "
+                  f"and as whatever shape the die cut\n  falls back to on a "
+                  f"sticker.\n"
                   f"  Regenerate the art on a plain, even background.", file=sys.stderr)
             sys.exit(1)
         upload_from = cut
@@ -1084,6 +1097,10 @@ def main():
     p.add_argument("--variants", default=""); p.add_argument("--limit", type=int, default=12)
     p.add_argument("--colors", "--colours", default="", dest="colors",
                    help='comma-separated colour names, e.g. --colors "Black,Navy"')
+    p.add_argument("--no-cutout", dest="no_cutout", action="store_true",
+                   help="this product prints its background - a poster, an "
+                        "all-over print. Everything else gets the background "
+                        "removed before upload.")
     p.add_argument("--alias", default="",
                    help="other words that mean this product, comma-separated")
     p.set_defaults(fn=cmd_pick)
