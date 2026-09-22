@@ -7867,3 +7867,160 @@ class TheScanSpendsItsEtsyCallsOnTheBestEvidence(unittest.TestCase):
         picked = self.m.pick("fall sticker", found)
         self.assertEqual(len(picked), len(set(picked)))
         self.assertEqual(picked.count("fall nail stickers"), 1)
+
+
+class ARatioAgainstZeroIsNotALargeNumber(unittest.TestCase):
+    """The summary line market-scan.py printed on its first real run:
+
+        'fall nail stickers' has 19508025.0x the demand per unit of
+        competition that 'fall sticker pack' does.
+
+    'fall sticker pack' scored exactly 0.0000 - 5,536 listings and not one
+    favourite a day across the top 25 - and the code divided by
+    max(score, 1e-9). Nineteen and a half million is not a large ratio; it
+    is not a ratio. Printed to one decimal place it reads like a
+    measurement, which is worse than printing nothing.
+
+    The zero is the actual finding, and it now gets said out loud.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("market_scan", SCRIPTS / "market-scan.py")
+
+    NOW = 1758500000.0
+
+    def rows(self, favs, views=500, days=100, title="fall sticker"):
+        return [{"original_creation_timestamp": int(self.NOW - days * 86400),
+                 "num_favorers": favs, "views": views, "title": title,
+                 "price": {"amount": 499, "divisor": 100}}]
+
+    def scan_output(self, table):
+        """Run cmd_scan against canned Etsy answers and capture what it says."""
+        mod = self.m
+        real_expand, real_fetch, real_sleep = mod.tp.expand, mod.fetch, time.sleep
+        mod.tp.expand = lambda phrase, **kw: ({c: i for i, c in enumerate(table)}, [])
+        mod.fetch = lambda key, cand: (table[cand], None)
+        time.sleep = lambda *_a: None
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                mod.cmd_scan("k:s", ["fall", "sticker"])
+        finally:
+            mod.tp.expand, mod.fetch = real_expand, real_fetch
+            time.sleep = real_sleep
+        return buf.getvalue()
+
+    def test_no_ratio_is_printed_against_a_zero(self):
+        table = {
+            "fall nail stickers": self.m.measure(
+                {"count": 1260, "results": self.rows(20)}, self.NOW),
+            "fall sticker pack": self.m.measure(
+                {"count": 5536, "results": self.rows(0)}, self.NOW),
+        }
+        said = self.scan_output(table)
+        self.assertNotIn("19508025", said)
+        self.assertNotRegex(said, r"\d{5,}\.\dx")
+
+    def test_the_zero_is_reported_as_the_finding_it_is(self):
+        table = {
+            "fall nail stickers": self.m.measure(
+                {"count": 1260, "results": self.rows(20)}, self.NOW),
+            "fall sticker pack": self.m.measure(
+                {"count": 5536, "results": self.rows(0)}, self.NOW),
+        }
+        said = self.scan_output(table)
+        self.assertIn("SCORED ZERO", said)
+        self.assertIn("fall sticker pack", said)
+        self.assertIn("5,536", said)
+
+    def test_a_ratio_between_two_real_scores_is_still_printed(self):
+        table = {
+            "fall nail stickers": self.m.measure(
+                {"count": 1000, "results": self.rows(40)}, self.NOW),
+            "fall sticker roll": self.m.measure(
+                {"count": 1000, "results": self.rows(10)}, self.NOW),
+        }
+        said = self.scan_output(table)
+        self.assertRegex(said, r"4\.0x the demand")
+        self.assertNotIn("SCORED ZERO", said)
+
+    def test_a_loosely_matched_phrase_is_flagged_in_the_output(self):
+        # title_match() being right is not the same as the scan SAYING so.
+        # A mutation that computed the fraction and then never printed the
+        # warning passed every direct test of the function.
+        table = {
+            "fall sticker emojis": self.m.measure(
+                {"count": 110, "results": self.rows(20, title="Autumn Leaf Decal")},
+                self.NOW, phrase="fall sticker emojis"),
+            "fall nail stickers": self.m.measure(
+                {"count": 1260, "results": self.rows(10, title="Fall Nail Stickers Set")},
+                self.NOW, phrase="fall nail stickers"),
+        }
+        said = self.scan_output(table)
+        self.assertIn("READ THE SUPPLY COLUMN CAREFULLY", said)
+        self.assertIn("fall sticker emojis", said)
+        self.assertNotIn("fall nail stickers                  ", said.split(
+            "READ THE SUPPLY COLUMN CAREFULLY")[1])
+
+    def test_everything_zero_says_so_rather_than_ranking_nothing(self):
+        table = {
+            "fall sticker pack": self.m.measure(
+                {"count": 5536, "results": self.rows(0)}, self.NOW),
+            "fall sticker set": self.m.measure(
+                {"count": 13433, "results": self.rows(0)}, self.NOW),
+        }
+        said = self.scan_output(table)
+        self.assertIn("no ratio to report", said)
+        self.assertIn("SCORED ZERO", said)
+
+
+class LowSupplyHasTwoMeanings(unittest.TestCase):
+    """'fall sticker emojis' came back with 110 active listings - by far the
+    thinnest market in the sweep, and the second-highest score.
+
+    That is either the best find in it or an artefact of an odd phrasing
+    that Etsy matched loosely, and the supply number alone cannot tell you
+    which. So the titles get checked against the phrase."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("market_scan", SCRIPTS / "market-scan.py")
+
+    def test_titles_that_contain_the_phrase_score_one(self):
+        rows = [{"title": "Cozy Fall Sticker Sheet, Autumn Journal"},
+                {"title": "FALL STICKERS - vinyl pack"}]
+        self.assertEqual(self.m.title_match(rows, "fall sticker"), 1.0)
+
+    def test_a_loose_match_is_caught(self):
+        rows = [{"title": "Autumn Leaf Vinyl Decal"},
+                {"title": "Pumpkin Spice Tumbler"},
+                {"title": "Fall Sticker Emojis Pack"}]
+        self.assertAlmostEqual(
+            self.m.title_match(rows, "fall sticker emojis"), 1 / 3, places=3)
+
+    def test_plurals_still_count_as_a_match(self):
+        rows = [{"title": "Fall Stickers for Journals"}]
+        self.assertEqual(self.m.title_match(rows, "fall sticker"), 1.0)
+
+    def test_stopwords_are_not_required_to_appear(self):
+        # 'fall stickers for kids' must not be judged on whether the word
+        # 'for' is in the title.
+        rows = [{"title": "Fall Stickers, Kids Craft Pack"}]
+        self.assertEqual(self.m.title_match(rows, "fall stickers for kids"), 1.0)
+
+    def test_a_missing_title_is_not_a_match_and_does_not_crash(self):
+        rows = [{"title": None}, {}, {"title": "Fall Sticker Sheet"}]
+        self.assertAlmostEqual(self.m.title_match(rows, "fall sticker"),
+                               1 / 3, places=3)
+
+    def test_no_rows_means_no_opinion(self):
+        self.assertIsNone(self.m.title_match([], "fall sticker"))
+        self.assertIsNone(self.m.title_match([{"title": "x"}], ""))
+
+    def test_measure_carries_the_match_through(self):
+        m = self.m.measure(
+            {"count": 110, "results": [{"title": "Autumn Leaf Decal",
+                                        "num_favorers": 3, "views": 100}]},
+            1758500000.0, phrase="fall sticker emojis")
+        self.assertEqual(m["match"], 0.0)

@@ -36,6 +36,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import statistics
 import sys
 import time
@@ -118,12 +119,43 @@ def price_of(row):
     return amount / divisor
 
 
+STOPWORDS = {"for", "the", "a", "an", "and", "of", "with", "in", "to"}
+
+
+def title_match(rows, phrase):
+    """What fraction of the returned listings actually contain the phrase.
+
+    A low supply count has two completely different meanings and the number
+    alone cannot tell them apart:
+
+      - a thin market, which is the opportunity we are hunting, or
+      - a phrase nobody uses, so Etsy matched loosely and the count is the
+        size of some OTHER market.
+
+    'fall sticker emojis' returned 110 listings. That is either the best
+    find in the sweep or an artefact of an odd phrasing, and treating it as
+    the first without checking is how a scorer produces a confident
+    recommendation for a market that does not exist.
+    """
+    want = {tp.stem(w) for w in re.findall(r"[a-z']+", (phrase or "").lower())
+            if w not in STOPWORDS}
+    if not want or not rows:
+        return None
+    hits = 0
+    for r in rows:
+        title = str(r.get("title") or "").lower()
+        have = {tp.stem(w) for w in re.findall(r"[a-z']+", title)}
+        if want <= have:
+            hits += 1
+    return hits / len(rows)
+
+
 def median(values):
     vals = [v for v in values if v is not None]
     return statistics.median(vals) if vals else None
 
 
-def measure(data, now=None):
+def measure(data, now=None, phrase=""):
     """Everything computable about one keyword's Etsy results, plus what was
     not computable and why."""
     rows = data.get("results") or []
@@ -135,6 +167,7 @@ def measure(data, now=None):
         "pull": median(pull(r) for r in rows),
         "price": median(price_of(r) for r in rows),
         "age": median(age_days(r, now) for r in rows),
+        "match": title_match(rows, phrase),
         "dropped": [],
     }
     checks = [("supply", "count"), ("heat", "original_creation_timestamp "
@@ -166,7 +199,7 @@ def fetch(key, phrase):
     data, headers, err = ep.call(f"/listings/active?{q}", key)
     if err:
         return None, err
-    return measure(data), None
+    return measure(data, phrase=phrase), None
 
 
 def show(phrase, m):
@@ -274,11 +307,42 @@ def cmd_scan(key, words):
               f"{opportunity(m):>9.4f}")
 
     best, bm = usable[0]
-    worst, wm = usable[-1]
-    print(f"\n  '{best}' has {opportunity(bm) / max(opportunity(wm), 1e-9):.1f}x "
-          f"the demand per unit of\n  competition that '{worst}' does. That "
-          f"is a comparison between these\n  {len(usable)} phrases and "
-          f"nothing more - it is not a sales forecast.")
+    dead = [(c, m) for c, m in usable if opportunity(m) <= 0]
+    alive = [(c, m) for c, m in usable if opportunity(m) > 0]
+
+    # The first version divided by max(score, 1e-9) and printed
+    # '19508025.0x' when the bottom phrase scored exactly zero. A ratio
+    # against zero is not a large number, it is not a number - and printed
+    # to one decimal place it reads like a measurement.
+    if len(alive) >= 2:
+        worst, wm = alive[-1]
+        print(f"\n  '{best}' has {opportunity(bm) / opportunity(wm):.1f}x the "
+              f"demand per unit of\n  competition that '{worst}' does - the "
+              f"lowest phrase here that scored at all.")
+    else:
+        print(f"\n  Only {len(alive)} phrase scored above zero, so there is no "
+              f"ratio to report.")
+
+    if dead:
+        print(f"\n  SCORED ZERO ({len(dead)}) - not one favourite a day across "
+              f"the top 25:")
+        for c, m in dead:
+            print(f"      {c:<34}{m['supply']:>10,} listings")
+        print(f"  That is a finding, not a gap. People are listing into these "
+              f"phrases\n  and nobody is saving the results.")
+
+    loose = [(c, m) for c, m in usable
+             if m.get("match") is not None and m["match"] < 0.5]
+    if loose:
+        print(f"\n  READ THE SUPPLY COLUMN CAREFULLY for these - fewer than "
+              f"half the\n  listings Etsy returned actually contain the "
+              f"phrase, so the count is\n  the size of a looser market than "
+              f"the one asked about:")
+        for c, m in loose:
+            print(f"      {c:<34}{m['match'] * 100:>3.0f}% of results match")
+
+    print(f"\n  A comparison between these {len(usable)} phrases and nothing "
+          f"more.\n  It is not a sales forecast.")
     skipped = len(scored) - len(usable)
     if skipped:
         print(f"\n  {skipped} phrase(s) left out of the ranking: a field the "
