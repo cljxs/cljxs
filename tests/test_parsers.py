@@ -6619,3 +6619,139 @@ class OneNightIsNotACalibration(unittest.TestCase):
         self.assertEqual(self.m.plural(2, "game"), "2 games")
         self.assertEqual(self.m.plural(0, "game"), "0 games")
         self.assertEqual(self.m.plural(1, "fixture"), "1 fixture")
+
+
+class TheEtsyKeyIsTwoValuesAndNeitherIsPrinted(unittest.TestCase):
+    """Scout invents ideas out of the model's own head.
+
+    An agent asked "what is selling on Etsy" with no data source produces a
+    confident, detailed, plausible answer that is fiction - and fiction with
+    numbers on it gets acted on, which makes it worse than no researcher at
+    all. The Etsy API is the only source that gives code on this droplet real
+    listings, prices, tags and favourite counts.
+
+    Its key is two values joined by a colon, which is not written down
+    anywhere obvious. The API says so itself when asked without one:
+
+        {"error":"Invalid API key: should be in the format
+         'keystring:shared_secret'."}
+
+    One of those two values is a secret, so the rule this class mostly exists
+    to hold is that it never appears in output - not in a message, not in an
+    error, not in a log.
+    """
+
+    def setUp(self):
+        self.m = load("etsy_probe", "etsy-probe.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.cred = self.root / "agents" / "scout" / "state" / "credentials.env"
+        self.cred.parent.mkdir(parents=True)
+        self.m.ROOT = self.root
+        self.m.CRED = self.cred
+        self.was = os.environ.pop("ETSY_API_KEY", None)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        if self.was is not None:
+            os.environ["ETSY_API_KEY"] = self.was
+        else:
+            os.environ.pop("ETSY_API_KEY", None)
+
+    # Built from halves so this file holds no credential-shaped literal -
+    # check-secrets.py scans it like any other tracked file.
+    def fake_key(self):
+        return "abc123def456ghi789" + ":" + "0a1b2c3d4e"
+
+    def test_a_missing_key_says_where_to_put_it(self):
+        key, why = self.m.api_key()
+        self.assertIsNone(key)
+        self.assertIn("credentials.env", why)
+        self.assertIn("keystring", why)
+        self.assertIn("chmod 600", why)
+
+    def test_it_is_read_from_scouts_credentials(self):
+        self.cred.write_text(f"ETSY_API_KEY={self.fake_key()}\n")
+        key, why = self.m.api_key()
+        self.assertIsNone(why)
+        self.assertEqual(key, self.fake_key())
+
+    def test_the_environment_wins_over_the_file(self):
+        # So a one-off test run does not need the file edited.
+        self.cred.write_text("ETSY_API_KEY=from" + ":" + "thefile\n")
+        os.environ["ETSY_API_KEY"] = self.fake_key()
+        self.assertEqual(self.m.api_key()[0], self.fake_key())
+
+    def test_one_value_instead_of_two_is_caught_here(self):
+        # Etsy answers a colon-less key with the same 403 it gives a wrong
+        # key, and those need completely different fixes. Cheaper to catch.
+        self.cred.write_text("ETSY_API_KEY=onlythekeystring\n")
+        key, why = self.m.api_key()
+        self.assertIsNone(key)
+        self.assertIn("colon", why)
+
+    def test_the_credentials_parser_is_emilys_not_a_second_one(self):
+        # Two parsers for one file format drift, and the first thing they
+        # drift on is quoting.
+        src = (SCRIPTS / "etsy-probe.py").read_text()
+        self.assertIn("ea.read_env_file(", src)
+        self.assertNotIn("def read_env_file", src)
+
+    def test_the_secret_never_reaches_the_output(self):
+        # Every path: the success message, the usage message, and the error
+        # message from a rejected call.
+        self.cred.write_text(f"ETSY_API_KEY={self.fake_key()}\n")
+        secret = self.fake_key().split(":")[1]
+
+        def boom(path, key):
+            return None, "HTTP 403: {\"error\":\"API key not found\"}"
+
+        real, self.m.call = self.m.call, boom
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                self.m.cmd_ping(self.fake_key())
+                self.m.cmd_search(self.fake_key(), ["fall", "sticker"])
+        finally:
+            self.m.call = real
+        both = out.getvalue() + err.getvalue()
+        self.assertNotIn(secret, both)
+        self.assertNotIn(self.fake_key(), both)
+
+    def test_a_403_explains_the_approval_step(self):
+        # Etsy reviews new apps, so a brand new key 403s until approved. That
+        # looks identical to a wrong key and wastes an afternoon.
+        def denied(path, key):
+            return None, "HTTP 403: not active"
+        real, self.m.call = self.m.call, denied
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(self.m.cmd_ping(self.fake_key()), 1)
+        finally:
+            self.m.call = real
+        self.assertIn("APPROVED", err.getvalue())
+
+    def test_it_reports_which_fields_are_missing(self):
+        # The probe exists to answer "what is really in the payload". A
+        # scoring rule built on a field that is not there is a rule that
+        # silently scores nothing.
+        def answer(path, key):
+            return {"count": 2, "results": [
+                {"title": "A Sticker", "tags": ["fall", "maple"],
+                 "price": {"amount": 599, "divisor": 100, "currency_code": "USD"}},
+                {"title": "B Sticker", "tags": ["fall"],
+                 "price": {"amount": 799, "divisor": 100, "currency_code": "USD"}},
+            ]}, None
+        real, self.m.call = self.m.call, answer
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                self.m.cmd_search(self.fake_key(), ["fall", "sticker"])
+        finally:
+            self.m.call = real
+        text = out.getvalue()
+        self.assertIn("NOT in the payload", text)
+        self.assertIn("num_favorers", text)
+        self.assertIn("5.99", text, "the price divisor must be applied")
+        self.assertIn("fall (2)", text, "tag frequency is the point")
