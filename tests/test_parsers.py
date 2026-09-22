@@ -6497,3 +6497,125 @@ class ADieCutFollowsTransparency(unittest.TestCase):
         body = src.split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
         after = body[body.index("if needs_cutout(cat):"):]
         self.assertIn("sys.exit(1)", after[:after.index("upload_from = cut")])
+
+
+class OneNightIsNotACalibration(unittest.TestCase):
+    """The "not enough to conclude" warning never fired.
+
+    It was a floor on threshold CALLS - fewer than 50 - and one fixture
+    produces about 120. So after a single Monday night game the report printed
+    its table with no caveat at all, and a gap of -46% in the 90-99% row read
+    like a finding.
+
+    The unit of independence is a game, not a call. Every call inside one
+    fixture shares a defence, a game script and the weather, so they move
+    together: 120 calls from one night is one piece of evidence counted 120
+    times. Counting calls counts the same evidence over and over.
+    """
+
+    def setUp(self):
+        self.m = load("props_forecast5", "props-forecast.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.m.STORE = Path(self.tmp.name) / "forecasts.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def rows(self, games, per_game=30):
+        # More than one market on purpose: the per-market table only draws
+        # when there are two, so a single-market fixture made the test that
+        # checks it is held back pass without the branch ever running.
+        markets = ("receiving_yards", "receptions")
+        out = []
+        for g in range(games):
+            for p in range(per_game):
+                out.append({"event_id": f"evt{g}", "athlete_id": f"{g}-{p}",
+                            "player": f"P{p}", "market": markets[p % 2],
+                            "probabilities": {"40": 70.0, "50": 60.0,
+                                              "60": 50.0, "70": 40.0},
+                            "actual": 55.0, "graded_utc": "x"})
+        return out
+
+    def report(self, games, per_game=30):
+        self.m.save({"forecasts": self.rows(games, per_game)})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.m.cmd_calibration()
+        return out.getvalue()
+
+    # --- the bug ------------------------------------------------------------
+
+    def test_one_game_is_flagged_however_many_calls_it_makes(self):
+        # 30 forecasts x 4 bars = 120 calls, comfortably past the old floor
+        # of 50, and it said nothing.
+        text = self.report(1)
+        self.assertIn("120 threshold calls", text)
+        self.assertIn("NOT A CALIBRATION YET", text)
+
+    def test_the_warning_comes_before_the_table(self):
+        # Under the table it arrived after the numbers had already persuaded
+        # you. A caveat you read second is a caveat you read too late.
+        text = self.report(1)
+        self.assertLess(text.index("NOT A CALIBRATION YET"),
+                        text.index("said"))
+
+    def test_many_games_pass_without_the_warning(self):
+        text = self.report(self.m.MIN_GAMES_TO_JUDGE, per_game=4)
+        self.assertNotIn("NOT A CALIBRATION YET", text)
+
+    def test_the_bar_is_games_not_calls(self):
+        # Few games and many calls is flagged; many games and few calls is
+        # not. That is the whole change, in one assertion pair.
+        self.assertIsNotNone(self.m.too_thin_to_judge(1, 5000))
+        self.assertIsNone(self.m.too_thin_to_judge(self.m.MIN_GAMES_TO_JUDGE, 40))
+
+    def test_the_old_call_floor_is_gone(self):
+        src = (SCRIPTS / "props-forecast.py").read_text()
+        self.assertNotIn("n < 50", src)
+
+    # --- counting the games -------------------------------------------------
+
+    def test_games_are_counted_by_fixture_not_by_row(self):
+        self.assertEqual(self.m.games_graded(self.rows(3, per_game=10)), 3)
+
+    def test_an_ungraded_row_is_not_a_graded_game(self):
+        rows = self.rows(2, per_game=2)
+        for r in rows:
+            r["actual"] = None
+        rows[0]["actual"] = 55.0
+        self.assertEqual(self.m.games_graded(rows), 1)
+
+    def test_no_games_at_all(self):
+        self.assertEqual(self.m.games_graded([]), 0)
+
+    # --- what it holds back -------------------------------------------------
+
+    def test_the_per_market_table_waits_for_enough_games(self):
+        # Splitting 120 correlated calls seven ways produces rows nobody
+        # should read, and a table on screen gets read.
+        thin = self.report(1)
+        self.assertIn("held back until", thin)
+        self.assertNotIn("receiving_yards", thin,
+                         "no per-market rows should have been drawn")
+
+    def test_the_per_market_table_arrives_once_there_are_enough(self):
+        text = self.report(self.m.MIN_GAMES_TO_JUDGE, per_game=4)
+        self.assertIn("receiving_yards", text)
+        self.assertIn("receptions", text)
+        self.assertNotIn("held back until", text)
+
+    # --- how it reads -------------------------------------------------------
+
+    def test_it_does_not_say_one_games(self):
+        # A caveat that reads as a template reads as boilerplate, and
+        # boilerplate is what gets skipped.
+        text = self.report(1)
+        self.assertNotIn("(s)", text)
+        self.assertIn("1 game graded", text)
+        self.assertIn("1 piece of evidence", text)
+
+    def test_plural_handles_both(self):
+        self.assertEqual(self.m.plural(1, "game"), "1 game")
+        self.assertEqual(self.m.plural(2, "game"), "2 games")
+        self.assertEqual(self.m.plural(0, "game"), "0 games")
+        self.assertEqual(self.m.plural(1, "fixture"), "1 fixture")

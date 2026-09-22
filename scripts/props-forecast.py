@@ -77,6 +77,23 @@ NOT_A_BET = ("NOT A BET and UNPRICED - there are no odds in this file. "
 RESAMPLES = 400
 INTERVAL_SPAN = 90                # a 90% interval: the 5th to the 95th
 
+# How many GAMES the calibration report needs before it is worth reading.
+#
+# This used to be a floor on threshold calls - 50 of them - and one fixture
+# produces about 120, so the "not enough to conclude" warning never fired
+# after even a single night. The table then read like a verdict on the first
+# evening it existed.
+#
+# The unit of independence is a game, not a call. Every call inside one
+# fixture shares a defence, a game script and the weather, so they move
+# together: 120 calls from one night carry nothing like the information of
+# 120 calls from twenty weekends. Counting calls counts the same evidence
+# over and over.
+#
+# 20 is a judgement and not a derived number - roughly a full slate's worth
+# of Sundays. It is the bar for "worth reading", not for "proven".
+MIN_GAMES_TO_JUDGE = 20
+
 # Who gets forecast, and how they are ranked against each other. A
 # quarterback throws thirty-five times a game and a receiver is targeted
 # eight, so one list ranked by volume would give a side six quarterbacks and
@@ -863,6 +880,37 @@ def by_market(forecasts):
     return dict(sorted(out.items()))
 
 
+def plural(n, one, many=None):
+    """"1 game", "20 games". Not "1 game(s)" - a caveat that reads as a
+    template reads as boilerplate, and boilerplate is what gets skipped."""
+    return f"{n} {one if n == 1 else (many or one + 's')}"
+
+
+def games_graded(forecasts):
+    """How many distinct fixtures the graded rows come from."""
+    return len({f.get("event_id") for f in forecasts
+                if f.get("actual") is not None})
+
+
+def too_thin_to_judge(games, calls):
+    """The warning, or None. Printed BEFORE the table, not after it.
+
+    Under the table it arrived after the numbers had already persuaded you,
+    which is the wrong order for a caveat: by then you have read a gap of
+    +20 and formed a view. This is the first thing on the screen.
+    """
+    if games >= MIN_GAMES_TO_JUDGE:
+        return None
+    return (f"  NOT A CALIBRATION YET - {plural(games, 'game')} graded.\n"
+            f"  The {calls} calls below come from {plural(games, 'fixture')}, "
+            f"and every call inside\n  one game shares a defence, a game "
+            f"script and the weather - they move\n  together. So this is "
+            f"{plural(games, 'piece')} of evidence counted {calls} times, "
+            f"not {calls}.\n"
+            f"  Read it as a smoke test. It becomes worth arguing with at "
+            f"about {MIN_GAMES_TO_JUDGE} games.")
+
+
 def cmd_calibration():
     data = load()
     done = [f for f in data["forecasts"] if f.get("actual") is not None]
@@ -873,7 +921,12 @@ def cmd_calibration():
 
     rows = buckets(done)
     n = sum(b["n"] for b in rows.values())
-    print(f"{len(done)} graded forecast(s), {n} threshold call(s)\n")
+    games = games_graded(done)
+    print(f"{plural(len(done), 'graded forecast')} from "
+          f"{plural(games, 'game')}, {plural(n, 'threshold call')}\n")
+    thin = too_thin_to_judge(games, n)
+    if thin:
+        print(thin + "\n")
     print(f"  {'said':<10}{'predicted':>10}{'happened':>10}{'gap':>8}{'calls':>7}")
     print("  " + "-" * 45)
     for lo, b in rows.items():
@@ -881,7 +934,7 @@ def cmd_calibration():
               f"{b['gap']:>+8.1f}{b['n']:>7}")
 
     markets = by_market(done)
-    if len(markets) > 1:
+    if len(markets) > 1 and not thin:
         print(f"\n  {'market':<20}{'predicted':>10}{'happened':>10}{'gap':>8}"
               f"{'calls':>7}")
         print("  " + "-" * 55)
@@ -893,13 +946,19 @@ def cmd_calibration():
             print(f"  {market:<20}{pred:>9.1f}%{obs:>9.1f}%{obs - pred:>+8.1f}"
                   f"{calls:>7}")
 
+    elif len(markets) > 1:
+        # The per-market split divides an already-thin sample seven ways. A
+        # table of six-call rows invites exactly the reading it cannot support.
+        print(f"\n  The per-market breakdown is held back until "
+              f"{MIN_GAMES_TO_JUDGE} games: splitting\n  {n} correlated calls "
+              f"seven ways produces rows nobody should read.")
+
     print(f"\n  A row whose gap is near zero is a forecast that means what it "
           f"says.\n  Consistently positive means it is too cautious; negative "
           f"means too\n  confident, which is the one that costs money.")
-    if n < 50:
-        print(f"\n  {n} calls is not enough to conclude anything. This needs "
-              f"weeks, not\n  a night - a coin lands 7 of 10 often enough that "
-              f"it means nothing.")
+    if thin:
+        print(f"\n  {games} of {MIN_GAMES_TO_JUDGE} games. Grade every week, "
+              f"then come back.")
     return 0
 
 
