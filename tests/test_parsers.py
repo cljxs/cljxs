@@ -28,6 +28,8 @@ import sys
 import tempfile
 import types
 import time
+import urllib.error
+import urllib.request
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -6697,26 +6699,82 @@ class TheEtsyKeyIsTwoValuesAndNeitherIsPrinted(unittest.TestCase):
         self.assertIn("ea.read_env_file(", src)
         self.assertNotIn("def read_env_file", src)
 
-    def test_the_secret_never_reaches_the_output(self):
-        # Every path: the success message, the usage message, and the error
-        # message from a rejected call.
+    def fake_http(self, status=200, body=b'{"application_id": 1}'):
+        """Stub urlopen, NOT call().
+
+        The first version of the leak tests stubbed call() - which is exactly
+        where a leak would happen - so a mutation that echoed the key into its
+        error message passed, and so did one that printed the key on success.
+        Two vacuous tests guarding the one rule this class exists for. The
+        stub goes underneath the code being tested now, not over it.
+        """
+        import io as _io
+
+        class Resp:
+            def read(self, n=None):
+                return body
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        def urlopen(req, timeout=None, context=None):
+            if status == 200:
+                return Resp()
+            raise urllib.error.HTTPError(
+                req.full_url, status, "Forbidden", {},
+                _io.BytesIO(b'{"error":"API key not found or not active."}'))
+        return urlopen
+
+    def leak_check(self, status, run):
+        """Run something with a stubbed transport and return everything said."""
         self.cred.write_text(f"ETSY_API_KEY={self.fake_key()}\n")
-        secret = self.fake_key().split(":")[1]
-
-        def boom(path, key):
-            return None, "HTTP 403: {\"error\":\"API key not found\"}"
-
-        real, self.m.call = self.m.call, boom
+        real = self.m.urllib.request.urlopen
+        self.m.urllib.request.urlopen = self.fake_http(status)
         out, err = io.StringIO(), io.StringIO()
         try:
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                self.m.cmd_ping(self.fake_key())
-                self.m.cmd_search(self.fake_key(), ["fall", "sticker"])
+                run()
         finally:
-            self.m.call = real
-        both = out.getvalue() + err.getvalue()
-        self.assertNotIn(secret, both)
-        self.assertNotIn(self.fake_key(), both)
+            self.m.urllib.request.urlopen = real
+        return out.getvalue() + err.getvalue()
+
+    def assert_no_secret(self, said):
+        secret = self.fake_key().split(":")[1]
+        self.assertNotIn(secret, said, "the shared secret reached the output")
+        self.assertNotIn(self.fake_key(), said, "the whole key reached the output")
+
+    def test_the_secret_does_not_reach_a_success_message(self):
+        said = self.leak_check(200, lambda: self.m.cmd_ping(self.fake_key()))
+        self.assertIn("ping ok", said)
+        self.assert_no_secret(said)
+
+    def test_the_secret_does_not_reach_an_error_message(self):
+        # Through the REAL call(), so its exception handling is what runs.
+        said = self.leak_check(403, lambda: self.m.cmd_ping(self.fake_key()))
+        self.assertIn("403", said)
+        self.assert_no_secret(said)
+
+    def test_the_secret_does_not_reach_a_failed_search(self):
+        said = self.leak_check(
+            403, lambda: self.m.cmd_search(self.fake_key(), ["fall", "sticker"]))
+        self.assert_no_secret(said)
+
+    def test_the_key_does_go_in_the_header_though(self):
+        # The other half: a test that only checks the key is absent everywhere
+        # would pass on a probe that never sends it.
+        seen = {}
+        real = self.m.urllib.request.urlopen
+        def capture(req, timeout=None, context=None):
+            seen.update(req.headers)
+            return self.fake_http(200)(req, timeout, context)
+        self.m.urllib.request.urlopen = capture
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.m.call("/openapi-ping", self.fake_key())
+        finally:
+            self.m.urllib.request.urlopen = real
+        self.assertEqual(seen.get("X-api-key"), self.fake_key())
 
     def test_a_403_explains_the_approval_step(self):
         # Etsy reviews new apps, so a brand new key 403s until approved. That
