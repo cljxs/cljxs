@@ -6711,6 +6711,9 @@ class TheEtsyKeyIsTwoValuesAndNeitherIsPrinted(unittest.TestCase):
         import io as _io
 
         class Resp:
+            # Etsy's real rate-limit headers, spelled the way it spells them.
+            headers = {"x-limit-per-second": "10", "x-remaining-this-second": "9",
+                       "x-limit-per-day": "10000", "x-remaining-today": "9997"}
             def read(self, n=None):
                 return body
             def __enter__(self):
@@ -6760,6 +6763,29 @@ class TheEtsyKeyIsTwoValuesAndNeitherIsPrinted(unittest.TestCase):
             403, lambda: self.m.cmd_search(self.fake_key(), ["fall", "sticker"]))
         self.assert_no_secret(said)
 
+    def test_the_rate_limit_budget_is_reported(self):
+        # Etsy's limits are per API key and differ between applications, so a
+        # constant in our code would be a guess about somebody else's account.
+        # Every successful response carries the real budget; this is the only
+        # honest source for it, and Scout will throttle on it later.
+        said = self.leak_check(200, lambda: self.m.cmd_ping(self.fake_key()))
+        self.assertIn("rate limit", said)
+        self.assertIn("9997", said, "the remaining daily quota should show")
+
+    def test_a_429_says_how_long_to_wait(self):
+        # Etsy evaluates QPS first then QPD, and returns retry-after. Burning
+        # the daily quota and not knowing for how long is a wasted day.
+        src = (SCRIPTS / "etsy-probe.py").read_text()
+        self.assertIn("retry-after", src)
+        self.assertIn("429", src)
+
+    def test_the_header_names_are_not_invented(self):
+        # Read off Etsy's own rate-limit documentation, not guessed. A
+        # misspelled header name reports nothing and looks like no limit.
+        self.assertEqual(sorted(self.m.LIMIT_HEADERS),
+                         ["x-limit-per-day", "x-limit-per-second",
+                          "x-remaining-this-second", "x-remaining-today"])
+
     def test_the_key_does_go_in_the_header_though(self):
         # The other half: a test that only checks the key is absent everywhere
         # would pass on a probe that never sends it.
@@ -6780,7 +6806,7 @@ class TheEtsyKeyIsTwoValuesAndNeitherIsPrinted(unittest.TestCase):
         # Etsy reviews new apps, so a brand new key 403s until approved. That
         # looks identical to a wrong key and wastes an afternoon.
         def denied(path, key):
-            return None, "HTTP 403: not active"
+            return None, {}, "HTTP 403: not active"
         real, self.m.call = self.m.call, denied
         err = io.StringIO()
         try:
@@ -6800,7 +6826,7 @@ class TheEtsyKeyIsTwoValuesAndNeitherIsPrinted(unittest.TestCase):
                  "price": {"amount": 599, "divisor": 100, "currency_code": "USD"}},
                 {"title": "B Sticker", "tags": ["fall"],
                  "price": {"amount": 799, "divisor": 100, "currency_code": "USD"}},
-            ]}, None
+            ]}, {}, None
         real, self.m.call = self.m.call, answer
         out = io.StringIO()
         try:

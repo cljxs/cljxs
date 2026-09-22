@@ -76,24 +76,47 @@ def api_key():
     return key, None
 
 
+# What Etsy calls its own rate-limit headers. Read rather than assumed: the
+# limits are per API key and differ between applications, so a constant here
+# would be a guess about somebody else's account. Every successful response
+# carries the current budget, which is the only honest source for it.
+LIMIT_HEADERS = ("x-limit-per-second", "x-remaining-this-second",
+                 "x-limit-per-day", "x-remaining-today")
+
+
 def call(path, key):
+    """(data, headers, error). Headers carry the rate-limit budget."""
     req = urllib.request.Request(f"{API}{path}", headers={
         "x-api-key": key, "User-Agent": UA, "Accept": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=30,
                                     context=ssl.create_default_context()) as r:
-            return json.load(r), None
+            return json.load(r), dict(r.headers), None
     except urllib.error.HTTPError as e:
         body = e.read(600).decode("utf-8", "replace")
         # The body is Etsy's, and it never contains the key - but it is
         # printed here rather than the request, which does.
-        return None, f"HTTP {e.code}: {body[:400]}"
+        note = ""
+        if e.code == 429:
+            # Etsy evaluates QPS first, then QPD, and says how long to wait.
+            note = f" retry after {e.headers.get('retry-after', '?')}s"
+        return None, dict(e.headers), f"HTTP {e.code}{note}: {body[:400]}"
     except Exception as e:
-        return None, f"{type(e).__name__}: {str(e)[:200]}"
+        return None, {}, f"{type(e).__name__}: {str(e)[:200]}"
+
+
+def show_limits(headers):
+    """Print the budget this key actually has, if the response said."""
+    lower = {k.lower(): v for k, v in (headers or {}).items()}
+    got = [(h, lower[h]) for h in LIMIT_HEADERS if h in lower]
+    if not got:
+        return
+    print("  rate limit: " + ", ".join(f"{h.replace('x-', '')} {v}"
+                                       for h, v in got))
 
 
 def cmd_ping(key):
-    data, err = call("/openapi-ping", key)
+    data, headers, err = call("/openapi-ping", key)
     if err:
         print(f"ping failed - {err}", file=sys.stderr)
         if "403" in err:
@@ -104,16 +127,18 @@ def cmd_ping(key):
                   file=sys.stderr)
         return 1
     print(f"ping ok: {json.dumps(data)}")
+    show_limits(headers)
     return 0
 
 
 def cmd_search(key, words):
     q = urllib.parse.urlencode({"keywords": " ".join(words), "limit": 25,
                                 "sort_on": "score"})
-    data, err = call(f"/listings/active?{q}", key)
+    data, headers, err = call(f"/listings/active?{q}", key)
     if err:
         print(f"search failed - {err}", file=sys.stderr)
         return 1
+    show_limits(headers)
 
     rows = data.get("results") or []
     print(f"'{' '.join(words)}' -> {data.get('count', '?')} active listings, "
