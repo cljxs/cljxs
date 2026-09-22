@@ -6901,8 +6901,15 @@ class GettingOneKeyOntoTheDroplet(unittest.TestCase):
         self.assertIn("colon", said)
 
     def test_a_shell_operator_is_refused(self):
-        code, said = self.run_with("abc12345:def67890" + " && echo hi")
-        self.assertEqual(code, 2)
+        # No spaces in these, deliberately. The first version of this test
+        # used "key && echo hi", which the whitespace rule caught - so
+        # deleting the shell-operator rule entirely still passed it.
+        for mangled in ("abc12345:def67890&&echo", "abc12345:def67890||echo",
+                        "abc12345:def$(whoami)", "abc12345:def`whoami`"):
+            with self.subTest(value=mangled):
+                code, said = self.run_with(mangled)
+                self.assertEqual(code, 2, mangled)
+                self.assertIn("shell operator", said)
 
     def test_nothing_is_written_when_it_refuses(self):
         # A half-written credentials.env is worse than none: the next command
