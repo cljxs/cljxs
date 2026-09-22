@@ -1,103 +1,146 @@
 #!/usr/bin/env python3
 """
-set-credential.py — put a secret into credentials.env without an editor.
+set-credential.py — put a secret in an agent's credentials.env, safely.
 
-    python3 scripts/set-credential.py                    # asks for each one it needs
-    python3 scripts/set-credential.py PRINTIFY_SHOP_ID   # just that one
-    python3 scripts/set-credential.py --agent scout OPENROUTER_API_KEY
+    set-credential.py scout ETSY_API_KEY
+    set-credential.py emily PRINTIFY_API_TOKEN
 
-Why this exists: nano is hard to escape on a phone keyboard, a flattened
-heredoc silently does nothing, and a value typed as a shell argument lands in
-your history. This prompts for the value, strips the stray whitespace a paste
-brings with it, writes it on the correct line, and confirms with a character
-count and four characters from each end. It never echoes the secret and never
-prints it back.
+WHY THIS EXISTS. Three attempts to get one key onto this droplet produced:
+a credentials.env full of malformed JSON's cousin, three nano .save files
+holding a live token, and a 298-byte "key" that was the key plus the NEXT
+command pasted after it - because the terminal joins a paste that has no
+trailing newline onto whatever follows. The user's key then appeared in a
+screenshot, because the prompt echoed it.
+
+So: no editor, nothing to substitute into a command line, the value never
+echoed, and the file validated before it is written rather than by whatever
+fails first afterwards.
+
+WHAT IT REFUSES. A value with a space in it, a newline, or a shell operator
+is not a credential - it is a paste accident, and every one of those has
+happened here. The check is deliberately blunt: refusing a real key costs one
+retry, accepting a mangled one costs an afternoon of debugging a 403.
+
+Existing keys in the file are kept. A credentials.env holds more than one
+secret, and rewriting the whole file to change one line is how the other ones
+disappear.
 
 Standard library only.
 """
 
 import getpass
+import importlib.util
 import os
+import re
 import sys
 from pathlib import Path
 
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
+SCRIPTS = Path(__file__).resolve().parent
 
-WANTED = {
-    "OPENROUTER_API_KEY": "your existing OpenRouter key - the same one the other agents use",
-    "PRINTIFY_API_TOKEN": "from printify.com/app/account/api",
-    "PRINTIFY_SHOP_ID": "a number - run emily-printify.py check to get it (not a secret)",
+_spec = importlib.util.spec_from_file_location("emily_assets", SCRIPTS / "emily-assets.py")
+ea = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(ea)
+
+# What a mangled paste looks like. Not an exhaustive grammar of secrets - a
+# list of things that are definitely NOT one.
+NONSENSE = [
+    (re.compile(r"\s"), "it has a space or newline in it - two things got pasted at once"),
+    (re.compile(r"&&|\|\||;\s|\$\(|`"), "it contains a shell operator - a command got pasted in"),
+    (re.compile(r"^-"), "it starts with a dash - that is a flag, not a value"),
+]
+
+# Keys we know the shape of. Everything else is accepted on the general checks
+# alone, because guessing at a format we have not seen is how a real key gets
+# refused at midnight.
+SHAPES = {
+    "ETSY_API_KEY": (re.compile(r"^[A-Za-z0-9]{8,64}:[A-Za-z0-9]{8,64}$"),
+                     "Etsy wants BOTH values joined by a colon:\n"
+                     "      keystring:shared_secret\n"
+                     "    Both are on your app's page in the Etsy developer portal."),
 }
-# The shop id is an account number, not a credential, so show it as typed.
-NOT_SECRET = {"PRINTIFY_SHOP_ID"}
+
+MIN_LEN, MAX_LEN = 8, 400
 
 
-def mask(v):
-    return f"{len(v)} chars  {v[:4]}...{v[-4:]}" if len(v) > 10 else f"{len(v)} chars"
+def problems(name, value):
+    """Everything wrong with this value, as a list of sentences."""
+    out = []
+    if not value:
+        return ["it is empty"]
+    if len(value) < MIN_LEN:
+        out.append(f"it is only {len(value)} characters - that is not a credential")
+    if len(value) > MAX_LEN:
+        out.append(f"it is {len(value)} characters - something else got pasted "
+                   f"in with it")
+    for pattern, why in NONSENSE:
+        if pattern.search(value):
+            out.append(why)
+    shape = SHAPES.get(name)
+    if shape and not out and not shape[0].match(value):
+        out.append(shape[1])
+    return out
 
 
-def set_key(path, key, value):
-    lines = path.read_text().splitlines() if path.is_file() else []
-    hit = False
-    for i, line in enumerate(lines):
-        if line.strip().startswith(f"{key}="):
-            lines[i] = f"{key}={value}"
-            hit = True
-            break
-    if not hit:
-        lines.append(f"{key}={value}")
-    path.write_text("\n".join(lines) + "\n")
+def masked(value):
+    """Enough to spot a truncated paste, useless to anyone reading it."""
+    def half(s):
+        return f"{s[:3]}…{s[-2:]}" if len(s) > 6 else "…"
+    if ":" in value:
+        a, _, b = value.partition(":")
+        return f"{half(a)}:{half(b)}  ({len(a)} + {len(b)} chars)"
+    return f"{half(value)}  ({len(value)} chars)"
+
+
+def write(path, name, value):
+    """Set one key, keep the others, mode 600 before anything is in it."""
+    existing = dict(ea.read_env_file(path))
+    existing[name] = value
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Created empty with the right mode FIRST. Writing then chmod-ing leaves a
+    # window where the secret is on disk world-readable.
+    path.touch(mode=0o600, exist_ok=True)
     os.chmod(path, 0o600)
+    path.write_text("".join(f"{k}={v}\n" for k, v in sorted(existing.items())))
+    return len(existing)
 
 
 def main():
-    args = [a for a in sys.argv[1:]]
-    agent = "emily"
-    if "--agent" in args:
-        i = args.index("--agent")
-        agent = args[i + 1]
-        del args[i:i + 2]
-
+    if len(sys.argv) < 3:
+        print("usage: set-credential.py <agent> <KEY_NAME>\n"
+              "  e.g. set-credential.py scout ETSY_API_KEY", file=sys.stderr)
+        return 2
+    agent, name = sys.argv[1], sys.argv[2]
     path = ROOT / "agents" / agent / "state" / "credentials.env"
-    if not path.is_file():
-        example = path.parent / "credentials.env.example"
-        if example.is_file():
-            path.write_text(example.read_text())
-            os.chmod(path, 0o600)
-            print(f"created {path} from the example\n")
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("")
-            os.chmod(path, 0o600)
+    if not (ROOT / "agents" / agent).is_dir():
+        have = sorted(p.name for p in (ROOT / "agents").iterdir() if p.is_dir()) \
+            if (ROOT / "agents").is_dir() else []
+        print(f"no agent called '{agent}'. There is: {', '.join(have) or 'none'}",
+              file=sys.stderr)
+        return 1
 
-    keys = args or list(WANTED)
-    print(f"Writing into {path}")
-    print("Paste the value and press Return. Leave it blank to skip.\n")
+    # Hidden, because the last one ended up in a screenshot.
+    try:
+        value = getpass.getpass(f"paste {name} (it will not be shown), then Enter: ")
+    except (EOFError, KeyboardInterrupt):
+        print("\nnothing written.", file=sys.stderr)
+        return 1
+    value = value.strip()
 
-    for key in keys:
-        hint = WANTED.get(key, "")
-        label = f"{key}" + (f"  ({hint})" if hint else "")
-        print(label)
-        try:
-            raw = (input("  value: ") if key in NOT_SECRET
-                   else getpass.getpass("  value (hidden): "))
-        except (EOFError, KeyboardInterrupt):
-            print("\nstopped.")
-            return 1
-        # A paste off a phone arrives with stray spaces, newlines, and
-        # sometimes the quotes from a config example.
-        v = raw.strip().strip('"').strip("'").strip()
-        if not v:
-            print("  skipped\n")
-            continue
-        if " " in v:
-            print("  that value contains a space - almost certainly a bad paste. Not saved.\n")
-            continue
-        set_key(path, key, v)
-        print(f"  saved: {mask(v)}\n")
+    found = problems(name, value)
+    if found:
+        print(f"\nnot written - that does not look like a {name}:", file=sys.stderr)
+        for p in found:
+            print(f"    {p}", file=sys.stderr)
+        print(f"\n  Nothing was saved and nothing was changed. Run it again.",
+              file=sys.stderr)
+        return 2
 
-    print("Now check it:  python3 scripts/check-credentials.py"
-          + (f" {agent}" if agent != "emily" else ""))
+    count = write(path, name, value)
+    print(f"\nwrote {name} to {path}")
+    print(f"  {masked(value)}")
+    print(f"  {count} key(s) in the file, mode {oct(path.stat().st_mode)[-3:]}")
+    print(f"\nThe value was never echoed and is not in your shell history.")
     return 0
 
 

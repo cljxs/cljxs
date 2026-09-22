@@ -6839,3 +6839,135 @@ class TheEtsyKeyIsTwoValuesAndNeitherIsPrinted(unittest.TestCase):
         self.assertIn("num_favorers", text)
         self.assertIn("5.99", text, "the price divisor must be applied")
         self.assertIn("fall (2)", text, "tag frequency is the point")
+
+
+class GettingOneKeyOntoTheDroplet(unittest.TestCase):
+    """Three attempts to save one credential produced three different failures.
+
+    A credentials.env edited in nano, killed because the terminal had no
+    working Ctrl key, leaving .save backups with a live token in them. Then a
+    298-byte "API key" that was the key plus the NEXT command pasted after it,
+    because a paste without a trailing newline joins onto whatever follows.
+    Then the key in a screenshot, because the prompt echoed it.
+
+    Every one of those was avoidable and none of them was the user's fault:
+    they were handed an editor, then two commands to paste in sequence, then
+    a visible prompt. So the editor is gone, there is nothing to substitute
+    into a command line, the value is never echoed, and the file is validated
+    before it is written rather than by whatever fails first afterwards.
+    """
+
+    def setUp(self):
+        self.m = load("set_credential", "set-credential.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / "agents" / "scout" / "state").mkdir(parents=True)
+        self.m.ROOT = self.root
+        self.path = self.root / "agents" / "scout" / "state" / "credentials.env"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def good_key(self):
+        return "yg4czc1wc6jkiyyzxg29wj9q" + ":" + "0a1b2c3d4e5f"
+
+    def run_with(self, value, agent="scout", name="ETSY_API_KEY"):
+        real_argv, real_getpass = sys.argv, self.m.getpass.getpass
+        sys.argv = ["set-credential.py", agent, name]
+        self.m.getpass.getpass = lambda prompt="": value
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = self.m.main()
+        finally:
+            sys.argv, self.m.getpass.getpass = real_argv, real_getpass
+        return code, out.getvalue() + err.getvalue()
+
+    # --- the accident that actually happened --------------------------------
+
+    def test_the_key_plus_the_next_command_is_refused(self):
+        # Verbatim shape of the 298-byte file: the key, then the command that
+        # was meant to run after it.
+        mangled = ("yg4czc1wc6jkiyyzxg29wj9q: cd /root/ecosystem && python3 -c "
+                   "\" import pathlib\"")
+        code, said = self.run_with(mangled)
+        self.assertEqual(code, 2)
+        self.assertIn("two things got pasted at once", said)
+        self.assertFalse(self.path.exists(), "nothing should have been written")
+
+    def test_a_keystring_with_no_secret_is_refused(self):
+        code, said = self.run_with("yg4czc1wc6jkiyyzxg29wj9q")
+        self.assertEqual(code, 2)
+        self.assertIn("colon", said)
+
+    def test_a_shell_operator_is_refused(self):
+        code, said = self.run_with("abc12345:def67890" + " && echo hi")
+        self.assertEqual(code, 2)
+
+    def test_nothing_is_written_when_it_refuses(self):
+        # A half-written credentials.env is worse than none: the next command
+        # fails somewhere else entirely.
+        self.path.write_text("OPENROUTER_API_KEY=sk-untouched\n")
+        before = self.path.read_text()
+        self.run_with("nonsense with spaces")
+        self.assertEqual(self.path.read_text(), before)
+
+    # --- what it does when the value is fine --------------------------------
+
+    def test_it_writes_the_key(self):
+        code, _ = self.run_with(self.good_key())
+        self.assertEqual(code, 0)
+        self.assertIn(f"ETSY_API_KEY={self.good_key()}", self.path.read_text())
+
+    def test_the_other_keys_in_the_file_survive(self):
+        # credentials.env holds more than one secret. Rewriting the whole file
+        # to change one line is how the others disappear.
+        self.path.write_text("OPENROUTER_API_KEY=sk-keepme\n"
+                             "PRINTIFY_API_TOKEN=keepmetoo\n")
+        self.run_with(self.good_key())
+        text = self.path.read_text()
+        self.assertIn("OPENROUTER_API_KEY=sk-keepme", text)
+        self.assertIn("PRINTIFY_API_TOKEN=keepmetoo", text)
+        self.assertIn("ETSY_API_KEY=", text)
+
+    def test_the_file_is_never_world_readable_even_for_an_instant(self):
+        # Write-then-chmod leaves a window where the secret is on disk with
+        # default permissions. It is created 600 before anything goes in it.
+        self.run_with(self.good_key())
+        self.assertEqual(oct(self.path.stat().st_mode)[-3:], "600")
+        src = (SCRIPTS / "set-credential.py").read_text()
+        body = src.split("def write(", 1)[1].split("\ndef ", 1)[0]
+        self.assertLess(body.index("touch(mode=0o600"), body.index("write_text"))
+
+    # --- the rule that put a key in a screenshot ----------------------------
+
+    def test_the_value_is_never_echoed(self):
+        secret = self.good_key().split(":")[1]
+        _code, said = self.run_with(self.good_key())
+        self.assertNotIn(self.good_key(), said)
+        self.assertNotIn(secret, said)
+
+    def test_but_enough_is_shown_to_spot_a_truncated_paste(self):
+        _code, said = self.run_with(self.good_key())
+        self.assertIn("24 + 12 chars", said)
+
+    def test_the_prompt_does_not_display_what_is_typed(self):
+        # getpass, not input(). The last key reached a screenshot because the
+        # prompt echoed it.
+        src = (SCRIPTS / "set-credential.py").read_text()
+        self.assertIn("getpass.getpass(", src)
+        self.assertNotIn("input(", src)
+
+    # --- being told what went wrong -----------------------------------------
+
+    def test_an_unknown_agent_lists_the_real_ones(self):
+        code, said = self.run_with(self.good_key(), agent="dennis")
+        self.assertEqual(code, 1)
+        self.assertIn("scout", said)
+
+    def test_a_key_we_do_not_know_the_shape_of_is_still_accepted(self):
+        # Guessing at the format of a credential nobody has seen is how a
+        # real key gets refused at midnight.
+        code, _ = self.run_with("some-other-token-that-is-long-enough",
+                                name="SOME_OTHER_TOKEN")
+        self.assertEqual(code, 0)
