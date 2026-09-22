@@ -19,6 +19,16 @@ Provenance of each file, and how to refresh it:
 redacts anything secret-shaped. Run it there, commit what it writes, and the
 tests keep testing reality instead of my memory of it.
 
+**A test must never restate a value that lives in a fixture.** Refreshing is
+what these files are for, so a hardcoded copy of one of their values is a
+time bomb with a date on it. `SystemdTimestamps.test_the_real_format` carried
+`"2026-09-16 18:55:37"` as a string beside the fixture that said the same
+thing; the fixture got refreshed on the droplet, the test failed with a diff
+of two timestamps, and nothing in that diff said the FIXTURE had moved rather
+than the parser. Assert the round trip - parse the captured line, print it
+back, compare it to the line - and put fixed values only in tests that also
+hold their own input.
+
 Still missing, because no raw sample has been captured yet:
 
 * `openclaw config get agents.entries.<name>.model.primary` - preflight parses

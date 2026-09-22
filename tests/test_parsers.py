@@ -223,15 +223,88 @@ class CashIdentity(unittest.TestCase):
 
 class SystemdTimestamps(unittest.TestCase):
     """health-check reads systemd's own format; an unparsed stamp must read as
-    'never ran', not as a crash."""
+    'never ran', not as a crash.
+
+    This test used to carry the fixture's timestamp written out beside it -
+    "2026-09-16 18:55:37" as a string in the assertion. capture-fixtures.py
+    exists to refresh that fixture from the droplet, and the moment someone
+    did, the test failed with a diff of two timestamps and no indication that
+    the FIXTURE had moved rather than the parser. One fact in two places, and
+    the second place was the one nobody would think to update.
+
+    What it checks now is the round trip: whatever instant the captured line
+    names, parsing it and printing it back must give that line again. That
+    holds for any capture, including tomorrow's.
+    """
+
+    def stamp_line(self):
+        return [l for l in (FIXTURES / "systemd-show.txt").read_text().splitlines()
+                if l.startswith("ExecMainStartTimestamp=")][0].split("=", 1)[1]
 
     def test_the_real_format(self):
-        line = [l for l in (FIXTURES / "systemd-show.txt").read_text().splitlines()
-                if l.startswith("ExecMainStartTimestamp=")][0].split("=", 1)[1]
+        line = self.stamp_line()
         ts = healthcheck.parse_stamp(line)
-        self.assertIsNotNone(ts)
-        self.assertEqual(datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                         "2026-09-16 18:55:37")
+        self.assertIsNotNone(ts, f"the captured format stopped parsing: {line!r}")
+        _day, date, clock, zone = line.split()
+        printed = (datetime.fromtimestamp(ts, timezone.utc)
+                   if zone.upper() in ("UTC", "GMT", "Z")
+                   else datetime.fromtimestamp(ts))
+        self.assertEqual(printed.strftime("%Y-%m-%d %H:%M:%S"), f"{date} {clock}")
+
+    def test_refreshing_the_fixture_cannot_break_this(self):
+        # The bug itself. A capture from any other moment must parse the same
+        # way - if this test can only pass against one particular timestamp,
+        # it is testing the fixture rather than the parser.
+        for line in ("Thu 2026-09-17 03:30:51 UTC", "Mon 2019-01-07 00:00:00 UTC",
+                     "Sat 2030-12-31 23:59:59 UTC"):
+            with self.subTest(line=line):
+                ts = healthcheck.parse_stamp(line)
+                self.assertEqual(
+                    datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                    " ".join(line.split()[1:3]))
+
+    def test_a_stamp_with_no_zone_at_all_is_still_read_as_utc(self):
+        # Not local. systemd always prints a zone, so a line without one is
+        # something else's output - and guessing "local" on a machine that is
+        # not UTC would move a timestamp nobody asked to be moved. UTC is what
+        # this always assumed; the suffix handling above is an addition to it,
+        # not a replacement.
+        was = os.environ.get("TZ")
+        os.environ["TZ"] = "America/New_York"
+        time.tzset()
+        try:
+            ts = healthcheck.parse_stamp("Wed 2026-09-16 18:55:37")
+            self.assertEqual(datetime.fromtimestamp(ts, timezone.utc)
+                             .strftime("%H:%M:%S"), "18:55:37")
+        finally:
+            if was is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = was
+            time.tzset()
+
+    def test_the_zone_on_the_end_is_not_decoration(self):
+        # systemd prints in the machine's own timezone. The suffix was being
+        # dropped and everything called UTC, which on an Eastern droplet
+        # reports every wake four hours before it happened - silently, and in
+        # the one number health-check exists to be trusted on.
+        was = os.environ.get("TZ")
+        os.environ["TZ"] = "America/New_York"
+        time.tzset()
+        try:
+            utc = healthcheck.parse_stamp("Wed 2026-09-16 18:55:37 UTC")
+            edt = healthcheck.parse_stamp("Wed 2026-09-16 18:55:37 EDT")
+            self.assertEqual(datetime.fromtimestamp(utc, timezone.utc)
+                             .strftime("%H:%M:%S"), "18:55:37")
+            self.assertEqual(datetime.fromtimestamp(edt, timezone.utc)
+                             .strftime("%H:%M:%S"), "22:55:37")
+            self.assertEqual(edt - utc, 4 * 3600)
+        finally:
+            if was is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = was
+            time.tzset()
 
     def test_never_ran(self):
         for empty in ("", "   ", "n/a"):

@@ -56,14 +56,29 @@ def sh(*args):
 
 
 def parse_stamp(v):
-    """systemd prints 'Wed 2026-09-16 18:55:37 UTC'. Empty means never ran."""
+    """systemd prints 'Wed 2026-09-16 18:55:37 UTC'. Empty means never ran.
+
+    The zone on the end is not decoration. systemd prints in the machine's
+    own timezone, so a droplet set to Eastern prints EDT - and this used to
+    drop the suffix and call it UTC regardless, which would have reported
+    every wake as four hours earlier than it happened. It has never bitten
+    because this droplet runs UTC; it would have bitten silently the day it
+    did not, and "the agent last ran four hours ago" is exactly the number
+    health-check exists to be trusted on.
+    """
     if not v or v.strip() in ("", "n/a"):
         return None
+    parts = v.split()
     try:
-        return datetime.strptime(" ".join(v.split()[1:3]), "%Y-%m-%d %H:%M:%S") \
-            .replace(tzinfo=timezone.utc).timestamp()
+        naive = datetime.strptime(" ".join(parts[1:3]), "%Y-%m-%d %H:%M:%S")
     except Exception:
         return None
+    zone = parts[3].upper() if len(parts) > 3 else "UTC"
+    if zone in ("UTC", "GMT", "Z"):
+        return naive.replace(tzinfo=timezone.utc).timestamp()
+    # Any other abbreviation is this machine's own zone, which is what
+    # .timestamp() on a naive datetime already means.
+    return naive.timestamp()
 
 
 def unit_facts(unit):
