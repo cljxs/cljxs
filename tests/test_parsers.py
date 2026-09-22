@@ -7635,3 +7635,235 @@ class OneBucketPerCompletionWorstNewsFirst(unittest.TestCase):
                        "fall stickers goodnotes"):
             with self.subTest(phrase=phrase):
                 self.assertEqual(self.m.intent_of(phrase)[0], "digital", phrase)
+
+
+class AFieldThatIsNotTheShapeItShouldBe(unittest.TestCase):
+    """market-scan.py reads four of Etsy's 59 fields and scores on them.
+
+    Each of these produces a confident, wrong number rather than an error if
+    it is not checked: a timestamp in milliseconds makes every listing three
+    weeks old and every favs/day figure enormous; a null view count makes
+    favs/view a division by zero or a TypeError depending on where it lands;
+    a missing divisor turns 899 minor units into a price of 899 dollars.
+
+    So every component is dropped rather than guessed, and the output names
+    what it dropped.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("market_scan", SCRIPTS / "market-scan.py")
+
+    NOW = 1758500000.0          # a fixed clock, so these never rot
+
+    def row(self, **over):
+        r = {"original_creation_timestamp": int(self.NOW - 100 * 86400),
+             "num_favorers": 50, "views": 1000,
+             "price": {"amount": 899, "divisor": 100, "currency_code": "USD"}}
+        r.update(over)
+        return r
+
+    def test_the_baseline_row_computes(self):
+        r = self.row()
+        self.assertAlmostEqual(self.m.age_days(r, self.NOW), 100, places=3)
+        self.assertAlmostEqual(self.m.favs_per_day(r, self.NOW), 0.5, places=3)
+        self.assertAlmostEqual(self.m.pull(r), 0.05, places=6)
+        self.assertAlmostEqual(self.m.price_of(r), 8.99, places=2)
+
+    def test_a_millisecond_timestamp_is_refused(self):
+        # The one that would do real damage: it is a plausible integer, it is
+        # in the right field, and it makes a five-year-old listing look three
+        # weeks old.
+        r = self.row(original_creation_timestamp=int((self.NOW - 100 * 86400) * 1000))
+        self.assertIsNone(self.m.age_days(r, self.NOW))
+        self.assertIsNone(self.m.favs_per_day(r, self.NOW))
+
+    def test_a_timestamp_from_before_etsy_existed_is_refused(self):
+        for ts in (0, -1, 1104537599):
+            with self.subTest(ts=ts):
+                self.assertIsNone(
+                    self.m.age_days(self.row(original_creation_timestamp=ts),
+                                    self.NOW))
+
+    def test_a_future_timestamp_is_refused(self):
+        r = self.row(original_creation_timestamp=int(self.NOW + 10 * 86400))
+        self.assertIsNone(self.m.age_days(r, self.NOW))
+
+    def test_a_listing_posted_today_does_not_divide_by_zero(self):
+        # age is floored at one day. Without it, a listing minutes old with
+        # one favourite scores hundreds of favourites per day and tops every
+        # ranking it appears in.
+        r = self.row(original_creation_timestamp=int(self.NOW - 60), num_favorers=1)
+        self.assertEqual(self.m.age_days(r, self.NOW), 1.0)
+        self.assertEqual(self.m.favs_per_day(r, self.NOW), 1.0)
+
+    def test_the_fallback_timestamp_field_is_used(self):
+        r = self.row()
+        del r["original_creation_timestamp"]
+        r["creation_timestamp"] = int(self.NOW - 50 * 86400)
+        self.assertAlmostEqual(self.m.age_days(r, self.NOW), 50, places=3)
+
+    def test_a_missing_or_null_field_drops_the_component(self):
+        for field in ("num_favorers", "views", "price",
+                      "original_creation_timestamp"):
+            for value in (None, "", {}):
+                with self.subTest(field=field, value=value):
+                    r = self.row(**{field: value})
+                    # None of these may raise, and none may return a number.
+                    self.m.age_days(r, self.NOW)
+                    self.m.favs_per_day(r, self.NOW)
+                    self.m.pull(r)
+                    self.m.price_of(r)
+
+    def test_a_boolean_timestamp_is_refused_by_the_window(self):
+        # True == 1 in Python, so a bool passes an isinstance int check. It
+        # does NOT pass the Etsy-launched-in-2005 window, which is the check
+        # that owns this - a separate isinstance(ts, bool) guard here was
+        # unreachable behind it and no test could fail on it.
+        self.assertIsNone(self.m.age_days(
+            self.row(original_creation_timestamp=True), self.NOW))
+        self.assertIsNone(self.m.favs_per_day(
+            self.row(original_creation_timestamp=False), self.NOW))
+
+    def test_a_boolean_is_not_a_number(self):
+        # True == 1 in Python, so a bool sails through an isinstance int
+        # check and scores as one favourite.
+        self.assertIsNone(self.m.favs_per_day(self.row(num_favorers=True),
+                                              self.NOW))
+        self.assertIsNone(self.m.pull(self.row(views=True)))
+        self.assertIsNone(self.m.price_of(
+            self.row(price={"amount": True, "divisor": 100})))
+
+    def test_zero_views_is_not_a_division(self):
+        self.assertIsNone(self.m.pull(self.row(views=0)))
+
+    def test_zero_favourites_is_a_real_answer_not_a_missing_one(self):
+        # 'fall sticker' returned a listing with favs=0. That is the finding,
+        # not a gap - dropping it would delete the evidence of saturation.
+        self.assertEqual(self.m.favs_per_day(self.row(num_favorers=0), self.NOW), 0.0)
+        self.assertEqual(self.m.pull(self.row(num_favorers=0)), 0.0)
+
+    def test_a_price_with_no_divisor_is_refused(self):
+        for price in ({"amount": 899}, {"amount": 899, "divisor": 0},
+                      {"amount": 899, "divisor": None}, {"divisor": 100}):
+            with self.subTest(price=price):
+                self.assertIsNone(self.m.price_of(self.row(price=price)))
+
+    def test_a_negative_count_is_refused(self):
+        self.assertIsNone(self.m.favs_per_day(self.row(num_favorers=-1), self.NOW))
+        self.assertIsNone(self.m.pull(self.row(views=-5)))
+
+
+class ASaturatedPhraseScoresLikeOne(unittest.TestCase):
+    """The arithmetic on top of those fields, and the refusal to invent a
+    verdict when a component is missing."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("market_scan", SCRIPTS / "market-scan.py")
+
+    NOW = 1758500000.0
+
+    def payload(self, count, rows):
+        return {"count": count, "results": rows}
+
+    def row(self, favs, views, days, cents=899):
+        return {"original_creation_timestamp": int(self.NOW - days * 86400),
+                "num_favorers": favs, "views": views,
+                "price": {"amount": cents, "divisor": 100}}
+
+    def test_the_real_fall_sticker_shape_reads_as_saturated(self):
+        # 109,099 listings whose top results have 1, 14 and 0 favourites -
+        # the numbers from the live probe.
+        m = self.m.measure(self.payload(109099, [
+            self.row(1, 400, 300), self.row(14, 900, 300), self.row(0, 200, 300)]),
+            self.NOW)
+        self.assertEqual(m["supply"], 109099)
+        self.assertLess(m["heat"], 0.01)
+        self.assertLess(self.m.opportunity(m), 0.002)
+
+    def test_a_thin_lively_phrase_outscores_it(self):
+        thin = self.m.measure(self.payload(900, [
+            self.row(30, 300, 60), self.row(45, 500, 60)]), self.NOW)
+        fat = self.m.measure(self.payload(109099, [
+            self.row(1, 400, 300), self.row(0, 200, 300)]), self.NOW)
+        self.assertGreater(self.m.opportunity(thin), self.m.opportunity(fat))
+
+    def test_the_divisor_is_logarithmic_not_linear(self):
+        # A linear divisor would make any narrow phrase win on arithmetic
+        # alone. Ten times the competition must cost less than ten times the
+        # score.
+        a = {"heat": 1.0, "supply": 1000}
+        b = {"heat": 1.0, "supply": 10000}
+        self.assertLess(self.m.opportunity(b), self.m.opportunity(a))
+        self.assertGreater(self.m.opportunity(b), self.m.opportunity(a) / 10)
+
+    def test_no_score_without_both_halves(self):
+        self.assertIsNone(self.m.opportunity({"heat": None, "supply": 1000}))
+        self.assertIsNone(self.m.opportunity({"heat": 1.0, "supply": None}))
+        self.assertIsNone(self.m.opportunity({"heat": 1.0, "supply": 0}))
+
+    def test_what_was_dropped_is_named(self):
+        m = self.m.measure(self.payload(500, [
+            {"num_favorers": 5, "views": None, "price": None}]), self.NOW)
+        self.assertIsNone(m["heat"])
+        self.assertIsNone(m["pull"])
+        self.assertIsNone(m["price"])
+        self.assertTrue(m["dropped"])
+        self.assertIn("views", " ".join(m["dropped"]))
+
+    def test_an_empty_result_set_does_not_crash(self):
+        m = self.m.measure(self.payload(0, []), self.NOW)
+        self.assertEqual(m["returned"], 0)
+        self.assertIsNone(self.m.opportunity(m))
+
+    def test_one_bad_row_does_not_poison_the_median(self):
+        # The median is taken over what computed, not over zeros substituted
+        # for what did not.
+        m = self.m.measure(self.payload(500, [
+            self.row(30, 300, 60), self.row(30, 300, 60),
+            {"num_favorers": None, "views": None}]), self.NOW)
+        self.assertAlmostEqual(m["heat"], 0.5, places=3)
+
+
+class TheScanSpendsItsEtsyCallsOnTheBestEvidence(unittest.TestCase):
+    """pick() in market-scan.py. Etsy allows 5 calls a second and 5,000 a
+    day, and an expansion produces 229 candidates. Which twelve get asked
+    about is the whole question."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("market_scan", SCRIPTS / "market-scan.py")
+
+    def test_multi_shop_phrases_go_first(self):
+        found = {"fall nail stickers amazon": 5, "fall nail stickers near me": 6,
+                 "fall sticker sheet": 0, "fall sticker pack": 1}
+        picked = self.m.pick("fall sticker", found)
+        self.assertEqual(picked[0], "fall nail stickers")
+
+    def test_the_rest_is_filled_by_rank(self):
+        found = {"fall sticker sheet": 0, "fall sticker pack": 1,
+                 "fall sticker roll": 2}
+        self.assertEqual(self.m.pick("fall sticker", found),
+                         ["fall sticker sheet", "fall sticker pack",
+                          "fall sticker roll"])
+
+    def test_infringing_and_off_topic_phrases_are_never_asked_about(self):
+        found = {"fall sticker pikmin": 0, "fall risk label": 1,
+                 "fall stickers png": 2, "fall sticker sheet": 3}
+        self.assertEqual(self.m.pick("fall sticker", found),
+                         ["fall sticker sheet"])
+
+    def test_the_budget_is_respected(self):
+        found = {f"fall sticker {i:02d}": i for i in range(60)}
+        self.assertEqual(len(self.m.pick("fall sticker", found)),
+                         self.m.CANDIDATES)
+
+    def test_no_phrase_is_asked_about_twice(self):
+        # A multi-shop phrase can also be a plain completion. Asking twice
+        # spends a call to learn nothing.
+        found = {"fall nail stickers": 0, "fall nail stickers amazon": 1,
+                 "fall nail stickers near me": 2}
+        picked = self.m.pick("fall sticker", found)
+        self.assertEqual(len(picked), len(set(picked)))
+        self.assertEqual(picked.count("fall nail stickers"), 1)
