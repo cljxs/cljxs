@@ -7388,3 +7388,250 @@ class ExpansionWidensTheKeyhole(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("429", errors[0])
         self.assertEqual(len(found), 26)
+
+
+class SomebodyElsesPropertyReachesTheArtGenerator(unittest.TestCase):
+    """ip-check.py.
+
+    The first real expansion of 'fall sticker' produced 229 searches and put
+    'fall sticker pikmin' and 'fall sticker decor pikmin' in a bucket labelled
+    BUYING. Pikmin is Nintendo's. The chain from there is automatic - Scout
+    proposes, Emily generates the art and drafts the listing - and nothing in
+    between was looking at trademarks.
+
+    Sixteen of that sweep's 229 were somebody else's property: Pikmin,
+    Fallout, Snoopy, Starbucks, and six Roblox games that never say Roblox.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("ip_check", SCRIPTS / "ip-check.py")
+
+    def test_the_phrases_that_started_this_are_blocked(self):
+        for phrase in ("fall sticker pikmin", "fall sticker decor pikmin",
+                       "fallout decal", "fall snoopy sticker",
+                       "fall sticker starbucks"):
+            with self.subTest(phrase=phrase):
+                tier, _what, why = self.m.risky(phrase)
+                self.assertEqual(tier, "blocked", f"{phrase}: {why}")
+
+    def test_a_game_is_blocked_by_the_name_people_actually_type(self):
+        # 'fall decals bloxburg' and 'fall decal codes berry avenue' are
+        # Roblox searches that never contain the word Roblox. Listing the
+        # publisher alone would have missed all six in the real sweep.
+        for phrase in ("fall decals bloxburg", "fall decals berry avenue",
+                       "fall decal codes berry avenue", "fall tree decal bloxburg"):
+            with self.subTest(phrase=phrase):
+                self.assertEqual(self.m.risky(phrase)[0], "blocked", phrase)
+
+    def test_an_ordinary_word_is_flagged_not_refused(self):
+        # 'frozen hot chocolate sticker' is a product. Blocking it outright
+        # is the 'target practice sticker' mistake again.
+        tier, _what, _why = self.m.risky("frozen hot chocolate sticker")
+        self.assertEqual(tier, "check")
+        self.assertEqual(self.m.risky("friends are like autumn leaves")[0], "check")
+
+    def test_a_plain_product_phrase_passes(self):
+        for phrase in ("cozy fall sweatshirt", "fall leaf sticker",
+                       "pumpkin spice tumbler", "autumn vinyl sticker pack"):
+            with self.subTest(phrase=phrase):
+                self.assertIsNone(self.m.risky(phrase)[0], phrase)
+
+    def test_the_phrasings_sellers_believe_are_a_defence(self):
+        for phrase in ("stanley cup dupe", "sticker inspired by hogwarts",
+                       "official fall sticker", "licensed autumn decal"):
+            with self.subTest(phrase=phrase):
+                tier, what, _why = self.m.risky(phrase)
+                self.assertEqual(tier, "blocked", phrase)
+
+    def test_phrasing_is_checked_before_the_name_list(self):
+        # 'inspired by' has to win, because the whole point is that it is a
+        # problem whatever name follows it - including one not on the list.
+        _tier, what, _why = self.m.risky("sticker inspired by a nameless thing")
+        self.assertEqual(what, "trademark phrasing")
+
+    def test_the_cli_exit_code_says_how_bad_it_is(self):
+        def run(*args):
+            r = subprocess.run([sys.executable, str(SCRIPTS / "ip-check.py"), *args],
+                               capture_output=True, text=True)
+            return r.returncode, r.stdout
+        self.assertEqual(run("fall leaf sticker")[0], 0)
+        self.assertEqual(run("frozen hot chocolate sticker")[0], 1)
+        self.assertEqual(run("fall sticker pikmin")[0], 2)
+        # The worst of several wins, so a batch cannot be passed by its
+        # innocent members.
+        self.assertEqual(run("fall leaf sticker", "fall sticker pikmin")[0], 2)
+
+    def test_it_never_claims_to_be_complete(self):
+        r = subprocess.run([sys.executable, str(SCRIPTS / "ip-check.py"),
+                            "fall sticker pikmin"], capture_output=True, text=True)
+        self.assertIn("not a complete list", r.stdout)
+        self.assertIn("not been cleared", r.stdout)
+
+
+class ASynonymIsNotDrift(unittest.TestCase):
+    """trend-probe.py's drift check, and the synonym map that keeps it honest.
+
+    Expanding 'fall sticker' returned 'fall vinyl decals' and 'fall leaf
+    decals'. A decal IS a sticker. Expanding 'cozy fall sweatshirt' returned
+    pullover, sweater, hoodie and crewneck - the four best results in the run.
+
+    A literal head-noun match called all of those off-topic. Drift detection
+    without a synonym map does not merely fail to help; it deletes the
+    findings you ran the sweep for.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("trend_probe", SCRIPTS / "trend-probe.py")
+
+    def test_the_four_best_sweatshirt_results_are_not_drift(self):
+        for phrase in ("cozy fall pullover", "cozy fall sweater",
+                       "cozy fall hoodie", "cozy fall crewneck",
+                       "cozy fall crewnecks", "cozy fall knit sweater"):
+            with self.subTest(phrase=phrase):
+                self.assertFalse(self.m.drifted("cozy fall sweatshirt", phrase),
+                                 phrase)
+
+    def test_a_decal_is_a_sticker(self):
+        for phrase in ("fall vinyl decals", "fall leaf decals",
+                       "fall shirt decals", "fall mirror decals"):
+            with self.subTest(phrase=phrase):
+                self.assertFalse(self.m.drifted("fall sticker", phrase), phrase)
+
+    def test_the_real_drifters_are_still_caught(self):
+        # Every one of these came back from the live sweep.
+        self.assertTrue(self.m.drifted("cozy fall sweatshirt", "cozy fall desserts"))
+        self.assertTrue(self.m.drifted("cozy fall sweatshirt", "cozy fall snacks"))
+        self.assertTrue(self.m.drifted("fall sticker", "fall autumn quotes"))
+        self.assertTrue(self.m.drifted("fall sticker", "fall sayings for signs"))
+
+    def test_a_label_is_not_a_sticker(self):
+        # It looks like one, and admitting it pulls in a hospital sign, a
+        # music company and a clothing brand - all real results.
+        for phrase in ("fall risk label", "fall records label",
+                       "fall hazard label", "fall the label bags"):
+            with self.subTest(phrase=phrase):
+                self.assertTrue(self.m.drifted("fall sticker", phrase), phrase)
+
+    def test_plurals_do_not_drift(self):
+        self.assertFalse(self.m.drifted("fall sticker", "fall stickers"))
+        self.assertFalse(self.m.drifted("fall stickers", "fall sticker"))
+        self.assertFalse(self.m.drifted("fall magnet", "fall magnets"))
+
+    def test_the_stemmer_is_crude_but_not_wrong(self):
+        self.assertEqual(self.m.stem("stickers"), "sticker")
+        self.assertEqual(self.m.stem("decals"), "decal")
+        # Short words must survive: 'bus' -> 'bu' would be a silent disaster.
+        for word in ("mug", "tee", "bus", "gas", "pins"):
+            with self.subTest(word=word):
+                self.assertGreaterEqual(len(self.m.stem(word)), 3, word)
+
+    def test_a_hyphenated_head_still_matches(self):
+        self.assertFalse(self.m.drifted("fall shirt", "fall t-shirt"))
+
+    def test_an_empty_seed_never_drifts(self):
+        self.assertFalse(self.m.drifted("", "anything at all"))
+
+
+class TheOffsiteBucketWasTheBestSignalInIt(unittest.TestCase):
+    """Somebody typing 'fall window stickers near me' has decided to buy,
+    knows the product, and has not thought of Etsy. The first version of
+    trend-probe.py put fifteen such searches in a bucket and ignored them."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("trend_probe", SCRIPTS / "trend-probe.py")
+
+    def test_the_shop_is_stripped_off_the_end(self):
+        self.assertEqual(self.m.without_retailer("fall nail stickers amazon"),
+                         "fall nail stickers")
+        self.assertEqual(self.m.without_retailer("fall window stickers near me"),
+                         "fall window stickers")
+        self.assertEqual(self.m.without_retailer("fall stickers at walmart"),
+                         "fall stickers")
+        self.assertEqual(self.m.without_retailer("fall stickers hobby lobby"),
+                         "fall stickers")
+
+    def test_a_phrase_with_no_shop_in_it_returns_nothing(self):
+        # None, not the phrase itself - a caller that got the phrase back
+        # would count every search as retail demand.
+        for phrase in ("fall leaf sticker", "cozy fall hoodie",
+                       "target practice sticker"):
+            with self.subTest(phrase=phrase):
+                self.assertIsNone(self.m.without_retailer(phrase), phrase)
+
+    def test_the_shop_is_only_stripped_from_the_end(self):
+        # 'amazon rainforest sticker' is a product, not a shopping trip.
+        self.assertIsNone(self.m.without_retailer("amazon rainforest sticker"))
+
+    def test_shops_are_counted_per_product(self):
+        found = {"fall nail stickers amazon": 0, "fall nail stickers near me": 1,
+                 "fall window stickers amazon": 2, "fall leaf sticker": 3}
+        hunted = self.m.retail_demand(found)
+        self.assertEqual(hunted["fall nail stickers"], {"amazon", "near me"})
+        self.assertEqual(hunted["fall window stickers"], {"amazon"})
+        self.assertNotIn("fall leaf sticker", hunted)
+
+    def test_the_real_sweep_finds_the_four_it_found(self):
+        found = {p: 0 for p in (
+            "fall stickers hobby lobby", "fall stickers on amazon",
+            "fall stickers walmart", "fall stickers amazon",
+            "fall stickers michaels", "fall stickers near me",
+            "fall leaf stickers near me", "fall stickers target",
+            "fall leaf stickers michaels", "fall stickers at walmart",
+            "fall stickers dollar tree", "fall window stickers amazon",
+            "fall nail stickers amazon", "fall window stickers near me",
+            "fall nail stickers near me")}
+        hunted = self.m.retail_demand(found)
+        multi = {p for p, shops in hunted.items() if len(shops) > 1}
+        self.assertEqual(multi, {"fall stickers", "fall leaf stickers",
+                                 "fall nail stickers", "fall window stickers"})
+
+
+class OneBucketPerCompletionWorstNewsFirst(unittest.TestCase):
+    """bucket() in trend-probe.py. A completion that is both infringing and
+    off-topic has to report as infringing: that is the one with a
+    consequence."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("trend_probe", SCRIPTS / "trend-probe.py")
+
+    def test_property_beats_everything_else(self):
+        # 'fall decals bloxburg' is a Roblox search - offsite-ish, arguably
+        # drift, and definitely not ours to print.
+        self.assertEqual(self.m.bucket("fall sticker", "fall decals bloxburg")[0],
+                         "blocked")
+        self.assertEqual(self.m.bucket("fall sticker", "pikmin sticker png")[0],
+                         "blocked")
+
+    def test_drift_beats_intent(self):
+        self.assertEqual(self.m.bucket("fall sticker", "fall risk label")[0],
+                         "drift")
+
+    def test_a_named_intent_beats_buying(self):
+        self.assertEqual(
+            self.m.bucket("cozy fall sweatshirt", "cozy fall sweater crochet pattern")[0],
+            "digital")
+        self.assertEqual(self.m.bucket("fall sticker", "fall stickers amazon")[0],
+                         "offsite")
+
+    def test_an_ordinary_product_phrase_lands_in_buying(self):
+        for phrase in ("fall leaf sticker", "cozy fall hoodie",
+                       "fall sticker sheet"):
+            with self.subTest(phrase=phrase):
+                seed = "cozy fall sweatshirt" if "hoodie" in phrase else "fall sticker"
+                self.assertEqual(self.m.bucket(seed, phrase)[0], "buying", phrase)
+
+    def test_a_check_word_is_its_own_bucket_not_buying(self):
+        name, what = self.m.bucket("fall sticker", "frozen sticker")
+        self.assertEqual(name, "check")
+        self.assertTrue(what)
+
+    def test_the_new_digital_rules_catch_what_the_sweep_missed(self):
+        # All three sat in BUYING on the first real run.
+        for phrase in ("cozy fall sweater crochet pattern", "fall sticker clipart",
+                       "fall stickers goodnotes"):
+            with self.subTest(phrase=phrase):
+                self.assertEqual(self.m.intent_of(phrase)[0], "digital", phrase)

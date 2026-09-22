@@ -33,7 +33,9 @@ so the refusal stays tested.
 Standard library only.
 """
 
+import importlib.util
 import json
+import os
 import re
 import ssl
 import sys
@@ -42,6 +44,16 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from pathlib import Path
+
+SCRIPTS = Path(__file__).resolve().parent
+
+# THE trademark list, imported. Emily will need the same one before she
+# generates art, and two copies would mean the one she reads is the one that
+# never got Pikmin added to it.
+_ip = importlib.util.spec_from_file_location("ip_check", SCRIPTS / "ip-check.py")
+ipc = importlib.util.module_from_spec(_ip)
+_ip.loader.exec_module(ipc)
 
 SUGGEST = "https://suggestqueries.google.com/complete/search"
 TRENDING = "https://trends.google.com/trending/rss"
@@ -71,8 +83,14 @@ INTENT = [
      "offsite", "shopping for a shop that is not Etsy"),
     (re.compile(r"\b(target|kohls|costco|cvs|walgreens)\s*$", re.I),
      "offsite", "shopping for a shop that is not Etsy"),
+    # 'crochet pattern', 'goodnotes' and 'clipart' all came back inside the
+    # BUYING bucket on the first real run. A crochet pattern is a document,
+    # GoodNotes is a tablet app, and clipart is an image licence - none of
+    # them is a thing to print and post.
     (re.compile(r"\b(png|svg|printable|print at home|digital|download|"
-                r"copy and paste|cricut file)\b", re.I),
+                r"copy and paste|cricut file|clip ?art|cut file|"
+                r"sublimation|goodnotes|notability|procreate|"
+                r"(crochet|knit(ting)?|sewing|quilt(ing)?) pattern)\b", re.I),
      "digital", "wants a file, not a physical product"),
     (re.compile(r"\b(free|diy|how to|tutorial|ideas|template)\b", re.I),
      "research", "looking for information, not buying"),
@@ -156,6 +174,113 @@ def intent_of(phrase):
         if pattern.search(phrase):
             return label, why
     return None, None
+
+
+RETAILERS = re.compile(
+    r"\s*\b(near me|on amazon|at amazon|amazon|at walmart|walmart|"
+    r"hobby lobby|michaels|dollar tree|temu|shein|aliexpress|ebay|target|"
+    r"kohls|costco|cvs|walgreens)\b\s*$", re.I)
+
+
+def stem(word):
+    """Crudest possible singular. 'stickers' -> 'sticker', and that is all
+    this needs to do - it is comparing a phrase to its own seed, not parsing
+    English."""
+    w = word.lower().strip()
+    for suffix in ("ies", "es", "s"):
+        if len(w) > len(suffix) + 2 and w.endswith(suffix):
+            return w[:-len(suffix)] + ("y" if suffix == "ies" else "")
+    return w
+
+
+# Words that mean the same product to a buyer. WITHOUT this, drift detection
+# is actively harmful: expanding 'cozy fall sweatshirt' returns pullover,
+# sweater, hoodie and crewneck - the four best results in the run - and a
+# literal head-noun match would have discarded all four as off-topic.
+#
+# Kept deliberately small and only for things actually sold here. 'label' is
+# NOT a synonym for sticker, however much it looks like one: it pulls in
+# 'fall risk label' and 'fall records label', which are a hospital sign and
+# a music company.
+SYNONYMS = [
+    {"sticker", "decal"},
+    {"sweatshirt", "hoodie", "crewneck", "pullover", "sweater", "jumper"},
+    {"shirt", "tee", "tshirt", "t-shirt", "top"},
+    {"mug", "tumbler", "cup", "glass"},
+    {"tote", "bag", "totebag"},
+    {"hat", "cap", "beanie"},
+    {"poster", "print", "wallart"},
+    {"magnet", "magnets"},
+    {"pin", "button", "badge"},
+]
+
+
+def family(word):
+    """Every word that means the same product as this one."""
+    w = stem(word)
+    out = {w}
+    for group in SYNONYMS:
+        if w in {stem(g) for g in group}:
+            out |= {stem(g) for g in group}
+    return out
+
+
+def drifted(seed, phrase):
+    """Has the completion wandered off the thing we asked about?
+
+    Expanding 'cozy fall sweatshirt' returned 'cozy fall desserts', and the
+    first run counted it as someone trying to buy a physical thing. It is
+    not: Google completed 'cozy fall', not 'cozy fall sweatshirt'. The seed's
+    LAST word is what is being sold, so a completion that has lost it is
+    about something else.
+    """
+    words = (seed or "").split()
+    if not words:
+        return False
+    head = family(words[-1])
+    return not (head & {stem(w) for w in re.findall(r"[a-z'-]+", phrase.lower())})
+
+
+def without_retailer(phrase):
+    """'fall nail stickers amazon' -> 'fall nail stickers', or None.
+
+    An offsite query is the STRONGEST demand signal in the whole sweep and
+    the first version threw it away. Somebody typing 'fall window stickers
+    near me' has decided to buy, has a product in mind, and has not thought
+    of Etsy. Strip the shop and what is left is a validated product phrase.
+    """
+    out = RETAILERS.sub("", phrase or "").strip()
+    return out if out and out != (phrase or "").strip() else None
+
+
+def retail_demand(found):
+    """{product phrase: {shops it was hunted in}} across a whole expansion.
+
+    A phrase hunted in three different shops is three separate people who
+    wanted it enough to guess at a stockist.
+    """
+    out = {}
+    for phrase in found:
+        m = RETAILERS.search(phrase)
+        bare = without_retailer(phrase)
+        if m and bare:
+            out.setdefault(bare, set()).add(m.group(1).lower())
+    return out
+
+
+def bucket(seed, phrase):
+    """The one group this completion belongs in, worst news first."""
+    tier, what, _why = ipc.risky(phrase)
+    if tier == "blocked":
+        return "blocked", what
+    if drifted(seed, phrase):
+        return "drift", None
+    label, _why = intent_of(phrase)
+    if label:
+        return label, None
+    if tier == "check":
+        return "check", what
+    return "buying", None
 
 
 def suggest(phrase, client="chrome"):
@@ -267,23 +392,54 @@ def cmd_expand(words):
         print("\nnothing came back at all. Suggest may be blocking this IP.")
         return 1
 
-    groups = {}
+    groups, marks = {}, {}
     for w, rank in sorted(found.items(), key=lambda kv: (kv[1], kv[0])):
-        label, _why = intent_of(w)
-        groups.setdefault(label or "buying", []).append((w, rank))
+        name, what = bucket(phrase, w)
+        groups.setdefault(name, []).append((w, rank))
+        if what:
+            marks[w] = what
 
     print(f"\n{len(found)} distinct searches around '{phrase}'\n")
-    for label in ("buying", "digital", "offsite", "research"):
-        rows = groups.get(label) or []
+    ORDER = [
+        ("blocked", "SOMEBODY ELSE'S PROPERTY - do not make these"),
+        ("buying", "wants to buy one"),
+        ("check", "a word that is also a property - a human decides"),
+        ("digital", "wants a file, not a physical product"),
+        ("offsite", "shopping for a shop that is not Etsy"),
+        ("research", "looking for information, not buying"),
+        ("drift", f"not about a {phrase.split()[-1]} at all - Google "
+                  f"completed a shorter phrase"),
+    ]
+    for name, why in ORDER:
+        rows = groups.get(name) or []
         if not rows:
             continue
-        why = next((w for _p, l, w in INTENT if l == label), "wants to buy one")
-        print(f"  {label.upper()} ({len(rows)}) - {why}")
-        for w, rank in rows[:18]:
-            print(f"      {w}")
+        print(f"  {name.upper()} ({len(rows)}) - {why}")
+        for w, _rank in rows[:18]:
+            note = f"   <- {marks[w]}" if w in marks else ""
+            print(f"      {w}{note}")
         if len(rows) > 18:
             print(f"      ... and {len(rows) - 18} more")
         print()
+
+    # The bit the first version threw away.
+    hunted = retail_demand(found)
+    multi = sorted(((p_, shops) for p_, shops in hunted.items() if len(shops) > 1),
+                   key=lambda kv: (-len(kv[1]), kv[0]))
+    if multi:
+        print(f"  HUNTED IN MORE THAN ONE SHOP ({len(multi)}) - the strongest "
+              f"signal here")
+        print(f"  Someone typing 'X near me' has decided to buy, knows what "
+              f"they want,\n  and has not thought of Etsy. Two different "
+              f"shops means two such people.")
+        for p_, shops in multi[:12]:
+            print(f"      {p_:<40} {len(shops)} shops: "
+                  f"{', '.join(sorted(shops))}")
+        print()
+
+    buying = len(groups.get("buying") or [])
+    print(f"  {buying} of {len(found)} are someone trying to buy a physical "
+          f"thing on Etsy.")
     print("  Nothing here is a sales figure. It is what people TYPE - the "
           "supply side\n  comes from etsy-probe.py, and market-scan.py is "
           "what puts the two together.")
