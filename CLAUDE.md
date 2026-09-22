@@ -102,6 +102,12 @@ parser bug here was a format assumption, not a logic error.
 ## Running the tests
 
     python3 -m unittest discover -s tests -v      # no dependencies, runs anywhere
+    python3 -m unittest discover -s tests -b 2>&1 | tail -3    # just the verdict
+
+Use `-b` for the short form. Tests print to stdout and unittest reports to
+stderr; through a pipe those two are buffered differently, so `| tail -3`
+without it can hand you three lines of a catalogue listing and no verdict at
+all. That happened on the droplet and read as a hung test run.
 
 Every test names the bug it guards, and each was checked by reintroducing that
 bug and confirming the test fails - a test that cannot fail is worse than no

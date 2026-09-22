@@ -5871,3 +5871,119 @@ class TheListingRulesLiveInOnePlace(unittest.TestCase):
 
     def test_something_that_is_not_an_object_at_all(self):
         self.assertTrue(self.m.listing_problems(["a", "list"]))
+
+
+class AnEmptyTimerListIsNotABrokenInstall(unittest.TestCase):
+    """`scripts/deploy.sh emily` ended with "0 timers listed."
+
+    Emily has no timer and never has - she runs when the task dispatcher
+    hands her a task - so `systemctl list-timers emily-*` correctly prints
+    nothing. Underneath it the script printed "Deploy finished. Nothing above
+    needs your attention." Both lines were true and the pair read as a broken
+    install, which is why it got screenshotted and asked about.
+
+    Absent and broken are different things. This is the same bug task.py's
+    payload reader had to unlearn: rendering both as an empty line is how one
+    gets mistaken for the other.
+
+    And for an agent with no clock, the dispatcher IS its next wake. A dead
+    task-dispatcher.service means it never runs again, and that was being
+    reported as nothing at all - the one case where the empty list really
+    would have meant something.
+    """
+
+    DEPLOY = SCRIPTS / "deploy.sh"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bin = Path(self.tmp.name) / "bin"
+        self.bin.mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def wake_report(self, agents, dispatcher_up=True):
+        """Run deploy.sh's wake_report against the real deploy/ folder.
+
+        A stub systemctl rather than the machine's: the test must fail for the
+        reason it names, not because the runner happens to have no timers.
+        """
+        (self.bin / "systemctl").write_text(
+            "#!/bin/bash\n"
+            'case "$1 $2" in\n'
+            '  "list-timers --no-pager") echo "UNIT $3"; echo "1 timers listed." ;;\n'
+            f'  "is-active --quiet") exit {0 if dispatcher_up else 1} ;;\n'
+            "esac\n")
+        (self.bin / "systemctl").chmod(0o755)
+        script = (
+            'ROOT="$1"; shift\n'
+            'AGENTS=("$@")\n'
+            "FAILED=0\n"
+            "ok()   { printf '   -- %s\\n' \"$*\"; }\n"
+            "warn() { printf '   !! %s\\n' \"$*\"; FAILED=1; }\n"
+            # has_timers is a one-liner, so one range covers both functions.
+            "source <(sed -n '/^has_timers()/,/^}/p' \"$ROOT/scripts/deploy.sh\")\n"
+            "wake_report\n"
+            'echo "FAILED=$FAILED"\n')
+        runner = Path(self.tmp.name) / "run.sh"
+        runner.write_text(script)
+        env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}")
+        r = subprocess.run(["bash", str(runner), str(ROOT)] + list(agents),
+                           capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def test_emily_really_does_have_no_timer(self):
+        # The premise, asserted rather than remembered. If she is ever given
+        # one, the wording below becomes a lie and this says so first.
+        self.assertEqual(list((ROOT / "deploy").glob("emily-*.timer")), [])
+        self.assertTrue(list((ROOT / "deploy").glob("ace-*.timer")))
+
+    def test_an_agent_without_a_timer_is_named_and_explained(self):
+        out = self.wake_report(["emily"])
+        self.assertIn("emily has no timer", out)
+        self.assertIn("task dispatcher", out)
+
+    def test_an_agent_with_a_timer_still_gets_its_timer_list(self):
+        out = self.wake_report(["ace"])
+        self.assertIn("1 timers listed", out)
+        self.assertNotIn("has no timer", out)
+
+    def test_a_dead_dispatcher_is_the_missing_next_wake(self):
+        # This is the case the empty list really did mean something, and the
+        # deploy said "nothing needs your attention" over the top of it.
+        out = self.wake_report(["emily"], dispatcher_up=False)
+        self.assertIn("!! task-dispatcher.service is NOT running", out)
+        self.assertIn("FAILED=1", out, "a deploy that cannot wake an agent "
+                                       "has finished WITH PROBLEMS")
+
+    def test_a_live_dispatcher_is_said_out_loud_too(self):
+        out = self.wake_report(["emily"])
+        self.assertIn("task-dispatcher.service is running", out)
+        self.assertIn("FAILED=0", out)
+
+    def test_the_dispatcher_is_not_checked_for_agents_that_have_clocks(self):
+        # Ace does not care whether the dispatcher is up, and a warning about
+        # it in an ace-only deploy would be noise that trains you to ignore
+        # the line that matters.
+        out = self.wake_report(["ace"], dispatcher_up=False)
+        self.assertNotIn("task-dispatcher", out)
+        self.assertIn("FAILED=0", out)
+
+    def test_a_mixed_deploy_reports_both(self):
+        out = self.wake_report(["emily", "ace"])
+        self.assertIn("emily has no timer", out)
+        self.assertIn("1 timers listed", out)
+
+    def test_installing_nothing_says_so(self):
+        # The other silent section: "== emily: installing units" printed a
+        # heading and no lines at all.
+        src = self.DEPLOY.read_text()
+        body = src.split('step "$AGENT: installing units"', 1)[1].split("\ndone", 1)[0]
+        self.assertIn("installed=0", body)
+        self.assertIn("has no units of its own", body)
+
+    def test_the_script_still_parses(self):
+        r = subprocess.run(["bash", "-n", str(self.DEPLOY)],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)

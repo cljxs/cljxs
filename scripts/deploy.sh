@@ -26,6 +26,38 @@ step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 warn() { printf '   !! %s\n' "$*"; FAILED=1; }
 ok()   { printf '   -- %s\n' "$*"; }
 
+# Which agents own systemd units, and what wakes the ones that do not.
+#
+# Emily has no timer and never has: she runs when the task dispatcher hands
+# her a task. `systemctl list-timers emily-*` therefore prints "0 timers
+# listed", which reads exactly like a broken install - and the script then
+# said "Nothing above needs your attention" underneath it. Absent and broken
+# are different things, and printing both as an empty list is how one gets
+# mistaken for the other.
+has_timers() { compgen -G "$ROOT/deploy/$1-"'*.timer' >/dev/null; }
+
+wake_report() {
+  local dispatched=0 a
+  for a in "${AGENTS[@]}"; do
+    if has_timers "$a"; then
+      systemctl list-timers --no-pager "$a-*" 2>/dev/null
+    else
+      echo "   $a has no timer, and is not supposed to have one - no clock"
+      echo "   wakes it. It runs when the task dispatcher gives it a task."
+      dispatched=1
+    fi
+  done
+  [ "$dispatched" -eq 1 ] || return 0
+  # For an agent with no clock, this IS its next wake. A dead dispatcher
+  # means it never runs again, and that was being reported as nothing at all.
+  if systemctl is-active --quiet task-dispatcher.service; then
+    ok "task-dispatcher.service is running - those agents can be woken"
+  else
+    warn "task-dispatcher.service is NOT running - nothing can wake them"
+    echo "      systemctl status task-dispatcher.service"
+  fi
+}
+
 step "pulling $ROOT"
 if ! git -C "$ROOT" pull --ff-only; then
   echo
@@ -46,10 +78,13 @@ for AGENT in "${AGENTS[@]}"; do
   fi
 
   step "$AGENT: installing units"
+  installed=0
   for f in "$ROOT"/deploy/"$AGENT"-*.service "$ROOT"/deploy/"$AGENT"-*.timer; do
     [ -e "$f" ] || continue
     install -m 644 "$f" /etc/systemd/system/ && ok "$(basename "$f")"
+    installed=$((installed + 1))
   done
+  [ "$installed" -gt 0 ] || ok "none in deploy/ - $AGENT has no units of its own"
 done
 
 step "reloading systemd"
@@ -108,9 +143,7 @@ PY
 fi
 
 step "next wakes"
-for AGENT in "${AGENTS[@]}"; do
-  systemctl list-timers --no-pager "$AGENT-*" 2>/dev/null
-done
+wake_report
 
 echo
 if [ "$FAILED" -eq 0 ]; then
