@@ -7855,7 +7855,14 @@ class TheScanSpendsItsEtsyCallsOnTheBestEvidence(unittest.TestCase):
                          ["fall sticker sheet"])
 
     def test_the_budget_is_respected(self):
-        found = {f"fall sticker {i:02d}": i for i in range(60)}
+        # Distinct WORDS, not numbers. The first version numbered them
+        # ('fall sticker 00'), and a digit is not a word - once candidates
+        # were keyed by stem they all collapsed to one key and the test was
+        # asserting against a degenerate fixture.
+        words = ("sheet pack roll set book kit tin bundle strip label card "
+                 "page album box folder pouch case wrap tab dot").split()
+        found = {f"fall sticker {w}": i for i, w in enumerate(words)}
+        self.assertGreater(len(found), self.m.CANDIDATES)
         self.assertEqual(len(self.m.pick("fall sticker", found)),
                          self.m.CANDIDATES)
 
@@ -7981,6 +7988,56 @@ class ARatioAgainstZeroIsNotALargeNumber(unittest.TestCase):
         self.assertEqual(said.count("100%"), 2, said)
         self.assertIn("at or above 50%", said)
 
+    def test_the_n_columns_reach_the_output(self):
+        # median_n() being right is not the same as the table SHOWING it.
+        # Mutations that computed the counts and then printed neither the
+        # columns nor the warning passed every direct test of the function.
+        partial = [
+            {"original_creation_timestamp": int(self.NOW - 100 * 86400),
+             "num_favorers": 10, "views": 200, "title": "fall sticker roll"},
+            {"original_creation_timestamp": int(self.NOW * 1000),
+             "num_favorers": 4, "views": 205, "title": "fall sticker roll"},
+        ]
+        table = {"fall sticker roll": self.m.measure(
+            {"count": 272, "results": partial}, self.NOW,
+            phrase="fall sticker roll")}
+        said = self.scan_output(table)
+        self.assertEqual(table["fall sticker roll"]["heat_n"], 1)
+        self.assertEqual(table["fall sticker roll"]["pull_n"], 2)
+        self.assertIn("favs/day from 1, favs/view from 2, of 2", said)
+        self.assertIn("should not be read against each other", said)
+        # And on the RANKED ROW itself, not only in the footnote: the two n
+        # columns have to survive between the median and the printing.
+        row = next(l for l in said.splitlines()
+                   if l.strip().startswith("fall sticker roll")
+                   and "272" in l)
+        self.assertRegex(row, r"272\s+[\d.]+\s+1\s+[\d.]+\s+2\s")
+        self.assertRegex(said, r"favs/day\s+n\s+favs/view\s+n\s+match")
+
+    def test_a_complete_payload_prints_no_partial_warning(self):
+        # And the check must be min(), not max(): one metric short of the
+        # full set is enough to make the two columns incomparable.
+        whole = [{"original_creation_timestamp": int(self.NOW - 100 * 86400),
+                  "num_favorers": 10, "views": 200,
+                  "title": "fall sticker roll"} for _ in range(3)]
+        table = {"fall sticker roll": self.m.measure(
+            {"count": 272, "results": whole}, self.NOW,
+            phrase="fall sticker roll")}
+        said = self.scan_output(table)
+        self.assertNotIn("should not be read against each other", said)
+
+    def test_one_metric_short_is_enough_to_warn(self):
+        rows = [{"original_creation_timestamp": int(self.NOW - 100 * 86400),
+                 "num_favorers": 10, "views": 200, "title": "fall sticker roll"},
+                {"original_creation_timestamp": int(self.NOW - 100 * 86400),
+                 "num_favorers": 10, "views": 0, "title": "fall sticker roll"}]
+        m = self.m.measure({"count": 272, "results": rows}, self.NOW,
+                           phrase="fall sticker roll")
+        self.assertEqual(m["heat_n"], 2)          # complete
+        self.assertEqual(m["pull_n"], 1)          # one row short
+        said = self.scan_output({"fall sticker roll": m})
+        self.assertIn("should not be read against each other", said)
+
     def test_everything_zero_says_so_rather_than_ranking_nothing(self):
         table = {
             "fall sticker pack": self.m.measure(
@@ -8042,3 +8099,93 @@ class LowSupplyHasTwoMeanings(unittest.TestCase):
                                         "num_favorers": 3, "views": 100}]},
             1758500000.0, phrase="fall sticker emojis")
         self.assertEqual(m["match"], 0.0)
+
+
+class AMedianOfThreeRowsIsNotAMedianOfTwentyFive(unittest.TestCase):
+    """The scan of 'cozy fall sweatshirt' reported, for 'cozy fall sweater':
+
+        favs/view 0.0195     favs/day 0.000
+
+    Those cannot both describe the same listings. They did not: a row with a
+    view count but an unusable timestamp counted towards one median and not
+    the other, and nothing in the output said so.
+
+    `dropped` only ever caught a metric missing ENTIRELY. A median computed
+    from three rows out of twenty-five was presented exactly like a median
+    of all twenty-five - the same defect one level down.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("market_scan", SCRIPTS / "market-scan.py")
+
+    NOW = 1758500000.0
+
+    def test_the_count_comes_back_with_the_median(self):
+        value, n = self.m.median_n([1.0, None, 3.0, None])
+        self.assertEqual(value, 2.0)
+        self.assertEqual(n, 2)
+
+    def test_all_missing_is_none_and_zero(self):
+        self.assertEqual(self.m.median_n([None, None]), (None, 0))
+        self.assertEqual(self.m.median_n([]), (None, 0))
+
+    def test_the_two_metrics_report_their_own_row_counts(self):
+        # Row 1: usable for both. Row 2: views but a millisecond timestamp,
+        # so it counts towards favs/view and not favs/day. Exactly the shape
+        # that produced the impossible pair above.
+        rows = [
+            {"original_creation_timestamp": int(self.NOW - 100 * 86400),
+             "num_favorers": 10, "views": 200, "title": "cozy fall sweater"},
+            {"original_creation_timestamp": int(self.NOW * 1000),
+             "num_favorers": 4, "views": 205, "title": "cozy fall sweater"},
+        ]
+        m = self.m.measure({"count": 97843, "results": rows}, self.NOW,
+                           phrase="cozy fall sweater")
+        self.assertEqual(m["returned"], 2)
+        self.assertEqual(m["heat_n"], 1)
+        self.assertEqual(m["pull_n"], 2)
+        self.assertNotEqual(m["heat_n"], m["pull_n"])
+
+    def test_a_clean_payload_reports_every_row(self):
+        rows = [{"original_creation_timestamp": int(self.NOW - 100 * 86400),
+                 "num_favorers": 10, "views": 200,
+                 "price": {"amount": 100, "divisor": 100}} for _ in range(5)]
+        m = self.m.measure({"count": 10, "results": rows}, self.NOW)
+        self.assertEqual((m["heat_n"], m["pull_n"], m["price_n"]), (5, 5, 5))
+
+
+class EtsyStemsItsOwnSearchSoTwoCallsBoughtOneAnswer(unittest.TestCase):
+    """'cozy fall sweatshirt' and 'cozy fall sweatshirts' both returned
+    exactly 137,321 listings. 'cozy fall crewneck' and 'cozy fall crewnecks'
+    returned 71,176 and 71,177. Two of ten Etsy calls spent, and two rows of
+    the ranking taken, for answers already in hand."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("market_scan", SCRIPTS / "market-scan.py")
+
+    def test_a_plural_does_not_get_its_own_call(self):
+        found = {"cozy fall sweatshirt": 0, "cozy fall sweatshirts": 1,
+                 "cozy fall crewneck": 2, "cozy fall crewnecks": 3}
+        picked = self.m.pick("cozy fall sweatshirt", found)
+        self.assertEqual(len(picked), 2, picked)
+
+    def test_word_order_does_not_make_a_new_phrase(self):
+        found = {"fall nail stickers": 0, "nail fall stickers": 1}
+        self.assertEqual(len(self.m.pick("fall sticker", found)), 1)
+
+    def test_genuinely_different_phrases_all_survive(self):
+        found = {"cozy fall sweater": 0, "cozy fall sweater women": 1,
+                 "cozy fall sweater dress": 2, "cozy fall hoodie": 3}
+        self.assertEqual(len(self.m.pick("cozy fall sweatshirt", found)), 4)
+
+    def test_the_freed_budget_goes_to_another_phrase(self):
+        # The point of the dedup: twelve DISTINCT markets asked about, not
+        # twelve calls spent.
+        found = {f"fall sticker {w}": i for i, w in enumerate(
+            ["sheet", "sheets", "pack", "packs", "roll", "rolls", "set",
+             "sets", "book", "books", "kit", "kits", "tin", "tins"])}
+        picked = self.m.pick("fall sticker", found)
+        self.assertEqual(len(picked), 7)
+        self.assertEqual(len(picked), len(set(picked)))

@@ -155,18 +155,39 @@ def median(values):
     return statistics.median(vals) if vals else None
 
 
+def median_n(values):
+    """(median, how many rows it was computed from).
+
+    The count is not decoration. A scan of 'cozy fall sweater' reported
+    favs/view 0.0195 and favs/day 0.000 for the same listings, which is
+    impossible unless the two medians were taken over DIFFERENT rows - some
+    row had a view count but no usable timestamp, so it counted towards one
+    and not the other.
+
+    `dropped` only ever caught a metric that was missing entirely. A median
+    of three rows out of twenty-five looked exactly like a median of all
+    twenty-five, which is the same defect one level down.
+    """
+    vals = [v for v in values if v is not None]
+    return (statistics.median(vals) if vals else None), len(vals)
+
+
 def measure(data, now=None, phrase=""):
     """Everything computable about one keyword's Etsy results, plus what was
     not computable and why."""
     rows = data.get("results") or []
     count = data.get("count")
+    heat, heat_n = median_n(favs_per_day(r, now) for r in rows)
+    pull_, pull_n = median_n(pull(r) for r in rows)
+    price, price_n = median_n(price_of(r) for r in rows)
+    age, _age_n = median_n(age_days(r, now) for r in rows)
     out = {
         "supply": count if isinstance(count, int) else None,
         "returned": len(rows),
-        "heat": median(favs_per_day(r, now) for r in rows),
-        "pull": median(pull(r) for r in rows),
-        "price": median(price_of(r) for r in rows),
-        "age": median(age_days(r, now) for r in rows),
+        "heat": heat, "heat_n": heat_n,
+        "pull": pull_, "pull_n": pull_n,
+        "price": price, "price_n": price_n,
+        "age": age,
         "match": title_match(rows, phrase),
         "dropped": [],
     }
@@ -262,8 +283,15 @@ def pick(phrase, found):
     # that could never disagree, and one no test could fail on.
     out, seen = [], set()
     for w in first + rest:
-        if w not in seen:
-            seen.add(w)
+        # KEYED BY STEM, not by the phrase. Etsy stems its own search:
+        # 'cozy fall sweatshirt' and 'cozy fall sweatshirts' both came back
+        # with exactly 137,321 listings, and crewneck/crewnecks with 71,176
+        # and 71,177. Two of ten calls bought the same answer twice, and a
+        # near-duplicate also takes a row in the ranking that a distinct
+        # phrase could have had.
+        key = frozenset(tp.stem(t) for t in re.findall(r"[a-z']+", w.lower()))
+        if key and key not in seen:
+            seen.add(key)
             out.append(w)
     return out[:CANDIDATES]
 
@@ -304,14 +332,26 @@ def cmd_scan(key, words):
     # cannot be told apart from a warning that is broken - the absence means
     # 'all fine' and 'the check never ran' equally, and the reader cannot
     # distinguish them. A number every row is unambiguous.
-    print(f"  {'phrase':<34}{'supply':>10}{'favs/day':>11}"
-          f"{'favs/view':>11}{'match':>7}{'score':>9}")
+    print(f"  {'phrase':<32}{'supply':>9}{'favs/day':>10}{'n':>4}"
+          f"{'favs/view':>11}{'n':>4}{'match':>7}{'score':>9}")
     for cand, m in usable:
         match = m.get("match")
-        shown = f"{match * 100:>6.0f}%" if match is not None else "     ?"
-        print(f"  {cand[:33]:<34}{m['supply']:>10,}{m['heat']:>11.3f}"
+        shown = f"{match * 100:>5.0f}%" if match is not None else "    ?"
+        print(f"  {cand[:31]:<32}{m['supply']:>9,}{m['heat']:>10.3f}"
+              f"{m['heat_n']:>4}"
               f"{(m['pull'] if m['pull'] is not None else 0):>11.4f}"
-              f"{shown:>7}{opportunity(m):>9.4f}")
+              f"{m['pull_n']:>4}{shown:>7}{opportunity(m):>9.4f}")
+
+    thin = [(c, m) for c, m in usable
+            if min(m["heat_n"], m["pull_n"]) < m["returned"]]
+    if thin:
+        print(f"\n  The n columns are how many of the {usable[0][1]['returned']} "
+              f"returned listings each\n  median was actually computed from. "
+              f"Where they differ, the two numbers\n  describe different "
+              f"listings and should not be read against each other:")
+        for c, m in thin:
+            print(f"      {c:<32}favs/day from {m['heat_n']}, "
+                  f"favs/view from {m['pull_n']}, of {m['returned']}")
 
     best, bm = usable[0]
     dead = [(c, m) for c, m in usable if opportunity(m) <= 0]
