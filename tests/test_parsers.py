@@ -6060,3 +6060,183 @@ class AnEmptyTimerListIsNotABrokenInstall(unittest.TestCase):
         r = subprocess.run(["bash", "-n", str(self.DEPLOY)],
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
+
+
+class NoCredentialReachesAPublicRepo(unittest.TestCase):
+    """.gitignore covered credentials.env and nothing that shadows it.
+
+    nano writes credentials.env.save and credentials.env.save.1 when it is
+    killed mid-edit, and nano.<pid>.save when it crashes. check-credentials.py
+    opens with advice about pasting a long token into nano on a phone, so
+    those files were always going to appear - and three of them were sitting
+    in agents/emily/state/ on the droplet holding a live Printify token,
+    matched by no ignore rule, one `git add -A` from a public repo.
+
+    Nothing would have stopped it. The CI scan only ever read tests/fixtures/,
+    and CI runs AFTER the push: by the time that job goes red the secret is
+    already on GitHub. So the check runs here, in the suite, before anything
+    leaves the machine.
+    """
+
+    SCRIPT = SCRIPTS / "check-secrets.py"
+
+    def setUp(self):
+        self.m = load("check_secrets", "check-secrets.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def scan_file(self, name, body=""):
+        p = self.d / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body)
+        named, contented = self.m.scan([p])
+        return named, contented
+
+    # --- the check that matters --------------------------------------------
+
+    def test_this_repo_is_clean_right_now(self):
+        # Not a source assertion: it runs the scan over every tracked file.
+        r = subprocess.run([sys.executable, str(self.SCRIPT)],
+                           capture_output=True, text=True, cwd=str(ROOT))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("tracked file(s) scanned", r.stdout)
+
+    def test_the_scan_really_looked_at_something(self):
+        # A scan of zero files exits 0 and means nothing - the shape of the
+        # credential-scan test that passed for a week on a missing file.
+        r = subprocess.run([sys.executable, str(self.SCRIPT)],
+                           capture_output=True, text=True, cwd=str(ROOT))
+        m = re.search(r"(\d+) tracked file", r.stdout)
+        self.assertIsNotNone(m, r.stdout + r.stderr)
+        self.assertGreater(int(m.group(1)), 50,
+                           "git ls-files returned almost nothing")
+
+    # --- what it catches ---------------------------------------------------
+
+    def test_a_nano_backup_of_a_credentials_file_is_caught(self):
+        named, _ = self.scan_file("credentials.env.save", "TOKEN=whatever\n")
+        self.assertTrue(named)
+
+    def test_so_is_the_numbered_one_nano_writes_next(self):
+        named, _ = self.scan_file("credentials.env.save.1", "TOKEN=whatever\n")
+        self.assertTrue(named)
+
+    def test_an_empty_credentials_file_is_still_caught(self):
+        # It is a file the next person will fill in, and they will not think
+        # to check whether it is tracked.
+        named, _ = self.scan_file("credentials.env", "")
+        self.assertTrue(named)
+
+    # The samples below are assembled at runtime rather than written out.
+    # check-secrets.py scans every tracked file including this one, and a test
+    # for a credential detector that contains a credential-shaped literal
+    # fails its own check - which it did, on the first run. Building them from
+    # halves keeps the claim true: no tracked file in this repo holds a
+    # credential-shaped string, including the one testing for them.
+    def jwt(self):
+        return "eyJ" + "0eXAiOiJKV1Qi" + "LCJhbGciOiJSUzI1NiJ9" + "." + "abcdefghij"
+
+    def sk_key(self):
+        return "sk-" + "or-v1-0123456789abcdef0123456789"
+
+    def long_run(self):
+        return "A1b2C3d4E5f6G7h8I9j0" + "K1l2M3n4O5p6Q7r8S9t0"
+
+    def test_a_jwt_is_caught_wherever_it_sits(self):
+        # The Printify token is a JWT, and the broad rule misses short ones:
+        # a JWT is dot-separated, so the longest run it sees is one segment.
+        _, found = self.scan_file("notes.md", f"token: {self.jwt()}\n")
+        self.assertTrue(found)
+
+    def test_an_sk_key_is_caught_wherever_it_sits(self):
+        _, found = self.scan_file("readme.md",
+                                  f"OPENROUTER_API_KEY={self.sk_key()}\n")
+        self.assertTrue(found)
+
+    def test_a_long_token_in_a_state_directory_is_caught(self):
+        _, found = self.scan_file("agents/emily/state/leftover.txt",
+                                  f"PRINTIFY={self.long_run()}\n")
+        self.assertTrue(found)
+
+    def test_a_long_token_outside_one_is_not(self):
+        # The same string in a source file is a long identifier, not a leak.
+        _, found = self.scan_file("scripts/whatever.py",
+                                  f"CONSTANT = '{self.long_run()}'\n")
+        self.assertEqual(found, [])
+
+    # --- what it must not cry wolf about ------------------------------------
+
+    def test_the_example_file_is_not_a_finding(self):
+        # It is tracked on purpose and holds key names with no values.
+        # Flagging it would train everyone to ignore this check on its only
+        # true positive.
+        named, found = self.scan_file("credentials.env.example",
+                                      "PRINTIFY_API_TOKEN=\n")
+        self.assertEqual((named, found), ([], []))
+
+    def test_a_long_test_method_name_is_not_a_credential(self):
+        # The first version of the broad rule ran everywhere and matched
+        # thousands of these, plus every npm integrity hash. A check that
+        # cries wolf is one people learn to skip.
+        named, found = self.scan_file(
+            "tests/some_test.py",
+            "def test_a_very_long_method_name_that_is_not_a_secret(self): pass\n")
+        self.assertEqual((named, found), ([], []))
+
+    def test_an_npm_integrity_hash_is_not_a_credential(self):
+        named, found = self.scan_file(
+            "mission-control-api/package-lock.json",
+            '"integrity": "sha512-'
+            'YmVjYXVzZSB0aGlzIGlzIHdoYXQgbnBtIHdyaXRlcyBldmVyeSBzaW5nbGUgdGltZQ=="\n')
+        self.assertEqual((named, found), ([], []))
+
+    def test_nothing_from_inside_the_file_is_ever_printed(self):
+        # The report says where, never what. A check that pastes the secret
+        # into a CI log has moved the problem rather than found it.
+        secret = self.sk_key()
+        p = self.d / "agents" / "x" / "state" / "leak.txt"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(f"KEY={secret}\n")
+        r = subprocess.run([sys.executable, str(self.SCRIPT), "--path", str(p)],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn(secret, r.stdout + r.stderr)
+        self.assertIn("leak.txt", r.stdout)
+
+    # --- the ignore rules ---------------------------------------------------
+
+    def ignored(self, path):
+        r = subprocess.run(["git", "-C", str(ROOT), "check-ignore", "-q", path],
+                           capture_output=True, text=True)
+        return r.returncode == 0
+
+    def test_git_itself_refuses_the_backups_now(self):
+        # check-secrets.py is the belt; these are the braces. A file git will
+        # not stage cannot be pushed by accident in the first place.
+        for path in ("agents/emily/state/credentials.env",
+                     "agents/emily/state/credentials.env.save",
+                     "agents/emily/state/credentials.env.save.1",
+                     "agents/emily/state/nano.48611.save",
+                     "agents/emily/state/.credentials.env.swp"):
+            with self.subTest(path=path):
+                self.assertTrue(self.ignored(path), f"{path} would be stageable")
+
+    def test_the_example_is_still_stageable(self):
+        self.assertFalse(self.ignored("agents/emily/state/credentials.env.example"))
+
+    def test_real_work_is_not_swept_up_by_the_new_rules(self):
+        # Broad ignore rules that swallow real files are how work disappears.
+        for path in ("scripts/check-secrets.py", "tests/fixtures/systemd-show.txt",
+                     "agents/emily/_emily-agents-header.md", "CLAUDE.md"):
+            with self.subTest(path=path):
+                self.assertFalse(self.ignored(path), f"{path} became invisible")
+
+    def test_ci_runs_the_same_script_rather_than_its_own_grep(self):
+        # It was an inline grep with its own copy of the patterns, over
+        # tests/fixtures/ only. Two copies of "is this a credential" drift.
+        wf = (ROOT / ".github" / "workflows" / "tests.yml").read_text()
+        self.assertIn("scripts/check-secrets.py", wf)
+        self.assertNotIn("sk-[A-Za-z0-9_-]", wf)

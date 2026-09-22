@@ -26,6 +26,17 @@ agents/*/IDENTITY.md
 agents/*/USER.md
 agents/*/HEARTBEAT.md
 agents/*/BOOTSTRAP.md
+# Same class, found later: openclaw writes these per agent too, and
+# merge-header.sh leaves an AGENTS.md.bak beside a file that is already
+# ignored. `git status` on the droplet listed 30 of these, which is how a
+# credentials backup sat in that list unnoticed - noise is not harmless when
+# the thing you need to see is one line in it.
+agents/*/DREAMS.md
+agents/*/memory/
+agents/*/skills/
+agents/*/*.bak
+agents/*/state/.cycle-started
+agents/*/state/.cycle-before
 
 # dashboard-owned value history (not an agent file)
 tasks/dashboard-snapshots.json
@@ -47,6 +58,22 @@ mission-control-api/public/vendor/
 # Emily runtime state - credentials must NEVER reach this public repo
 agents/*/state/credentials.env
 **/credentials.env
+
+# ...and every copy an editor leaves behind. nano writes credentials.env.save
+# and credentials.env.save.1 when it is killed mid-edit, and it writes
+# nano.<pid>.save when it crashes - check-credentials.py opens with advice
+# about pasting a long token into nano on a phone, so those were always going
+# to appear. Three of them were sitting in agents/emily/state/ holding a live
+# token, matched by none of the two lines above, one `git add -A` from being
+# public. scripts/check-secrets.py is the belt to this pair of braces.
+**/credentials.env.*
+!**/credentials.env.example
+**/*.save
+**/*.save.[0-9]*
+**/nano.*.save
+**/.*.sw[a-z]
+**/*~
+**/*.bak
 agents/emily/builds/*
 !agents/emily/builds/.gitkeep
 agents/emily/reports/*

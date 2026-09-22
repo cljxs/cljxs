@@ -30,17 +30,16 @@ jobs:
       - name: tests
         run: python3 -m unittest discover -s tests -v
 
-      # Fixtures are captured from a live droplet and committed. If one ever
-      # carries a real credential it would be public the moment it is pushed,
-      # so this fails the build rather than trusting the capture script's
-      # redaction to have been run.
-      - name: no credential-shaped strings in fixtures
-        run: |
-          if grep -rEn 'sk-[A-Za-z0-9_-]{16,}|Bearer [A-Za-z0-9._-]{16,}|[A-Za-z0-9_-]{40,}' tests/fixtures/ ; then
-            echo "::error::a fixture looks like it contains a credential - see the matches above"
-            exit 1
-          fi
-          echo "fixtures are clean"
+      # Fixtures are captured from a live droplet and committed, and a
+      # credentials file is one bad `git add -A` from being tracked. Either
+      # would be public the moment it is pushed.
+      #
+      # This used to be a grep here, over tests/fixtures/ only. It has moved
+      # into a script so the patterns exist once and so the same check can run
+      # locally, in the test suite, BEFORE the push - by the time this job
+      # fails, the secret is already on GitHub.
+      - name: nothing credential-shaped is tracked
+        run: python3 scripts/check-secrets.py
 
       # AGENTS.md is generated from a header by scripts/deploy.sh. A tracked
       # copy would go stale silently and agents would run whichever the merge
