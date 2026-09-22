@@ -129,6 +129,34 @@ def placeholder(path, prompt, size):
 
 # ------------------------------------------------------------- OpenRouter
 
+# Appended to every prompt that draws a print file.
+#
+# Emily asked for "Maple leaf pocket sticker" and got exactly that: a
+# PHOTOGRAPH of a maple leaf sticker lying on a wooden desk next to a ruler,
+# which then went to Printify as the file to print. The model was not wrong -
+# that is what the words describe. Nobody had told it the output is a print
+# file rather than a picture of a product.
+#
+# It lives in code and not in Emily's instructions because it is the same
+# sentence every time and does not need judgement. Her judgement is the idea;
+# this is the format, and a format restated by a model every cycle is a
+# format that eventually comes back missing a clause.
+PRINT_DIRECTION = (
+    "Flat 2D vector-style illustration intended as a print file. "
+    "Solid plain background in one even colour, filling the frame, seen "
+    "straight on. "
+    "NOT a photograph and NOT a product mockup: no desk, no table, no wood "
+    "grain, no ruler, no hand, no packaging, no printed sticker, no shelf, "
+    "no room, no perspective, no drop shadow, no reflection, no watermark, "
+    "no border."
+)
+
+
+def directed(prompt):
+    """The art direction on the end, once, however the prompt already reads."""
+    return f"{prompt.strip()}\n\n{PRINT_DIRECTION}"
+
+
 def generate(path, prompt, key, model=None):
     """Draw one image. Returns (bytes written, usage).
 
@@ -141,7 +169,7 @@ def generate(path, prompt, key, model=None):
     """
     body = json.dumps({
         "model": model or image_model(),
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [{"role": "user", "content": directed(prompt)}],
         "modalities": ["image", "text"],
         "usage": {"include": True},
     }).encode()

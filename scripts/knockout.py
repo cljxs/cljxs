@@ -328,11 +328,55 @@ def despeckle(w, h, px, max_pct=SPECK_MAX_PCT, dominant_pct=DOMINANT_MIN_PCT):
                                 f"of the artwork)")
 
 
+def verdict(w, h, px, tol=DEFAULT_TOLERANCE):
+    """Flat art on a plain background, or something that must not be printed?
+
+    The three refusals knockout has always made, lifted out of main() so
+    something other than the cutout can ask. emily-printify.py runs this on
+    EVERY print file now, not only apparel: a sticker skips the cutout, so
+    nothing looked at its file at all, and a PHOTOGRAPH of a sticker lying on
+    a desk - wood grain, ruler and all - was uploaded to Printify as the
+    artwork to print. Measured on that image afterwards its border was 20%
+    one colour. Flat art is 100%.
+
+    Mutates px the way knockout() does, because main() wants that and copying
+    a four-megapixel image to avoid it would cost something real for nothing.
+    """
+    bg = background_colour(w, h, px)
+    agree = border_agreement(w, h, px, bg, tol)
+    removed, _ = knockout(w, h, px, tol, bg)
+    pct = 100.0 * removed / (w * h)
+    facts = (f"{w}x{h}, background rgb{bg}, border {agree:.0f}% that colour, "
+             f"removed {removed:,} px ({pct:.1f}%)")
+
+    if agree < BORDER_MIN_PCT:
+        return False, facts, (
+            f"only {agree:.0f}% of the border is one colour - there is no flat "
+            f"background here.\n  That is what a photograph looks like: a "
+            f"product shot, a mockup on a desk, a\n  gradient. It is not a "
+            f"file to print. Ask for flat art on a plain background.")
+    if pct < MIN_REMOVED_PCT:
+        return False, facts, (
+            f"only {pct:.1f}% was removed - there is no flat background here "
+            f"to knock out.\n  Art for a garment needs a plain, even "
+            f"background. Ask for one in the prompt,\n  or raise --tolerance "
+            f"if it is merely uneven.")
+    if pct > MAX_REMOVED_PCT:
+        return False, facts, (
+            f"{pct:.1f}% was removed - the artwork itself matched the "
+            f"background, so what is\n  left is not a design. Lower "
+            f"--tolerance, or ask for art that contrasts with\n  its "
+            f"background.")
+    return True, facts, None
+
+
 def main():
     if len(sys.argv) < 3:
-        print("usage: knockout.py <in.png> <out.png> [--tolerance N] [--keep-specks]", file=sys.stderr)
+        print("usage: knockout.py <in.png> <out.png> [--tolerance N] [--keep-specks]\n"
+              "       knockout.py <in.png> --check", file=sys.stderr)
         return 2
-    src, dst = sys.argv[1], sys.argv[2]
+    src = sys.argv[1]
+    dst = None if sys.argv[2].startswith("--") else sys.argv[2]
     tol = DEFAULT_TOLERANCE
     if "--tolerance" in sys.argv:
         tol = int(sys.argv[sys.argv.index("--tolerance") + 1])
@@ -343,31 +387,17 @@ def main():
         print(f"knockout: {exc}", file=sys.stderr)
         return 2
 
-    bg = background_colour(w, h, px)
-    agree = border_agreement(w, h, px, bg, tol)
-    removed, _ = knockout(w, h, px, tol, bg)
-    pct = 100.0 * removed / (w * h)
-    print(f"{src}: {w}x{h}, background rgb{bg}, border {agree:.0f}% that colour, "
-          f"removed {removed:,} px ({pct:.1f}%)")
+    ok, facts, problem = verdict(w, h, px, tol)
+    print(f"{src}: {facts}")
+    if not ok:
+        print(f"knockout: {problem}\n  Nothing written.", file=sys.stderr)
+        return 1
 
-    if agree < BORDER_MIN_PCT:
-        print(f"knockout: only {agree:.0f}% of the border is one colour - this art has "
-              f"no flat background to remove. Nothing written.\n"
-              f"  Removing part of it would leave ragged edges that print. Ask for "
-              f"art on a plain, even background.", file=sys.stderr)
-        return 1
-    if pct < MIN_REMOVED_PCT:
-        print(f"knockout: only {pct:.1f}% was removed - there is no flat background "
-              f"here to knock out. Nothing written.\n"
-              f"  Art for a garment needs a plain, even background. Ask for one in "
-              f"the prompt, or raise --tolerance if it is merely uneven.", file=sys.stderr)
-        return 1
-    if pct > MAX_REMOVED_PCT:
-        print(f"knockout: {pct:.1f}% was removed - the artwork itself matched the "
-              f"background, so what is left is not a design. Nothing written.\n"
-              f"  Lower --tolerance, or ask for art that contrasts with its "
-              f"background.", file=sys.stderr)
-        return 1
+    # --check answers "is this fit to print at all" and writes nothing. It is
+    # what emily-printify.py asks before every upload, for every product.
+    if "--check" in sys.argv:
+        print("knockout: flat art on a plain background - fit to print.")
+        return 0
 
     # Only after the refusals above: despeckling a file that was never going
     # to be written is work for nothing, and despeckling one whose background

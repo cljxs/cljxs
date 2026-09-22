@@ -19,6 +19,7 @@ import io
 import importlib.util
 import json
 import os
+import random
 import re
 import shutil
 import struct
@@ -4140,10 +4141,27 @@ class StrayMarksBesideTheArt(unittest.TestCase):
         # Cleaning a file that will not be written is work for nothing, and
         # measuring specks against art whose background was never found is
         # measuring against noise.
-        src = (SCRIPTS / "knockout.py").read_text()
-        body = src.split("def main(", 1)[1]
-        self.assertLess(body.index("MAX_REMOVED_PCT"), body.index("despeckle(w, h, px)"))
-        self.assertLess(body.index("despeckle(w, h, px)"), body.index("encode(dst"))
+        #
+        # This used to assert that "MAX_REMOVED_PCT" appeared before
+        # "despeckle(" inside main()'s source. The refusals then moved into
+        # verdict() so knockout could be asked without writing, and the test
+        # broke on a rename rather than on a behaviour - it was never really
+        # watching the ordering. Now it runs the thing: on a file that gets
+        # refused, no despeckle line is printed at all.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        src, dst = Path(tmp.name) / "gradient.png", Path(tmp.name) / "out.png"
+        w, h = 80, 60
+        px = bytearray()
+        for y in range(h):
+            for x in range(w):
+                px += bytes((x * 3 % 256, y * 4 % 256, (x + y) % 256)) + b"\xff"
+        self.k.encode(src, w, h, px)
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knockout.py"),
+                            str(src), str(dst)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1, "a gradient has no background to remove")
+        self.assertNotIn("despeckle:", r.stdout)
+        self.assertFalse(dst.exists(), "nothing should have been written")
 
 
 class ForecastsAreGradedOrTheyAreDecoration(unittest.TestCase):
@@ -6240,3 +6258,162 @@ class NoCredentialReachesAPublicRepo(unittest.TestCase):
         wf = (ROOT / ".github" / "workflows" / "tests.yml").read_text()
         self.assertIn("scripts/check-secrets.py", wf)
         self.assertNotIn("sk-[A-Za-z0-9_-]", wf)
+
+
+class APhotographIsNotAPrintFile(unittest.TestCase):
+    """design.png was a photograph of a sticker lying on a wooden desk.
+
+    Wood grain, a ruler along the bottom, a highlight off the varnish - and it
+    went to Printify as the artwork. Printify prints what it is given, so the
+    sticker would have arrived with a desk printed on it.
+
+    Two failures met:
+
+    The prompt said "Maple leaf pocket sticker" and the model drew exactly
+    that - a picture OF a sticker. It was never told the output is a print
+    file rather than a photograph of a product.
+
+    And nothing looked. knockout.py's refusals ran for apparel only, on the
+    reasoning that a sticker is die-cut so an opaque square is fine. True, and
+    it meant a sticker's file was never examined at all. The check that would
+    have caught this was already written and was being skipped.
+
+    Measured on the real image: 20% of its border is one colour. Flat art is
+    100%. The signal was there the whole time.
+    """
+
+    def setUp(self):
+        self.ko = load("knockout3", "knockout.py")
+        self.ea = load("emily_assets3", "emily-assets.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def image(self, w, h, pixel):
+        px = bytearray()
+        for y in range(h):
+            for x in range(w):
+                px += bytes(pixel(x, y)) + b"\xff"
+        return w, h, px
+
+    def art(self, w=240, h=180):
+        """Flat art: one shape, one even background."""
+        return self.image(w, h, lambda x, y:
+                          (178, 58, 38) if (60 < x < 180 and 40 < y < 140)
+                          else (255, 255, 255))
+
+    def photo(self, w=240, h=180):
+        """A wood-grain desk. Continuous variation everywhere, including the
+        border - which is exactly what the real design.png was."""
+        rnd = random.Random(7)
+        rows = [(150 + rnd.randrange(60), 100 + rnd.randrange(50),
+                 50 + rnd.randrange(40)) for _ in range(h)]
+        return self.image(w, h, lambda x, y: tuple(
+            max(0, min(255, c + ((x * 7 + y * 13) % 17) - 8)) for c in rows[y]))
+
+    # --- the check ---------------------------------------------------------
+
+    def test_a_photograph_is_refused(self):
+        w, h, px = self.photo()
+        ok, facts, problem = self.ko.verdict(w, h, px)
+        self.assertFalse(ok, facts)
+        self.assertIn("photograph", problem)
+
+    def test_flat_art_is_not_refused(self):
+        # The other half. A check that refuses everything is not a check, it
+        # is an outage.
+        w, h, px = self.art()
+        ok, facts, problem = self.ko.verdict(w, h, px)
+        self.assertTrue(ok, f"{facts}\n{problem}")
+
+    def test_the_border_is_what_tells_them_apart(self):
+        # The premise, measured rather than remembered.
+        aw, ah, apx = self.art()
+        pw, ph, ppx = self.photo()
+        art_agree = self.ko.border_agreement(
+            aw, ah, apx, self.ko.background_colour(aw, ah, apx),
+            self.ko.DEFAULT_TOLERANCE)
+        photo_agree = self.ko.border_agreement(
+            pw, ph, ppx, self.ko.background_colour(pw, ph, ppx),
+            self.ko.DEFAULT_TOLERANCE)
+        self.assertGreater(art_agree, 95.0)
+        self.assertLess(photo_agree, self.ko.BORDER_MIN_PCT)
+
+    def test_check_writes_nothing(self):
+        src = self.d / "art.png"
+        w, h, px = self.art()
+        self.ko.encode(src, w, h, px)
+        before = sorted(p.name for p in self.d.iterdir())
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knockout.py"),
+                            str(src), "--check"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(sorted(p.name for p in self.d.iterdir()), before)
+
+    def test_check_exits_non_zero_on_a_photograph(self):
+        src = self.d / "photo.png"
+        w, h, px = self.photo()
+        self.ko.encode(src, w, h, px)
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knockout.py"),
+                            str(src), "--check"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("photograph", r.stderr)
+
+    def test_the_cutout_still_works_and_still_writes(self):
+        # verdict() was lifted out of main(). The write path must be unchanged.
+        src, dst = self.d / "art.png", self.d / "cut.png"
+        w, h, px = self.art()
+        self.ko.encode(src, w, h, px)
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knockout.py"),
+                            str(src), str(dst)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(dst.is_file())
+        _w, _h, cut = self.ko.decode(dst)
+        self.assertEqual(cut[3], 0, "the background corner should be transparent")
+
+    # --- where it is wired in ----------------------------------------------
+
+    def test_every_product_is_checked_not_only_apparel(self):
+        # The whole bug. The check is before the needs_cutout branch, so no
+        # product type can skip it.
+        src = (SCRIPTS / "emily-printify.py").read_text()
+        body = src.split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
+        check = body.index('"--check"')
+        branch = body.index("if needs_cutout(cat):")
+        self.assertLess(check, branch,
+                        "the check must run before the apparel-only branch")
+
+    def test_a_refused_file_stops_the_draft(self):
+        # Printing a warning and uploading anyway would be worse than nothing.
+        src = (SCRIPTS / "emily-printify.py").read_text()
+        body = src.split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
+        # The window is the check and nothing else. Measured to "if
+        # needs_cutout" rather than to "uploading": the apparel branch has a
+        # sys.exit(1) of its own, so the wider window passed even with this
+        # refusal deleted.
+        after = body[body.index('"--check"'):]
+        window = after[:after.index("if needs_cutout(cat):")]
+        self.assertIn("sys.exit(1)", window)
+
+    # --- the cause ----------------------------------------------------------
+
+    def test_the_prompt_says_it_is_a_print_file(self):
+        out = self.ea.directed("Maple leaf pocket sticker")
+        self.assertIn("Maple leaf pocket sticker", out)
+        for forbidden in ("photograph", "mockup", "ruler", "wood grain", "desk"):
+            self.assertIn(forbidden, out.lower(),
+                          f"the direction must rule out a {forbidden}")
+
+    def test_the_direction_reaches_the_model(self):
+        # Defined and not sent is the same as not defined. Asserted on the
+        # request body, not on the constant existing.
+        src = (SCRIPTS / "emily-assets.py").read_text()
+        body = src.split("def generate(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("directed(prompt)", body)
+        self.assertNotIn('"content": prompt', body)
+
+    def test_the_agents_own_words_are_kept(self):
+        # The direction is added to her idea, not instead of it.
+        self.assertTrue(self.ea.directed("a fox in a scarf")
+                        .startswith("a fox in a scarf"))

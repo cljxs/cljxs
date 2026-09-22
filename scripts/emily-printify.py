@@ -808,14 +808,33 @@ def cmd_draft(a):
             print(f"  + {line}")
         print(f"  (wording lives in agents/emily/state/disclosures.json)")
 
-    # Apparel needs the background removed before it goes anywhere near a
-    # garment. knockout.py refuses art it cannot cut cleanly, and that refusal
-    # has to stop the draft: uploading the opaque file instead would produce a
-    # product that looks right in the listing and wrong on the shirt.
+    ko = Path(__file__).resolve().parent / "knockout.py"
+
+    # EVERY print file is checked first, whatever the product. This used to
+    # run for apparel only, because a sticker is die-cut and an opaque square
+    # is fine on one - true, and it meant nothing looked at a sticker's file
+    # at all. A PHOTOGRAPH of a sticker lying on a desk went to Printify as
+    # the artwork: wood grain, ruler and all, and it would have printed that
+    # way. It looked perfectly good as a thumbnail, which is how it got past
+    # everyone including me.
+    print(f"checking {design.name} is artwork and not a photograph ...")
+    r = subprocess.run([sys.executable, str(ko), str(design), "--check"],
+                       capture_output=True, text=True)
+    sys.stdout.write(r.stdout)
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr)
+        print(f"\nnot drafting: this file is not artwork. Printify prints what "
+              f"it is given,\n  so a product shot would arrive with its "
+              f"background on it.\n  Regenerate the art - emily-assets.py asks "
+              f"for flat art on a plain background.", file=sys.stderr)
+        sys.exit(1)
+
+    # Apparel needs that background actually removed before it goes anywhere
+    # near a garment: an opaque file prints its background as a visible
+    # rectangle - a white box on a black hoodie.
     upload_from = design
     if needs_cutout(cat):
         cut = d / "design-cutout.png"
-        ko = Path(__file__).resolve().parent / "knockout.py"
         print(f"{product_type} is apparel - cutting the background out first ...")
         r = subprocess.run([sys.executable, str(ko), str(design), str(cut)],
                            capture_output=True, text=True)

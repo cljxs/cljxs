@@ -70,6 +70,17 @@ result — do not guess at what to build.
    The checker rejects any `.png` under 2KB, so a hand-written file fails the
    build no matter what you write about it.
 
+   **Describe the design, not a picture of the product.** "Maple leaf pocket
+   sticker" got a photograph of a sticker lying on a wooden desk next to a
+   ruler — and that went to Printify as the file to print. The command already
+   appends the format direction (flat art, plain background, no mockup) so you
+   do not have to; your half is the subject. Say "a maple leaf in warm autumn
+   browns", not "a maple leaf sticker".
+
+   Before any draft is created, `knockout.py` checks the file is artwork and
+   not a photograph. If it refuses, the art is wrong — regenerate it. Do not
+   try to get around it; a file it refuses would print its background.
+
 
 3. **Write the listing copy** — with this command, never by hand:
 
