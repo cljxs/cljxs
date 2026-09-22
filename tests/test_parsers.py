@@ -6949,16 +6949,16 @@ class GettingOneKeyOntoTheDroplet(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertFalse(self.path.exists())
 
-    def test_an_empty_half_is_refused_even_with_no_shape_to_catch_it(self):
-        # For ETSY_API_KEY the shape check happens to catch "keystring:" on
-        # its way past, so the empty-half guard never fires and a mutation
-        # removing it went unnoticed. A two-part key with no known shape is
-        # the case that guard is actually for.
+    def test_an_empty_half_is_refused_with_no_shape_to_catch_it(self):
+        # Guards the per-part check itself, not the shape check: for a
+        # two-part key whose shape we do not know, the empty second half has
+        # to be caught by problems("", second) or by nothing at all.
         self.m.PARTS["TWO_PART_TOKEN"] = ("first part", "second part")
         self.addCleanup(self.m.PARTS.pop, "TWO_PART_TOKEN", None)
-        code, _said = self.run_with("aaaaaaaaaaaa", "", "", "",
-                                    name="TWO_PART_TOKEN")
+        code, said = self.run_with("aaaaaaaaaaaa", "", "", "",
+                                   name="TWO_PART_TOKEN")
         self.assertEqual(code, 2)
+        self.assertIn("it is empty", said)
         self.assertFalse(self.path.exists())
 
     def test_the_whole_key_pasted_at_the_first_prompt_is_taken(self):

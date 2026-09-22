@@ -182,8 +182,13 @@ def main():
                     value, found = first, problems(name, first)
                 else:
                     second = clean(asker(f"  2/2  {parts[1]}: "))
+                    # Each half is judged on its own before they are joined.
+                    # An "if first and second" guard here as well would be a
+                    # second opinion on emptiness that can never disagree -
+                    # and it could not be tested, because problems() always
+                    # answers first.
                     bad = problems("", second)
-                    value = f"{first}:{second}" if first and second else ""
+                    value = f"{first}:{second}"
                     found = bad or problems(name, value)
             else:
                 value = clean(asker(f"paste {name}"
