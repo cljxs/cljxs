@@ -7049,3 +7049,342 @@ class GettingOneKeyOntoTheDroplet(unittest.TestCase):
         code, _ = self.run_with("some-other-token-that-is-long-enough",
                                 name="SOME_OTHER_TOKEN")
         self.assertEqual(code, 0)
+
+
+class GoogleSaysOrderAndWeReadItAsPopularity(unittest.TestCase):
+    """trend-probe.py, against payloads captured from Google on 2026-09-22.
+
+    Suggest returns a relevance score per completion, which reads like a
+    measurement of how popular each one is. For 'fall sticker' the real
+    payload scores them
+
+        1250, 601, 600, 561, 560, 559, 558, 557, 556, 555, 554, 553, 552, ...
+
+    Only the first three of those are measurements. The rest is a consecutive
+    descending run - Google reporting the ORDER it chose, nothing more. A
+    scorer that averaged them, or that preferred the 11th suggestion to the
+    12th because 554 > 553, would be inventing differences out of a counter.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("trend_probe", SCRIPTS / "trend-probe.py")
+
+    def chrome(self):
+        return (FIXTURES / "google-suggest-chrome.json").read_text()
+
+    def firefox(self):
+        return (FIXTURES / "google-suggest-firefox.json").read_text()
+
+    def test_the_real_chrome_payload_parses(self):
+        words, rel, err = self.m.parse_suggest(self.chrome())
+        self.assertIsNone(err)
+        self.assertEqual(words[0], "fall stickers")
+        self.assertEqual(len(words), 15)
+        self.assertEqual(rel[:4], [1250, 601, 600, 561])
+
+    def test_the_arity_differs_between_clients(self):
+        # client=chrome returns five elements, client=firefox four. Reading
+        # the metadata from a fixed index worked on whichever one was tried
+        # first and broke on the other.
+        c_words, c_rel, c_err = self.m.parse_suggest(self.chrome())
+        f_words, f_rel, f_err = self.m.parse_suggest(self.firefox())
+        self.assertIsNone(c_err)
+        self.assertIsNone(f_err)
+        self.assertEqual(len(json.loads(self.chrome())), 5)
+        self.assertEqual(len(json.loads(self.firefox())), 4)
+        # Both still yield suggestions; only chrome carries relevance.
+        self.assertTrue(c_words and f_words)
+        self.assertTrue(c_rel)
+        self.assertEqual(f_rel, [])
+
+    def test_the_filler_run_is_found_in_the_real_payload(self):
+        _words, rel, _err = self.m.parse_suggest(self.chrome())
+        self.assertEqual(self.m.filler_from(rel), 12)
+
+    def test_distinct_scores_are_not_called_filler(self):
+        # 1250, 601, 600 are real. Calling them rank-filler would throw away
+        # the only measurement in the payload.
+        self.assertEqual(self.m.filler_from([1250, 601, 600]), 0)
+        self.assertEqual(self.m.filler_from([900, 800, 700, 600]), 0)
+
+    def test_a_short_run_is_not_enough_to_call_it_filler(self):
+        # Two consecutive scores happen by chance. Three in a row do not.
+        self.assertEqual(self.m.filler_from([900, 601, 600]), 0)
+        self.assertEqual(self.m.filler_from([900, 602, 601, 600]), 3)
+
+    def test_an_all_filler_payload_is_all_filler(self):
+        self.assertEqual(self.m.filler_from([605, 604, 603, 602, 601]), 5)
+
+    def test_html_is_not_mistaken_for_a_payload(self):
+        # The exact failure that killed Trends: a 429 that is an HTML page,
+        # not JSON. A parser that returned [] here would read as "nobody
+        # searches for this", which is the opposite of what happened.
+        html = (FIXTURES / "google-trends-explore-429.html").read_text()
+        words, rel, err = self.m.parse_suggest(html)
+        self.assertEqual(words, [])
+        self.assertIsNotNone(err)
+        self.assertIn("not JSON", err)
+        self.assertIn("429", err)
+
+    def test_the_error_names_the_page_rather_than_pasting_it(self):
+        html = (FIXTURES / "google-trends-explore-429.html").read_text()
+        said = self.m.looks_like(html)
+        self.assertIn("HTML page", said)
+        self.assertIn("429", said)
+        self.assertLess(len(said), 160, said)
+        self.assertNotIn("<style", said)
+
+    def test_valid_json_of_the_wrong_shape_is_refused(self):
+        for text in ('{"suggestions": ["a"]}', '[]', '["fall sticker"]', 'null'):
+            with self.subTest(text=text):
+                words, _rel, err = self.m.parse_suggest(text)
+                self.assertEqual(words, [])
+                self.assertIsNotNone(err, text)
+
+    def test_relevance_is_never_longer_than_the_suggestions(self):
+        # Zipping two lists of different lengths pairs the wrong score with
+        # the wrong phrase, silently.
+        #
+        # CONSTRUCTED, deliberately. The captured payload has 15 of each, so
+        # asserting against it cannot fail however the truncation is broken -
+        # the first version of this test was exactly that and a mutation
+        # removing the truncation sailed past it. The imbalance has to be in
+        # the input for the guard to be under test at all.
+        payload = json.dumps(["q", ["one", "two"], [], {
+            "google:suggestrelevance": [1250, 900, 800, 700, 600]}])
+        words, rel, err = self.m.parse_suggest(payload)
+        self.assertIsNone(err)
+        self.assertEqual(words, ["one", "two"])
+        self.assertEqual(rel, [1250, 900])
+
+    def test_a_non_numeric_relevance_entry_is_dropped(self):
+        payload = json.dumps(["q", ["one", "two"], [], {
+            "google:suggestrelevance": [1250, None, "900"]}])
+        _words, rel, err = self.m.parse_suggest(payload)
+        self.assertIsNone(err)
+        self.assertEqual(rel, [1250])
+
+    def test_a_payload_with_no_relevance_at_all_is_fine(self):
+        # client=firefox never sends it, and that is not an error.
+        words, rel, err = self.m.parse_suggest(self.firefox())
+        self.assertIsNone(err)
+        self.assertEqual(len(words), 10)
+        self.assertEqual(rel, [])
+        self.assertEqual(self.m.filler_from(rel), 0)
+
+
+class NotEveryCompletionIsACustomer(unittest.TestCase):
+    """The intent labels in trend-probe.py, on the real completion list.
+
+    'fall stickers near me', 'fall stickers hobby lobby' and 'fall stickers
+    amazon' are people shopping somewhere that is not Etsy. 'fall stickers
+    png' and 'fall stickers printable' want a file, which is a line we
+    decided not to enter. 'fall sticker ideas' is not shopping at all.
+
+    Seven of the fifteen completions for 'fall sticker' are someone trying to
+    buy a physical thing. A researcher that counted all fifteen as demand
+    would overstate it by more than double.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("trend_probe", SCRIPTS / "trend-probe.py")
+
+    def test_the_real_completions_split_the_way_they_should(self):
+        words, _rel, _err = self.m.parse_suggest(
+            (FIXTURES / "google-suggest-chrome.json").read_text())
+        labels = {w: self.m.intent_of(w)[0] for w in words}
+        self.assertEqual(labels["fall stickers near me"], "offsite")
+        self.assertEqual(labels["fall stickers hobby lobby"], "offsite")
+        self.assertEqual(labels["fall stickers amazon"], "offsite")
+        self.assertEqual(labels["fall stickers png"], "digital")
+        self.assertEqual(labels["fall stickers printable"], "digital")
+        self.assertEqual(labels["fall sticker ideas"], "research")
+        self.assertIsNone(labels["fall sticker sheet"])
+        self.assertIsNone(labels["fall sticker pack"])
+
+    def test_exactly_seven_of_the_fifteen_are_buyers(self):
+        words, _rel, _err = self.m.parse_suggest(
+            (FIXTURES / "google-suggest-chrome.json").read_text())
+        buyable = [w for w in words if self.m.intent_of(w)[0] is None]
+        self.assertEqual(len(buyable), 7, buyable)
+
+    def test_a_label_does_not_match_inside_a_longer_word(self):
+        # \bfree\b, not 'free' anywhere: 'freezer magnet' and 'freeform' are
+        # products, and substring matching would throw both away.
+        for phrase in ("freezer magnet", "freeform sticker",
+                       "digitally printed", "targeted ad sticker"):
+            with self.subTest(phrase=phrase):
+                label, _why = self.m.intent_of(phrase)
+                self.assertIsNone(label, f"{phrase} -> {label}")
+
+    def test_a_shop_that_is_also_a_word_is_only_a_shop_at_the_end(self):
+        # Found by this suite, not on the droplet: 'target' matched anywhere
+        # labelled 'target practice sticker' as someone shopping at Target,
+        # which silently deletes a real product idea. A retailer query puts
+        # the shop last.
+        self.assertEqual(self.m.intent_of("fall stickers target")[0], "offsite")
+        self.assertEqual(self.m.intent_of("fall stickers costco")[0], "offsite")
+        for phrase in ("target practice sticker", "target practice",
+                       "on target decal", "cvs receipt sticker joke"):
+            with self.subTest(phrase=phrase):
+                self.assertIsNone(self.m.intent_of(phrase)[0], phrase)
+
+    def test_a_plain_product_phrase_is_left_unlabelled(self):
+        for phrase in ("fall sticker sheet", "pumpkin spice sticker",
+                       "autumn vinyl sticker pack", "cozy fall tumbler"):
+            with self.subTest(phrase=phrase):
+                self.assertIsNone(self.m.intent_of(phrase)[0], phrase)
+
+
+class TrendingIsNewsNotAProductQueue(unittest.TestCase):
+    """The Trends RSS feed, against the real US feed of 2026-09-22.
+
+    This one DOES work from the droplet - 200 and real XML, unlike the
+    explore endpoint. What it returns is 'taylor swift', 'united nations',
+    'hayden panettiere': news spikes. Parsing it is easy; the trap is reading
+    it as a list of things to print on a shirt.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("trend_probe", SCRIPTS / "trend-probe.py")
+
+    def feed(self):
+        return (FIXTURES / "google-trending-rss.xml").read_text()
+
+    def test_the_namespaced_fields_are_read(self):
+        # approx_traffic and news_item_title live in the ht: namespace.
+        # findtext('approx_traffic') finds nothing and returns '' - which
+        # reads as a trend with no volume rather than as a parser miss.
+        items = self._parse()
+        self.assertEqual(len(items), 10)
+        phrase, traffic, heads = items[0]
+        self.assertEqual(phrase, "taylor swift")
+        self.assertEqual(traffic, "500+")
+        self.assertTrue(heads and "Taylor Swift" in heads[0])
+
+    def _parse(self):
+        calls = {}
+
+        def fake_fetch(url, timeout=20):
+            calls["url"] = url
+            return self.feed(), None
+
+        real, self.m.fetch = self.m.fetch, fake_fetch
+        try:
+            items, err = self.m.trending("US")
+        finally:
+            self.m.fetch = real
+        self.assertIsNone(err)
+        self.calls = calls
+        return items
+
+    def test_every_item_carries_a_traffic_figure(self):
+        for phrase, traffic, _heads in self._parse():
+            with self.subTest(phrase=phrase):
+                self.assertRegex(traffic, r"^\d[\d,]*\+$", phrase)
+
+    def test_the_geo_reaches_the_url(self):
+        self._parse()
+        self.assertIn("geo=US", self.calls["url"])
+
+    def test_html_where_rss_was_expected_is_an_error_not_an_empty_feed(self):
+        html = (FIXTURES / "google-trends-explore-429.html").read_text()
+
+        def fake_fetch(url, timeout=20):
+            return html, None
+
+        real, self.m.fetch = self.m.fetch, fake_fetch
+        try:
+            items, err = self.m.trending("US")
+        finally:
+            self.m.fetch = real
+        self.assertEqual(items, [])
+        self.assertIsNotNone(err)
+        self.assertIn("not RSS", err)
+
+    def test_a_transport_failure_is_passed_through(self):
+        def fake_fetch(url, timeout=20):
+            return None, "HTTP 429: an HTML page (Error 429)"
+
+        real, self.m.fetch = self.m.fetch, fake_fetch
+        try:
+            items, err = self.m.trending("US")
+        finally:
+            self.m.fetch = real
+        self.assertEqual(items, [])
+        self.assertIn("429", err)
+
+
+class ExpansionWidensTheKeyhole(unittest.TestCase):
+    """trend-probe.py expand: one Suggest call sees ten completions, and
+    there are far more than ten ways to finish a phrase. Asking once per
+    letter is the only breadth this endpoint offers."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("trend_probe", SCRIPTS / "trend-probe.py")
+
+    def fake_suggest(self, table):
+        def _suggest(phrase, client="chrome"):
+            return table.get(phrase, []), [], None
+        return _suggest
+
+    def test_it_asks_for_the_bare_phrase_as_well_as_every_letter(self):
+        asked = []
+
+        def _suggest(phrase, client="chrome"):
+            asked.append(phrase)
+            return [], [], None
+
+        real, self.m.suggest = self.m.suggest, _suggest
+        try:
+            self.m.expand("fall sticker", pause=0)
+        finally:
+            self.m.suggest = real
+        self.assertEqual(len(asked), 27, asked)
+        self.assertEqual(asked[0], "fall sticker")
+        self.assertEqual(asked[1], "fall sticker a")
+        self.assertEqual(asked[-1], "fall sticker z")
+
+    def test_the_best_rank_wins_when_a_phrase_appears_twice(self):
+        # The same completion turns up under several letters. Keeping the
+        # worst rank would bury a phrase that was top of another list.
+        table = {"fall sticker": ["cozy fall sticker", "pumpkin sticker"],
+                 "fall sticker c": ["a", "b", "cozy fall sticker"]}
+        real, self.m.suggest = self.m.suggest, self.fake_suggest(table)
+        try:
+            found, errors = self.m.expand("fall sticker", letters="c", pause=0)
+        finally:
+            self.m.suggest = real
+        self.assertEqual(errors, [])
+        self.assertEqual(found["cozy fall sticker"], 0)
+
+    def test_results_are_lowercased_and_deduped(self):
+        table = {"fall sticker": ["Cozy Fall Sticker", "cozy fall sticker",
+                                  "  COZY FALL STICKER  "]}
+        real, self.m.suggest = self.m.suggest, self.fake_suggest(table)
+        try:
+            found, _errors = self.m.expand("fall sticker", letters="", pause=0)
+        finally:
+            self.m.suggest = real
+        self.assertEqual(list(found), ["cozy fall sticker"])
+
+    def test_one_failed_letter_does_not_lose_the_other_twenty_six(self):
+        # A single 429 in the middle of a 27-request sweep used to be the
+        # kind of thing that raised and threw away everything collected.
+        def _suggest(phrase, client="chrome"):
+            if phrase.endswith(" m"):
+                return [], [], "HTTP 429: an HTML page (Error 429)"
+            return [f"{phrase} thing"], [], None
+
+        real, self.m.suggest = self.m.suggest, _suggest
+        try:
+            found, errors = self.m.expand("fall sticker", pause=0)
+        finally:
+            self.m.suggest = real
+        self.assertEqual(len(errors), 1)
+        self.assertIn("429", errors[0])
+        self.assertEqual(len(found), 26)

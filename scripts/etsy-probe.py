@@ -4,6 +4,7 @@ etsy-probe.py — what does the Etsy API actually give us?
 
     etsy-probe.py ping                 is the key alive and approved?
     etsy-probe.py search fall sticker  what comes back for a keyword?
+    etsy-probe.py search fall sticker --save   ...and keep it as a fixture
 
 This is a PROBE, not the researcher. Its job is to answer "what fields are
 really in the response" before anything is built on them - every parser bug
@@ -48,6 +49,21 @@ SCRIPTS = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("emily_assets", SCRIPTS / "emily-assets.py")
 ea = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ea)
+
+# THE redactor, imported rather than written again. capture-fixtures.py
+# already knows every credential value on this box and every shape worth
+# masking; a second copy here would be the one that forgets a rule.
+_cf = importlib.util.spec_from_file_location("capture_fixtures",
+                                             SCRIPTS / "capture-fixtures.py")
+cf = importlib.util.module_from_spec(_cf)
+_cf.loader.exec_module(cf)
+
+FIXTURES = ROOT / "tests" / "fixtures"
+
+# How many listings to keep in a saved fixture. The point is the SHAPE - what
+# fields are really there, what a price and a timestamp really look like -
+# and five of those is as informative as twenty-five and a quarter the size.
+FIXTURE_ROWS = 5
 
 API = "https://api.etsy.com/v3/application"
 UA = "Mozilla/5.0 (compatible; cljxs-etsy-probe/1.0)"
@@ -131,6 +147,28 @@ def cmd_ping(key):
     return 0
 
 
+def save_fixture(data, words):
+    """Write the real payload to tests/fixtures/, redacted, for the parser.
+
+    market-scan.py has to read num_favorers, views, price and
+    original_creation_timestamp out of these rows. Every parser bug in this
+    repo was a format assumption, and the fix that keeps working is a real
+    captured sample that the tests can be re-run against.
+    """
+    rows = (data.get("results") or [])[:FIXTURE_ROWS]
+    keep = {"count": data.get("count"), "results": rows}
+    text = cf.redact(json.dumps(keep, indent=2, sort_keys=True),
+                     cf.known_secrets())
+    FIXTURES.mkdir(parents=True, exist_ok=True)
+    path = FIXTURES / "etsy-listings-active.json"
+    path.write_text(text)
+    print(f"\n  saved {len(rows)} of {len(data.get('results') or [])} rows to "
+          f"tests/fixtures/{path.name}")
+    print(f"  ({len(text)} bytes, redacted through capture-fixtures.py) "
+          f"for '{' '.join(words)}'")
+    return path
+
+
 def cmd_search(key, words):
     q = urllib.parse.urlencode({"keywords": " ".join(words), "limit": 25,
                                 "sort_on": "score"})
@@ -172,6 +210,9 @@ def cmd_search(key, words):
         print(f"    {str(r.get('title', ''))[:52]:<52} {shown:>12}  "
               f"favs={r.get('num_favorers', '?')}")
 
+    if "--save" in sys.argv:
+        save_fixture(data, words)
+
     tags = [t for r in rows for t in (r.get("tags") or [])]
     if tags:
         counts = {}
@@ -197,7 +238,7 @@ def main():
     if len(sys.argv) < 3:
         print("usage: etsy-probe.py search <keywords...>", file=sys.stderr)
         return 2
-    return cmd_search(key, sys.argv[2:])
+    return cmd_search(key, [a for a in sys.argv[2:] if a != "--save"])
 
 
 if __name__ == "__main__":
