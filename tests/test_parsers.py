@@ -9329,6 +9329,39 @@ class PricingRunsEndToEndOrNotAtAll(unittest.TestCase):
         self.assertEqual(entry["priced_against"]["fees_used"]["transaction_pct"],
                          0.065)
 
+    def test_the_shipping_table_reaches_the_margin_column(self):
+        # net_of() taking shipping is not the same as market-price PASSING
+        # it. Every other command test here has zero postage, so the
+        # argument made no difference and a mutation dropping it survived.
+        #
+        # These are the real Printify numbers: $1.42 to print, $4.59 to
+        # post. At the $3.99 median with free shipping every size loses
+        # money, and the ladder must be refused.
+        self.run_it("costs", "--product", "sticker", "1.42", "1.68", "2.02")
+        self.run_it("fees", "--set", "ship_cost=4.59")
+        before = self.prices()
+        r = self.run_it("market-price", "--product", "sticker",
+                        "--market", "water bottle stickers", "--apply")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("BELOW BREAK-EVEN", r.stdout)
+        self.assertIn("absorbing $4.59 postage", r.stdout)
+        self.assertIn("MULTI-PACK", r.stdout)
+        # The break-even figure itself, not just the fact of a refusal:
+        # ($1.42 + $4.59 + $0.45) / (1 - 0.095) = $7.14. Without postage in
+        # it the same line reads $2.07, and the refusal still fires - so
+        # only this assertion can tell the two apart.
+        self.assertIn("$7.14", r.stdout)
+        self.assertEqual(self.prices(), before)
+
+    def test_charging_the_postage_makes_the_same_ladder_pass(self):
+        self.run_it("costs", "--product", "sticker", "1.42", "1.68", "2.02")
+        self.run_it("fees", "--set", "ship_cost=4.59", "ship_charged=4.59")
+        r = self.run_it("market-price", "--product", "sticker",
+                        "--market", "water bottle stickers", "--apply")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("BELOW BREAK-EVEN", r.stdout)
+        self.assertEqual(self.prices(), {"1": 349, "2": 399, "3": 449})
+
     def test_there_is_one_catalogue_writer(self):
         src = (SCRIPTS / "emily-printify.py").read_text()
         code = [l for l in src.splitlines() if not l.lstrip().startswith("#")]
@@ -9336,3 +9369,125 @@ class PricingRunsEndToEndOrNotAtAll(unittest.TestCase):
         self.assertEqual(len(inline), 1,
                          "the catalogue write belongs in write_catalog() alone")
         self.assertIn("def write_catalog(cat):", src)
+
+
+class PostageIsTheWholeStoryOnASticker(unittest.TestCase):
+    """Printify's Kiss-Cut sticker: $1.42 to print, $4.59 to ship.
+
+    The postage costs three times the product and more than the $3.99 that
+    market is asking for the item. The first version of net_of() had no
+    shipping term at all, so every margin it printed assumed postage was
+    free - and on this product that is the difference between making 70
+    cents and losing $3.65.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("emily_printify", SCRIPTS / "emily-printify.py")
+
+    FEES = {"transaction_pct": 0.065, "processing_pct": 0.03,
+            "processing_flat": 0.25, "listing_fee": 0.20,
+            "offsite_ads_pct": 0.0, "ship_cost": 4.59, "ship_charged": 0.0}
+
+    def test_free_shipping_on_a_cheap_sticker_loses_money(self):
+        # 3.99 - 9.5% - 0.45 flat - 1.42 print - 4.59 post
+        net = self.m.net_of(3.99, 1.42, self.FEES, 4.59, 0.0)
+        self.assertLess(net, -2.5)
+        self.assertAlmostEqual(net, -2.84905, places=4)
+
+    def test_the_buyer_paying_postage_turns_it_positive(self):
+        # revenue 3.99 + 4.59 = 8.58, and Etsy's cut applies to both
+        net = self.m.net_of(3.99, 1.42, self.FEES, 4.59, 4.59)
+        self.assertGreater(net, 0)
+        self.assertAlmostEqual(net, 1.3049, places=4)
+
+    def test_break_even_moves_by_roughly_the_postage(self):
+        free = self.m.floor_price(1.42, self.FEES, 4.59, 0.0)
+        charged = self.m.floor_price(1.42, self.FEES, 4.59, 4.59)
+        self.assertAlmostEqual(free - charged, 4.59, places=2)
+        self.assertGreater(free, 7)
+        self.assertLess(charged, 4)
+
+    def test_break_even_is_where_it_crosses_zero_with_shipping_too(self):
+        for charged in (0.0, 2.0, 4.59):
+            with self.subTest(charged=charged):
+                floor = self.m.floor_price(1.42, self.FEES, 4.59, charged)
+                self.assertAlmostEqual(
+                    self.m.net_of(floor, 1.42, self.FEES, 4.59, charged),
+                    0.0, places=9)
+
+    def test_etsy_taxes_the_shipping_you_charge(self):
+        # Charging $4.59 does not return $4.59: the transaction and
+        # processing percentages apply to it as well as to the item.
+        taxed = self.m.net_of(3.99, 1.42, self.FEES, 4.59, 4.59)
+        untaxed = self.m.net_of(3.99, 1.42, self.FEES, 4.59, 0.0) + 4.59
+        self.assertLess(taxed, untaxed)
+
+    def test_a_multipack_carries_the_postage_five_ways(self):
+        # The real reason to sell packs: postage is per PARCEL, print is per
+        # sticker. One envelope of five costs one postage.
+        single = self.m.net_of(3.99, 1.42, self.FEES, 4.59, 0.0)
+        pack = self.m.net_of(16.99, 1.42 * 5, self.FEES, 4.59, 0.0)
+        self.assertLess(single, 0)
+        self.assertGreater(pack, 0)
+
+    def test_no_shipping_arguments_is_the_old_behaviour(self):
+        # Defaults of zero, so every existing caller keeps its meaning.
+        self.assertAlmostEqual(self.m.net_of(3.10, 1.32, self.FEES),
+                               1.0355, places=4)
+
+    def test_the_default_table_carries_shipping_keys(self):
+        for k in ("ship_cost", "ship_charged"):
+            self.assertIn(k, self.m.DEFAULT_FEES)
+            self.assertEqual(self.m.DEFAULT_FEES[k], 0.0)
+
+    def test_fees_can_be_set_and_are_read_back(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "agents" / "emily" / "state").mkdir(parents=True)
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(root))
+        run = lambda *a: subprocess.run(
+            [sys.executable, str(SCRIPTS / "emily-printify.py"), "fees", *a],
+            capture_output=True, text=True, env=env)
+        r = run("--set", "ship_cost=4.59")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("4.59", run().stdout)
+        saved = json.loads((root / "agents" / "emily" / "state"
+                            / "printify-catalog.json").read_text())
+        self.assertEqual(saved["_fees"]["ship_cost"], 4.59)
+
+    def test_an_unknown_fee_name_is_refused(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "agents" / "emily" / "state").mkdir(parents=True)
+        r = subprocess.run(
+            [sys.executable, str(SCRIPTS / "emily-printify.py"), "fees",
+             "--set", "etsy_vibes=0.5"], capture_output=True, text=True,
+            env=dict(os.environ, ECOSYSTEM_ROOT=str(root)))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("not a fee", r.stderr)
+
+    def test_zero_shipping_is_called_out_rather_than_assumed_fine(self):
+        # The state this shipped in: every margin printed as if postage were
+        # free, with nothing saying so.
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        state = root / "agents" / "emily" / "state"
+        state.mkdir(parents=True)
+        (root / "agents" / "scout" / "state" / "scans").mkdir(parents=True)
+        (state / "printify-catalog.json").write_text(json.dumps({"sticker": {
+            "variant_ids": [1], "variant_titles": ['2" x 2"'],
+            "prices": {"1": 399}, "costs": {"1": 1.42}}}))
+        (root / "agents" / "scout" / "state" / "scans" / "s.json").write_text(
+            json.dumps({"seed": "s", "scanned_at": datetime.now(timezone.utc)
+                        .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "rows": [{"phrase": "water bottle stickers", "supply": 1,
+                                  "heat": 0.1, "pull": 0.1, "price": 3.99,
+                                  "match": 1.0, "returned": 25, "heat_n": 25,
+                                  "pull_n": 25, "score": 0.1}], "excluded": []}))
+        r = subprocess.run(
+            [sys.executable, str(SCRIPTS / "emily-printify.py"), "market-price",
+             "--product", "sticker", "--market", "water bottle stickers"],
+            capture_output=True, text=True,
+            env=dict(os.environ, ECOSYSTEM_ROOT=str(root)))
+        self.assertIn("SHIPPING IS NOT IN THESE NUMBERS", r.stdout)

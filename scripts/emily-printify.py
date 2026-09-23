@@ -645,6 +645,13 @@ DEFAULT_FEES = {
     "processing_flat": 0.25,
     "listing_fee": 0.20,
     "offsite_ads_pct": 0.0,
+    # What Printify charges YOU to post one, and what you charge the buyer.
+    # Free shipping (0.0 charged) is what Etsy's search favours and what its
+    # buyers filter for, and on a sticker it is also what turns a profit
+    # into a loss - so both are recorded and the arithmetic is shown rather
+    # than the choice being made here.
+    "ship_cost": 0.0,
+    "ship_charged": 0.0,
 }
 
 
@@ -659,29 +666,47 @@ def fees_of(cat):
     return got
 
 
-def net_of(price, cost, fees):
+def net_of(price, cost, fees, ship_cost=0.0, ship_charged=0.0):
     """What actually lands in your account, per sale.
 
-    price       what the buyer pays
-    cost        what you pay to make and ship it
+    price           what the buyer pays for the item
+    cost            what Printify charges to MAKE it
+    ship_cost       what Printify charges to SHIP it
+    ship_charged    what you charge the buyer for shipping; 0 is free shipping
+
+    SHIPPING IS THE WHOLE STORY ON A STICKER, and the first version of this
+    had no term for it. Printify's Kiss-Cut sticker is $1.42 to print and
+    $4.59 to ship - the postage costs three times the product, and more than
+    the $3.99 that market is asking for the item. At free shipping that sale
+    loses $2.85. Folding it into `cost` by hand would have given the right
+    total and hidden the reason, and it could not express the buyer paying
+    it, which is the difference between losing $2.85 and making $1.31.
+
+    Etsy's transaction fee applies to shipping you charge as well as to the
+    item, which is why ship_charged is taxed and ship_cost is not.
     """
+    revenue = price + ship_charged
     take = fees["transaction_pct"] + fees["processing_pct"] + fees["offsite_ads_pct"]
-    return price - (price * take) - fees["processing_flat"] - fees["listing_fee"] - cost
+    return (revenue - (revenue * take) - fees["processing_flat"]
+            - fees["listing_fee"] - cost - ship_cost)
 
 
-def floor_price(cost, fees):
-    """The price at which the sale breaks exactly even.
+def floor_price(cost, fees, ship_cost=0.0, ship_charged=0.0):
+    """The item price at which the sale breaks exactly even.
 
-    Below this you pay Etsy for the privilege of shipping somebody a sticker.
-    Solving net_of(p) = 0 for p:
+    Below this you pay Etsy for the privilege of posting somebody a sticker.
+    Solving net_of(p) = 0 for p, with r = p + ship_charged:
 
-        p - p*take - flat - listing - cost = 0
-        p = (cost + flat + listing) / (1 - take)
+        r - r*take - flat - listing - cost - ship_cost = 0
+        r = (cost + ship_cost + flat + listing) / (1 - take)
+        p = r - ship_charged
     """
     take = fees["transaction_pct"] + fees["processing_pct"] + fees["offsite_ads_pct"]
     if take >= 1:
         return None
-    return (cost + fees["processing_flat"] + fees["listing_fee"]) / (1 - take)
+    revenue = ((cost + ship_cost + fees["processing_flat"] + fees["listing_fee"])
+               / (1 - take))
+    return revenue - ship_charged
 
 
 def costs_of(entry):
@@ -689,6 +714,49 @@ def costs_of(entry):
     got = entry.get("costs") or {}
     return {str(k): float(v) for k, v in got.items()
             if isinstance(v, (int, float)) and v >= 0}
+
+
+def cmd_fees(a):
+    """See or change what Etsy takes and what postage costs."""
+    cat = read_catalog()
+    fees = fees_of(cat)
+    if a.set:
+        for pair in a.set:
+            if "=" not in pair:
+                print(f"--set takes KEY=VALUE, got {pair!r}", file=sys.stderr)
+                return 2
+            k, _, v = pair.partition("=")
+            k = k.strip()
+            if k not in DEFAULT_FEES:
+                print(f"'{k}' is not a fee. Known: "
+                      f"{', '.join(sorted(DEFAULT_FEES))}", file=sys.stderr)
+                return 2
+            try:
+                fees[k] = float(v)
+            except ValueError:
+                print(f"{v!r} is not a number", file=sys.stderr)
+                return 2
+        cat["_fees"] = fees
+        write_catalog(cat)
+        print("Saved. Every price check uses these from now on.\n")
+
+    print("  what Etsy and the post office take:\n")
+    for k in ("transaction_pct", "processing_pct", "offsite_ads_pct"):
+        print(f"    {k:<20}{fees[k] * 100:>8.2f}%")
+    for k in ("processing_flat", "listing_fee", "ship_cost", "ship_charged"):
+        print(f"    {k:<20}{'$%.2f' % fees[k]:>9}")
+    if not fees["ship_cost"]:
+        print(f"\n  ship_cost is ZERO, so every margin shown so far has "
+              f"assumed postage\n  is free. It is not. Printify's page shows "
+              f"it per product:\n"
+              f"    emily-printify.py fees --set ship_cost=4.59")
+    elif not fees["ship_charged"]:
+        print(f"\n  Free shipping: you absorb ${fees['ship_cost']:.2f} a "
+              f"parcel. Etsy's search\n  favours that, and on a cheap item "
+              f"it is also what sinks the margin.\n  To charge it instead:\n"
+              f"    emily-printify.py fees --set ship_charged="
+              f"{fees['ship_cost']:.2f}")
+    return 0
 
 
 def cmd_costs(a):
@@ -888,10 +956,11 @@ def cmd_market_price(a):
             uncosted.append(t)
             rows.append((t, current.get(str(vid)), price, None, None))
             continue
-        net = net_of(price, cost, fees)
-        rows.append((t, current.get(str(vid)), price, net, floor_price(cost, fees)))
+        net = net_of(price, cost, fees, fees["ship_cost"], fees["ship_charged"])
+        floor = floor_price(cost, fees, fees["ship_cost"], fees["ship_charged"])
+        rows.append((t, current.get(str(vid)), price, net, floor))
         if net <= 0:
-            losers.append((t, price, net, floor_price(cost, fees)))
+            losers.append((t, price, net, floor))
 
     head = f"  {'variant':<28}{'now':>9}{'proposed':>10}"
     print(head + ("" if uncosted and len(uncosted) == len(ids)
@@ -911,9 +980,25 @@ def cmd_market_price(a):
               f"once - they are on\n  the Printify product page:\n"
               f"    emily-printify.py costs --product {a.product}")
 
+    if not fees["ship_cost"] and costs:
+        print(f"\n  SHIPPING IS NOT IN THESE NUMBERS. ship_cost is zero, so every "
+              f"margin\n  above assumes postage is free. On a sticker it is the "
+              f"largest cost\n  there is - Printify's own page shows it:\n"
+              f"    emily-printify.py fees --set ship_cost=4.59")
+
     if losers:
+        ship_note = ""
+        if fees["ship_cost"] and not fees["ship_charged"]:
+            ship_note = (f"\n  You are absorbing ${fees['ship_cost']:.2f} postage on "
+                         f"every parcel. Charging it\n  instead moves break-even "
+                         f"down by about that much:\n"
+                         f"    emily-printify.py fees --set ship_charged="
+                         f"{fees['ship_cost']:.2f}\n"
+                         f"  Or sell a MULTI-PACK: postage is nearly fixed per "
+                         f"parcel, so five\n  stickers in one envelope carry it "
+                         f"five times as well as one does.")
         print(f"\n  BELOW BREAK-EVEN ({len(losers)}) - you would pay Etsy for the "
-              f"privilege:")
+              f"privilege:" + ship_note)
         for t, price, net, floor in losers:
             print(f"      {t:<28}${price:.2f} keeps ${net:.2f}; "
                   f"break-even is ${floor:.2f}")
@@ -1474,6 +1559,10 @@ def main():
     p.add_argument("--apply", action="store_true",
                    help="actually set them; without this it only shows")
     p.set_defaults(fn=cmd_market_price)
+
+    p = sub.add_parser("fees", help="see or set the fee and shipping table")
+    p.add_argument("--set", nargs="+", default=[], metavar="KEY=VALUE")
+    p.set_defaults(fn=cmd_fees)
 
     p = sub.add_parser("costs", help="record what each variant costs to make")
     p.add_argument("--product", required=True)
