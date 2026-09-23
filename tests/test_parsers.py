@@ -1367,6 +1367,29 @@ class ScoutCannotDestroyTheIdeaLog(unittest.TestCase):
         self.state.mkdir(parents=True)
         self.ideas = self.state / "ideas.json"
         self.proposals = self.state / "proposals.json"
+        # merge refuses a row with no measurement behind it now, so these
+        # need a scan and rows that name it. The behaviours they guard - the
+        # append, the id assignment, the rerun, the inch repair - are
+        # unchanged; only the shape of a valid row is.
+        scans = self.state / "scans"
+        scans.mkdir(parents=True, exist_ok=True)
+        (scans / "s.json").write_text(json.dumps({
+            "seed": "hoodie", "scanned_at": datetime.now(timezone.utc)
+            .strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "rows": [{"phrase": "trail map hoodie", "supply": 1000,
+                      "heat": 0.05, "pull": 0.04, "price": 30.0, "match": 1.0,
+                      "returned": 25, "heat_n": 25, "pull_n": 25,
+                      "score": 0.017}], "excluded": []}))
+
+    def evidenced(self, rows):
+        """Rows as `propose` would have written them."""
+        out = []
+        for r in rows:
+            r = dict(r)
+            r.setdefault("evidence", {"phrase": "trail map hoodie",
+                                      "supply": 1000, "favs_per_day": 0.05})
+            out.append(r)
+        return out
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -1390,28 +1413,30 @@ class ScoutCannotDestroyTheIdeaLog(unittest.TestCase):
 
     def test_new_ideas_are_appended_not_substituted(self):
         self.ideas.write_text(json.dumps({"ideas": [{"id": 1, "title": "Old one"}]}))
-        self.proposals.write_text(json.dumps([{"title": "Trail map hoodie",
-                                               "product": "hoodie"}]))
+        self.proposals.write_text(json.dumps(self.evidenced(
+            [{"title": "Trail map hoodie", "product": "hoodie"}])))
         self.merge()
         titles = [i["title"] for i in self.log()]
         self.assertEqual(titles, ["Old one", "Trail map hoodie"])
 
     def test_ids_are_assigned_here_not_by_the_agent(self):
         self.ideas.write_text(json.dumps({"ideas": [{"id": 7, "title": "Old"}]}))
-        self.proposals.write_text(json.dumps([{"title": "A"}, {"title": "B"}]))
+        self.proposals.write_text(json.dumps(
+            self.evidenced([{"title": "A"}, {"title": "B"}])))
         self.merge()
         self.assertEqual([i["id"] for i in self.log()], [7, 8, 9])
         self.assertTrue(all(i.get("status") == "pending" for i in self.log()[1:]))
 
     def test_a_repeated_title_is_not_filed_twice(self):
         self.ideas.write_text(json.dumps({"ideas": [{"id": 1, "title": "Trail map hoodie"}]}))
-        self.proposals.write_text(json.dumps([{"title": "  trail MAP hoodie "}]))
+        self.proposals.write_text(json.dumps(
+            self.evidenced([{"title": "  trail MAP hoodie "}])))
         self.merge()
         self.assertEqual(len(self.log()), 1)
 
     def test_rerunning_the_merge_adds_nothing(self):
         self.ideas.write_text(json.dumps({"ideas": []}))
-        self.proposals.write_text(json.dumps([{"title": "One"}]))
+        self.proposals.write_text(json.dumps(self.evidenced([{"title": "One"}])))
         self.merge()
         self.merge()
         self.assertEqual(len(self.log()), 1)
@@ -1567,11 +1592,15 @@ class ScoutDoesNotHandWriteJson(unittest.TestCase):
     def test_the_inch_repair_recovers_a_hand_written_file(self):
         # What actually happened, kept because a model writing measurements
         # into JSON will do it again even with propose available.
+        # Raw text on purpose: the unescaped inch mark IS what is being
+        # tested, so it cannot go through json.dumps. The evidence block
+        # rides along as text for the same reason.
         self.proposals.write_text(
             '{"proposals":[{"title":"Minimalist Mountain Badge",'
-            '"product":"hoodie","brief":"sized for a 3.5" chest print."}]}')
+            '"product":"hoodie","evidence":{"phrase":"cosy hoodie"},'
+            '"brief":"sized for a 3.5" chest print."}]}')
         r = self.run_it("merge")
-        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("inch mark had closed a string early", r.stderr)
         log = json.loads((self.state / "ideas.json").read_text())["ideas"]
         self.assertEqual(log[0]["title"], "Minimalist Mountain Badge")
@@ -10187,3 +10216,133 @@ class TheFeeTableIsNotAProduct(unittest.TestCase):
         _key, entry = self.m.resolve(self.CAT, "sweatshirt")
         self.assertIsNotNone(entry)
         self.assertEqual(entry["blueprint_id"], 77)
+
+
+class TheGateBelongsWhereTheDataEntersTheLog(unittest.TestCase):
+    """Scout was told in bold never to write proposals.json. On 2026-09-23 it
+    wrote it by hand - its own tool log says read and write, the propose
+    script was never called - with three ideas carrying no phrase, no
+    evidence, a free-text product of 'all-over-print canvas tote bag', and a
+    stray newline inside a JSON string that broke the file.
+
+    propose refuses an idea with no measurement. merge did not: it took
+    whatever was in the file. So every guarantee the evidence gate makes was
+    one hand-written file away from being void.
+
+    Rewording the instruction has never fixed this class of thing here - it
+    is the third agent told to run a tool that wrote a file instead - so the
+    rule moved to where it cannot be walked around.
+    """
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.state = self.root / "agents" / "scout" / "state"
+        (self.state / "scans").mkdir(parents=True)
+        (self.state / "ideas.json").write_text('{"ideas":[]}')
+        (self.state / "scans" / "s.json").write_text(json.dumps({
+            "seed": "canvas tote bag",
+            "scanned_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "rows": [{"phrase": "canvas tote bag", "supply": 359529,
+                      "heat": 0.013, "pull": 0.0249, "price": 22.62,
+                      "match": 1.0, "returned": 25, "heat_n": 25,
+                      "pull_n": 23, "score": 0.0024},
+                     {"phrase": "canvas tote bag kids", "supply": 31184,
+                      "heat": 0.0, "pull": 0.0, "price": 19.99, "match": 1.0,
+                      "returned": 25, "heat_n": 25, "pull_n": 25,
+                      "score": 0.0}],
+            "excluded": []}))
+        self.env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+
+    def hand_write(self, rows):
+        (self.state / "proposals.json").write_text(json.dumps({"proposals": rows}))
+
+    def run_it(self, *args):
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "scout-ideas.py"), *args],
+            capture_output=True, text=True, env=self.env)
+
+    def log(self):
+        return json.loads((self.state / "ideas.json").read_text())["ideas"]
+
+    def pending(self):
+        d = json.loads((self.state / "proposals.json").read_text())
+        return d.get("proposals", []) if isinstance(d, dict) else d
+
+    def test_scouts_three_hand_written_ideas_are_all_refused(self):
+        self.hand_write([
+            {"title": "Botanical Map All-Over Tote",
+             "product": "all-over-print canvas tote bag",
+             "angle": "Layered hand-drawn map of a local park."},
+            {"title": "Metro Tile Pattern Tote", "product": "all-over-print canvas tote bag"},
+            {"title": "Rainy Window Watercolor Scene Tote",
+             "product": "all-over-print canvas tote bag"}])
+        r = self.run_it("merge")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("3 proposal(s) REFUSED", r.stderr)
+        self.assertIn("no evidence", r.stderr)
+        self.assertEqual(self.log(), [], "nothing may reach the log")
+
+    def test_a_refused_idea_is_kept_not_deleted(self):
+        # A refusal that also deletes the work is how an agent learns to
+        # stop telling you.
+        self.hand_write([{"title": "Botanical Map All-Over Tote", "product": "tote"}])
+        self.run_it("merge")
+        self.assertEqual([r["title"] for r in self.pending()],
+                         ["Botanical Map All-Over Tote"])
+
+    def test_a_refused_idea_survives_a_merge_that_also_succeeds(self):
+        # THE BUG IN THE FIX, found by running it: the end of merge empties
+        # proposals.json, which wiped the refused rows a moment after the
+        # message promised they were kept.
+        self.run_it("propose", "--phrase", "canvas tote bag",
+                    "--title", "A Measured One", "--product", "tote")
+        rows = self.pending()
+        rows.append({"title": "Hand Written One", "product": "tote"})
+        self.hand_write(rows)
+        r = self.run_it("merge")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([i["title"] for i in self.log()], ["A Measured One"])
+        self.assertEqual([r["title"] for r in self.pending()],
+                         ["Hand Written One"])
+
+    def test_evidence_naming_an_unmeasured_phrase_is_refused(self):
+        # Forging the block is no better than omitting it.
+        self.hand_write([{"title": "Invented", "product": "tote",
+                          "evidence": {"phrase": "solid gold tote",
+                                       "supply": 3, "favs_per_day": 99.0}}])
+        r = self.run_it("merge")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("has not been measured", r.stderr)
+        self.assertEqual(self.log(), [])
+
+    def test_evidence_naming_a_dead_market_is_refused(self):
+        self.hand_write([{"title": "Kids Tote", "product": "tote",
+                          "evidence": {"phrase": "canvas tote bag kids"}}])
+        r = self.run_it("merge")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("scored zero", r.stderr)
+        self.assertEqual(self.log(), [])
+
+    def test_a_trademark_in_a_hand_written_row_is_refused(self):
+        self.hand_write([{"title": "Pikmin Bloom Tote", "product": "tote",
+                          "evidence": {"phrase": "canvas tote bag"}}])
+        r = self.run_it("merge")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("property", r.stderr)
+        self.assertEqual(self.log(), [])
+
+    def test_the_proper_door_is_unaffected(self):
+        r = self.run_it("propose", "--phrase", "canvas tote bag",
+                        "--title", "Botanical Map All-Over Tote",
+                        "--product", "tote")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        m = self.run_it("merge")
+        self.assertEqual(m.returncode, 0, m.stderr)
+        self.assertEqual(self.log()[0]["evidence"]["supply"], 359529)
+
+    def test_the_refusal_says_how_to_do_it_properly(self):
+        self.hand_write([{"title": "X", "product": "tote"}])
+        said = self.run_it("merge").stderr
+        self.assertIn("scout-ideas.py evidence", said)
+        self.assertIn("propose --phrase", said)

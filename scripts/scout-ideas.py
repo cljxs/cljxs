@@ -134,6 +134,33 @@ def _rows_of(d):
     return good
 
 
+def row_problem(row):
+    """Why this proposal cannot be filed, or None.
+
+    The same rules propose applies, applied again at the log's door so that
+    hand-writing proposals.json is not a way round them.
+    """
+    title = str(row.get("title") or "").strip()
+    for field in ("title", "angle", "brief", "product"):
+        tier, what, why = ipc.risky(str(row.get(field) or ""))
+        if tier == "blocked":
+            return f"the {field} is somebody else's property - {what}: {why}"
+    ev = row.get("evidence")
+    if not isinstance(ev, dict) or not str(ev.get("phrase") or "").strip():
+        return ("no evidence. It was written straight into proposals.json "
+                "instead of\n      going through propose, so nothing has been "
+                "checked against Etsy.")
+    phrase = str(ev["phrase"]).strip()
+    measured_row, _scan, problem = measured(phrase)
+    if problem:
+        return f"its evidence names {phrase!r}, but {problem.splitlines()[0]}"
+    if not measured_row.get("score"):
+        return (f"{phrase!r} was measured and scored zero - "
+                f"{measured_row.get('supply') or 0:,} listings and not one "
+                f"favourite a day.")
+    return None
+
+
 def cmd_merge():
     existing, readable = load_ideas()
     if IDEAS.is_file() and not readable:
@@ -151,6 +178,44 @@ def cmd_merge():
     if not new:
         print(f"no new proposals ({len(existing['ideas'])} idea(s) in the log, unchanged)")
         return 0
+
+    # THE GATE BELONGS WHERE THE DATA ENTERS THE LOG, NOT ON ONE OF THE DOORS.
+    #
+    # propose refuses an idea with no measurement behind it. merge did not -
+    # it took whatever was in proposals.json. Scout, told in bold never to
+    # write that file, wrote it by hand on 2026-09-23: three ideas, no
+    # phrase, no evidence, a free-text product of "all-over-print canvas
+    # tote bag", and a stray newline inside a JSON string that broke the
+    # file. Its own tool log says read and write - the propose script was
+    # never called.
+    #
+    # Rewording the instruction has never fixed this class of thing here,
+    # and it is the third agent to be told to run a tool and write a file
+    # instead. So the rule moved to where it cannot be walked around: every
+    # row is checked HERE, whichever door it came through.
+    good, refused = [], []
+    for row in new:
+        why = row_problem(row)
+        (refused if why else good).append((row, why) if why else row)
+    if refused:
+        print(f"{len(refused)} proposal(s) REFUSED - no measurement behind "
+              f"them:", file=sys.stderr)
+        for row, why in refused:
+            print(f"  - {str(row.get('title'))[:52]}\n      {why}",
+                  file=sys.stderr)
+        # Written back at the END of the merge, not here: the merge empties
+        # proposals.json when it finishes, and doing it here meant the
+        # refused rows were saved and then wiped by that line - after the
+        # message had said they were kept. Found by running it.
+        print(f"\n  They are still in {PROPOSALS.name}. Propose them properly:\n"
+              f"    scout-ideas.py evidence\n"
+              f"    scout-ideas.py propose --phrase \"<measured phrase>\" "
+              f"--title ... --product ...", file=sys.stderr)
+    new = good
+    if not new:
+        print(f"nothing merged ({len(existing['ideas'])} idea(s) in the log, "
+              f"unchanged)")
+        return 1
 
     have = {str(i.get("title", "")).strip().lower() for i in existing["ideas"]}
     next_id = max([int(i.get("id") or 0) for i in existing["ideas"]] or [0]) + 1
@@ -173,8 +238,12 @@ def cmd_merge():
     IDEAS.parent.mkdir(parents=True, exist_ok=True)
     IDEAS.write_text(json.dumps(existing, indent=1) + "\n")
     # Scout owns this file and may overwrite it; emptying it here means a rerun
-    # cannot add the same ideas twice.
-    PROPOSALS.write_text("[]\n")
+    # cannot add the same ideas twice. Anything REFUSED stays, because it was
+    # never merged and deleting it would lose work the message just promised
+    # was safe.
+    PROPOSALS.write_text(
+        json.dumps({"proposals": [r for r, _w in refused]}, indent=1) + "\n"
+        if refused else "[]\n")
 
     for line in added:
         print(f"  + {line}")
