@@ -10348,8 +10348,12 @@ class TheGateBelongsWhereTheDataEntersTheLog(unittest.TestCase):
     def test_the_refusal_says_how_to_do_it_properly(self):
         self.hand_write([{"title": "X", "product": "tote"}])
         said = self.run_it("merge").stderr
-        self.assertIn("scout-ideas.py evidence", said)
-        self.assertIn("propose --phrase", said)
+        # It now hands back a usable line and the phrases to choose from,
+        # rather than naming two more commands to go and run.
+        self.assertIn("Their words are not lost", said)
+        self.assertIn("<phrase> | X | tote", said)
+        self.assertIn("Measured phrases, best first", said)
+        self.assertIn("canvas tote bag", said)
 
 
 class TheModelCannotRunTheScript(unittest.TestCase):
@@ -10478,3 +10482,89 @@ class TheModelCannotRunTheScript(unittest.TestCase):
         self.assertIn("state/drafts.txt", head)
         self.assertIn("DO NOT run any script", head)
         self.assertNotIn("RUN, once per new idea", head)
+
+
+class ARefusalThatIsADeadEndLosesTheWork(unittest.TestCase):
+    """Scout's words - the title, the angle - are the part a model is
+    actually for. Refused, they sat in proposals.json with no way forward
+    but retyping them, and Scout produced three fresh ones the next run
+    instead of recovering the last three.
+
+    The one thing missing from a hand-written row is the phrase. So the
+    refusal hands them back as drafts.txt lines with the phrase left to
+    choose, and lists the measured phrases to choose from.
+    """
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.state = self.root / "agents" / "scout" / "state"
+        (self.state / "scans").mkdir(parents=True)
+        (self.state / "ideas.json").write_text('{"ideas":[]}')
+        (self.state / "scans" / "t.json").write_text(json.dumps({
+            "seed": "canvas tote bag",
+            "scanned_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "rows": [
+                {"phrase": "canvas tote bag", "supply": 359529, "heat": 0.013,
+                 "pull": 0.02, "price": 22.62, "match": 1.0, "returned": 25,
+                 "heat_n": 25, "pull_n": 23, "score": 0.0024},
+                {"phrase": "canvas tote bag embroidered", "supply": 18149,
+                 "heat": 0.062, "pull": 0.035, "price": 23.84, "match": 1.0,
+                 "returned": 25, "heat_n": 25, "pull_n": 23, "score": 0.0145}],
+            "excluded": []}))
+        self.env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+
+    def merge_with(self, rows):
+        (self.state / "proposals.json").write_text(json.dumps({"proposals": rows}))
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "scout-ideas.py"), "merge"],
+            capture_output=True, text=True, env=self.env)
+
+    def test_the_words_come_back_as_a_draft_line(self):
+        r = self.merge_with([
+            {"title": "Coastal Tide Botanical Collage Tote",
+             "product": "all-over-print canvas tote bag",
+             "angle": "torn-paper shoreline with pressed seaweed"}])
+        self.assertIn("Their words are not lost", r.stderr)
+        self.assertIn("<phrase> | Coastal Tide Botanical Collage Tote | tote "
+                      "| torn-paper shoreline with pressed seaweed", r.stderr)
+
+    def test_the_free_text_product_becomes_a_catalogue_word(self):
+        # 'all-over-print canvas tote bag' is not a product Emily can
+        # resolve. The word list is emily-printify's, imported rather than
+        # written twice.
+        r = self.merge_with([{"title": "X",
+                              "product": "all-over-print canvas tote bag"}])
+        line = [l for l in r.stderr.splitlines() if l.strip().startswith("<phrase>")][0]
+        self.assertTrue(line.strip().endswith("| tote"), line)
+        self.assertNotIn("all-over-print", line)
+
+    def test_the_measured_phrases_are_listed_best_first(self):
+        r = self.merge_with([{"title": "X", "product": "tote"}])
+        tail = r.stderr.split("Measured phrases, best first:")[1]
+        rows = [l.strip() for l in tail.splitlines() if l.strip()]
+        self.assertEqual(rows[:2],
+                         ["canvas tote bag embroidered", "canvas tote bag"])
+
+    def test_with_nothing_measured_it_says_to_scan(self):
+        for f in (self.state / "scans").glob("*.json"):
+            f.unlink()
+        r = self.merge_with([{"title": "X", "product": "tote"}])
+        self.assertIn("Nothing has been measured yet", r.stderr)
+        self.assertIn("market-scan.py scan", r.stderr)
+
+    def test_a_missing_angle_still_produces_a_usable_line(self):
+        r = self.merge_with([{"title": "Bare", "product": "tote"}])
+        self.assertIn("<phrase> | Bare | tote", r.stderr)
+        self.assertFalse(r.stderr.rstrip().endswith("|"),
+                         "no dangling separator on an empty field")
+
+    def test_the_brief_is_used_when_there_is_no_angle(self):
+        r = self.merge_with([{"title": "B", "product": "tote",
+                              "brief": "a brief instead"}])
+        self.assertIn("a brief instead", r.stderr)
+
+    def test_an_unknown_product_is_left_as_written_not_guessed(self):
+        r = self.merge_with([{"title": "X", "product": "something unheard of"}])
+        line = [l for l in r.stderr.splitlines() if l.strip().startswith("<phrase>")][0]
+        self.assertIn("something unheard of", line)

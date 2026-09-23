@@ -137,6 +137,26 @@ def _rows_of(d):
     return good
 
 
+def catalogue_word(product):
+    """'all-over-print canvas tote bag' -> 'tote'.
+
+    THE word list is emily-printify's, imported rather than written again -
+    a second list here would drift, and the one that drifts is always the
+    copy. Imported LAZILY because emily-printify imports this module for
+    the scan reader, and at module level that is a cycle.
+    """
+    text = str(product or "").strip()
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "emily_printify", SCRIPTS / "emily-printify.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        word = mod.product_word(text)
+    except Exception:
+        word = None                  # never lose the suggestion over this
+    return word or text or "PRODUCT"
+
+
 def row_problem(row):
     """Why this proposal cannot be filed, or None.
 
@@ -210,10 +230,37 @@ def cmd_merge():
         # proposals.json when it finishes, and doing it here meant the
         # refused rows were saved and then wiped by that line - after the
         # message had said they were kept. Found by running it.
-        print(f"\n  They are still in {PROPOSALS.name}. Propose them properly:\n"
-              f"    scout-ideas.py evidence\n"
-              f"    scout-ideas.py propose --phrase \"<measured phrase>\" "
-              f"--title ... --product ...", file=sys.stderr)
+        # A REFUSAL THAT IS A DEAD END LOSES THE WORK.
+        #
+        # The words in a refused row are the part a model is actually for -
+        # the title, the angle - and they were sitting in a file nothing
+        # would accept, with no way forward but retyping them. So the rows
+        # come back out as drafts.txt lines with the phrase left to choose,
+        # which is the one thing missing from them.
+        phrases = []
+        for scan in scans():
+            for r in scan["rows"]:
+                if r.get("score"):
+                    phrases.append((r["score"], str(r.get("phrase"))))
+        best = [p for _s, p in sorted(phrases, reverse=True)][:6]
+        if best:
+            print(f"\n  Their words are not lost. Put a measured phrase in "
+                  f"front of each and\n  they go straight into "
+                  f"{DRAFTS.name}:\n", file=sys.stderr)
+            for row, _why in refused:
+                bits = [str(row.get("title") or "").strip(),
+                        catalogue_word(row.get("product")),
+                        str(row.get("angle") or row.get("brief") or "").strip()]
+                while bits and not bits[-1]:
+                    bits.pop()       # no dangling '| ' on a line with no angle
+                print(f"    <phrase> | " + " | ".join(bits), file=sys.stderr)
+            print(f"\n  Measured phrases, best first:", file=sys.stderr)
+            for ph in best:
+                print(f"    {ph}", file=sys.stderr)
+        else:
+            print(f"\n  Nothing has been measured yet, so nothing can be "
+                  f"filed:\n    market-scan.py scan <phrase> --save",
+                  file=sys.stderr)
     new = good
     if not new:
         print(f"nothing merged ({len(existing['ideas'])} idea(s) in the log, "
