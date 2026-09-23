@@ -71,5 +71,6 @@ printf '%s\n' "$LINE" >> "$MEM"
 # 2026-09-18 after being told in bold to keep every existing entry - the same
 # way it destroyed MEMORY.md twice. Nothing here removes an idea.
 echo "-- merging proposals"
+python3 "$ROOT/scripts/scout-ideas.py" intake
 python3 "$ROOT/scripts/scout-ideas.py" merge
 echo "logged to MEMORY.md: $LINE"

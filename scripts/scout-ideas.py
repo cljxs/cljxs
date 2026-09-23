@@ -24,7 +24,9 @@ which is another thing it cannot get wrong if it never does it.
 Standard library only.
 """
 
+import contextlib
 import importlib.util
+import io
 import json
 import re
 import os
@@ -36,6 +38,7 @@ ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.par
 STATE = ROOT / "agents" / "scout" / "state"
 IDEAS = STATE / "ideas.json"
 PROPOSALS = STATE / "proposals.json"
+DRAFTS = STATE / "drafts.txt"
 SCANS = STATE / "scans"
 SCRIPTS = Path(__file__).resolve().parent
 
@@ -323,6 +326,75 @@ def measured(phrase):
         f"    python3 ../../scripts/scout-ideas.py evidence")
 
 
+def cmd_intake(_argv):
+    """Turn Scout's plain-text drafts into proposals, in code.
+
+    THE MODEL CANNOT RUN THE SCRIPT. Twice now Scout has read the
+    instructions, understood them, and written proposals.json by hand
+    anyway - the second time saying so outright: "tell me whether to run it
+    and provide approval to execute shell commands". Its tool log shows an
+    exec attempt and a failure. It is not refusing; it is blocked, and then
+    doing the only thing left to it.
+
+    Rewording an instruction has never fixed this here. Emily wrote 49-byte
+    text files named design.png, Fury wrote its briefing, Scout cleared
+    MEMORY.md twice - and every time the fix was to move the job to code.
+    Fury's whole cycle is Python now and wakes no model at all.
+
+    So Scout writes ONE PLAIN TEXT FILE, which is the thing it does
+    reliably, and this does the JSON, the evidence lookup and the refusals.
+    One idea per line:
+
+        canvas tote bag | Botanical Map Tote | tote | hand-drawn park map
+
+        phrase  | title | product | angle
+        MEASURED  words   catalogue  words
+
+    A blank line or one starting with # is skipped. Every line goes through
+    the same checks as propose, and a bad line is reported with its number
+    rather than silently dropped.
+    """
+    if not DRAFTS.is_file():
+        print(f"no {DRAFTS.name} - nothing to take in.")
+        return 0
+    lines = DRAFTS.read_text().splitlines()
+    filed, bad = 0, []
+    for n, raw in enumerate(lines, 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [x.strip() for x in line.split("|")]
+        if len(parts) < 3:
+            bad.append((n, line, "needs at least  phrase | title | product"))
+            continue
+        phrase, title, product = parts[0], parts[1], parts[2]
+        angle = parts[3] if len(parts) > 3 else ""
+        brief = parts[4] if len(parts) > 4 else ""
+        argv = ["--phrase", phrase, "--title", title, "--product", product]
+        if angle:
+            argv += ["--angle", angle]
+        if brief:
+            argv += ["--brief", brief]
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            code = cmd_propose(argv)
+        if code == 0:
+            filed += 1
+            print(f"  + line {n}: {title}")
+        else:
+            bad.append((n, title, buf.getvalue().strip().splitlines()[0]
+                        if buf.getvalue().strip() else f"refused (exit {code})"))
+
+    for n, what, why in bad:
+        print(f"  - line {n}: {what}\n      {why}", file=sys.stderr)
+    print(f"{filed} filed, {len(bad)} refused.")
+    # Emptied whatever happened: a line that was filed must not be filed
+    # twice, and a line that was refused has had its reason printed. Scout
+    # writes the file fresh each run.
+    DRAFTS.write_text("")
+    return 0
+
+
 def cmd_evidence(argv):
     """Everything Scout is allowed to propose, and what it is worth."""
     found = scans()
@@ -467,7 +539,10 @@ def main():
         return cmd_show()
     if cmd == "evidence":
         return cmd_evidence(sys.argv[2:])
-    print("usage: scout-ideas.py propose|merge|show|evidence", file=sys.stderr)
+    if cmd == "intake":
+        return cmd_intake(sys.argv[2:])
+    print("usage: scout-ideas.py propose|intake|merge|show|evidence",
+          file=sys.stderr)
     return 2
 
 

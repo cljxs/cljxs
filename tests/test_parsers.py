@@ -1453,7 +1453,9 @@ class ScoutCannotDestroyTheIdeaLog(unittest.TestCase):
     def test_scout_is_told_the_log_is_not_its_to_edit(self):
         header = (ROOT / "agents" / "scout" / "_scout-agents-header.md").read_text()
         self.assertIn("proposals.json", header)
-        self.assertIn("Never write `state/ideas.json` yourself", header)
+        # Wording changed when proposals.json joined it; the rule did not.
+        self.assertIn("Never write `state/ideas.json`", header)
+        self.assertIn("proposals.json", header)
 
     def test_the_wrapper_merges(self):
         src = (SCRIPTS / "scout-cycle.sh").read_text()
@@ -1613,8 +1615,10 @@ class ScoutDoesNotHandWriteJson(unittest.TestCase):
 
     def test_scout_is_told_to_use_propose(self):
         header = (ROOT / "agents" / "scout" / "_scout-agents-header.md").read_text()
-        self.assertIn("scout-ideas.py propose", header)
-        self.assertIn("Do not write any JSON by hand", header)
+        # Scout is told to write drafts.txt now - it cannot run a script,
+        # and told to, it hand-wrote JSON twice instead.
+        self.assertIn("state/drafts.txt", header)
+        self.assertIn("No JSON anywhere, from you, ever", header)
 
 
 class EtsyDisclosuresAreRequiredToDraft(unittest.TestCase):
@@ -10346,3 +10350,131 @@ class TheGateBelongsWhereTheDataEntersTheLog(unittest.TestCase):
         said = self.run_it("merge").stderr
         self.assertIn("scout-ideas.py evidence", said)
         self.assertIn("propose --phrase", said)
+
+
+class TheModelCannotRunTheScript(unittest.TestCase):
+    """Twice Scout read the instructions, understood them, and wrote
+    proposals.json by hand anyway. The second time it said why:
+
+        "tell me whether to run it and provide approval to execute shell
+         commands"
+
+    and its tool log showed an exec attempt with a failure. It was not
+    refusing. It was blocked, and then doing the only thing left to it.
+
+    Emily wrote 49-byte text files named design.png, Fury wrote its
+    briefing, Scout cleared MEMORY.md twice. Every time, rewording failed
+    and moving the job to code worked. So Scout writes ONE PLAIN TEXT FILE -
+    the thing it does reliably - and intake does the JSON, the evidence
+    lookup and the refusals.
+    """
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.state = self.root / "agents" / "scout" / "state"
+        (self.state / "scans").mkdir(parents=True)
+        (self.state / "ideas.json").write_text('{"ideas":[]}')
+        (self.state / "scans" / "s.json").write_text(json.dumps({
+            "seed": "canvas tote bag",
+            "scanned_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "rows": [{"phrase": "canvas tote bag", "supply": 359529,
+                      "heat": 0.013, "pull": 0.0249, "price": 22.62,
+                      "match": 1.0, "returned": 25, "heat_n": 25,
+                      "pull_n": 23, "score": 0.0024},
+                     {"phrase": "canvas tote bag kids", "supply": 31184,
+                      "heat": 0.0, "pull": 0.0, "price": 19.99, "match": 1.0,
+                      "returned": 25, "heat_n": 25, "pull_n": 25, "score": 0.0}],
+            "excluded": []}))
+        self.drafts = self.state / "drafts.txt"
+        self.env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+
+    def run_it(self, *args):
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "scout-ideas.py"), *args],
+            capture_output=True, text=True, env=self.env)
+
+    def filed(self):
+        p = self.state / "proposals.json"
+        if not p.is_file() or not p.read_text().strip():
+            return []
+        d = json.loads(p.read_text())
+        return d.get("proposals", []) if isinstance(d, dict) else d
+
+    def test_scouts_three_real_ideas_go_in_as_text(self):
+        self.drafts.write_text(
+            "# phrase | title | product | angle\n"
+            "canvas tote bag | Vintage Coastal Collage Tote | tote | torn paper\n"
+            "canvas tote bag | Market Map Folded-City Tote | tote | folded map\n"
+            "canvas tote bag | Rainlight Ceramic Tile Tote | tote | glazed tile\n")
+        r = self.run_it("intake")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("3 filed, 0 refused", r.stdout)
+        rows = self.filed()
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0]["evidence"]["supply"], 359529)
+        self.assertEqual(rows[0]["angle"], "torn paper")
+
+    def test_every_refusal_reaches_the_line_it_came_from(self):
+        self.drafts.write_text(
+            "canvas tote bag | Good One | tote | fine\n"
+            "canvas tote bag kids | Dead Market | tote | scored zero\n"
+            "solid gold tote | Never Measured | tote | invented\n"
+            "canvas tote bag | Pikmin Bloom Tote | tote | not ours\n"
+            "this line is broken\n")
+        r = self.run_it("intake")
+        self.assertIn("1 filed, 4 refused", r.stdout)
+        self.assertIn("line 2", r.stderr)
+        self.assertIn("scored zero", r.stderr)
+        self.assertIn("line 3", r.stderr)
+        self.assertIn("has not been measured", r.stderr)
+        self.assertIn("line 4", r.stderr)
+        self.assertIn("property", r.stderr)
+        self.assertIn("line 5", r.stderr)
+        self.assertIn("at least", r.stderr)
+        self.assertEqual(len(self.filed()), 1)
+
+    def test_blank_lines_and_comments_are_skipped(self):
+        self.drafts.write_text(
+            "# a comment\n\n   \n"
+            "canvas tote bag | Only One | tote | yes\n\n")
+        r = self.run_it("intake")
+        self.assertIn("1 filed, 0 refused", r.stdout)
+
+    def test_a_missing_angle_is_fine(self):
+        self.drafts.write_text("canvas tote bag | Bare Minimum | tote\n")
+        r = self.run_it("intake")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(self.filed()), 1)
+
+    def test_a_brief_in_the_fifth_field_is_carried(self):
+        self.drafts.write_text(
+            "canvas tote bag | With Brief | tote | an angle | and a brief\n")
+        self.run_it("intake")
+        self.assertEqual(self.filed()[0]["brief"], "and a brief")
+
+    def test_the_file_is_emptied_so_nothing_is_filed_twice(self):
+        self.drafts.write_text("canvas tote bag | Once Only | tote | yes\n")
+        self.run_it("intake")
+        self.run_it("intake")
+        self.assertEqual(len(self.filed()), 1)
+        self.assertEqual(self.drafts.read_text().strip(), "")
+
+    def test_no_drafts_file_is_not_an_error(self):
+        r = self.run_it("intake")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("nothing to take in", r.stdout)
+
+    def test_intake_runs_in_the_cycle_before_the_merge(self):
+        # Scout never calls either; the cycle script does, in that order, or
+        # the drafts sit on disk unread.
+        cycle = (SCRIPTS / "scout-cycle.sh").read_text()
+        self.assertIn("scout-ideas.py\" intake", cycle)
+        self.assertLess(cycle.index('scout-ideas.py" intake'),
+                        cycle.index('scout-ideas.py" merge'))
+
+    def test_the_header_tells_it_to_write_text_not_run_a_script(self):
+        head = (ROOT / "agents" / "scout" / "_scout-agents-header.md").read_text()
+        self.assertIn("state/drafts.txt", head)
+        self.assertIn("DO NOT run any script", head)
+        self.assertNotIn("RUN, once per new idea", head)
