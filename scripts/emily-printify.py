@@ -220,6 +220,18 @@ ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.par
 CATALOG = ROOT / "agents" / "emily" / "state" / "printify-catalog.json"
 
 
+def write_catalog(cat):
+    """Save the catalogue. ONE place.
+
+    This line was copy-pasted inline at five call sites and existed as a
+    function at none of them, which is how cmd_market_price came to call a
+    write_catalog() that was not there - a NameError that fired only under
+    --apply, after the table had already printed.
+    """
+    CATALOG.parent.mkdir(parents=True, exist_ok=True)
+    CATALOG.write_text(json.dumps(cat, indent=1) + "\n")
+
+
 def read_catalog():
     try:
         return json.loads(CATALOG.read_text())
@@ -369,7 +381,7 @@ def cmd_refresh(a):
         filled.append((key, title))
 
     if filled:
-        CATALOG.write_text(json.dumps(cat, indent=1) + "\n")
+        write_catalog(cat)
 
     def reaches(word):
         """Which entry a word reaches, or None if it is ambiguous.
@@ -438,7 +450,7 @@ def cmd_alias(a):
         have.append(word)
         added.append(word)
     entry["aliases"] = have
-    CATALOG.write_text(json.dumps(cat, indent=1) + "\n")
+    write_catalog(cat)
     if added:
         print(f"'{a.product}' now also answers to: {', '.join(added)}")
     else:
@@ -537,7 +549,7 @@ def cmd_pick(a):
     if getattr(a, "no_cutout", False):
         cat[a.product]["cutout"] = False
     CATALOG.parent.mkdir(parents=True, exist_ok=True)
-    CATALOG.write_text(json.dumps(cat, indent=1) + "\n")
+    write_catalog(cat)
     print(f"saved '{a.product}' -> blueprint {a.blueprint}, provider {a.provider}, "
           f"{len(chosen)} variant(s)")
     for t in cat[a.product]["variant_titles"][:12]:
@@ -608,6 +620,177 @@ def _scout():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+# ETSY'S CUT, AND WHAT IT COSTS TO MAKE THE THING.
+#
+# These are DEFAULTS, stored in the catalogue on first use so they can be
+# corrected without editing this file. Etsy changes its fees and Printify
+# changes its prices; a number hardcoded here would be quietly wrong for
+# months, which is the same failure as a rate limit assumed instead of read.
+#
+# Check them against your own Etsy payment account and Printify product page
+# rather than trusting this list:
+#
+#   transaction   6.5% of the item price (and of shipping, if you charge it)
+#   processing    3% + $0.25 in the US; different in every other country
+#   listing       $0.20, charged again on each sale that renews the listing
+#   offsite ads   12-15% on attributed sales, and MANDATORY once a shop
+#                 passes $10,000 a year. Off by default because it applies
+#                 to some sales and not others - turn it on to see the
+#                 worst case.
+DEFAULT_FEES = {
+    "transaction_pct": 0.065,
+    "processing_pct": 0.03,
+    "processing_flat": 0.25,
+    "listing_fee": 0.20,
+    "offsite_ads_pct": 0.0,
+}
+
+
+def fees_of(cat):
+    """The fee structure, from the catalogue, defaults filled in."""
+    got = dict(DEFAULT_FEES)
+    saved = cat.get("_fees") if isinstance(cat, dict) else None
+    if isinstance(saved, dict):
+        for k, v in saved.items():
+            if k in got and isinstance(v, (int, float)):
+                got[k] = float(v)
+    return got
+
+
+def net_of(price, cost, fees):
+    """What actually lands in your account, per sale.
+
+    price       what the buyer pays
+    cost        what you pay to make and ship it
+    """
+    take = fees["transaction_pct"] + fees["processing_pct"] + fees["offsite_ads_pct"]
+    return price - (price * take) - fees["processing_flat"] - fees["listing_fee"] - cost
+
+
+def floor_price(cost, fees):
+    """The price at which the sale breaks exactly even.
+
+    Below this you pay Etsy for the privilege of shipping somebody a sticker.
+    Solving net_of(p) = 0 for p:
+
+        p - p*take - flat - listing - cost = 0
+        p = (cost + flat + listing) / (1 - take)
+    """
+    take = fees["transaction_pct"] + fees["processing_pct"] + fees["offsite_ads_pct"]
+    if take >= 1:
+        return None
+    return (cost + fees["processing_flat"] + fees["listing_fee"]) / (1 - take)
+
+
+def costs_of(entry):
+    """Recorded production cost per variant, in dollars, or {}."""
+    got = entry.get("costs") or {}
+    return {str(k): float(v) for k, v in got.items()
+            if isinstance(v, (int, float)) and v >= 0}
+
+
+def cmd_costs(a):
+    """Record what each variant costs to make, once.
+
+    Printify's catalogue endpoint does not carry a price - the cost only
+    appears on a product in YOUR shop, against YOUR chosen provider. So
+    until a product exists it has to be read off the Printify product page
+    and recorded here. Without it, market-price is pricing blind.
+    """
+    cat = read_catalog()
+    try:
+        _key, entry = resolve(cat, a.product)
+    except Ambiguous as exc:
+        print(f"'{exc.word}' matches more than one entry: {', '.join(exc.keys)}.",
+              file=sys.stderr)
+        return 2
+    if not entry:
+        print(no_entry(cat, a.product), file=sys.stderr)
+        return 2
+
+    ids = entry.get("variant_ids") or []
+    titles = entry.get("variant_titles") or []
+    have = costs_of(entry)
+
+    # ONE COST PER VARIANT, IN ORDER - the same shape `prices` accepts, and
+    # the one that works for a product whose variants are sizes like
+    # '2" x 2"'. size_of() understands apparel sizes (S, M, L), so --by-size
+    # matches nothing on a sticker and refused every variant as missing.
+    if a.cost:
+        if len(a.cost) != len(ids):
+            print(f"'{a.product}' has {len(ids)} variant(s) and you gave "
+                  f"{len(a.cost)} cost(s). One per variant, in the order "
+                  f"listed by:\n  emily-printify.py costs --product {a.product}",
+                  file=sys.stderr)
+            return 2
+        entry["costs"] = {str(v): round(float(c), 4)
+                          for v, c in zip(ids, a.cost)}
+        entry["costed_at"] = _now()
+        write_catalog(cat)
+        print(f"Recorded {len(ids)} production cost(s) for '{a.product}'.")
+        return 0
+
+    if not a.by_size and a.all_cost is None:
+        print(f"'{a.product}' production cost per variant:\n")
+        for i, vid in enumerate(ids):
+            t = (titles[i] if i < len(titles) else f"variant {vid}")[:32]
+            c = have.get(str(vid))
+            print(f"  {t:<34}{('$%.2f' % c) if c is not None else '(unrecorded)':>14}")
+        sizes = sorted({size_of(titles[i] if i < len(titles) else "") or ""
+                        for i in range(len(ids))} - {""},
+                       key=lambda z: SIZES.index(z) if z in SIZES else 99)
+        print(f"\nRead these off the Printify product page - shipping included "
+              f"if you\npay it - and record them once, in that order:")
+        print(f"  emily-printify.py costs --product {a.product} "
+              + " ".join("0.00" for _ in ids))
+        if sizes:
+            print(f"\nOr by size:\n  emily-printify.py costs --product "
+                  f"{a.product} --by-size "
+                  + " ".join(f"{z}=0.00" for z in sizes))
+        print(f"\nOr one cost for all of them:\n"
+              f"  emily-printify.py costs --product {a.product} --all 1.60")
+        print(f"\nWithout them, market-price cannot tell a profit from a loss.")
+        return 0
+
+    wanted = {}
+    if a.all_cost is not None:
+        wanted = {str(v): float(a.all_cost) for v in ids}
+    else:
+        table = {}
+        for pair in a.by_size:
+            if "=" not in pair:
+                print(f"--by-size takes SIZE=COST, got {pair!r}", file=sys.stderr)
+                return 2
+            k, _, v = pair.partition("=")
+            try:
+                table[k.strip().upper()] = float(v)
+            except ValueError:
+                print(f"{v!r} is not a number", file=sys.stderr)
+                return 2
+        missing = []
+        for i, vid in enumerate(ids):
+            sz = (size_of(titles[i] if i < len(titles) else "") or "").upper()
+            if sz in table:
+                wanted[str(vid)] = table[sz]
+            else:
+                missing.append(titles[i] if i < len(titles) else str(vid))
+        if missing:
+            # The same refusal as --by-size on prices: a variant with no cost
+            # is a variant that will be priced blind, and finding out at the
+            # first sale is the expensive way.
+            print(f"{len(missing)} variant(s) have no cost in --by-size:",
+                  file=sys.stderr)
+            for t in missing[:8]:
+                print(f"    {t}", file=sys.stderr)
+            return 2
+
+    entry["costs"] = {k: round(v, 4) for k, v in wanted.items()}
+    entry["costed_at"] = _now()
+    write_catalog(cat)
+    print(f"Recorded {len(wanted)} production cost(s) for '{a.product}'.")
+    return 0
 
 
 def market_price(phrase):
@@ -688,11 +871,58 @@ def cmd_market_price(a):
         print(f"  Nothing is priced yet, so there is no ladder to keep: the "
               f"median goes on\n  every variant. Set a real ladder with "
               f"--by-size before you publish.\n")
+    # WHAT ETSY AND PRINTIFY TAKE, BEFORE ANY OF THIS IS A PRICE.
+    #
+    # The median asking price is what other sellers CHARGE, not what they
+    # keep. A 2"x2" sticker at $3.10 loses money once 6.5% + 3% + $0.25 +
+    # $0.20 and the production cost come out, and the first version of this
+    # command would have set exactly that and said nothing.
+    fees = fees_of(cat)
+    costs = costs_of(entry)
+    rows, losers, uncosted = [], [], []
     for i, vid in enumerate(ids):
-        t = (titles[i] if i < len(titles) else f"variant {vid}")[:30]
-        was = current.get(str(vid))
-        print(f"  {t:<32}{('$%.2f' % (was / 100)) if was else '  (unset)':>10}"
-              f"  ->  ${proposed[str(vid)] / 100:.2f}")
+        t = (titles[i] if i < len(titles) else f"variant {vid}")[:26]
+        price = proposed[str(vid)] / 100
+        cost = costs.get(str(vid))
+        if cost is None:
+            uncosted.append(t)
+            rows.append((t, current.get(str(vid)), price, None, None))
+            continue
+        net = net_of(price, cost, fees)
+        rows.append((t, current.get(str(vid)), price, net, floor_price(cost, fees)))
+        if net <= 0:
+            losers.append((t, price, net, floor_price(cost, fees)))
+
+    head = f"  {'variant':<28}{'now':>9}{'proposed':>10}"
+    print(head + ("" if uncosted and len(uncosted) == len(ids)
+                  else f"{'you keep':>10}{'break even':>12}"))
+    for t, was, price, net, floor in rows:
+        line = (f"  {t:<28}{('$%.2f' % (was / 100)) if was else '(unset)':>9}"
+                f"{'$%.2f' % price:>10}")
+        if net is not None:
+            line += f"{'$%.2f' % net:>10}{'$%.2f' % floor:>12}"
+        else:
+            line += f"{'no cost recorded':>22}"
+        print(line)
+
+    if uncosted:
+        print(f"\n  {len(uncosted)} variant(s) have NO RECORDED PRODUCTION COST, so "
+              f"whether these\n  prices make or lose money is unknown. Record them "
+              f"once - they are on\n  the Printify product page:\n"
+              f"    emily-printify.py costs --product {a.product}")
+
+    if losers:
+        print(f"\n  BELOW BREAK-EVEN ({len(losers)}) - you would pay Etsy for the "
+              f"privilege:")
+        for t, price, net, floor in losers:
+            print(f"      {t:<28}${price:.2f} keeps ${net:.2f}; "
+                  f"break-even is ${floor:.2f}")
+        print(f"\n  The median asking price is what other sellers CHARGE, not what "
+              f"they keep.\n  Nothing was written. Either price above break-even by "
+              f"hand:\n"
+              f"    emily-printify.py prices --product {a.product} --by-size ...\n"
+              f"  or accept that this market cannot carry this product at this cost.")
+        return 2
 
     if not a.apply:
         print(f"\nNothing written. Add --apply to set these:\n"
@@ -703,7 +933,10 @@ def cmd_market_price(a):
     entry["priced_at"] = _now()
     entry["priced_against"] = {"phrase": a.market, "median": median,
                                "scan": scan.get("seed"),
-                               "measured_at": scan.get("scanned_at")}
+                               "measured_at": scan.get("scanned_at"),
+                               "fees_used": fees,
+                               "costs_known": len(costs), "variants": len(ids)}
+    cat.setdefault("_fees", fees)
     write_catalog(cat)
     print(f"\nSet {len(proposed)} variant price(s), anchored to {a.market!r}.")
     return 0
@@ -815,7 +1048,7 @@ def cmd_prices(a):
         entry["prices"] = prices
         entry["priced_at"] = _now()
         cat[a.product] = entry
-        CATALOG.write_text(json.dumps(cat, indent=1) + "\n")
+        write_catalog(cat)
 
         by = {}
         for i, vid in enumerate(ids):
@@ -847,7 +1080,7 @@ def cmd_prices(a):
     entry["prices"] = prices
     entry["priced_at"] = _now()
     cat[a.product] = entry
-    CATALOG.write_text(json.dumps(cat, indent=1) + "\n")
+    write_catalog(cat)
     for i, vid in enumerate(ids):
         t = titles[i] if i < len(titles) else f"variant {vid}"
         print(f"  {t:<28} ${prices[str(vid)]/100:.2f}")
@@ -1241,6 +1474,15 @@ def main():
     p.add_argument("--apply", action="store_true",
                    help="actually set them; without this it only shows")
     p.set_defaults(fn=cmd_market_price)
+
+    p = sub.add_parser("costs", help="record what each variant costs to make")
+    p.add_argument("--product", required=True)
+    p.add_argument("cost", nargs="*", type=float,
+                   help="one cost per variant, in the order listed")
+    p.add_argument("--by-size", nargs="+", default=[], metavar="SIZE=COST")
+    p.add_argument("--all", dest="all_cost", type=float, default=None,
+                   help="one cost for every variant")
+    p.set_defaults(fn=cmd_costs)
 
     p = sub.add_parser("status"); p.add_argument("build_dir", nargs="?")
     p.set_defaults(fn=cmd_status)

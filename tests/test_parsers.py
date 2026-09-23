@@ -9156,3 +9156,183 @@ class TheValueChartRecordsWhatWasPutIn(unittest.TestCase):
     def test_the_caller_passes_it(self):
         src = (self.API / "dashboard-data.js").read_text()
         self.assertIn("snapshotHistory(totalValue, totalStart)", src)
+
+
+class WhatEtsyAndPrintifyTakeFirst(unittest.TestCase):
+    """market-price set prices from the median ASKING price and said nothing
+    about cost or fees.
+
+    For 'water bottle stickers' the median is $3.99, and the proposed ladder
+    started at $3.10 for a 2"x2". Out of that come 6.5% transaction, 3% +
+    $0.25 processing, $0.20 listing and whatever Printify charges to make it.
+    At a $2.60 production cost that sale LOSES 24 cents, and the first
+    version of this command would have set it and reported success.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("emily_printify", SCRIPTS / "emily-printify.py")
+
+    FEES = {"transaction_pct": 0.065, "processing_pct": 0.03,
+            "processing_flat": 0.25, "listing_fee": 0.20,
+            "offsite_ads_pct": 0.0}
+
+    def test_what_you_actually_keep(self):
+        # $3.10 - 9.5% - $0.25 - $0.20 - $1.32 production
+        self.assertAlmostEqual(self.m.net_of(3.10, 1.32, self.FEES), 1.0355,
+                               places=4)
+
+    def test_break_even_is_where_it_crosses_zero(self):
+        floor = self.m.floor_price(1.32, self.FEES)
+        self.assertAlmostEqual(floor, 1.9558, places=3)
+        self.assertAlmostEqual(self.m.net_of(floor, 1.32, self.FEES), 0.0,
+                               places=9)
+
+    def test_the_losing_case_off_the_real_ladder(self):
+        self.assertLess(self.m.net_of(3.10, 2.60, self.FEES), 0)
+        self.assertGreater(self.m.floor_price(2.60, self.FEES), 3.10)
+
+    def test_offsite_ads_make_the_floor_higher(self):
+        with_ads = dict(self.FEES, offsite_ads_pct=0.15)
+        self.assertGreater(self.m.floor_price(1.32, with_ads),
+                           self.m.floor_price(1.32, self.FEES))
+
+    def test_a_fee_table_that_takes_everything_has_no_floor(self):
+        # Nonsense in, no number out - rather than a negative or infinite
+        # "break-even" presented as a price.
+        self.assertIsNone(self.m.floor_price(
+            1.0, dict(self.FEES, transaction_pct=0.99, processing_pct=0.02)))
+
+    def test_defaults_are_used_and_can_be_overridden(self):
+        self.assertEqual(self.m.fees_of({})["transaction_pct"], 0.065)
+        got = self.m.fees_of({"_fees": {"transaction_pct": 0.05}})
+        self.assertEqual(got["transaction_pct"], 0.05)
+        self.assertEqual(got["listing_fee"], 0.20, "the rest keep their defaults")
+
+    def test_junk_in_the_saved_fees_is_ignored(self):
+        got = self.m.fees_of({"_fees": {"transaction_pct": "loads",
+                                        "nonsense_key": 1}})
+        self.assertEqual(got["transaction_pct"], 0.065)
+        self.assertNotIn("nonsense_key", got)
+
+
+class PricingRunsEndToEndOrNotAtAll(unittest.TestCase):
+    """--apply crashed with NameError: write_catalog is not defined.
+
+        File "scripts/emily-printify.py", line 707, in cmd_market_price
+          write_catalog(cat)
+
+    The catalogue write was copy-pasted inline at five call sites and
+    existed as a function at none of them. The table had already printed, so
+    it looked like it had worked right up to the traceback.
+
+    It shipped because every test here called anchored(), a pure function,
+    and none ran the COMMAND. I had run it myself - without --apply, so the
+    write path never executed. Fourth time this session that a function
+    passed its test while its caller was broken.
+    """
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        (self.root / "agents" / "emily" / "state").mkdir(parents=True)
+        (self.root / "agents" / "scout" / "state" / "scans").mkdir(parents=True)
+        self.cat = self.root / "agents" / "emily" / "state" / "printify-catalog.json"
+        self.cat.write_text(json.dumps({"sticker": {
+            "blueprint_id": 1, "provider_id": 1,
+            "blueprint_title": "Kiss-Cut Vinyl Decals",
+            "variant_ids": [1, 2, 3],
+            "variant_titles": ['2" x 2"', '3" x 3"', '4" x 4"'],
+            "prices": {"1": 699, "2": 799, "3": 899}}}))
+        (self.root / "agents" / "scout" / "state" / "scans" / "s.json").write_text(
+            json.dumps({"seed": "water bottle sticker",
+                        "scanned_at": datetime.now(timezone.utc)
+                        .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "rows": [{"phrase": "water bottle stickers",
+                                  "supply": 436800, "heat": 0.066, "pull": 0.1497,
+                                  "price": 3.99, "match": 1.0, "returned": 25,
+                                  "heat_n": 25, "pull_n": 25, "score": 0.0049}],
+                        "excluded": []}))
+        self.env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+
+    def run_it(self, *args):
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "emily-printify.py"), *args],
+            capture_output=True, text=True, env=self.env)
+
+    def prices(self):
+        return json.loads(self.cat.read_text())["sticker"].get("prices")
+
+    def test_apply_writes_the_prices(self):
+        self.run_it("costs", "--product", "sticker", "1.32", "1.55", "1.86")
+        r = self.run_it("market-price", "--product", "sticker",
+                        "--market", "water bottle stickers", "--apply")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("NameError", r.stderr)
+        # median of 699/799/899 is 799, so the factor is 399/799.
+        self.assertEqual(self.prices(), {"1": 349, "2": 399, "3": 449})
+
+    def test_without_apply_nothing_is_written(self):
+        self.run_it("costs", "--product", "sticker", "1.32", "1.55", "1.86")
+        before = self.prices()
+        r = self.run_it("market-price", "--product", "sticker",
+                        "--market", "water bottle stickers")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.prices(), before)
+
+    def test_a_below_cost_ladder_is_refused_and_nothing_is_written(self):
+        # At $3.49 a $3.20 cost loses 49c once 9.5% + $0.45 comes out.
+        self.run_it("costs", "--product", "sticker", "3.20", "3.40", "3.60")
+        before = self.prices()
+        r = self.run_it("market-price", "--product", "sticker",
+                        "--market", "water bottle stickers", "--apply")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("BELOW BREAK-EVEN", r.stdout)
+        self.assertIn("break-even is", r.stdout)
+        self.assertEqual(self.prices(), before, "nothing may be written")
+
+    def test_uncosted_variants_are_called_out(self):
+        r = self.run_it("market-price", "--product", "sticker",
+                        "--market", "water bottle stickers")
+        self.assertIn("NO RECORDED PRODUCTION COST", r.stdout)
+        self.assertIn("Printify product page", r.stdout)
+
+    def test_costs_are_recorded_one_per_variant_in_order(self):
+        # --by-size cannot work here: size_of() knows apparel sizes, and a
+        # sticker's variants are '2" x 2"'. It matched nothing and refused
+        # every variant as missing.
+        r = self.run_it("costs", "--product", "sticker", "1.32", "1.55", "1.86")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        entry = json.loads(self.cat.read_text())["sticker"]
+        self.assertEqual(entry["costs"], {"1": 1.32, "2": 1.55, "3": 1.86})
+
+    def test_the_wrong_number_of_costs_is_refused(self):
+        r = self.run_it("costs", "--product", "sticker", "1.32", "1.55")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("3 variant(s)", r.stderr)
+        self.assertNotIn("costs", json.loads(self.cat.read_text())["sticker"])
+
+    def test_listing_costs_says_how_to_record_them(self):
+        r = self.run_it("costs", "--product", "sticker")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("unrecorded", r.stdout)
+        self.assertIn("Printify product page", r.stdout)
+
+    def test_the_fees_used_are_recorded_with_the_price(self):
+        # So a price set under one fee structure can be told from one set
+        # under another, months later.
+        self.run_it("costs", "--product", "sticker", "1.32", "1.55", "1.86")
+        self.run_it("market-price", "--product", "sticker",
+                    "--market", "water bottle stickers", "--apply")
+        entry = json.loads(self.cat.read_text())["sticker"]
+        self.assertEqual(entry["priced_against"]["costs_known"], 3)
+        self.assertEqual(entry["priced_against"]["fees_used"]["transaction_pct"],
+                         0.065)
+
+    def test_there_is_one_catalogue_writer(self):
+        src = (SCRIPTS / "emily-printify.py").read_text()
+        code = [l for l in src.splitlines() if not l.lstrip().startswith("#")]
+        inline = [l for l in code if "CATALOG.write_text" in l]
+        self.assertEqual(len(inline), 1,
+                         "the catalogue write belongs in write_catalog() alone")
+        self.assertIn("def write_catalog(cat):", src)
