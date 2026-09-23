@@ -223,6 +223,41 @@ def measure(data, now=None, phrase=""):
     return out
 
 
+# How far below its neighbours a phrase's price can sit before the phrase is
+# probably not selling the same thing at all.
+ODD_PRICE = 0.4
+
+
+def price_outliers(scored, factor=ODD_PRICE):
+    """Phrases priced so far below the rest that they are a different product.
+
+    Three real scans put one of these in first place:
+
+        funny coffee mug designs    $3.90   against a $19.50 market
+        canvas tote bag pattern     $6.00   against a $23.00 market
+        wall art print etsy         $5.95   against a $18.50 market
+
+    A mug is not $3.90 and a canvas tote is not $6. Those are design files,
+    sewing patterns and listing-service fees - digital markets wearing a
+    physical phrase, and the intent labels missed all three because nothing
+    in the WORDS gives them away. The price does.
+
+    This does not delete them. It says the price disagrees with the rest of
+    the scan, which is a question for a person, not a verdict.
+    """
+    prices = [m["price"] for _c, m in scored
+              if isinstance(m.get("price"), (int, float)) and m["price"] > 0]
+    if len(prices) < 4:
+        return [], None           # too few to know what "the rest" even is
+    typical = statistics.median(prices)
+    if not typical:
+        return [], None
+    out = [(c, m) for c, m in scored
+           if isinstance(m.get("price"), (int, float)) and 0 < m["price"]
+           and m["price"] < typical * factor]
+    return out, typical
+
+
 def opportunity(m):
     """Demand per decade of competition, or None if either half is missing.
 
@@ -393,6 +428,20 @@ def cmd_scan(key, words):
               f"{m['heat_n']:>4}"
               f"{(m['pull'] if m['pull'] is not None else 0):>11.4f}"
               f"{m['pull_n']:>4}{shown:>7}{opportunity(m):>9.4f}")
+
+    odd, typical = price_outliers(ranked)
+    if odd:
+        print(f"\n  PRICED LIKE A DIFFERENT PRODUCT ({len(odd)}) - the rest of "
+              f"this market\n  asks about ${typical:.2f}, and these ask a "
+              f"fraction of it:")
+        for c, m in odd:
+            print(f"      {c:<32}${m['price']:>7.2f}  "
+                  f"({m['price'] / typical * 100:.0f}% of the market)")
+        print(f"  A physical product does not undercut its own market by that "
+              f"much. These\n  are usually design files, patterns or services "
+              f"wearing a product's words -\n  and the words alone do not give "
+              f"them away, which is why nothing above\n  caught them. Worth a "
+              f"look before you build one.")
 
     thin = [(c, m) for c, m in ranked
             if min(m["heat_n"], m["pull_n"]) < m["returned"]]

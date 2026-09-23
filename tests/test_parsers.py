@@ -9724,3 +9724,120 @@ class WhichProductIsADifferentQuestion(unittest.TestCase):
         r = self.run_it()
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("a thing", r.stdout)
+
+
+class AMugIsNotThreeNinety(unittest.TestCase):
+    """Three real scans each put a digital market in or near first place, and
+    the intent labels missed all three because nothing in the WORDS gives
+    them away:
+
+        funny coffee mug designs    $3.90   against a $19.70 market
+        canvas tote bag pattern     $6.00   against a $22.62 market
+        wall art print etsy         $5.95   against a $18.50 market
+
+    Design files, sewing patterns and listing services wearing a product's
+    phrase. The price is what gives them away, and the scan already knew
+    every price.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("market_scan", SCRIPTS / "market-scan.py")
+
+    def scored(self, pairs):
+        return [(p, {"price": v}) for p, v in pairs]
+
+    MUGS = [("funny coffee mug designs", 3.90),
+            ("funny coffee mugs for your boss", 19.99),
+            ("funny coffee mug for men", 19.95),
+            ("funny coffee mug coworker", 21.98),
+            ("funny coffee mugs etsy", 18.70),
+            ("funny coffee mugs", 19.99),
+            ("funny coffee cups", 19.46),
+            ("funny coffee mug gifts", 17.95)]
+
+    TOTES = [("canvas tote bag insert", 40.00),
+             ("canvas tote bag embroidered", 23.84),
+             ("canvas tote bag pattern", 6.00),
+             ("canvas tote bag", 22.62),
+             ("canvas tote bag designer", 39.98),
+             ("canvas tote bag with zipper", 29.00),
+             ("canvas tote bag custom", 22.62)]
+
+    def test_the_mug_scan_flags_the_design_files(self):
+        odd, typical = self.m.price_outliers(self.scored(self.MUGS))
+        self.assertAlmostEqual(typical, 19.70, places=2)
+        self.assertEqual([c for c, _ in odd], ["funny coffee mug designs"])
+
+    def test_the_tote_scan_flags_the_sewing_pattern(self):
+        odd, _typical = self.m.price_outliers(self.scored(self.TOTES))
+        self.assertEqual([c for c, _ in odd], ["canvas tote bag pattern"])
+
+    def test_a_dearer_phrase_is_never_flagged(self):
+        # 'canvas tote bag insert' at $40 against a $22.62 market is not an
+        # outlier in the direction this looks for. Expensive is a product
+        # decision; a tenth of the market price is a different product.
+        odd, _t = self.m.price_outliers(self.scored(self.TOTES))
+        self.assertNotIn("canvas tote bag insert", [c for c, _ in odd])
+
+    def test_an_ordinary_spread_flags_nothing(self):
+        odd, _t = self.m.price_outliers(self.scored(
+            [("a", 18.0), ("b", 20.0), ("c", 22.0), ("d", 25.0), ("e", 12.0)]))
+        self.assertEqual(odd, [])
+
+    def test_too_few_prices_means_no_opinion(self):
+        # With three phrases there is no "rest of the market" to be out of
+        # step with, and calling one an outlier would be arithmetic on noise.
+        odd, typical = self.m.price_outliers(self.scored(
+            [("a", 20.0), ("b", 19.0), ("c", 1.0)]))
+        self.assertEqual(odd, [])
+        self.assertIsNone(typical)
+
+    def test_unreadable_prices_do_not_drag_the_market_down(self):
+        # Etsy's price field comes back unreadable often enough that a scan
+        # can carry several zeros. Counting them in the median pulls
+        # "typical" towards nothing, and then a genuine outlier sits ABOVE
+        # the threshold and is never flagged - the check goes quiet exactly
+        # when the data is worst.
+        scored = self.scored([("cheap file", 6.0), ("a", 20.0), ("b", 20.0),
+                              ("c", 20.0), ("d", 22.0)]) + \
+            [(f"unreadable {i}", {"price": 0.0}) for i in range(5)]
+        odd, typical = self.m.price_outliers(scored)
+        self.assertAlmostEqual(typical, 20.0, places=2)
+        self.assertEqual([c for c, _ in odd], ["cheap file"])
+
+    def test_missing_and_zero_prices_are_not_outliers(self):
+        rows = [("a", 20.0), ("b", 19.0), ("c", 21.0), ("d", 22.0)]
+        scored = self.scored(rows) + [("no price", {"price": None}),
+                                      ("free", {"price": 0.0})]
+        odd, _t = self.m.price_outliers(scored)
+        self.assertEqual(odd, [])
+
+    def test_the_warning_reaches_the_scan_output(self):
+        # price_outliers() being right is not the same as the scan SAYING so.
+        m = self.m
+        now = 1758500000.0
+
+        def measured(phrase, price, favs=10):
+            rows = [{"original_creation_timestamp": int(now - 100 * 86400),
+                     "num_favorers": favs, "views": 200, "title": phrase,
+                     "price": {"amount": int(price * 100), "divisor": 100}}]
+            return m.measure({"count": 5000, "results": rows}, now, phrase=phrase)
+
+        table = {p: measured(p, v) for p, v in self.MUGS}
+        real_expand, real_fetch, real_sleep = m.tp.expand, m.fetch, time.sleep
+        m.tp.expand = lambda phrase, **kw: ({c: i for i, c in enumerate(table)}, [])
+        m.fetch = lambda key, cand: (table[cand], None)
+        time.sleep = lambda *_a: None
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                m.cmd_scan("k:s", ["funny", "coffee", "mug"])
+        finally:
+            m.tp.expand, m.fetch = real_expand, real_fetch
+            time.sleep = real_sleep
+        said = buf.getvalue()
+        self.assertIn("PRICED LIKE A DIFFERENT PRODUCT", said)
+        self.assertIn("funny coffee mug designs", said.split(
+            "PRICED LIKE A DIFFERENT PRODUCT")[1])
+        self.assertIn("$3.90", said)
