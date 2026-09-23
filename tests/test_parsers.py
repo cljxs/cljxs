@@ -1519,6 +1519,18 @@ class ScoutDoesNotHandWriteJson(unittest.TestCase):
         self.state.mkdir(parents=True)
         (self.state / "ideas.json").write_text('{"ideas":[]}')
         self.proposals = self.state / "proposals.json"
+        # propose now refuses an idea with no measurement behind it, so these
+        # need one. The bugs they guard - the inch mark, accumulation, the
+        # clobber - are unchanged; only the door they come through is.
+        scans = self.state / "scans"
+        scans.mkdir(parents=True, exist_ok=True)
+        (scans / "s.json").write_text(json.dumps({
+            "seed": "hoodie", "scanned_at": datetime.now(timezone.utc)
+            .strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "rows": [{"phrase": "cosy hoodie", "supply": 1000, "heat": 0.05,
+                      "pull": 0.04, "price": 30.0, "match": 1.0,
+                      "returned": 25, "heat_n": 25, "pull_n": 25,
+                      "score": 0.017}], "excluded": []}))
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -1529,7 +1541,8 @@ class ScoutDoesNotHandWriteJson(unittest.TestCase):
                               capture_output=True, text=True, env=env)
 
     def test_an_inch_mark_survives_propose(self):
-        r = self.run_it("propose", "--title", "Pocket Folklore Deer",
+        r = self.run_it("propose", "--phrase", "cosy hoodie",
+                        "--title", "Pocket Folklore Deer",
                         "--product", "hoodie",
                         "--brief", 'Bold flat shapes at 3.5" wide.')
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -1539,13 +1552,15 @@ class ScoutDoesNotHandWriteJson(unittest.TestCase):
 
     def test_proposals_accumulate_across_calls(self):
         for t in ("One", "Two", "Three"):
-            self.run_it("propose", "--title", t, "--product", "hoodie")
+            self.run_it("propose", "--phrase", "cosy hoodie",
+                        "--title", t, "--product", "hoodie")
         self.assertEqual(len(json.loads(self.proposals.read_text())["proposals"]), 3)
 
     def test_propose_will_not_clobber_a_file_it_cannot_read(self):
         self.proposals.write_text("{ not json")
-        r = self.run_it("propose", "--title", "New", "--product", "hoodie")
-        self.assertEqual(r.returncode, 1)
+        r = self.run_it("propose", "--phrase", "cosy hoodie",
+                        "--title", "New", "--product", "hoodie")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertEqual(self.proposals.read_text(), "{ not json")
 
     def test_the_inch_repair_recovers_a_hand_written_file(self):
@@ -8305,3 +8320,306 @@ class EtsyStemsItsOwnSearchSoTwoCallsBoughtOneAnswer(unittest.TestCase):
         picked = self.m.pick("fall sticker", found)
         self.assertEqual(len(picked), 7)
         self.assertEqual(len(picked), len(set(picked)))
+
+
+class AnIdeaWithNoMeasurementIsAnOpinion(unittest.TestCase):
+    """scout-ideas.py propose.
+
+    Scout's job was to answer 'what is selling on Etsy' out of the model's
+    own head. Asked that, a model produces a confident, detailed, plausible
+    answer that is fiction - and fiction with numbers on it gets built,
+    which is worse than having no researcher at all.
+
+    So Scout names a phrase and the numbers are copied off disk. A figure
+    that is never typed cannot be invented, and an idea with no measurement
+    behind it cannot be filed at all.
+    """
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.scans = self.root / "agents" / "scout" / "state" / "scans"
+        self.scans.mkdir(parents=True)
+        self.env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+
+    def write_scan(self, name="water bottle sticker", days_ago=0, rows=None,
+                   excluded=None):
+        when = datetime.now(timezone.utc) - timedelta(days=days_ago)
+        doc = {"seed": name,
+               "scanned_at": when.strftime("%Y-%m-%dT%H:%M:%SZ"),
+               "rows": rows if rows is not None else [
+                   {"phrase": "water bottle stickers", "supply": 436862,
+                    "heat": 0.066, "pull": 0.1497, "price": 4.99,
+                    "match": 1.0, "returned": 25, "heat_n": 25,
+                    "pull_n": 25, "score": 0.0117}],
+               "excluded": excluded or []}
+        (self.scans / "scan.json").write_text(json.dumps(doc))
+
+    def propose(self, *args):
+        r = subprocess.run(
+            [sys.executable, str(SCRIPTS / "scout-ideas.py"), "propose", *args],
+            capture_output=True, text=True, env=self.env)
+        return r.returncode, r.stdout + r.stderr
+
+    def filed(self):
+        p = self.root / "agents" / "scout" / "state" / "proposals.json"
+        return json.loads(p.read_text())["proposals"] if p.is_file() else []
+
+    def test_a_measured_phrase_is_filed_with_its_numbers(self):
+        self.write_scan()
+        code, said = self.propose("--phrase", "water bottle stickers",
+                                  "--title", "Trail Marker Set",
+                                  "--product", "sticker")
+        self.assertEqual(code, 0, said)
+        ev = self.filed()[0]["evidence"]
+        self.assertEqual(ev["supply"], 436862)
+        self.assertEqual(ev["favs_per_day"], 0.066)
+        self.assertEqual(ev["phrase"], "water bottle stickers")
+
+    def test_an_unmeasured_phrase_is_refused_and_nothing_is_written(self):
+        self.write_scan()
+        code, said = self.propose("--phrase", "fall pumpkin sticker",
+                                  "--title", "X", "--product", "sticker")
+        self.assertEqual(code, 2)
+        self.assertIn("has not been measured", said)
+        self.assertEqual(self.filed(), [])
+
+    def test_with_no_scans_at_all_it_says_how_to_make_one(self):
+        code, said = self.propose("--phrase", "anything", "--title", "X",
+                                  "--product", "sticker")
+        self.assertEqual(code, 2)
+        self.assertIn("market-scan.py", said)
+        self.assertEqual(self.filed(), [])
+
+    def test_a_dead_market_is_refused(self):
+        # 'fall sticker pack': 5,536 listings, score zero. Refusing costs one
+        # idea; building into it costs a build.
+        self.write_scan(rows=[{"phrase": "fall sticker pack", "supply": 5536,
+                               "heat": 0.0, "pull": 0.0, "price": 4.0,
+                               "match": 1.0, "returned": 25, "heat_n": 25,
+                               "pull_n": 25, "score": 0.0}])
+        code, said = self.propose("--phrase", "fall sticker pack",
+                                  "--title", "X", "--product", "sticker")
+        self.assertEqual(code, 2)
+        self.assertIn("scored zero", said)
+        self.assertIn("5,536", said)
+        self.assertEqual(self.filed(), [])
+
+    def test_a_loosely_matched_phrase_is_refused_with_the_reason(self):
+        self.write_scan(excluded=[{"phrase": "water bottle sticker etsy",
+                                   "match": 0.08, "supply": 284,
+                                   "why": "loose"}])
+        code, said = self.propose("--phrase", "water bottle sticker etsy",
+                                  "--title", "X", "--product", "sticker")
+        self.assertEqual(code, 2)
+        self.assertIn("8%", said)
+        self.assertEqual(self.filed(), [])
+
+    def test_a_stale_measurement_is_refused(self):
+        # Supply moves. A six-week-old number would be presented at review
+        # with exactly the confidence of one from this morning.
+        self.write_scan(days_ago=40)
+        code, said = self.propose("--phrase", "water bottle stickers",
+                                  "--title", "X", "--product", "sticker")
+        self.assertEqual(code, 2)
+        self.assertIn("40 days old", said)
+        self.assertEqual(self.filed(), [])
+
+    def test_a_scan_with_no_readable_date_is_refused(self):
+        # Found by mutation: an unparseable timestamp read as 'never stale',
+        # so such a file would back proposals forever. An unknown age is not
+        # a young one.
+        self.write_scan()
+        path = self.scans / "scan.json"
+        doc = json.loads(path.read_text())
+        doc["scanned_at"] = "last Tuesday"
+        path.write_text(json.dumps(doc))
+        code, said = self.propose("--phrase", "water bottle stickers",
+                                  "--title", "X", "--product", "sticker")
+        self.assertEqual(code, 2)
+        self.assertIn("no readable date", said)
+        self.assertEqual(self.filed(), [])
+
+    def test_a_fresh_measurement_inside_the_window_is_fine(self):
+        self.write_scan(days_ago=13)
+        code, said = self.propose("--phrase", "water bottle stickers",
+                                  "--title", "X", "--product", "sticker")
+        self.assertEqual(code, 0, said)
+
+    def test_a_trademark_anywhere_in_the_idea_is_refused(self):
+        # The phrase can be clean while the idea built on it is not:
+        # 'water bottle stickers, Pikmin style'.
+        self.write_scan()
+        for field, args in (
+                ("title", ("--title", "Pikmin Bloom Trail Set",
+                           "--product", "sticker")),
+                ("angle", ("--title", "X", "--product", "sticker",
+                           "--angle", "in the style of Hogwarts")),
+                ("brief", ("--title", "X", "--product", "sticker",
+                           "--brief", "a Stanley cup dupe"))):
+            with self.subTest(field=field):
+                code, said = self.propose("--phrase", "water bottle stickers",
+                                          *args)
+                self.assertEqual(code, 2, said)
+                self.assertIn("property", said)
+                self.assertEqual(self.filed(), [])
+
+    def test_an_ambiguous_word_is_flagged_for_a_human_not_refused(self):
+        self.write_scan()
+        code, said = self.propose("--phrase", "water bottle stickers",
+                                  "--title", "Frozen Lake Series",
+                                  "--product", "sticker")
+        self.assertEqual(code, 0, said)
+        self.assertIn("FLAGGED", said)
+        self.assertIn("ip_flag", json.dumps(self.filed()[0]))
+
+    def test_the_evidence_survives_the_merge_into_the_log(self):
+        self.write_scan()
+        self.propose("--phrase", "water bottle stickers", "--title", "T",
+                     "--product", "sticker")
+        r = subprocess.run(
+            [sys.executable, str(SCRIPTS / "scout-ideas.py"), "merge"],
+            capture_output=True, text=True, env=self.env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        log = json.loads((self.root / "agents" / "scout" / "state"
+                          / "ideas.json").read_text())
+        self.assertEqual(log["ideas"][0]["evidence"]["supply"], 436862)
+
+    def test_a_broken_scan_file_does_not_crash_the_lookup(self):
+        self.write_scan()
+        (self.scans / "broken.json").write_text("{not json")
+        code, said = self.propose("--phrase", "water bottle stickers",
+                                  "--title", "X", "--product", "sticker")
+        self.assertEqual(code, 0, said)
+
+
+class TheScanFileIsWhatScoutIsAllowedToBelieve(unittest.TestCase):
+    """market-scan.py scan --save. Whatever is in `rows` is proposable and
+    whatever is not, is not - so a loosely matched phrase landing in `rows`
+    would hand Scout exactly the numbers the loose check exists to withhold."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("market_scan", SCRIPTS / "market-scan.py")
+
+    NOW = 1758500000.0
+
+    def measured(self, phrase, favs, title):
+        rows = [{"original_creation_timestamp": int(self.NOW - 100 * 86400),
+                 "num_favorers": favs, "views": 200, "title": title,
+                 "price": {"amount": 499, "divisor": 100}}]
+        return self.m.measure({"count": 1000, "results": rows}, self.NOW,
+                              phrase=phrase)
+
+    def save(self, ranked, loose):
+        out = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, out, ignore_errors=True)
+        real, self.m.SCANS = self.m.SCANS, out
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                path = self.m.save_scan("water bottle sticker", ranked, loose)
+        finally:
+            self.m.SCANS = real
+        return json.loads(path.read_text())
+
+    def test_measured_phrases_land_in_rows_with_their_numbers(self):
+        doc = self.save([("water bottle stickers",
+                          self.measured("water bottle stickers", 20,
+                                        "Water Bottle Stickers Pack"))], [])
+        self.assertEqual(doc["seed"], "water bottle sticker")
+        row = doc["rows"][0]
+        self.assertEqual(row["phrase"], "water bottle stickers")
+        self.assertEqual(row["supply"], 1000)
+        self.assertEqual(row["match"], 1.0)
+        self.assertGreater(row["score"], 0)
+
+    def test_a_loose_phrase_never_lands_in_rows(self):
+        loose = self.measured("water bottle sticker etsy", 20, "Sticker Pack")
+        doc = self.save([], [("water bottle sticker etsy", loose)])
+        self.assertEqual(doc["rows"], [])
+        self.assertEqual(doc["excluded"][0]["phrase"], "water bottle sticker etsy")
+        self.assertEqual(doc["excluded"][0]["match"], 0.0)
+
+    def test_the_timestamp_is_the_format_scout_ideas_parses(self):
+        # The two scripts agree on this string or every scan reads as
+        # undateable, which scout-ideas treats as never stale.
+        doc = self.save([("water bottle stickers",
+                          self.measured("water bottle stickers", 20,
+                                        "Water Bottle Stickers"))], [])
+        si = load("scout_ideas", SCRIPTS / "scout-ideas.py")
+        self.assertIsNotNone(si.age_days(doc["scanned_at"]))
+        self.assertLess(si.age_days(doc["scanned_at"]), 1)
+
+    def test_the_slug_survives_a_phrase_with_punctuation(self):
+        self.assertEqual(self.m.slug("water bottle sticker"),
+                         "water-bottle-sticker")
+        self.assertEqual(self.m.slug("  FALL/sticker!! "), "fall-sticker")
+        self.assertEqual(self.m.slug("!!!"), "scan")
+
+
+class TheApprovalScreenShowsWhatItIsBasedOn(unittest.TestCase):
+    """scout-review.py is where the user decides. Before the evidence block,
+    an idea from a market scan and an idea from the model's imagination read
+    identically on that screen."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.state = self.root / "agents" / "scout" / "state"
+        self.state.mkdir(parents=True)
+        self.env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+
+    def write_log(self, idea):
+        (self.state / "ideas.json").write_text(json.dumps({"ideas": [idea]}))
+
+    def listed(self):
+        r = subprocess.run(
+            [sys.executable, str(SCRIPTS / "scout-review.py"), "list"],
+            capture_output=True, text=True, env=self.env)
+        return r.stdout + r.stderr
+
+    def test_it_reads_the_root_it_is_told_to(self):
+        # scout-review.py hardcoded ROOT and ignored ECOSYSTEM_ROOT, so it
+        # read a different ideas.json from the one scout-ideas.py had just
+        # written. CLAUDE.md: nothing hardcodes a path.
+        self.write_log({"id": 1, "title": "Only In The Temp Root",
+                        "product": "sticker", "status": "pending"})
+        self.assertIn("Only In The Temp Root", self.listed())
+
+    def test_the_numbers_reach_the_screen(self):
+        self.write_log({"id": 1, "title": "Trail Marker Set",
+                        "product": "sticker", "status": "pending",
+                        "evidence": {"phrase": "water bottle stickers",
+                                     "supply": 436862, "favs_per_day": 0.066,
+                                     "favs_per_view": 0.1497, "match": 1.0,
+                                     "score": 0.0117, "typical_price": 4.99,
+                                     "measured_at": "2026-09-23T12:00:00Z",
+                                     "from_scan": "water bottle sticker"}})
+        said = self.listed()
+        self.assertIn("436,862", said)
+        self.assertIn("0.066", said)
+        self.assertIn("0.1497", said)
+        self.assertIn("100%", said)
+        self.assertIn("water bottle stickers", said)
+
+    def test_an_idea_with_no_evidence_says_so_rather_than_looking_the_same(self):
+        # The log predates the requirement. Hiding the gap would make an
+        # unmeasured idea look like a measured one that passed.
+        self.write_log({"id": 1, "title": "Old Idea From Scouts Head",
+                        "product": "hoodie", "status": "pending"})
+        said = self.listed()
+        self.assertIn("evidence: NONE", said)
+        self.assertIn("has been checked", said)
+
+    def test_the_ip_flag_is_shown_as_the_users_call(self):
+        self.write_log({"id": 1, "title": "Frozen Lake", "product": "sticker",
+                        "status": "pending",
+                        "evidence": {"phrase": "water bottle stickers",
+                                     "supply": 1, "favs_per_day": 0.1,
+                                     "favs_per_view": 0.1, "match": 1.0,
+                                     "score": 0.01, "typical_price": 4.0,
+                                     "measured_at": "x", "from_scan": "y",
+                                     "ip_flag": "frozen: the film?"}})
+        said = self.listed()
+        self.assertIn("IP FLAG", said)
+        self.assertIn("Your call", said)

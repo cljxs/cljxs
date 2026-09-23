@@ -18,12 +18,17 @@ Standard library only.
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+# ECOSYSTEM_ROOT overrides the root and nothing here hardcodes a path - this
+# file was the exception, and it meant scout-review.py read a different
+# ideas.json from the one scout-ideas.py had just written whenever the
+# variable was set.
+ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
 IDEAS = ROOT / "agents" / "scout" / "state" / "ideas.json"
 LESSONS = ROOT / "agents" / "emily" / "state" / "lessons.md"
 NEW_BUILD = ROOT / "scripts" / "emily-new-build.py"
@@ -58,6 +63,49 @@ def find(d, ident):
     sys.exit(1)
 
 
+def show_evidence(ev):
+    """The measurement behind an idea, or the absence of one.
+
+    This is the line the approval turns on. Before it existed, every
+    proposal read the same whether it came from a market scan or from the
+    model's own head - and the second kind is fiction, which is worse than
+    no researcher because fiction with a confident tone gets built.
+
+    An idea with no evidence is NOT hidden. It is shown saying so, because
+    the old ideas in the log predate the requirement and quietly dropping
+    them would look like they had been measured and passed.
+    """
+    if not isinstance(ev, dict) or not ev.get("phrase"):
+        print(f"      evidence: NONE - proposed before measurements were "
+              f"required, or by hand.")
+        print(f"                Nothing here has been checked against Etsy.")
+        return
+    supply = ev.get("supply")
+    print(f"      evidence: '{ev.get('phrase')}'")
+    print(f"                {supply:,} active listings"
+          if isinstance(supply, int) else "                supply unknown")
+    heat, pull = ev.get("favs_per_day"), ev.get("favs_per_view")
+    if heat is not None:
+        print(f"                {heat:.3f} favourites/day across the top "
+              f"results (a rate, not a count)")
+    if pull is not None:
+        print(f"                {pull:.4f} favourites/view - how often a "
+              f"looker saves one")
+    match = ev.get("match")
+    if match is not None:
+        print(f"                {match * 100:.0f}% of those listings really "
+              f"contain the phrase")
+    price = ev.get("typical_price")
+    if price is not None:
+        print(f"                {price:.2f} typical price")
+    print(f"                measured {ev.get('measured_at')} "
+          f"(scan: {ev.get('from_scan')})")
+    if ev.get("ip_flag"):
+        print(f"      IP FLAG : {ev['ip_flag']}")
+        print(f"                Not refused - an ordinary word that is also a "
+              f"property. Your call.")
+
+
 def cmd_list(a, d):
     ideas = d.get("ideas", [])
     pending = [i for i in ideas if i.get("status", "pending") == "pending"]
@@ -73,6 +121,7 @@ def cmd_list(a, d):
         print(f"      angle   : {i.get('angle','')[:110]}")
         if i.get("brief"):
             print(f"      brief   : {i['brief'][:110]}")
+        show_evidence(i.get("evidence"))
         if st != "pending":
             print(f"      {st} — {i.get('verdict_reason','')[:90]}")
     print(f"\n{len(pending)} pending. Approve with: scout-review.py approve <id>")

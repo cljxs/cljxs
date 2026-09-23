@@ -4,6 +4,7 @@ market-scan.py — put the two halves together.
 
     market-scan.py phrase fall sticker      one phrase, both sources
     market-scan.py scan fall sticker        expand, then score the candidates
+    market-scan.py scan laptop sticker --save   ...and file it for Scout
 
 trend-probe.py says what people SEARCH for. etsy-probe.py says what is
 already SOLD. The number that matters is neither one:
@@ -40,6 +41,7 @@ import re
 import statistics
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
@@ -63,6 +65,7 @@ tp = _load("trend_probe", "trend-probe.py")
 # listing about three weeks old and every favs/day figure enormous.
 EPOCH_FLOOR = 1104537600          # 2005-01-01
 CANDIDATES = 12                   # Etsy calls per scan. 5 QPS, 5000 a day.
+SCANS = ROOT / "agents" / "scout" / "state" / "scans"
 LOOSE = 0.5                       # below this share of matching titles,
                                   # a phrase is not comparable at all
 
@@ -420,6 +423,9 @@ def cmd_scan(key, words):
               f"above {LOOSE:.0%}, so every supply count\n  above is the "
               f"market that was actually asked about.")
 
+    if "--save" in sys.argv:
+        save_scan(phrase, ranked, loose)
+
     print(f"\n  A comparison between "
           f"{'these ' + str(len(ranked)) + ' phrases' if len(ranked) > 1 else 'one phrase'}"
           f" and nothing more.\n  It is not a sales forecast.")
@@ -431,6 +437,48 @@ def cmd_scan(key, words):
     return 0
 
 
+def slug(phrase):
+    return re.sub(r"[^a-z0-9]+", "-", (phrase or "").lower()).strip("-") or "scan"
+
+
+def save_scan(seed, ranked, loose):
+    """Write the ranking where Scout can read it.
+
+    THE POINT OF THIS FILE. Scout proposes ideas out of the model's own head
+    today, and an agent asked 'what is selling' will produce a confident,
+    detailed, plausible answer that is fiction. Fiction with numbers on it
+    gets acted on.
+
+    So Scout never types a supply figure. It names a phrase, and
+    scout-ideas.py copies the numbers out of here. A number that is never
+    typed cannot be invented - the same reason ace-judge.py and
+    emily-listing.py exist.
+
+    Loosely matched phrases are saved too, in their own list, so a proposal
+    naming one can be refused with the reason rather than silently missed.
+    """
+    SCANS.mkdir(parents=True, exist_ok=True)
+    doc = {
+        "seed": seed,
+        "scanned_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "rows": [{"phrase": c, "supply": m["supply"], "heat": m["heat"],
+                  "pull": m["pull"], "price": m["price"], "match": m["match"],
+                  "returned": m["returned"], "heat_n": m["heat_n"],
+                  "pull_n": m["pull_n"], "score": opportunity(m)}
+                 for c, m in ranked],
+        "excluded": [{"phrase": c, "match": m["match"], "supply": m["supply"],
+                      "why": "fewer than half the listings Etsy returned "
+                             "contain this phrase"}
+                     for c, m in loose],
+    }
+    path = SCANS / f"{slug(seed)}.json"
+    path.write_text(json.dumps(doc, indent=1) + "\n")
+    print(f"\n  saved {len(doc['rows'])} measured phrase(s) to "
+          f"agents/scout/state/scans/{path.name}")
+    print(f"  Scout can now propose any of them by name, and nothing else.")
+    return path
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd not in ("phrase", "scan") or len(sys.argv) < 3:
@@ -440,7 +488,8 @@ def main():
     if not key:
         print(why, file=sys.stderr)
         return 2
-    return (cmd_phrase if cmd == "phrase" else cmd_scan)(key, sys.argv[2:])
+    words = [a for a in sys.argv[2:] if not a.startswith("--")]
+    return (cmd_phrase if cmd == "phrase" else cmd_scan)(key, words)
 
 
 if __name__ == "__main__":

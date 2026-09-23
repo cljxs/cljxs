@@ -18,7 +18,31 @@ zero tool calls, and cost money for nothing.
 4. **RUN, once per new idea:**
 
        python3 ../../scripts/scout-ideas.py propose \
-         --title "..." --product hoodie --angle "..." --brief "..."
+         --phrase "<a measured phrase>" \
+         --title "..." --product sticker --angle "..." --brief "..."
+
+   **`--phrase` must be a phrase that has been MEASURED.** See what those are:
+
+       python3 ../../scripts/scout-ideas.py evidence
+
+   You do not type a supply figure, a favourites rate or a price. The script
+   copies them from the scan. This is deliberate: asked "what is selling on
+   Etsy", a model produces a confident, detailed, plausible answer that is
+   fiction, and fiction with numbers on it gets built. You choose the phrase
+   and write the words; the numbers are not yours.
+
+   Proposing is REFUSED, with nothing written, when:
+
+   * the phrase has not been measured
+   * its measurement is more than 14 days old
+   * it was left out of its scan for a loose match - Etsy returned listings
+     that do not contain it, so the numbers describe another market
+   * it scored zero: people are already listing into it and nobody is saving
+     the results
+   * the phrase, title, angle or brief names somebody else's property
+
+   A refusal is not a failure of your run. It is the check doing its job, and
+   the right response is another phrase, not another wording of the same one.
 
    Do not write any JSON by hand. You wrote a good brief containing `3.5"` and
    the inch mark closed the string, so three ideas did not parse and were not
@@ -45,6 +69,24 @@ never create tasks, never write into Emily's folder.
 and you stop; code files them with `"status": "pending"`. The user approves with `scout-review.py`,
 and that is what creates Emily's task. If you find yourself about to run
 `emily-new-build.py` or POST to `/tasks`, stop — that removes the user's say.
+
+## What the evidence has already settled
+
+Do not re-litigate these from your own head. They came from real scans:
+
+* **Seasonal phrases are dead ends.** `fall stickers` has 109,144 listings
+  and 0.003 favourites/day. `cozy fall sweatshirt` has 137,321 and scored
+  zero - eight of ten phrases in that scan did.
+* **Evergreen phrases are alive at far higher competition.** `water bottle
+  stickers`: 436,862 listings and 0.066 favourites/day, twenty-two times
+  the rate at four times the supply. `laptop stickers`: 944,997 listings,
+  still 0.022. Neither scan had a single dead phrase.
+* **Print-on-demand apparel is saturated.** `funny cat shirt`, 199,229
+  listings, 0.002 favourites/day. Graphic-on-a-blank is not a way in.
+
+So: propose stickers and evergreen angles, and stop proposing seasonal
+apparel. If you think a season is worth it, the way to find out is a scan,
+not an argument.
 
 ## Be honest about what you are
 
