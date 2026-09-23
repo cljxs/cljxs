@@ -375,12 +375,20 @@ def cmd_scan(key, words):
     # cannot be told apart from a warning that is broken - the absence means
     # 'all fine' and 'the check never ran' equally, and the reader cannot
     # distinguish them. A number every row is unambiguous.
-    print(f"  {'phrase':<32}{'supply':>9}{'favs/day':>10}{'n':>4}"
+    # PRICE WAS COMPUTED, SAVED, AND NEVER SHOWN.
+    #
+    # It is the number the whole decision turns on - whether a product can
+    # be made for less than the market charges - and it sat in the file
+    # while the table printed five columns that cannot answer that. Found by
+    # needing it and not having it, which is the only way an omission like
+    # this ever gets found.
+    print(f"  {'phrase':<30}{'supply':>9}{'price':>8}{'favs/day':>10}{'n':>4}"
           f"{'favs/view':>11}{'n':>4}{'match':>7}{'score':>9}")
     for cand, m in ranked:
         match = m.get("match")
         shown = f"{match * 100:>5.0f}%" if match is not None else "    ?"
-        print(f"  {cand[:31]:<32}{m['supply']:>9,}{m['heat']:>10.3f}"
+        price = f"${m['price']:.2f}" if m.get("price") is not None else "    ?"
+        print(f"  {cand[:29]:<30}{m['supply']:>9,}{price:>8}{m['heat']:>10.3f}"
               f"{m['heat_n']:>4}"
               f"{(m['pull'] if m['pull'] is not None else 0):>11.4f}"
               f"{m['pull_n']:>4}{shown:>7}{opportunity(m):>9.4f}")

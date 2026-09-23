@@ -7996,6 +7996,22 @@ class ARatioAgainstZeroIsNotALargeNumber(unittest.TestCase):
         # taken first place, which is the whole reason to print it.
         self.assertRegex(tail, r"would have scored 0\.0\d\d\d")
 
+    def test_a_market_with_no_readable_price_shows_a_question_not_zero(self):
+        # Etsy's price field can be missing or malformed on a listing. A
+        # median of none must print as unknown: "$0.00 median asking price"
+        # reads as a market giving things away.
+        priceless = [{"original_creation_timestamp": int(self.NOW - 100 * 86400),
+                      "num_favorers": 9, "views": 200,
+                      "title": "fall sticker roll"}]
+        table = {"fall sticker roll": self.m.measure(
+            {"count": 272, "results": priceless}, self.NOW,
+            phrase="fall sticker roll")}
+        said = self.scan_output(table)
+        row = next(l for l in said.splitlines()
+                   if l.strip().startswith("fall sticker roll") and "272" in l)
+        self.assertIn("?", row)
+        self.assertNotIn("$0.00", row)
+
     def test_the_match_number_is_shown_on_every_row_not_just_bad_ones(self):
         # A warning that only appears below a threshold cannot be told apart
         # from a warning that is broken: the reader sees silence either way.
@@ -8037,8 +8053,11 @@ class ARatioAgainstZeroIsNotALargeNumber(unittest.TestCase):
         row = next(l for l in said.splitlines()
                    if l.strip().startswith("fall sticker roll")
                    and "272" in l)
-        self.assertRegex(row, r"272\s+[\d.]+\s+1\s+[\d.]+\s+2\s")
-        self.assertRegex(said, r"favs/day\s+n\s+favs/view\s+n\s+match")
+        # supply, price, favs/day, n, favs/view, n - the price column was
+        # added between supply and favs/day, and this regex spans it so it
+        # keeps holding the two n values in place.
+        self.assertRegex(row, r"272\s+\S+\s+[\d.]+\s+1\s+[\d.]+\s+2\s")
+        self.assertRegex(said, r"price\s+favs/day\s+n\s+favs/view\s+n\s+match")
 
     def test_a_complete_payload_prints_no_partial_warning(self):
         # And the check must be min(), not max(): one metric short of the
@@ -9491,3 +9510,96 @@ class PostageIsTheWholeStoryOnASticker(unittest.TestCase):
             capture_output=True, text=True,
             env=dict(os.environ, ECOSYSTEM_ROOT=str(root)))
         self.assertIn("SHIPPING IS NOT IN THESE NUMBERS", r.stdout)
+
+
+class SellersShoppingForAssetsAreNotBuyers(unittest.TestCase):
+    """The sticker-sheet scan put these in the top two places:
+
+        sticker sheet mockup        219 listings   score 0.0144
+        sticker sheet for printer   388 listings   score 0.0049
+
+    Both are other Etsy SELLERS shopping for design assets - a mockup
+    template to photograph a design on, a printable file to run off at home.
+    That is a real market; it is not the one this shop is in, and it took
+    the top of a ranking meant to say what to make and post.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("trend_probe", SCRIPTS / "trend-probe.py")
+
+    def test_the_two_that_topped_the_real_scan(self):
+        self.assertEqual(self.m.intent_of("sticker sheet mockup")[0], "digital")
+        self.assertEqual(self.m.intent_of("sticker sheet for printer")[0],
+                         "digital")
+
+    def test_other_seller_tools_are_caught_too(self):
+        for phrase in ("sticker mockup psd", "svg for cricut",
+                       "sticker sheet mock up", "decal dxf file",
+                       "sticker pack commercial use"):
+            with self.subTest(phrase=phrase):
+                self.assertEqual(self.m.intent_of(phrase)[0], "digital", phrase)
+
+    def test_real_products_are_not_swept_up(self):
+        # 'sticker sheet custom' and 'sticker sheet' are 100%-match product
+        # searches and must stay in BUYING; 'holder' is a physical object.
+        for phrase in ("sticker sheet custom", "sticker sheet",
+                       "sticker sheet holder", "water bottle stickers",
+                       "custom vinyl sticker"):
+            with self.subTest(phrase=phrase):
+                self.assertIsNone(self.m.intent_of(phrase)[0], phrase)
+
+    def test_printer_as_an_object_is_not_a_file(self):
+        # 'for printer' is the seller phrase. A sticker OF a printer, or a
+        # printer-themed design, is a product.
+        self.assertIsNone(self.m.intent_of("retro printer sticker")[0])
+
+
+class ThePriceWasComputedAndNeverShown(unittest.TestCase):
+    """market-scan measured the median asking price of every market, saved
+    it to the scan file, and printed a table without it.
+
+    It is the number the whole decision turns on - whether a thing can be
+    made for less than the market charges - and it was the one column
+    missing. Found by needing it and not having it."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.scans = self.root / "agents" / "scout" / "state" / "scans"
+        self.scans.mkdir(parents=True)
+        (self.scans / "s.json").write_text(json.dumps({
+            "seed": "sticker sheet",
+            "scanned_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "rows": [
+                {"phrase": "sticker sheet custom", "supply": 17120,
+                 "heat": 0.013, "pull": 0.0199, "price": 8.5, "match": 1.0,
+                 "returned": 25, "heat_n": 25, "pull_n": 23, "score": 0.0030},
+                {"phrase": "no price here", "supply": 100, "heat": 0.01,
+                 "pull": 0.01, "price": None, "match": 1.0, "returned": 25,
+                 "heat_n": 25, "pull_n": 25, "score": 0.005}],
+            "excluded": []}))
+        self.env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+
+    def test_the_median_price_is_on_the_evidence_listing(self):
+        r = subprocess.run(
+            [sys.executable, str(SCRIPTS / "scout-ideas.py"), "evidence"],
+            capture_output=True, text=True, env=self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("$8.50", r.stdout)
+        self.assertIn("median", r.stdout)
+
+    def test_a_missing_price_shows_as_unknown_not_as_zero(self):
+        r = subprocess.run(
+            [sys.executable, str(SCRIPTS / "scout-ideas.py"), "evidence"],
+            capture_output=True, text=True, env=self.env)
+        line = [l for l in r.stdout.splitlines() if "no price here" in l][0]
+        self.assertIn("?", line)
+        self.assertNotIn("$0.00", line)
+
+    def test_the_scan_table_carries_a_price_column(self):
+        src = (SCRIPTS / "market-scan.py").read_text()
+        code = "\n".join(l for l in src.splitlines()
+                         if not l.lstrip().startswith("#"))
+        self.assertIn("'price':>8", code)
+        self.assertIn("m['price']", code)

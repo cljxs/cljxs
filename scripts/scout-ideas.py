@@ -269,8 +269,10 @@ def cmd_evidence(argv):
         for row in scan["rows"]:
             score = row.get("score")
             dead = "   DEAD - nothing here is being saved" if not score else ""
-            print(f"      {str(row.get('phrase'))[:36]:<38}"
+            price = row.get("price")
+            print(f"      {str(row.get('phrase'))[:34]:<36}"
                   f"{row.get('supply') or 0:>9,} listings  "
+                  f"{('$%.2f' % price) if price is not None else '    ?':>7} median  "
                   f"score {score or 0:.4f}{dead}")
     print(f"\n  Propose one by name:\n"
           f"    scout-ideas.py propose --phrase \"<one of the above>\" "

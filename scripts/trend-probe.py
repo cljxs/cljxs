@@ -87,9 +87,17 @@ INTENT = [
     # BUYING bucket on the first real run. A crochet pattern is a document,
     # GoodNotes is a tablet app, and clipart is an image licence - none of
     # them is a thing to print and post.
+    # 'crochet pattern', 'goodnotes' and 'clipart' came back inside BUYING on
+    # the first real run. 'sticker sheet mockup' and 'sticker sheet for
+    # printer' took the TOP TWO places in the sticker-sheet scan on the
+    # second - and both are other SELLERS shopping for design assets, not
+    # buyers shopping for stickers. A market of sellers selling to sellers
+    # is a real market; it is not the one this shop is in.
     (re.compile(r"\b(png|svg|printable|print at home|digital|download|"
                 r"copy and paste|cricut file|clip ?art|cut file|"
                 r"sublimation|goodnotes|notability|procreate|"
+                r"mock ?up|for printer|for cricut|silhouette file|"
+                r"studio3|dxf|eps file|commercial use|"
                 r"(crochet|knit(ting)?|sewing|quilt(ing)?) pattern)\b", re.I),
      "digital", "wants a file, not a physical product"),
     (re.compile(r"\b(free|diy|how to|tutorial|ideas|template)\b", re.I),
