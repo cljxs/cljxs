@@ -555,10 +555,48 @@ def save_scan(seed, ranked, loose):
     return path
 
 
-def best_row(doc):
-    """The strongest measured phrase in one scan."""
+def usable_rows(doc):
+    """A scan's rows, re-judged by TODAY'S rules.
+
+    A SAVED SCAN IS FROZEN AT THE RULES THAT WROTE IT. Six scans on disk
+    were saved before the seller-tool labels and the price check existed,
+    and compare dutifully picked their best-scoring row:
+
+        laptop sticker         laptop sticker jiji          $3.75
+        canvas tote bag        canvas tote bag insert      $40.00
+        sticker sheet          sticker sheet mockup         $6.00
+        water bottle sticker   water bottle sticker design  $3.75
+        funny coffee mug       funny coffee mug designs     $3.90
+
+    Five of six were a marketplace in Nigeria, a bag organiser at 76% match,
+    and three digital markets. The rules that would have caught them all
+    existed by then - just not when the file was written.
+
+    Everything needed to re-judge is in the row: the phrase for the intent
+    labels and the loose-match check, the price for the outlier check. So
+    they are applied on READ, and a scan improves when the rules do without
+    being re-run.
+    """
     rows = [r for r in (doc.get("rows") or [])
             if isinstance(r.get("score"), (int, float))]
+    seed = doc.get("seed") or ""
+    kept = []
+    for r in rows:
+        phrase = str(r.get("phrase") or "")
+        if tp.bucket(seed, phrase)[0] != "buying":
+            continue                       # digital, offsite, drift, blocked
+        match = r.get("match")
+        if isinstance(match, (int, float)) and match < LOOSE:
+            continue
+        kept.append(r)
+    odd, _typical = price_outliers([(r.get("phrase"), r) for r in kept])
+    dropped = {c for c, _m in odd}
+    return [r for r in kept if r.get("phrase") not in dropped]
+
+
+def best_row(doc):
+    """The strongest phrase in one scan that today's rules still accept."""
+    rows = usable_rows(doc)
     return max(rows, key=lambda r: r["score"]) if rows else None
 
 
@@ -586,7 +624,7 @@ def cmd_compare(_words):
         print("no scans yet. Measure something first:\n"
               "  market-scan.py scan <phrase> --save", file=sys.stderr)
         return 1
-    seen = []
+    seen, stale = [], []
     for f in files:
         try:
             doc = json.loads(f.read_text())
@@ -595,6 +633,8 @@ def cmd_compare(_words):
         row = best_row(doc)
         if row:
             seen.append((doc, row))
+        elif doc.get("rows"):
+            stale.append(doc.get("seed"))
     if not seen:
         print(f"{len(files)} scan file(s) on disk, none with a measured "
               f"phrase in it.\n  Every phrase in them was excluded, or they "
@@ -616,6 +656,12 @@ def cmd_compare(_words):
 
     dearest = max(seen, key=lambda dr: dr[1].get("price") or 0)
     hottest = max(seen, key=lambda dr: dr[1].get("heat") or 0)
+    if stale:
+        print(f"\n  Nothing usable left in: {', '.join(str(x) for x in stale)}\n"
+              f"  Every phrase in those was a seller tool, a loose match or "
+              f"priced like a\n  different product once today's rules were "
+              f"applied. Re-scan to look again.")
+
     print(f"\n  Most demand:  {hottest[0].get('seed')} "
           f"({(hottest[1].get('heat') or 0):.3f} favourites/day)")
     if dearest[1].get("price"):

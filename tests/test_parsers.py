@@ -9676,31 +9676,31 @@ class WhichProductIsADifferentQuestion(unittest.TestCase):
                          ["strong", "middle", "weak"])
 
     def test_demand_and_price_are_named_separately(self):
-        self.scan("cheap and hot",
-                  [self.row("cheap thing", 1000, 0.200, 4.00, 0.06)])
-        self.scan("dear and quiet",
-                  [self.row("dear thing", 1000, 0.005, 28.00, 0.002)])
+        self.scan("cheap sticker",
+                  [self.row("cheap vinyl sticker", 1000, 0.200, 4.00, 0.06)])
+        self.scan("dear tote",
+                  [self.row("dear canvas tote", 1000, 0.005, 28.00, 0.002)])
         out = self.run_it().stdout
-        self.assertIn("Most demand:  cheap and hot", out)
-        self.assertIn("Dearest item: dear and quiet", out)
+        self.assertIn("Most demand:  cheap sticker", out)
+        self.assertIn("Dearest item: dear tote", out)
 
     def test_nothing_is_multiplied_into_a_revenue_figure(self):
         # The Dennis trap: price x demand looks like money and is not.
-        self.scan("a", [self.row("a thing", 1000, 0.100, 10.00, 0.03)])
+        self.scan("tote", [self.row("canvas tote", 1000, 0.100, 10.00, 0.03)])
         out = self.run_it().stdout
         self.assertIn("Favourites are not sales", out)
         self.assertNotIn("revenue", out.lower())
         self.assertNotIn("$/day", out)
-        self.assertNotIn("1.00", out, "0.100 x 10.00 must not appear anywhere")
+        self.assertNotIn("100.00", out, "0.100 x 10.00 scaled must not appear")
 
     def test_a_market_with_no_price_is_shown_with_a_question(self):
-        self.scan("no price", [self.row("x", 100, 0.01, None, 0.004)])
+        self.scan("no price sticker", [self.row("no price sticker", 100, 0.01, None, 0.004)])
         out = self.run_it().stdout
         self.assertIn("?", out)
         self.assertNotIn("$0.00", out)
 
     def test_it_says_what_actually_settles_it(self):
-        self.scan("a", [self.row("a thing", 1000, 0.1, 10.0, 0.03)])
+        self.scan("tote", [self.row("canvas tote", 1000, 0.1, 10.0, 0.03)])
         out = self.run_it().stdout
         self.assertIn("margin", out)
         self.assertIn("production cost", out)
@@ -9712,18 +9712,18 @@ class WhichProductIsADifferentQuestion(unittest.TestCase):
 
     def test_a_scan_with_no_scorable_phrase_is_skipped_not_crashed_on(self):
         self.scan("empty", [])
-        self.scan("good", [self.row("a thing", 1000, 0.1, 10.0, 0.03)])
+        self.scan("good sticker", [self.row("good vinyl sticker", 1000, 0.1, 10.0, 0.03)])
         r = self.run_it()
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("a thing", r.stdout)
+        self.assertIn("good vinyl sticker", r.stdout)
         self.assertIn("1 market(s)", r.stdout)
 
     def test_a_broken_scan_file_does_not_stop_the_others(self):
         (self.scans / "broken.json").write_text("{not json")
-        self.scan("good", [self.row("a thing", 1000, 0.1, 10.0, 0.03)])
+        self.scan("good sticker", [self.row("good vinyl sticker", 1000, 0.1, 10.0, 0.03)])
         r = self.run_it()
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("a thing", r.stdout)
+        self.assertIn("good vinyl sticker", r.stdout)
 
 
 class AMugIsNotThreeNinety(unittest.TestCase):
@@ -9927,3 +9927,124 @@ class WhatMustICharge(unittest.TestCase):
         self.assertRegex(r.stdout, r"\$\s*29\.89")
         self.assertIn("vs the market's $22.62", r.stdout)
         self.assertIn("positioning", r.stdout)
+
+
+class ASavedScanIsFrozenAtTheRulesThatWroteIt(unittest.TestCase):
+    """compare read six scans saved before the seller-tool labels and the
+    price check existed, and picked these as each market's best:
+
+        laptop sticker         laptop sticker jiji          $3.75
+        canvas tote bag        canvas tote bag insert      $40.00
+        sticker sheet          sticker sheet mockup         $6.00
+        water bottle sticker   water bottle sticker design  $3.75
+        funny coffee mug       funny coffee mug designs     $3.90
+
+    A marketplace in Nigeria, a bag organiser at 76% match, and three
+    digital markets. Every rule that catches them existed by then - just not
+    when the files were written. Everything needed to re-judge is in the
+    row, so the rules are applied on READ and a scan improves when they do.
+    """
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.scans = self.root / "agents" / "scout" / "state" / "scans"
+        self.scans.mkdir(parents=True)
+        self.env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+        self.m = load("market_scan", SCRIPTS / "market-scan.py")
+
+    def row(self, phrase, supply, heat, price, score, match=1.0):
+        return {"phrase": phrase, "supply": supply, "heat": heat, "pull": 0.05,
+                "price": price, "match": match, "returned": 25, "heat_n": 25,
+                "pull_n": 25, "score": score}
+
+    def write(self, seed, rows):
+        (self.scans / f"{seed.replace(' ', '-')}.json").write_text(json.dumps({
+            "seed": seed,
+            "scanned_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "rows": rows, "excluded": []}))
+
+    def test_the_offsite_marketplace_is_not_a_market(self):
+        self.write("laptop sticker", [
+            self.row("laptop sticker jiji", 82, 0.043, 3.75, 0.0223),
+            self.row("laptop stickers", 944997, 0.022, 4.50, 0.0037)])
+        got = self.m.best_row(json.loads(
+            (self.scans / "laptop-sticker.json").read_text()))
+        self.assertEqual(got["phrase"], "laptop stickers")
+
+    def test_a_genuinely_loose_match_is_dropped_on_read(self):
+        self.write("canvas tote bag", [
+            self.row("canvas tote bag japan", 3978, 0.090, 25.0, 0.030,
+                     match=0.24),
+            self.row("canvas tote bag embroidered", 18149, 0.062, 23.84, 0.0145)])
+        got = self.m.best_row(json.loads(
+            (self.scans / "canvas-tote-bag.json").read_text()))
+        self.assertEqual(got["phrase"], "canvas tote bag embroidered")
+
+    def test_a_different_product_at_a_good_match_is_NOT_caught(self):
+        # Recorded because it is a real limit, not an oversight.
+        #
+        # 'canvas tote bag insert' is an organiser that goes INSIDE a tote.
+        # Its match is 76% - well clear of the loose threshold - and at $40
+        # against a $22.62 market it is dearer, not cheaper, so the price
+        # check does not see it either. Both checks are working; neither is
+        # for this.
+        #
+        # Nothing here can tell "a thing that goes in a tote" from "a tote".
+        # That is a job for the person reading the table, and pretending
+        # otherwise would mean tuning a threshold until one case passed.
+        self.write("canvas tote bag", [
+            self.row("canvas tote bag insert", 395, 0.052, 40.0, 0.0199,
+                     match=0.76),
+            self.row("canvas tote bag embroidered", 18149, 0.062, 23.84, 0.0145)])
+        got = self.m.best_row(json.loads(
+            (self.scans / "canvas-tote-bag.json").read_text()))
+        self.assertEqual(got["phrase"], "canvas tote bag insert")
+
+    def test_the_seller_tool_is_dropped_on_read(self):
+        self.write("sticker sheet", [
+            self.row("sticker sheet mockup", 219, 0.034, 6.0, 0.0144),
+            self.row("sticker sheet custom", 17120, 0.013, 12.0, 0.0030)])
+        got = self.m.best_row(json.loads(
+            (self.scans / "sticker-sheet.json").read_text()))
+        self.assertEqual(got["phrase"], "sticker sheet custom")
+
+    def test_the_price_outlier_is_dropped_on_read(self):
+        # 'funny coffee mug designs' at $3.90 in a $19.70 market. Its words
+        # are innocent and its match is 96% - only the price gives it away.
+        self.write("funny coffee mug", [
+            self.row("funny coffee mug designs", 4143, 0.022, 3.90, 0.0060,
+                     match=0.96),
+            self.row("funny coffee mug for men", 31941, 0.003, 19.95, 0.0006),
+            self.row("funny coffee mug coworker", 52354, 0.002, 21.98, 0.0004),
+            self.row("funny coffee mugs", 452510, 0.001, 19.99, 0.0002),
+            self.row("funny coffee cups", 280142, 0.001, 19.46, 0.0001)])
+        got = self.m.best_row(json.loads(
+            (self.scans / "funny-coffee-mug.json").read_text()))
+        self.assertEqual(got["phrase"], "funny coffee mug for men")
+
+    def test_a_scan_left_with_nothing_is_named_rather_than_vanishing(self):
+        # Silently dropping a market reads as "never scanned it", which is a
+        # different thing from "everything in it was a seller tool".
+        self.write("sticker sheet", [
+            self.row("sticker sheet mockup", 219, 0.034, 6.0, 0.0144)])
+        self.write("canvas tote bag", [
+            self.row("canvas tote bag", 359529, 0.013, 22.62, 0.0024)])
+        r = subprocess.run(
+            [sys.executable, str(SCRIPTS / "market-scan.py"), "compare"],
+            capture_output=True, text=True, env=self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Nothing usable left in: sticker sheet", r.stdout)
+        self.assertIn("Re-scan", r.stdout)
+
+    def test_the_survivor_is_what_the_table_reports(self):
+        self.write("canvas tote bag", [
+            self.row("canvas tote bag japan", 3978, 0.09, 40.0, 0.0199,
+                     match=0.24),
+            self.row("canvas tote bag", 359529, 0.013, 22.62, 0.0024)])
+        out = subprocess.run(
+            [sys.executable, str(SCRIPTS / "market-scan.py"), "compare"],
+            capture_output=True, text=True, env=self.env).stdout
+        self.assertIn("$22.62", out)
+        self.assertNotIn("$40.00", out)
+        self.assertNotIn("Dearest item: canvas tote bag ($40.00)", out)

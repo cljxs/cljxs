@@ -79,7 +79,7 @@ INTENT = [
     # ambiguous word that is not last is left alone. Missing one retailer
     # query costs nothing; killing a real idea costs the idea.
     (re.compile(r"\b(near me|amazon|walmart|hobby lobby|michaels|"
-                r"dollar tree|temu|shein|aliexpress|ebay)\b", re.I),
+                r"dollar tree|temu|shein|aliexpress|ebay|jiji|wish)\b", re.I),
      "offsite", "shopping for a shop that is not Etsy"),
     (re.compile(r"\b(target|kohls|costco|cvs|walgreens)\s*$", re.I),
      "offsite", "shopping for a shop that is not Etsy"),
