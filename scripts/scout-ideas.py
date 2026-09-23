@@ -373,6 +373,38 @@ def measured(phrase):
         f"    python3 ../../scripts/scout-ideas.py evidence")
 
 
+def drafts_lines():
+    """('drafts.txt line N', text) for each line of the plain-text file."""
+    if not DRAFTS.is_file():
+        return
+    for n, raw in enumerate(DRAFTS.read_text().splitlines(), 1):
+        yield (f"{DRAFTS.name} line {n}", raw)
+
+
+def json_lines():
+    """The same, from a hand-written proposals.json.
+
+    Turned into the same pipe-separated line the text file uses, so there is
+    ONE parser and one set of rules rather than two that drift. A row with
+    no phrase yields a line with an empty first field, which the phrase
+    check then refuses by the same path as any other.
+    """
+    if not PROPOSALS.is_file():
+        return
+    try:
+        rows = _rows_of(json.loads(PROPOSALS.read_text() or "[]"))
+    except Exception:
+        return                      # merge reports an unreadable file
+    for i, row in enumerate(rows, 1):
+        ev = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
+        phrase = str(row.get("phrase") or ev.get("phrase") or "").strip()
+        bits = [phrase, str(row.get("title") or "").strip(),
+                catalogue_word(row.get("product")),
+                str(row.get("angle") or "").strip(),
+                str(row.get("brief") or "").strip()]
+        yield (f"{PROPOSALS.name} row {i}", " | ".join(bits))
+
+
 def cmd_intake(_argv):
     """Turn Scout's plain-text drafts into proposals, in code.
 
@@ -401,20 +433,41 @@ def cmd_intake(_argv):
     the same checks as propose, and a bad line is reported with its number
     rather than silently dropped.
     """
-    if not DRAFTS.is_file():
-        print(f"no {DRAFTS.name} - nothing to take in.")
+    # EITHER FILE. Scout was told, in a rebuilt AGENTS.md that mentions
+    # drafts.txt five times, to write drafts.txt and not proposals.json. It
+    # read that and wrote proposals.json - the third time it has been told
+    # to write one file and written another.
+    #
+    # The filename was never the thing that mattered. The EVIDENCE is, and
+    # it rides along inside either file. So both are read, both are checked
+    # the same way, and the argument about which one to write is over.
+    lines = list(drafts_lines()) + list(json_lines())
+    if not lines:
+        print(f"no drafts to take in ({DRAFTS.name} and {PROPOSALS.name} "
+              f"are both empty).")
         return 0
-    lines = DRAFTS.read_text().splitlines()
+    # CLEARED NOW, BEFORE ANYTHING IS FILED. proposals.json is both a source
+    # here and where propose appends its output, and emptying it at the END
+    # wiped the rows this run had just filed into it. Everything needed is
+    # already in `lines`.
+    if PROPOSALS.is_file():
+        PROPOSALS.write_text("[]\n")
     filed, bad = 0, []
-    for n, raw in enumerate(lines, 1):
+    for where, raw in lines:
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
+        n = where
         parts = [x.strip() for x in line.split("|")]
         if len(parts) < 3:
             bad.append((n, line, "needs at least  phrase | title | product"))
             continue
         phrase, title, product = parts[0], parts[1], parts[2]
+        if not phrase or phrase == "<phrase>":
+            bad.append((n, title or line[:40],
+                        "no phrase. Every idea names a MEASURED phrase - "
+                        "see scout-ideas.py evidence"))
+            continue
         angle = parts[3] if len(parts) > 3 else ""
         brief = parts[4] if len(parts) > 4 else ""
         argv = ["--phrase", phrase, "--title", title, "--product", product]
@@ -427,18 +480,19 @@ def cmd_intake(_argv):
             code = cmd_propose(argv)
         if code == 0:
             filed += 1
-            print(f"  + line {n}: {title}")
+            print(f"  + {n}: {title}")
         else:
             bad.append((n, title, buf.getvalue().strip().splitlines()[0]
                         if buf.getvalue().strip() else f"refused (exit {code})"))
 
     for n, what, why in bad:
-        print(f"  - line {n}: {what}\n      {why}", file=sys.stderr)
+        print(f"  - {n}: {what}\n      {why}", file=sys.stderr)
     print(f"{filed} filed, {len(bad)} refused.")
-    # Emptied whatever happened: a line that was filed must not be filed
-    # twice, and a line that was refused has had its reason printed. Scout
-    # writes the file fresh each run.
-    DRAFTS.write_text("")
+    # Both emptied whatever happened: a line that was filed must not be
+    # filed twice, and a line that was refused has had its reason printed.
+    # Scout writes them fresh each run.
+    if DRAFTS.is_file():
+        DRAFTS.write_text("")
     return 0
 
 

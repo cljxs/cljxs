@@ -15,7 +15,7 @@ zero tool calls, and cost money for nothing.
 
 **Then, only if proposing ideas this run:**
 
-4. **WRITE `state/drafts.txt`** — one idea per line, nothing else:
+4. **WRITE YOUR IDEAS, ONE PER LINE**, to `state/drafts.txt`:
 
        phrase | title | product | angle
 
@@ -23,37 +23,36 @@ zero tool calls, and cost money for nothing.
 
        canvas tote bag | Botanical Map Tote | tote | hand-drawn park map
 
-   * `phrase` must be one that has been MEASURED. The list is in
-     `state/scans/` — read those files. Anything else is refused.
-   * `product` is the word Emily's catalogue uses: sticker, tote, hoodie.
-     Not a description — `all-over-print canvas tote bag` is not a product.
-   * `title` and `angle` are yours. They are the part a model is for.
-   * Blank lines and lines starting with `#` are ignored.
+   **The only field that can get you refused is the first one.** It must be
+   a phrase that has been MEASURED — the list is in `state/scans/`, and
+   nothing else is accepted. `title` and `angle` are yours; they are the
+   part a model is for.
 
-   **DO NOT run any script. DO NOT write `state/proposals.json`.** Plain
-   code reads drafts.txt after you finish, looks up the evidence, and files
-   what passes. You have tried twice to write proposals.json by hand and
-   both times it was refused, once for a stray newline and once for having
-   no evidence in it. That is not a thing to try harder at — the file is
-   not yours.
+   If you write `state/proposals.json` instead, that is read too, and every
+   row needs a `"phrase"` in it for the same reason. Nobody minds which
+   file. The measurement is the rule, not the filename.
 
    A line is refused, with the reason printed, when:
 
-   * its phrase has not been measured, or its scan is stale
+   * it has no phrase, or names one that has not been measured
+   * its scan is more than 14 days old
    * the phrase scored zero — people are already listing into it and
      nobody is saving the results
    * the phrase, title, angle or brief names somebody else's property
-   * the line has fewer than three fields
 
-   A refusal is not a failure of your run. It is the check working, and the
-   answer is a different phrase, not a different wording.
+   Refused ideas are handed back as lines with the phrase left blank, so
+   the words are never lost. A refusal is the check working; the answer is
+   a different phrase, not a different wording.
+
+   **Do not run any script.** Plain code reads whichever file you wrote,
+   looks up the evidence, and files what passes.
 
 5. **WRITE** today's report into `reports/` (the date, then `.md`)
 
-**Never write `state/ideas.json` or `state/proposals.json` yourself.** You
-cleared ideas.json on 2026-09-18 having been told to keep every entry, the
-same way you replaced `MEMORY.md` twice, and you hand-wrote proposals.json
-twice on 2026-09-23. Code owns both. `drafts.txt` is the only one you write.
+**Never write `state/ideas.json` yourself.** You cleared it on 2026-09-18
+having been told to keep every entry, the same way you replaced `MEMORY.md`
+twice. Code owns the log; you write drafts, in either file, and code files
+what has evidence behind it.
 
 **The checker reads `state/last-run.txt`, not `ideas.json`.** Proposing
 nothing is a pass; proposing nothing *and writing no summary line* is

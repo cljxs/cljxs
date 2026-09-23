@@ -10467,7 +10467,60 @@ class TheModelCannotRunTheScript(unittest.TestCase):
     def test_no_drafts_file_is_not_an_error(self):
         r = self.run_it("intake")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("nothing to take in", r.stdout)
+        self.assertIn("no drafts to take in", r.stdout)
+        self.assertIn("proposals.json", r.stdout,
+                      "both sources are named, not just one")
+
+    def test_either_file_is_read_and_only_the_phrase_decides(self):
+        # AGENTS.md mentioned drafts.txt five times. Scout read it and wrote
+        # proposals.json - the third time it has been told to write one file
+        # and written another. The filename was never the rule; the
+        # measurement is, and it rides along inside either file.
+        self.drafts.write_text(
+            "canvas tote bag | From The Text File | tote | a line\n")
+        (self.state / "proposals.json").write_text(json.dumps({"proposals": [
+            {"title": "No Phrase Here", "product": "all-over-print canvas tote bag",
+             "angle": "torn paper"},
+            {"title": "Has A Phrase", "product": "all-over-print canvas tote bag",
+             "phrase": "canvas tote bag", "angle": "meadow"}]}))
+        r = self.run_it("intake")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("2 filed, 1 refused", r.stdout)
+        self.assertIn("drafts.txt line 1", r.stdout)
+        self.assertIn("proposals.json row 2", r.stdout)
+        self.assertIn("proposals.json row 1", r.stderr)
+        self.assertIn("no phrase", r.stderr)
+        titles = {row["title"] for row in self.filed()}
+        self.assertEqual(titles, {"From The Text File", "Has A Phrase"})
+
+    def test_a_phrase_inside_an_evidence_block_counts(self):
+        (self.state / "proposals.json").write_text(json.dumps({"proposals": [
+            {"title": "From Evidence", "product": "tote",
+             "evidence": {"phrase": "canvas tote bag"}}]}))
+        r = self.run_it("intake")
+        self.assertIn("1 filed, 0 refused", r.stdout)
+
+    def test_the_filed_rows_are_not_wiped_by_the_clear(self):
+        # proposals.json is BOTH a source here and where propose appends.
+        # Emptying it at the end of intake wiped the rows just filed into
+        # it, and merge then found nothing. Found by running the chain.
+        (self.state / "proposals.json").write_text(json.dumps({"proposals": [
+            {"title": "Survives", "product": "tote",
+             "phrase": "canvas tote bag"}]}))
+        self.run_it("intake")
+        self.assertEqual([r["title"] for r in self.filed()], ["Survives"])
+        m = self.run_it("merge")
+        self.assertEqual(m.returncode, 0, m.stderr)
+        log = json.loads((self.state / "ideas.json").read_text())["ideas"]
+        self.assertEqual([i["title"] for i in log], ["Survives"])
+
+    def test_the_placeholder_phrase_is_refused(self):
+        # The recovery lines print '<phrase> | ...'. Pasted back unedited,
+        # that must not file an idea against a phrase called '<phrase>'.
+        self.drafts.write_text("<phrase> | Pasted Unedited | tote | oops\n")
+        r = self.run_it("intake")
+        self.assertIn("0 filed, 1 refused", r.stdout)
+        self.assertIn("no phrase", r.stderr)
 
     def test_intake_runs_in_the_cycle_before_the_merge(self):
         # Scout never calls either; the cycle script does, in that order, or
@@ -10480,7 +10533,7 @@ class TheModelCannotRunTheScript(unittest.TestCase):
     def test_the_header_tells_it_to_write_text_not_run_a_script(self):
         head = (ROOT / "agents" / "scout" / "_scout-agents-header.md").read_text()
         self.assertIn("state/drafts.txt", head)
-        self.assertIn("DO NOT run any script", head)
+        self.assertIn("Do not run any script", head)
         self.assertNotIn("RUN, once per new idea", head)
 
 
