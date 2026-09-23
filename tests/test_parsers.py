@@ -9841,3 +9841,89 @@ class AMugIsNotThreeNinety(unittest.TestCase):
         self.assertIn("funny coffee mug designs", said.split(
             "PRICED LIKE A DIFFERENT PRODUCT")[1])
         self.assertIn("$3.90", said)
+
+
+class WhatMustICharge(unittest.TestCase):
+    """price_for() - the other direction from floor_price().
+
+    The median says what the market asks. It does not say what you need. A
+    canvas tote whose blank costs $12.60 and posts for $6.00 clears $1.42 at
+    the market's $22.62 and $8.09 at $29.99, and which of those is the
+    business is a decision rather than a measurement.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("emily_printify", SCRIPTS / "emily-printify.py")
+
+    FEES = {"transaction_pct": 0.065, "processing_pct": 0.03,
+            "processing_flat": 0.25, "listing_fee": 0.20,
+            "offsite_ads_pct": 0.0, "ship_cost": 6.00, "ship_charged": 0.0}
+
+    def test_it_is_the_inverse_of_net_of(self):
+        for target in (0.0, 1.42, 8.09, 25.0):
+            with self.subTest(target=target):
+                price = self.m.price_for(target, 12.60, self.FEES, 6.00, 0.0)
+                self.assertAlmostEqual(
+                    self.m.net_of(price, 12.60, self.FEES, 6.00, 0.0),
+                    target, places=9)
+
+    def test_a_target_of_zero_is_the_break_even_price(self):
+        self.assertAlmostEqual(
+            self.m.price_for(0.0, 12.60, self.FEES, 6.00, 0.0),
+            self.m.floor_price(12.60, self.FEES, 6.00, 0.0), places=9)
+
+    def test_the_real_tote_numbers(self):
+        # $12.60 blank, $6.00 postage, free shipping to the buyer.
+        # 22.62 - 9.5% - 0.45 flat - 12.60 blank - 6.00 postage
+        self.assertAlmostEqual(
+            self.m.net_of(22.62, 12.60, self.FEES, 6.00, 0.0), 1.4211, places=4)
+        self.assertAlmostEqual(
+            self.m.net_of(29.99, 12.60, self.FEES, 6.00, 0.0), 8.09095, places=4)
+
+    def test_a_dearer_blank_needs_a_dearer_price(self):
+        cheap = self.m.price_for(8.0, 12.60, self.FEES, 6.00, 0.0)
+        dear = self.m.price_for(8.0, 19.26, self.FEES, 6.00, 0.0)
+        self.assertGreater(dear, cheap)
+        self.assertAlmostEqual(dear - cheap, (19.26 - 12.60) / 0.905, places=3)
+
+    def test_charging_postage_lowers_the_price_needed(self):
+        free = self.m.price_for(8.0, 12.60, self.FEES, 6.00, 0.0)
+        charged = self.m.price_for(8.0, 12.60, self.FEES, 6.00, 6.00)
+        self.assertAlmostEqual(free - charged, 6.00, places=2)
+
+    def test_a_fee_table_that_takes_everything_has_no_answer(self):
+        self.assertIsNone(self.m.price_for(
+            8.0, 1.0, dict(self.FEES, transaction_pct=0.99, processing_pct=0.02)))
+
+    def test_the_target_reaches_the_output_with_the_gap_to_the_market(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        state = root / "agents" / "emily" / "state"
+        state.mkdir(parents=True)
+        (root / "agents" / "scout" / "state" / "scans").mkdir(parents=True)
+        (state / "printify-catalog.json").write_text(json.dumps({
+            "_fees": {"ship_cost": 6.00},
+            "tote": {"variant_ids": [1], "variant_titles": ["one size"],
+                     "prices": {"1": 2262}, "costs": {"1": 12.60}}}))
+        (root / "agents" / "scout" / "state" / "scans" / "s.json").write_text(
+            json.dumps({"seed": "canvas tote bag",
+                        "scanned_at": datetime.now(timezone.utc)
+                        .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "rows": [{"phrase": "canvas tote bag", "supply": 359529,
+                                  "heat": 0.013, "pull": 0.0249, "price": 22.62,
+                                  "match": 1.0, "returned": 25, "heat_n": 25,
+                                  "pull_n": 23, "score": 0.0024}],
+                        "excluded": []}))
+        r = subprocess.run(
+            [sys.executable, str(SCRIPTS / "emily-printify.py"), "market-price",
+             "--product", "tote", "--market", "canvas tote bag",
+             "--margin", "8.00"],
+            capture_output=True, text=True,
+            env=dict(os.environ, ECOSYSTEM_ROOT=str(root)))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("TO KEEP $8.00 A SALE", r.stdout)
+        # The column is padded, so match the number rather than "$29.89".
+        self.assertRegex(r.stdout, r"\$\s*29\.89")
+        self.assertIn("vs the market's $22.62", r.stdout)
+        self.assertIn("positioning", r.stdout)

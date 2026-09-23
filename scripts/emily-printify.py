@@ -691,6 +691,24 @@ def net_of(price, cost, fees, ship_cost=0.0, ship_charged=0.0):
             - fees["listing_fee"] - cost - ship_cost)
 
 
+def price_for(target, cost, fees, ship_cost=0.0, ship_charged=0.0):
+    """The item price that leaves exactly `target` in your account.
+
+    The other direction from floor_price(), and the one that answers the
+    question actually being asked at the counter: not "does this lose money"
+    but "what must I charge to make eight dollars". Solving net_of(p) = t:
+
+        r = (t + cost + ship_cost + flat + listing) / (1 - take)
+        p = r - ship_charged
+    """
+    take = fees["transaction_pct"] + fees["processing_pct"] + fees["offsite_ads_pct"]
+    if take >= 1:
+        return None
+    revenue = ((target + cost + ship_cost + fees["processing_flat"]
+                + fees["listing_fee"]) / (1 - take))
+    return revenue - ship_charged
+
+
 def floor_price(cost, fees, ship_cost=0.0, ship_charged=0.0):
     """The item price at which the sale breaks exactly even.
 
@@ -1008,6 +1026,27 @@ def cmd_market_price(a):
               f"    emily-printify.py prices --product {a.product} --by-size ...\n"
               f"  or accept that this market cannot carry this product at this cost.")
         return 2
+
+    # WHAT MUST I CHARGE TO MAKE X. The median tells you what the market
+    # asks; it does not tell you what you need. A tote whose blank costs
+    # $12.60 and posts for $6.00 clears $1.42 at the market's $22.62 and
+    # $8.09 at $29.99 - and which of those is the business is a decision, not
+    # a measurement. So the tool answers both directions.
+    if a.margin is not None and costs:
+        print(f"\n  TO KEEP ${a.margin:.2f} A SALE you would have to charge:")
+        for i, vid in enumerate(ids):
+            cost = costs.get(str(vid))
+            if cost is None:
+                continue
+            t = (titles[i] if i < len(titles) else f"variant {vid}")[:26]
+            want = price_for(a.margin, cost, fees, fees["ship_cost"],
+                             fees["ship_charged"])
+            gap = (want - median) / median * 100 if median else 0
+            note = (f"{gap:+.0f}% vs the market's ${median:.2f}")
+            print(f"      {t:<28}${want:>7.2f}   {note}")
+        print(f"\n  Above the median is not automatically wrong - half the "
+              f"market already\n  charges more - but it is a positioning "
+              f"decision and nothing here can\n  make it for you.")
 
     if not a.apply:
         print(f"\nNothing written. Add --apply to set these:\n"
@@ -1558,6 +1597,8 @@ def main():
                    help="a phrase market-scan.py has measured")
     p.add_argument("--apply", action="store_true",
                    help="actually set them; without this it only shows")
+    p.add_argument("--margin", type=float, default=None,
+                   help="also show what you must charge to keep this much")
     p.set_defaults(fn=cmd_market_price)
 
     p = sub.add_parser("fees", help="see or set the fee and shipping table")
