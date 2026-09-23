@@ -152,14 +152,63 @@ def cmd_blueprints(a):
               f"  emily-printify.py providers {nxt}")
 
 
+# The product words this shop uses. Used only to SUGGEST a name for a
+# blueprint - the person can call it whatever they like, and `pick` takes
+# any word.
+#
+# The word boundary in the search is what stops 'Sweatshirt' being read as
+# 'shirt', not this ordering - an earlier comment here claimed otherwise and
+# was wrong. The order decides which word wins when a title contains SEVERAL
+# of them: 'Crewneck Sweatshirt' answers to sweatshirt because the broader
+# category is the better entry name, and a blueprint saying only 'Crewneck'
+# still finds crewneck.
+PRODUCT_WORDS = ("sweatshirt", "crewneck", "pullover", "hoodie", "t-shirt",
+                 "tshirt", "shirt", "tee", "tote", "sticker", "decal", "mug",
+                 "tumbler", "poster", "print", "blanket", "pillow", "beanie",
+                 "hat", "cap", "magnet", "pin", "apron", "case", "bag")
+
+
+def product_word(title):
+    """A sensible product name for a blueprint, from its own title.
+
+    cmd_providers used to print '--product sticker' whatever blueprint you
+    asked about. Ask it about blueprint 1389, Tote Bag (AOP), and it tells
+    you to save a tote under your STICKER entry - a command that runs, does
+    the wrong thing, and is wrong nowhere you would look.
+
+    A guess from the title is not authoritative and does not need to be: the
+    title is printed beside it, and `pick` takes any word.
+    """
+    low = re.sub(r"\(.*?\)", " ", str(title or "")).lower()
+    for w in PRODUCT_WORDS:
+        if re.search(rf"\b{re.escape(w)}s?\b", low):
+            return w
+    return None
+
+
 def cmd_providers(a):
     ps = call(f"/catalog/blueprints/{a.blueprint_id}/print_providers.json")
     for p in ps:
         print(f"  {p['id']:>6}  {p['title']}")
-    if ps:
-        print(f"\nPick one, then save the pair (once, ever):\n"
-              f"  emily-printify.py pick --product sticker "
+    if not ps:
+        return 0
+    try:
+        title = call(f"/catalog/blueprints/{a.blueprint_id}.json").get("title") or ""
+    except Exception:
+        title = ""
+    word = product_word(title)
+    print(f"\nBlueprint {a.blueprint_id} is {title!r}." if title else "")
+    if word:
+        print(f"\nPick a provider, then save the pair (once, ever):\n"
+              f"  emily-printify.py pick --product {word} "
               f"--blueprint {a.blueprint_id} --provider {ps[0]['id']}")
+    else:
+        print(f"\nPick a provider, then save the pair with a name of your "
+              f"own for this\nproduct type - it is the word Emily will use "
+              f"for it:\n"
+              f"  emily-printify.py pick --product NAME-IT "
+              f"--blueprint {a.blueprint_id} --provider {ps[0]['id']}")
+    return 0
 
 
 def cmd_variants(a):

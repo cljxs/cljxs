@@ -10048,3 +10048,82 @@ class ASavedScanIsFrozenAtTheRulesThatWroteIt(unittest.TestCase):
         self.assertIn("$22.62", out)
         self.assertNotIn("$40.00", out)
         self.assertNotIn("Dearest item: canvas tote bag ($40.00)", out)
+
+
+class AToteIsNotASticker(unittest.TestCase):
+    """cmd_providers printed '--product sticker' whatever blueprint you
+    asked about:
+
+        emily-printify.py providers 1389        (Tote Bag (AOP))
+        -> emily-printify.py pick --product sticker --blueprint 1389 ...
+
+    A command that runs, does the wrong thing, and is wrong nowhere you
+    would look: the tote gets saved under the sticker entry, and every
+    later `--product sticker` resolves to a bag.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("emily_printify", SCRIPTS / "emily-printify.py")
+
+    def test_the_blueprint_that_found_this(self):
+        self.assertEqual(self.m.product_word("Tote Bag (AOP)"), "tote")
+
+    def test_the_real_blueprint_titles(self):
+        for title, want in [
+                ("Kiss-Cut Stickers", "sticker"),
+                ("Sticker Sheets", "sticker"),
+                ("Cotton Tote Bag", "tote"),
+                ("Woven Tote", "tote"),
+                ("Adjustable Tote Bag (AOP)", "tote"),
+                ("Square Vinyl Stickers", "sticker"),
+                ("Holographic Die-cut Stickers", "sticker")]:
+            with self.subTest(title=title):
+                self.assertEqual(self.m.product_word(title), want)
+
+    def test_sweatshirt_is_not_read_as_shirt(self):
+        # Longest-first, or 'Unisex Hooded Sweatshirt' registers as a shirt
+        # and resolve() then has two entries answering to the same word.
+        self.assertEqual(self.m.product_word("Unisex Heavy Blend Hooded Sweatshirt"),
+                         "sweatshirt")
+        # 'Crewneck Sweatshirt' answers to sweatshirt, and should: a
+        # crewneck IS one, and the broader word is the better entry name.
+        # The narrower words are there for a blueprint that says only
+        # 'Crewneck'.
+        self.assertEqual(self.m.product_word("Crewneck Sweatshirt"), "sweatshirt")
+        self.assertEqual(self.m.product_word("Heavyweight Crewneck"), "crewneck")
+        self.assertEqual(self.m.product_word("Unisex Jersey Short Sleeve Tee"), "tee")
+
+    def test_the_order_decides_between_two_words_in_one_title(self):
+        # Not the boundary - both are whole words in this title. The list
+        # order is what makes the broader category win.
+        self.assertEqual(self.m.PRODUCT_WORDS.index("sweatshirt"),
+                         self.m.PRODUCT_WORDS.index("crewneck") - 1)
+        self.assertEqual(self.m.product_word("Crewneck Sweatshirt"), "sweatshirt")
+
+    def test_a_word_inside_a_longer_word_is_not_a_match(self):
+        # 'Magnetic' is not a magnet and 'Pillowcase' is not a pillow. A
+        # substring search finds both and names the blueprint wrongly.
+        self.assertIsNone(self.m.product_word("Magnetic Bottle Opener"))
+        self.assertIsNone(self.m.product_word("Teether Ring"))
+
+    def test_the_parenthetical_is_not_searched(self):
+        # '(AOP)' and '(DTG)' are process notes, not products. A blueprint
+        # called 'Poster (in a Tote-style tube)' must not become a tote.
+        self.assertEqual(self.m.product_word("Matte Poster (Tote-style tube)"),
+                         "poster")
+
+    def test_an_unknown_product_gets_no_guess(self):
+        # Better to ask than to invent a name that quietly collides with an
+        # entry that already exists.
+        self.assertIsNone(self.m.product_word("Something Unheard Of"))
+        self.assertIsNone(self.m.product_word(""))
+        self.assertIsNone(self.m.product_word(None))
+
+    def test_the_suggestion_no_longer_hardcodes_a_product(self):
+        code = "\n".join(
+            l for l in (SCRIPTS / "emily-printify.py").read_text().splitlines()
+            if not l.lstrip().startswith("#"))
+        providers = code.split("def cmd_providers")[1].split("\ndef ")[0]
+        self.assertNotIn("--product sticker", providers)
+        self.assertIn("product_word", providers)
