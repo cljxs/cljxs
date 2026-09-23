@@ -211,6 +211,44 @@
 
   #boot{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:30;
     background:#121a14;color:var(--mute);font-size:13px;text-align:center;padding:24px}
+
+  /* ---- Scout's verdict deck ----------------------------------------
+     A dense list you scan, not a form you read. The point is that a
+     verdict takes one glance: the numbers are already on the row, and
+     opening one shows where they came from rather than more adjectives. */
+  .vdeck{--amber:#f0b429;--glow:rgba(240,180,41,.55)}
+  .vtally{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+  .vt{flex:1;min-width:84px;border:1px solid var(--line);border-radius:9px;
+      padding:8px 10px;background:rgba(255,255,255,.02)}
+  .vt b{display:block;font-size:22px;line-height:1.1;font-variant-numeric:tabular-nums}
+  .vt span{font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute)}
+  .vt.lead{border-color:rgba(240,180,41,.5);box-shadow:0 0 0 1px rgba(240,180,41,.12) inset}
+  .vt.lead b{color:var(--amber)}
+  .vrow{border:1px solid var(--line);border-left:3px solid rgba(240,180,41,.55);
+        border-radius:8px;margin-bottom:7px;background:rgba(255,255,255,.015);
+        cursor:pointer;transition:border-color .12s,background .12s}
+  .vrow:hover{background:rgba(240,180,41,.05)}
+  .vrow.open{border-color:rgba(240,180,41,.45);background:rgba(240,180,41,.045)}
+  .vhead{display:flex;align-items:center;gap:9px;padding:9px 11px}
+  .vtag{font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;padding:2px 6px;
+        border:1px solid rgba(240,180,41,.5);border-radius:4px;color:var(--amber);
+        white-space:nowrap}
+  .vslug{flex:1;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+         overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .vnum{font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .vbody{padding:0 11px 11px}
+  .vgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:7px;
+         margin-bottom:10px}
+  .vcell{border:1px solid var(--line);border-radius:7px;padding:8px 9px;
+         background:rgba(255,255,255,.02)}
+  .vcell h4{margin:0 0 3px;font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;
+            color:var(--mute);font-weight:600}
+  .vcell .big{font-size:15px;font-variant-numeric:tabular-nums;line-height:1.25}
+  .vcell .sm{font-size:11px;color:var(--mute);margin-top:3px;line-height:1.4}
+  .vcell.none{border-style:dashed}
+  .vcell.none .big{color:var(--down);font-size:12.5px}
+  .vfoot{font-size:10px;color:var(--mute);letter-spacing:.03em;margin-top:10px;
+         padding-top:8px;border-top:1px solid var(--line);line-height:1.5}
 </style>
 </head>
 <body>
@@ -1315,28 +1353,164 @@ async function actOnIdea(id, verb) {
   }
 }
 
+let openIdea = null, IDEAS = [];
+
+function ideaSlug(i){
+  const ev = i.evidence || {};
+  const when = String(ev.measured_at || i.proposed_at || '').slice(0, 10);
+  const words = String(i.title || 'untitled').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return (when ? when + '-' : '') + words;
+}
+
+// CONFIDENCE IN THE MEASUREMENT, NOT IN THE SALE.
+//
+// The interface this copies shows "8/10" next to an invented revenue range,
+// and a confidence score over a made-up number is decoration. This one is
+// computed from three things that are facts about the data: how many of the
+// listings Etsy returned actually contained the phrase, how many rows the
+// medians were taken from, and how long ago it was measured. Every point is
+// listed underneath, so the number can be checked rather than trusted.
+function confidence(ev){
+  if(!ev || !ev.phrase) return null;
+  const parts = [], m = ev.match, n = ev.heat_n, age = scanAge(ev.measured_at);
+  let score = 0;
+  if(typeof m === 'number'){
+    const pts = m >= 0.9 ? 4 : m >= 0.7 ? 3 : m >= 0.5 ? 2 : 0;
+    score += pts;
+    parts.push(`${Math.round(m * 100)}% of listings matched the phrase (+${pts})`);
+  }
+  if(typeof n === 'number'){
+    const pts = n >= 20 ? 3 : n >= 10 ? 2 : n >= 5 ? 1 : 0;
+    score += pts;
+    parts.push(`medians from ${n} listings (+${pts})`);
+  }
+  if(age !== null){
+    const pts = age <= 3 ? 3 : age <= 7 ? 2 : age <= 14 ? 1 : 0;
+    score += pts;
+    parts.push(`measured ${age === 0 ? 'today' : age + ' day' + (age === 1 ? '' : 's') + ' ago'} (+${pts})`);
+  }
+  return { score: Math.min(score, 10), parts };
+}
+
+function scanAge(stamp){
+  const t = Date.parse(String(stamp || ''));
+  if(!isFinite(t)) return null;
+  return Math.max(0, Math.floor((Date.now() - t) / 86400000));
+}
+
+// Named for this panel, not generically: `money` already exists above and
+// the whole file is one scope, so a second one silently shadows or throws.
+const evPrice = v => typeof v === 'number' ? '$' + v.toFixed(2) : null;
+const evCount = v => typeof v === 'number' ? v.toLocaleString() : null;
+
+function cell(title, big, small, missing){
+  if(big === null || big === undefined)
+    return `<div class="vcell none"><h4>${esc(title)}</h4>
+      <div class="big">not measured</div>
+      <div class="sm">${esc(missing || 'nothing was guessed in its place.')}</div></div>`;
+  return `<div class="vcell"><h4>${esc(title)}</h4><div class="big">${big}</div>`
+       + (small ? `<div class="sm">${small}</div>` : '') + `</div>`;
+}
+
+function evidencePanels(i){
+  const ev = i.evidence || {};
+  if(!ev.phrase){
+    return `<div class="vcell none" style="margin-bottom:10px">
+      <h4>Evidence</h4><div class="big">none</div>
+      <div class="sm">Proposed before measurements were required, or by hand.
+      Nothing here has been checked against Etsy — approving it is a guess,
+      the same as every idea was before.</div></div>`;
+  }
+  const c = confidence(ev), age = scanAge(ev.measured_at);
+  const crowded = typeof ev.supply === 'number' && ev.supply >= 50000;
+  return `<div class="vgrid">
+    ${cell('Competition', evCount(ev.supply) ? evCount(ev.supply) + ' <span class="sm" style="display:inline">listings</span>' : null,
+           crowded ? 'Crowded. The design is first seen as a thumbnail in a grid, so it was briefed for bold shapes and high contrast.'
+                   : 'Narrow enough to be specific rather than broadly safe.')}
+    ${cell('Demand', typeof ev.favs_per_day === 'number' ? ev.favs_per_day.toFixed(3) + ' <span class="sm" style="display:inline">favs/day</span>' : null,
+           typeof ev.favs_per_view === 'number'
+             ? (ev.favs_per_view * 100).toFixed(1) + '% of people who look, save one'
+             : 'favourites per view was not readable on these listings.')}
+    ${cell('Price band', evPrice(ev.typical_price),
+           'Median asking price in this market. An anchor, not a margin.')}
+    ${cell('Executor', 'Emily', esc(i.product || 'product') + ' &middot; drafts only, never publishes')}
+    ${cell('Confidence', c ? c.score + '<span class="sm" style="display:inline">/10</span>' : null,
+           c ? c.parts.map(esc).join('<br>') : null,
+           'in the measurement, not in the sale.')}
+    ${cell('Measured', age === null ? null : (age === 0 ? 'today' : age + ' day' + (age === 1 ? '' : 's') + ' ago'),
+           'from the scan of ' + esc(ev.from_scan || 'an unnamed seed'))}
+  </div>
+  <div class="vcell"><h4>Phrase this is aimed at</h4>
+    <div class="big" style="font-family:ui-monospace,monospace;font-size:13px">${esc(ev.phrase)}</div>
+    ${(ev.tags || []).length ? `<div class="sm">Sellers there call it: ${esc((ev.tags || []).slice(0, 8).join(', '))}</div>` : ''}
+    ${ev.ip_flag ? `<div class="sm" style="color:#f59e0b">IP FLAG &mdash; ${esc(ev.ip_flag)}. An ordinary word that is also a property. Your call.</div>` : ''}
+  </div>`;
+}
+
+function toggleIdea(id){
+  openIdea = (openIdea === id) ? null : id;
+  drawIdeas();
+}
+
+function drawIdeas(){
+  const host = document.getElementById('scoutIdeas');
+  if(!host) return;
+  const pending = IDEAS.filter(i => (i.status || 'pending') === 'pending');
+  const tally = {
+    pending: pending.length,
+    approved: IDEAS.filter(i => i.status === 'approved').length,
+    rejected: IDEAS.filter(i => i.status === 'rejected').length,
+  };
+  const head = `<div class="vtally">
+    <div class="vt lead"><b>${tally.pending}</b><span>Pending verdict</span></div>
+    <div class="vt"><b>${tally.approved}</b><span>Approved</span></div>
+    <div class="vt"><b>${tally.rejected}</b><span>Rejected</span></div>
+  </div>`;
+
+  if(!pending.length){
+    host.innerHTML = head + `<div class="muted">Nothing waiting on you. Scout proposes
+      again on its next run, and only from a phrase that has been measured.</div>`;
+    return;
+  }
+
+  host.innerHTML = head + pending.map(i => {
+    const ev = i.evidence || {};
+    const open = openIdea === i.id;
+    const gist = ev.phrase
+      ? `${evCount(ev.supply) || '?'} listings &middot; ${typeof ev.favs_per_day === 'number' ? ev.favs_per_day.toFixed(3) : '?'}/day`
+      : 'no evidence';
+    return `<div class="vrow${open ? ' open' : ''}">
+      <div class="vhead" onclick="toggleIdea(${Number(i.id)})">
+        <span class="vtag">proposed</span>
+        <span class="vslug">${esc(ideaSlug(i))}</span>
+        <span class="vnum">${gist}</span>
+      </div>
+      ${open ? `<div class="vbody">
+        ${i.angle ? `<div class="d" style="margin-bottom:8px">${esc(i.angle)}</div>` : ''}
+        ${i.brief ? `<div class="d" style="margin-bottom:10px">${esc(i.brief)}</div>` : ''}
+        ${evidencePanels(i)}
+        <div class="acts">
+          <button class="no"  onclick="event.stopPropagation();actOnIdea(${Number(i.id)},'reject')">✗ Reject</button>
+          <button class="yes" onclick="event.stopPropagation();actOnIdea(${Number(i.id)},'approve')">✓ Approve</button>
+        </div>
+      </div>` : ''}
+    </div>`;
+  }).join('') + `<div class="vfoot">
+    Every verdict is logged to Emily's lessons, and a rejection tells Scout why.<br>
+    None of the numbers above was typed by a model &mdash; each was copied from a
+    market scan, and an idea with no measurement behind it cannot be filed at all.
+  </div>`;
+}
+
 async function loadScoutIdeas() {
   const host = document.getElementById('scoutIdeas');
   if (!host) return;
   try {
     const r = await fetch('/api/scout/ideas', { cache: 'no-store' });
     const d = await r.json();
-    const pending = (d.ideas || []).filter(i => i.status === 'pending');
-    if (!pending.length) {
-      host.innerHTML = '<div class="muted">No ideas waiting. Scout proposes again tomorrow morning.</div>';
-      return;
-    }
-    host.innerHTML = `<div class="muted" style="margin-bottom:8px">${pending.length} waiting for you</div>` +
-      pending.map(i => `<div class="idea">
-        <div><span class="t">${esc(i.title)}</span><span class="p">${esc(i.product || '')}</span></div>
-        ${i.angle ? `<div class="d">${esc(i.angle)}</div>` : ''}
-        ${i.brief ? `<div class="d">${esc(i.brief)}</div>` : ''}
-        ${i.why_now ? `<div class="w">${esc(i.why_now)}</div>` : ''}
-        <div class="acts">
-          <button class="yes" onclick="actOnIdea(${Number(i.id)},'approve')">\u2713 Approve</button>
-          <button class="no"  onclick="actOnIdea(${Number(i.id)},'reject')">\u2717 Reject</button>
-        </div>
-      </div>`).join('');
+    IDEAS = d.ideas || [];
+    drawIdeas();
   } catch {
     host.innerHTML = '<div class="muted">Could not load ideas.</div>';
   }
