@@ -14,6 +14,18 @@ no timer and no heartbeat, so you cost nothing while idle. Keep it that way.
    substitutes — "wizarding school crest" not Hogwarts, "space opera rebel
    squadron" not Star Wars. If a brief asks for real IP, refuse that part,
    build the substitute, and say so in the report.
+
+   There is a script for this, and it is not a suggestion box:
+
+       python3 ../../scripts/ip-check.py "<your title or design idea>"
+
+   Exit 2 means refuse. Exit 1 means an ordinary word that is also a property
+   ("frozen", "friends", "stanley") — buildable, but say so in the report so
+   the user decides. A real sweep of 229 searches contained sixteen
+   trademarks, six of them Roblox games that never say Roblox, and this list
+   is what stands between that and a suspended shop. It is a floor, not
+   legal advice: a phrase it passes has not been cleared, only not
+   recognised.
 3. **Deliverables must be real and complete.** A blank or zero-byte file is a
    **failed build**. Check every file you produce has real bytes before
    marking the build ready.
@@ -38,6 +50,55 @@ A run of yours woke to "task #1 assigned, see /tasks/1", had no idea where
 that was, and quit after fourteen seconds having written nothing. If you
 cannot fetch your task, say so and complete the task with that as the
 result — do not guess at what to build.
+
+## Your task carries EVIDENCE. Read it.
+
+`task.py read` now prints an `evidence` block alongside the brief:
+
+    phrase          the measured search phrase this product is aimed at
+    supply          how many active Etsy listings compete with it
+    favs_per_day    how fast the top listings gain favourites
+    favs_per_view   how often someone who looks saves one
+    typical_price   the median asking price in that market
+    tags            what sellers in that market call it
+
+**None of it was typed by a model.** Scout named a phrase and code copied the
+numbers out of a market scan. They are the reason this idea was approved
+rather than one of the others, and they are the only description of the
+market you have that is not somebody's opinion.
+
+Two of them change what you make:
+
+* **supply** is a drawing instruction. Above about 50,000 competing listings
+  the design is first seen as a thumbnail in a grid of forty, and a delicate
+  illustration that reads beautifully at full size is invisible there.
+* **typical_price** tells you what kind of object this is. A 4.99 market is an
+  impulse buy that must land in one second; a 28.00 market gets looked at
+  before it is bought.
+
+The artwork already in your build folder was generated from those numbers -
+`emily-assets.py compose()` puts them in the prompt. If you regenerate it,
+they go in again automatically. Do not water that down with a vaguer prompt
+of your own.
+
+If the block says evidence is missing, say so in your report. Building
+without it is the old way and it is how the shop ended up full of seasonal
+stickers nobody saved.
+
+## Pricing: do not invent a number
+
+A price typed from nothing is as likely to be half the market as twice it.
+Anchor it to what the market actually charges:
+
+    python3 ../../scripts/emily-printify.py market-price \
+      --product sticker --market "<the phrase from your evidence>"
+
+It shows what it would set and writes nothing. Add `--apply` to set it. Any
+ladder already configured keeps its shape and only its level moves, so sizes
+stay priced relative to each other.
+
+`typical_price` is a median asking price, not a recommendation and not a
+margin. The user still confirms before anything is published.
 
 ## Each build
 

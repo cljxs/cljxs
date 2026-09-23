@@ -15,6 +15,7 @@ Standard library only.
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -59,7 +60,16 @@ def drafts_today():
     return sum(1 for t in rows if (t.get("created_at") or "").startswith(today))
 
 
-def generate_artwork(slug, idea, brief, product):
+def _assets():
+    """emily-assets.py as a module - it owns the prompt and the art direction."""
+    spec = importlib.util.spec_from_file_location(
+        "emily_assets", Path(__file__).resolve().parent / "emily-assets.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def generate_artwork(slug, idea, brief, product, evidence=None):
     """Make the artwork here, in plain code, before Emily ever wakes.
 
     Emily was told to run emily-assets.py. She wrote 49-byte text files named
@@ -78,8 +88,15 @@ def generate_artwork(slug, idea, brief, product):
     out = here.parent / "agents" / "emily" / "builds" / slug / "design.png"
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    prompt = (f"{idea}. {brief}" if brief else idea).strip()
-    prompt = f"{prompt} Flat vector illustration for a {product}, clean edges, no text."
+    # THE prompt is composed in emily-assets.py, imported rather than built
+    # again here. This line used to append its own art direction - 'Flat
+    # vector illustration ..., clean edges, no text' - alongside
+    # PRINT_DIRECTION, which says the same thing differently. They had
+    # already drifted on whether text was allowed.
+    ea = _assets()
+    prompt = ea.compose(
+        idea, brief, product, evidence,
+        ea.prior_designs(out.parent.parent, (evidence or {}).get("phrase")))
 
     try:
         res = subprocess.run(
@@ -106,6 +123,9 @@ def main():
     ap.add_argument("idea", help="the approved idea, in a few words")
     ap.add_argument("--brief", default="", help="what the design should feel like")
     ap.add_argument("--product", default="poster", help="poster, tee, mug, tote ...")
+    ap.add_argument("--evidence", default="",
+                    help="JSON from the approved idea: the measured phrase, "
+                         "supply, price band and the market's own tags")
     ap.add_argument("--priority", type=int, default=0)
     ap.add_argument("--cost-estimate", type=float, default=0.25)
     ap.add_argument("--force", action="store_true",
@@ -121,10 +141,26 @@ def main():
 
     slug = slugify(a.idea)
 
+    evidence = None
+    if a.evidence.strip():
+        try:
+            evidence = json.loads(a.evidence)
+        except Exception as exc:
+            # Not fatal: a build with no evidence is the old behaviour, and
+            # losing the build over a bad argument would be worse. But it is
+            # said out loud, because silently unmeasured is how this started.
+            print(f"  --evidence did not parse ({exc}); building WITHOUT "
+                  f"market direction.", file=sys.stderr)
+    if not isinstance(evidence, dict) or not evidence.get("phrase"):
+        evidence = None
+        print("  no market evidence with this build - the art prompt will "
+              "carry no\n  competition, price or tag direction.")
+
     # Do the art before queueing, so the task Emily receives already has real
     # pixels sitting in its build folder.
     print(f"generating artwork for '{slug}' ...")
-    art_ok, art_msg = generate_artwork(slug, a.idea, a.brief, a.product)
+    art_ok, art_msg = generate_artwork(slug, a.idea, a.brief, a.product,
+                                       evidence)
     print(("  ok: " if art_ok else "  FAILED: ") + art_msg)
     if not art_ok:
         print("  queueing anyway - Emily can run emily-assets.py herself, and "
@@ -145,6 +181,7 @@ def main():
             "build_dir": f"builds/{slug}",
             "artwork": "already generated at builds/%s/design.png - do NOT create it" % slug
                        if art_ok else "NOT generated - you must run emily-assets.py",
+            "evidence": evidence,
             "approved_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         },
         "notes": "DRAFT ONLY - Emily must not publish.",

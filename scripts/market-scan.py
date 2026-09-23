@@ -155,6 +155,22 @@ def title_match(rows, phrase):
     return hits / len(rows)
 
 
+def common_tags(rows, keep=12):
+    """What this market calls itself, in its sellers' own words.
+
+    The only description of a market's look that is not somebody's opinion.
+    Emily's art prompt says 'autumn vibes' because 25 listings that are
+    actually selling say it, not because a model thought it sounded nice.
+    """
+    counts = {}
+    for r in rows:
+        for t in (r.get("tags") or []):
+            if isinstance(t, str) and t.strip():
+                key = t.strip().lower()
+                counts[key] = counts.get(key, 0) + 1
+    return [t for t, _n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:keep]]
+
+
 def median(values):
     vals = [v for v in values if v is not None]
     return statistics.median(vals) if vals else None
@@ -194,6 +210,7 @@ def measure(data, now=None, phrase=""):
         "price": price, "price_n": price_n,
         "age": age,
         "match": title_match(rows, phrase),
+        "tags": common_tags(rows),
         "dropped": [],
     }
     checks = [("supply", "count"), ("heat", "original_creation_timestamp "
@@ -464,7 +481,8 @@ def save_scan(seed, ranked, loose):
         "rows": [{"phrase": c, "supply": m["supply"], "heat": m["heat"],
                   "pull": m["pull"], "price": m["price"], "match": m["match"],
                   "returned": m["returned"], "heat_n": m["heat_n"],
-                  "pull_n": m["pull_n"], "score": opportunity(m)}
+                  "pull_n": m["pull_n"], "score": opportunity(m),
+                  "tags": m.get("tags") or []}
                  for c, m in ranked],
         "excluded": [{"phrase": c, "match": m["match"], "supply": m["supply"],
                       "why": "fewer than half the listings Etsy returned "

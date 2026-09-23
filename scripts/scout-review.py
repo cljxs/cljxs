@@ -135,6 +135,12 @@ def cmd_approve(a, d):
     cmd = [sys.executable, str(NEW_BUILD), idea["title"],
            "--brief", idea.get("brief") or idea.get("angle", ""),
            "--product", idea.get("product", "poster")]
+    # THE EVIDENCE GOES WITH IT. Approval used to pass title, brief and
+    # product and stop there, so Emily never learned the phrase she was
+    # building for, what the market charges, or how many listings she was
+    # competing with. Everything measured died at this line.
+    if isinstance(idea.get("evidence"), dict) and idea["evidence"].get("phrase"):
+        cmd += ["--evidence", json.dumps(idea["evidence"])]
     if a.force:
         cmd.append("--force")
     print("queueing to emily:", " ".join(cmd[2:5]), "...")

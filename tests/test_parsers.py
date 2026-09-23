@@ -22,6 +22,7 @@ import os
 import random
 import re
 import shutil
+import statistics
 import struct
 import subprocess
 import sys
@@ -8623,3 +8624,357 @@ class TheApprovalScreenShowsWhatItIsBasedOn(unittest.TestCase):
         said = self.listed()
         self.assertIn("IP FLAG", said)
         self.assertIn("Your call", said)
+
+
+class TheArtDirectionLivesInOnePlace(unittest.TestCase):
+    """emily-assets.py compose().
+
+    The prompt was built in two places: emily-new-build.py appended 'Flat
+    vector illustration for a <product>, clean edges, no text' and
+    emily-assets.py appended PRINT_DIRECTION, which says the same thing in
+    different words. They had already drifted on whether text was allowed.
+
+    And neither carried a single thing that had been measured, so a design
+    for a market of 436,862 listings was briefed exactly like one for 900.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("emily_assets", SCRIPTS / "emily-assets.py")
+
+    BIG = {"phrase": "water bottle stickers", "supply": 436862,
+           "typical_price": 4.99, "tags": ["vinyl sticker", "hydroflask"]}
+    SMALL = {"phrase": "pottery poster", "supply": 900,
+             "typical_price": 28.0, "tags": []}
+
+    def test_a_crowded_market_asks_for_a_design_that_survives_a_thumbnail(self):
+        # 436,862 competing listings is not trivia; it means the work is
+        # first seen at about 170 pixels in a grid of forty.
+        said = self.m.compose("X", "", "sticker", self.BIG)
+        self.assertIn("436,862", said)
+        self.assertIn("thumbnail", said)
+        self.assertIn("no fine detail", said)
+
+    def test_a_narrow_market_is_told_it_can_be_specific(self):
+        said = self.m.compose("X", "", "poster", self.SMALL)
+        self.assertIn("narrow market", said)
+        self.assertNotIn("thumbnail", said)
+
+    def test_a_cheap_market_and_a_dear_one_are_briefed_differently(self):
+        cheap = self.m.compose("X", "", "sticker", self.BIG)
+        dear = self.m.compose("X", "", "poster", self.SMALL)
+        self.assertIn("impulse buy", cheap)
+        self.assertNotIn("impulse buy", dear)
+        self.assertIn("reward a second look", dear)
+
+    def test_the_markets_own_words_reach_the_prompt(self):
+        said = self.m.compose("X", "", "sticker", self.BIG)
+        self.assertIn("vinyl sticker", said)
+        self.assertIn("hydroflask", said)
+        self.assertIn("without copying any individual listing", said)
+
+    def test_no_evidence_means_no_invented_direction(self):
+        # A build with no measurement behind it must not be handed made-up
+        # numbers to design against.
+        said = self.m.compose("Something", "a brief", "mug", None)
+        for word in ("thumbnail", "impulse", "listings compete", "Sellers in"):
+            self.assertNotIn(word, said)
+        self.assertIn("Something", said)
+        self.assertIn("a brief", said)
+
+    def test_a_malformed_evidence_blob_is_ignored_not_crashed_on(self):
+        for bad in ("not a dict", [], 7, {"supply": "lots", "typical_price": None}):
+            with self.subTest(bad=bad):
+                said = self.m.compose("X", "", "sticker", bad)
+                self.assertIn("X", said)
+
+    def test_previous_designs_are_part_of_the_brief(self):
+        # An image model handed the same brief twice draws the same picture
+        # twice, and Emily builds one at a time with no memory.
+        said = self.m.compose("New One", "", "sticker", self.BIG,
+                              ["Pine Ridge Compass", "Switchback Arrow"])
+        self.assertIn("visibly different", said)
+        self.assertIn("Pine Ridge Compass", said)
+        self.assertIn("Switchback Arrow", said)
+
+    def test_the_art_direction_is_appended_once(self):
+        said = self.m.directed(self.m.compose("X", "", "sticker", self.BIG))
+        self.assertEqual(said.count("NOT a photograph"), 1)
+        # And the old second copy is gone from the build script - checked
+        # against its CODE, not its comments. The first version of this
+        # assertion failed on the comment that explains the removal, which
+        # quotes the very string it is looking for.
+        code = "\n".join(
+            l for l in (SCRIPTS / "emily-new-build.py").read_text().splitlines()
+            if not l.lstrip().startswith("#"))
+        self.assertNotIn("clean edges, no text", code)
+        self.assertIn("compose(", code)
+
+
+class EmilyRemembersWhatSheAlreadyMade(unittest.TestCase):
+    """prior_designs() in emily-assets.py."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("emily_assets", SCRIPTS / "emily-assets.py")
+
+    def builds(self, *entries):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        for i, (idea, phrase) in enumerate(entries):
+            d = root / f"build-{i}"
+            d.mkdir()
+            body = {"idea": idea}
+            if phrase is not None:
+                body["evidence"] = {"phrase": phrase}
+            (d / "build.json").write_text(json.dumps(body))
+        return root
+
+    def test_only_designs_for_the_same_phrase_come_back(self):
+        root = self.builds(("Pine Ridge Compass", "water bottle stickers"),
+                           ("Autumn Leaf", "fall stickers"),
+                           ("Switchback Arrow", "water bottle stickers"))
+        got = self.m.prior_designs(root, "water bottle stickers")
+        self.assertEqual(sorted(got), ["Pine Ridge Compass", "Switchback Arrow"])
+
+    def test_the_match_ignores_case_and_padding(self):
+        root = self.builds(("Pine Ridge", "  Water Bottle STICKERS "))
+        self.assertEqual(self.m.prior_designs(root, "water bottle stickers"),
+                         ["Pine Ridge"])
+
+    def test_a_build_with_no_evidence_is_not_claimed_for_every_phrase(self):
+        root = self.builds(("Old Build", None))
+        self.assertEqual(self.m.prior_designs(root, "water bottle stickers"), [])
+
+    def test_a_broken_build_file_does_not_stop_the_others(self):
+        root = self.builds(("Good One", "water bottle stickers"))
+        bad = root / "broken"
+        bad.mkdir()
+        (bad / "build.json").write_text("{not json")
+        self.assertEqual(self.m.prior_designs(root, "water bottle stickers"),
+                         ["Good One"])
+
+    def test_a_missing_folder_is_empty_not_an_error(self):
+        self.assertEqual(self.m.prior_designs("/no/such/place", "x"), [])
+
+    def test_duplicates_are_not_listed_twice(self):
+        root = self.builds(("Same Name", "p"), ("Same Name", "p"))
+        self.assertEqual(self.m.prior_designs(root, "p"), ["Same Name"])
+
+
+class APriceTypedFromNothing(unittest.TestCase):
+    """emily-printify.py market-price.
+
+    Prices were typed from nothing, and a number typed from nothing is as
+    likely to be half the market as twice it. The median asking price of the
+    top listings for a measured phrase is an anchor - not a recommendation,
+    and the user still confirms it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("emily_printify", SCRIPTS / "emily-printify.py")
+
+    IDS = [1, 2, 3, 4, 5]
+
+    def test_an_existing_ladder_keeps_its_shape(self):
+        # A five-size sticker is not one price. Flattening it to the market
+        # median would undo the reason sizes exist.
+        current = {"1": 300, "2": 400, "3": 500, "4": 650, "5": 800}
+        out, kept = self.m.anchored(current, self.IDS, 4.99)
+        self.assertTrue(kept)
+        self.assertEqual(statistics.median(out.values()), 499)
+        order = [out[str(v)] for v in self.IDS]
+        self.assertEqual(order, sorted(order), "the ladder must stay rising")
+
+    def test_the_level_really_moves(self):
+        current = {"1": 300, "2": 400, "3": 500, "4": 650, "5": 800}
+        up, _ = self.m.anchored(current, self.IDS, 10.0)
+        down, _ = self.m.anchored(current, self.IDS, 2.5)
+        self.assertGreater(statistics.median(up.values()),
+                           statistics.median(current.values()))
+        self.assertLess(statistics.median(down.values()),
+                        statistics.median(current.values()))
+
+    def test_with_nothing_priced_the_median_goes_on_everything(self):
+        out, kept = self.m.anchored({}, self.IDS, 4.99)
+        self.assertFalse(kept, "there is no ladder to keep")
+        self.assertEqual(set(out.values()), {499})
+
+    def test_one_lonely_price_is_not_a_ladder(self):
+        out, kept = self.m.anchored({"3": 500}, self.IDS, 4.99)
+        self.assertFalse(kept)
+        self.assertEqual(set(out.values()), {499})
+
+    def test_unset_variants_are_filled_rather_than_left_at_zero(self):
+        # A variant with no price would otherwise go to Printify at nothing.
+        current = {"1": 300, "2": 400, "3": 500}
+        out, kept = self.m.anchored(current, self.IDS, 4.0)
+        self.assertTrue(kept)
+        self.assertEqual(len(out), 5)
+        self.assertTrue(all(v > 0 for v in out.values()), out)
+
+    def test_zero_and_junk_prices_are_not_treated_as_a_ladder(self):
+        for junk in ({"1": 0, "2": 0}, {"1": None, "2": "5.00"},
+                     {"1": -100, "2": 0}):
+            with self.subTest(junk=junk):
+                out, kept = self.m.anchored(junk, self.IDS, 4.99)
+                self.assertFalse(kept)
+                self.assertEqual(set(out.values()), {499})
+
+
+class TheEvidenceSurvivesEveryHandOff(unittest.TestCase):
+    """The joins, not the links.
+
+    market-scan measures it, scout-ideas copies it, scout-review approves it,
+    emily-new-build queues it, emily-assets draws from it. Every one of those
+    functions had a test and the chain still had two breaks in it, because a
+    function that computes the right thing and a function that is called with
+    it are different facts.
+
+    Both breaks were found by mutation, not by reading.
+    """
+
+    def review(self):
+        return load("scout_review", SCRIPTS / "scout-review.py")
+
+    def test_approval_hands_the_evidence_to_the_build(self):
+        # cmd_approve passed title, brief and product and stopped there, so
+        # everything measured died at that line.
+        m = self.review()
+        seen = {}
+
+        class Done:
+            returncode, stdout, stderr = 0, "", ""
+
+        def fake_run(cmd, **kw):
+            seen["cmd"] = cmd
+            return Done()
+
+        idea = {"id": 1, "title": "Trail Marker", "product": "sticker",
+                "brief": "six die-cut", "status": "pending",
+                "evidence": {"phrase": "water bottle stickers",
+                             "supply": 436862, "typical_price": 4.99,
+                             "tags": ["vinyl sticker"]}}
+        doc = {"ideas": [idea]}
+        real_run, m.subprocess.run = m.subprocess.run, fake_run
+        real_save, m.save = m.save, lambda *_a, **_k: None
+        real_note, m.note_lesson = m.note_lesson, lambda *_a, **_k: None
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                m.cmd_approve(types.SimpleNamespace(id=1, force=False,
+                                                    reason=""), doc)
+        finally:
+            m.subprocess.run, m.save, m.note_lesson = real_run, real_save, real_note
+
+        cmd = seen["cmd"]
+        self.assertIn("--evidence", cmd)
+        blob = json.loads(cmd[cmd.index("--evidence") + 1])
+        self.assertEqual(blob["phrase"], "water bottle stickers")
+        self.assertEqual(blob["supply"], 436862)
+
+    def test_an_idea_with_no_evidence_still_queues(self):
+        # The existing log predates the requirement. Refusing to approve
+        # those would strand every idea already in it.
+        m = self.review()
+        seen = {}
+
+        class Done:
+            returncode, stdout, stderr = 0, "", ""
+
+        real_run, m.subprocess.run = m.subprocess.run, \
+            lambda cmd, **kw: (seen.__setitem__("cmd", cmd), Done())[1]
+        real_save, m.save = m.save, lambda *_a, **_k: None
+        real_note, m.note_lesson = m.note_lesson, lambda *_a, **_k: None
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                m.cmd_approve(types.SimpleNamespace(id=1, force=False, reason=""),
+                              {"ideas": [{"id": 1, "title": "Old", "product": "mug",
+                                          "status": "pending"}]})
+        finally:
+            m.subprocess.run, m.save, m.note_lesson = real_run, real_save, real_note
+        self.assertNotIn("--evidence", seen["cmd"])
+
+    def test_the_build_puts_the_evidence_into_the_image_prompt(self):
+        # generate_artwork() shells out to emily-assets.py with --prompt.
+        # Passing None for evidence there would silently undo the whole
+        # chain, and nothing noticed.
+        m = load("emily_new_build", SCRIPTS / "emily-new-build.py")
+        slug = "zz-test-evidence-reaches-the-prompt"
+        built = (SCRIPTS.parent / "agents" / "emily" / "builds" / slug)
+        self.addCleanup(shutil.rmtree, built, ignore_errors=True)
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen["prompt"] = cmd[cmd.index("--prompt") + 1]
+            Path(cmd[cmd.index("--out") + 1]).write_bytes(b"x" * 4096)
+            return types.SimpleNamespace(returncode=0, stdout='"generated"',
+                                         stderr="")
+
+        real, m.subprocess.run = m.subprocess.run, fake_run
+        try:
+            ok, _msg = m.generate_artwork(
+                slug, "Trail Marker", "six die-cut", "sticker",
+                {"phrase": "water bottle stickers", "supply": 436862,
+                 "typical_price": 4.99, "tags": ["vinyl sticker"]})
+        finally:
+            m.subprocess.run = real
+        self.assertTrue(ok)
+        self.assertIn("436,862", seen["prompt"])
+        self.assertIn("thumbnail", seen["prompt"])
+        self.assertIn("impulse buy", seen["prompt"])
+        self.assertIn("vinyl sticker", seen["prompt"])
+
+    def test_what_the_shop_already_sells_reaches_the_prompt(self):
+        # prior_designs() being right is not the same as generate_artwork()
+        # passing it. With no sibling build on disk the argument is empty
+        # either way, so the fixture has to contain one.
+        m = load("emily_new_build", SCRIPTS / "emily-new-build.py")
+        builds = SCRIPTS.parent / "agents" / "emily" / "builds"
+        earlier = builds / "zz-test-earlier-design"
+        earlier.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(shutil.rmtree, earlier, ignore_errors=True)
+        (earlier / "build.json").write_text(json.dumps(
+            {"idea": "Pine Ridge Compass",
+             "evidence": {"phrase": "water bottle stickers"}}))
+
+        slug = "zz-test-differs-from-earlier"
+        self.addCleanup(shutil.rmtree, builds / slug, ignore_errors=True)
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen["prompt"] = cmd[cmd.index("--prompt") + 1]
+            Path(cmd[cmd.index("--out") + 1]).write_bytes(b"x" * 4096)
+            return types.SimpleNamespace(returncode=0, stdout='"generated"',
+                                         stderr="")
+
+        real, m.subprocess.run = m.subprocess.run, fake_run
+        try:
+            m.generate_artwork(slug, "New One", "", "sticker",
+                               {"phrase": "water bottle stickers",
+                                "supply": 436862, "typical_price": 4.99})
+        finally:
+            m.subprocess.run = real
+        self.assertIn("Pine Ridge Compass", seen["prompt"])
+        self.assertIn("visibly different", seen["prompt"])
+
+    def test_a_build_with_no_evidence_gets_no_invented_direction(self):
+        m = load("emily_new_build", SCRIPTS / "emily-new-build.py")
+        slug = "zz-test-no-evidence-no-invention"
+        built = (SCRIPTS.parent / "agents" / "emily" / "builds" / slug)
+        self.addCleanup(shutil.rmtree, built, ignore_errors=True)
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen["prompt"] = cmd[cmd.index("--prompt") + 1]
+            Path(cmd[cmd.index("--out") + 1]).write_bytes(b"x" * 4096)
+            return types.SimpleNamespace(returncode=0, stdout='"generated"',
+                                         stderr="")
+
+        real, m.subprocess.run = m.subprocess.run, fake_run
+        try:
+            m.generate_artwork(slug, "Something", "a brief", "mug", None)
+        finally:
+            m.subprocess.run = real
+        for word in ("thumbnail", "impulse", "listings compete"):
+            self.assertNotIn(word, seen["prompt"])

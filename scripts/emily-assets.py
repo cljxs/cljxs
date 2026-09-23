@@ -152,6 +152,106 @@ PRINT_DIRECTION = (
 )
 
 
+def market_notes(evidence):
+    """Design constraints that follow from the numbers, not from taste.
+
+    A model asked to be creative will be creative in whatever direction it
+    happened to start in. These are the parts of the brief that are FACTS
+    about the market, so they belong in code:
+
+      - 436,862 competing listings is not trivia. It means the design is
+        first seen as a 170-pixel thumbnail in a grid of forty, and a
+        delicate illustration that reads beautifully at full size is
+        invisible there. That is a drawing instruction.
+      - a 4.99 median price and a 28.00 median price are different products.
+        One is an impulse buy that must read in a second; the other is
+        looked at before it is bought.
+      - the market's own tags are the only description of its look that is
+        not somebody's opinion.
+    """
+    if not isinstance(evidence, dict):
+        return []
+    out = []
+    supply = evidence.get("supply")
+    if isinstance(supply, int) and supply > 0:
+        if supply >= 50000:
+            out.append(f"This design competes with {supply:,} other listings. "
+                       f"It will first be seen as a small thumbnail in a grid, "
+                       f"so it must read instantly at that size: bold shapes, "
+                       f"high contrast, few elements, no fine detail that "
+                       f"disappears when shrunk.")
+        else:
+            out.append(f"About {supply:,} listings compete with this - a "
+                       f"narrow market, so it can afford to be specific and "
+                       f"characterful rather than broadly safe.")
+    price = evidence.get("typical_price")
+    if isinstance(price, (int, float)) and price > 0:
+        if price < 12:
+            out.append(f"Typical price in this market is {price:.2f}: an "
+                       f"impulse buy. One clear idea, understood in a second.")
+        else:
+            out.append(f"Typical price in this market is {price:.2f}: it will "
+                       f"be looked at before it is bought, so it can reward "
+                       f"a second look.")
+    tags = [t for t in (evidence.get("tags") or []) if isinstance(t, str)]
+    if tags:
+        out.append("Sellers in this market describe it as: "
+                   + ", ".join(tags[:8]) + ". Fit that world without copying "
+                   "any individual listing.")
+    return out
+
+
+def prior_designs(build_root, phrase, limit=12):
+    """What has already been made for this phrase.
+
+    Emily builds one design at a time with no memory of the last one, and an
+    image model handed the same brief twice draws the same picture twice. A
+    shop wins on many DISTINCT designs in one coherent style, so the designs
+    already made are part of the brief - as things to differ from.
+    """
+    root = Path(build_root)
+    if not root.is_dir():
+        return []
+    seen = []
+    for meta in sorted(root.glob("*/build.json")):
+        try:
+            d = json.loads(meta.read_text())
+        except Exception:
+            continue                      # a broken build is not a crash here
+        if not isinstance(d, dict):
+            continue
+        ev = d.get("evidence") or {}
+        same = str(ev.get("phrase") or "").strip().lower() == \
+            str(phrase or "").strip().lower()
+        title = str(d.get("idea") or d.get("title") or "").strip()
+        if same and title and title not in seen:
+            seen.append(title)
+    return seen[-limit:]
+
+
+def compose(idea, brief="", product="", evidence=None, already=()):
+    """THE art prompt. One place.
+
+    It used to be built in two: emily-new-build.py appended 'Flat vector
+    illustration for a <product>, clean edges, no text' and emily-assets.py
+    appended PRINT_DIRECTION, which says the same thing in different words.
+    Two pieces of code deciding one thing always drift, and these two were
+    already disagreeing about whether text was allowed.
+    """
+    parts = [str(idea or "").strip()]
+    if brief and brief.strip():
+        parts.append(brief.strip())
+    if product and product.strip():
+        parts.append(f"Artwork for a {product.strip()}.")
+    parts += market_notes(evidence)
+    if already:
+        parts.append("The shop already sells these, so this must be visibly "
+                     "different from all of them - a different subject and a "
+                     "different composition, in the same style: "
+                     + "; ".join(already) + ".")
+    return "\n\n".join(p for p in parts if p)
+
+
 def directed(prompt):
     """The art direction on the end, once, however the prompt already reads."""
     return f"{prompt.strip()}\n\n{PRINT_DIRECTION}"

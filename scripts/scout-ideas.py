@@ -356,6 +356,7 @@ def cmd_propose(argv):
         "favs_per_day": row.get("heat"), "favs_per_view": row.get("pull"),
         "match": row.get("match"), "score": row.get("score"),
         "typical_price": row.get("price"),
+        "tags": row.get("tags") or [],
         "measured_at": scan.get("scanned_at"), "from_scan": scan.get("seed"),
     }
     if tier == "check":

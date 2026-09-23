@@ -29,10 +29,12 @@ Standard library only.
 
 import argparse
 import base64
+import importlib.util
 import json
 import os
 import re
 import subprocess
+import statistics
 import sys
 import urllib.error
 import urllib.request
@@ -594,6 +596,119 @@ def colour_of(title):
     return " / ".join(rest) if rest else None
 
 
+def _scout():
+    """scout-ideas.py as a module - it owns reading the scan files.
+
+    A second reader here would be a second opinion on what counts as a
+    measurement and how old is too old, and the one that drifts is always
+    the copy.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "scout_ideas", Path(__file__).resolve().parent / "scout-ideas.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def market_price(phrase):
+    """(median price in this market, scan, problem).
+
+    The median asking price of the top listings for a measured phrase. Not
+    a recommendation - an anchor. Prices here were typed from nothing, and a
+    number typed from nothing is as likely to be half the market as twice it.
+    """
+    si = _scout()
+    row, scan, problem = si.measured(phrase)
+    if problem:
+        return None, None, problem
+    price = row.get("price")
+    if not isinstance(price, (int, float)) or price <= 0:
+        return None, scan, (
+            f"{phrase!r} was measured, but no usable price came back with it "
+            f"-\n  Etsy's price field was missing or malformed on those "
+            f"listings, and nothing\n  was guessed in its place.")
+    return float(price), scan, None
+
+
+def anchored(current_cents, ids, median):
+    """Existing prices rescaled so their median is the market's, ladder kept.
+
+    A five-size sticker is not one price, and flattening it to the market
+    median would undo the reason sizes exist. So the SHAPE of what is already
+    set is preserved and only its level moves. With nothing set there is no
+    shape to keep, and the median goes on every variant - said out loud
+    rather than passed off as a ladder.
+    """
+    have = [current_cents[str(v)] for v in ids
+            if isinstance(current_cents.get(str(v)), int)
+            and current_cents[str(v)] > 0]
+    if len(have) < 2:
+        return {str(v): int(round(median * 100)) for v in ids}, False
+    now = statistics.median(have)
+    if not now:
+        return {str(v): int(round(median * 100)) for v in ids}, False
+    factor = (median * 100) / now
+    out = {}
+    for v in ids:
+        cents = current_cents.get(str(v))
+        out[str(v)] = int(round((cents if isinstance(cents, int) and cents > 0
+                                 else now) * factor))
+    return out, True
+
+
+def cmd_market_price(a):
+    """Propose prices from what this market actually charges."""
+    cat = read_catalog()
+    try:
+        _key, entry = resolve(cat, a.product)
+    except Ambiguous as exc:
+        print(f"'{exc.word}' matches more than one entry: {', '.join(exc.keys)}.",
+              file=sys.stderr)
+        return 2
+    if not entry:
+        print(no_entry(cat, a.product), file=sys.stderr)
+        return 2
+
+    median, scan, problem = market_price(a.market)
+    if problem:
+        print(f"cannot price against {a.market!r} - {problem}", file=sys.stderr)
+        return 2
+
+    ids = entry.get("variant_ids") or []
+    titles = entry.get("variant_titles") or []
+    current = entry.get("prices") or {}
+    proposed, kept_shape = anchored(current, ids, median)
+
+    print(f"'{a.market}' - median asking price {median:.2f} "
+          f"(measured {scan.get('scanned_at')})\n")
+    if kept_shape:
+        print(f"  Your existing ladder is kept and only its level moves, so "
+              f"the sizes stay\n  priced relative to each other.\n")
+    else:
+        print(f"  Nothing is priced yet, so there is no ladder to keep: the "
+              f"median goes on\n  every variant. Set a real ladder with "
+              f"--by-size before you publish.\n")
+    for i, vid in enumerate(ids):
+        t = (titles[i] if i < len(titles) else f"variant {vid}")[:30]
+        was = current.get(str(vid))
+        print(f"  {t:<32}{('$%.2f' % (was / 100)) if was else '  (unset)':>10}"
+              f"  ->  ${proposed[str(vid)] / 100:.2f}")
+
+    if not a.apply:
+        print(f"\nNothing written. Add --apply to set these:\n"
+              f"  emily-printify.py market-price --product {a.product} "
+              f"--market \"{a.market}\" --apply")
+        return 0
+    entry["prices"] = proposed
+    entry["priced_at"] = _now()
+    entry["priced_against"] = {"phrase": a.market, "median": median,
+                               "scan": scan.get("seed"),
+                               "measured_at": scan.get("scanned_at")}
+    write_catalog(cat)
+    print(f"\nSet {len(proposed)} variant price(s), anchored to {a.market!r}.")
+    return 0
+
+
 def cmd_prices(a):
     """Set a price per variant for a product type, once.
 
@@ -1117,6 +1232,15 @@ def main():
     p.add_argument("--all", dest="all_price", metavar="PRICE",
                    help="one price for every variant")
     p.set_defaults(fn=cmd_prices)
+
+    p = sub.add_parser("market-price",
+                       help="propose prices from what this market charges")
+    p.add_argument("--product", required=True)
+    p.add_argument("--market", required=True,
+                   help="a phrase market-scan.py has measured")
+    p.add_argument("--apply", action="store_true",
+                   help="actually set them; without this it only shows")
+    p.set_defaults(fn=cmd_market_price)
 
     p = sub.add_parser("status"); p.add_argument("build_dir", nargs="?")
     p.set_defaults(fn=cmd_status)
