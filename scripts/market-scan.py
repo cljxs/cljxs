@@ -5,6 +5,7 @@ market-scan.py — put the two halves together.
     market-scan.py phrase fall sticker      one phrase, both sources
     market-scan.py scan fall sticker        expand, then score the candidates
     market-scan.py scan laptop sticker --save   ...and file it for Scout
+    market-scan.py compare                  every market measured, side by side
 
 trend-probe.py says what people SEARCH for. etsy-probe.py says what is
 already SOLD. The number that matters is neither one:
@@ -505,8 +506,89 @@ def save_scan(seed, ranked, loose):
     return path
 
 
+def best_row(doc):
+    """The strongest measured phrase in one scan."""
+    rows = [r for r in (doc.get("rows") or [])
+            if isinstance(r.get("score"), (int, float))]
+    return max(rows, key=lambda r: r["score"]) if rows else None
+
+
+def cmd_compare(_words):
+    """Every market measured so far, side by side.
+
+    WHICH PRODUCT TO SELL is a different question from which phrase, and it
+    was being answered by whichever scan happened to be on screen. This
+    reads the saved scans - no API calls, no model - and puts them in one
+    table.
+
+    PRICE AND DEMAND ARE DIFFERENT AXES AND NEITHER DECIDES ALONE. A market
+    at 0.008 favourites a day and $25 an item is not obviously worse than
+    one at 0.066 and $4: the first needs a fraction of the sales to make the
+    same money, and postage is nearly fixed per parcel whatever is in it.
+    So both are shown and neither is multiplied by the other - favourites
+    are not sales, and a number made by multiplying a proxy by a price would
+    look like revenue without being it.
+    """
+    files = sorted(SCANS.glob("*.json")) if SCANS.is_dir() else []
+    if not files:
+        # An empty folder and a missing one are the same thing to the
+        # reader, and both mean "measure something". Saying "scans on disk"
+        # when there are none sent me looking for files that did not exist.
+        print("no scans yet. Measure something first:\n"
+              "  market-scan.py scan <phrase> --save", file=sys.stderr)
+        return 1
+    seen = []
+    for f in files:
+        try:
+            doc = json.loads(f.read_text())
+        except Exception:
+            continue
+        row = best_row(doc)
+        if row:
+            seen.append((doc, row))
+    if not seen:
+        print(f"{len(files)} scan file(s) on disk, none with a measured "
+              f"phrase in it.\n  Every phrase in them was excluded, or they "
+              f"were written by an older version.\n  Re-scan:  "
+              f"market-scan.py scan <phrase> --save", file=sys.stderr)
+        return 1
+
+    seen.sort(key=lambda dr: -dr[1]["score"])
+    print(f"\n  {len(seen)} market(s) measured. Best phrase in each:\n")
+    print(f"  {'market':<22}{'best phrase':<28}{'supply':>9}{'price':>8}"
+          f"{'favs/day':>10}{'favs/view':>11}{'score':>9}")
+    for doc, row in seen:
+        price = row.get("price")
+        print(f"  {str(doc.get('seed'))[:21]:<22}{str(row['phrase'])[:27]:<28}"
+              f"{row.get('supply') or 0:>9,}"
+              f"{('$%.2f' % price) if price is not None else '?':>8}"
+              f"{(row.get('heat') or 0):>10.3f}"
+              f"{(row.get('pull') or 0):>11.4f}{row['score']:>9.4f}")
+
+    dearest = max(seen, key=lambda dr: dr[1].get("price") or 0)
+    hottest = max(seen, key=lambda dr: dr[1].get("heat") or 0)
+    print(f"\n  Most demand:  {hottest[0].get('seed')} "
+          f"({(hottest[1].get('heat') or 0):.3f} favourites/day)")
+    if dearest[1].get("price"):
+        print(f"  Dearest item: {dearest[0].get('seed')} "
+              f"(${dearest[1]['price']:.2f} median)")
+    print(f"\n  These are different axes. A dearer item needs far fewer sales "
+          f"for the\n  same money, and postage is nearly fixed per parcel "
+          f"whatever is inside it -\n  so a cheap item in a hot market can "
+          f"still be the worse business. What\n  settles it is the margin, "
+          f"and that needs a production cost:\n"
+          f"    emily-printify.py costs --product <type>\n"
+          f"    emily-printify.py market-price --product <type> --market "
+          f"\"<phrase>\"\n\n"
+          f"  Favourites are not sales. Nothing here is multiplied by "
+          f"anything else.")
+    return 0
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if cmd == "compare":
+        return cmd_compare(sys.argv[2:])
     if cmd not in ("phrase", "scan") or len(sys.argv) < 3:
         print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
         return 2

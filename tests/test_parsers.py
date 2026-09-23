@@ -9603,3 +9603,124 @@ class ThePriceWasComputedAndNeverShown(unittest.TestCase):
                          if not l.lstrip().startswith("#"))
         self.assertIn("'price':>8", code)
         self.assertIn("m['price']", code)
+
+
+class WhichProductIsADifferentQuestion(unittest.TestCase):
+    """market-scan compare.
+
+    "Should I sell stickers or mugs" was being answered by whichever scan
+    happened to be on screen. This reads the saved scans - no API calls, no
+    model - and puts every measured market in one table.
+
+    The trap it has to avoid is the one the reference dashboard falls into:
+    multiplying a demand proxy by a price and calling the result revenue.
+    Favourites are not sales. Price and demand are shown side by side and
+    nothing is multiplied by anything.
+    """
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.scans = self.root / "agents" / "scout" / "state" / "scans"
+        self.scans.mkdir(parents=True)
+        self.env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+
+    def scan(self, seed, rows):
+        (self.scans / f"{seed.replace(' ', '-')}.json").write_text(json.dumps({
+            "seed": seed,
+            "scanned_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "rows": rows, "excluded": []}))
+
+    def row(self, phrase, supply, heat, price, score, pull=0.05):
+        return {"phrase": phrase, "supply": supply, "heat": heat, "pull": pull,
+                "price": price, "match": 1.0, "returned": 25, "heat_n": 25,
+                "pull_n": 25, "score": score}
+
+    def run_it(self):
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "market-scan.py"), "compare"],
+            capture_output=True, text=True, env=self.env)
+
+    def test_the_real_numbers_line_up_in_one_table(self):
+        self.scan("water bottle sticker",
+                  [self.row("water bottle stickers", 436800, 0.066, 4.99, 0.0049)])
+        self.scan("sticker sheet",
+                  [self.row("sticker sheet", 245012, 0.008, 8.50, 0.0016)])
+        r = self.run_it()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("436,800", r.stdout)
+        self.assertIn("$4.99", r.stdout)
+        self.assertIn("$8.50", r.stdout)
+        self.assertIn("0.066", r.stdout)
+
+    def test_the_best_phrase_in_each_scan_is_the_one_shown(self):
+        self.scan("sticker sheet", [
+            self.row("sticker sheet", 245012, 0.008, 8.50, 0.0016),
+            self.row("sticker sheet custom", 17120, 0.013, 12.0, 0.0030)])
+        out = self.run_it().stdout
+        self.assertIn("sticker sheet custom", out)
+        self.assertNotIn("245,012", out, "the weaker phrase must not be the row")
+
+    def test_the_table_is_ordered_best_first(self):
+        # A comparison table that is not sorted is a list, and the reader
+        # takes the top row as the answer either way.
+        self.scan("weak", [self.row("weak thing", 100000, 0.002, 5.0, 0.0004)])
+        self.scan("strong", [self.row("strong thing", 1000, 0.08, 5.0, 0.0267)])
+        self.scan("middle", [self.row("middle thing", 10000, 0.02, 5.0, 0.005)])
+        body = self.run_it().stdout.split("best phrase")[1]
+        # Data rows only: the footer contains the word "anything", which a
+        # looser filter picked up as a fourth market.
+        order = [l for l in body.splitlines()
+                 if re.match(r"\s+(weak|strong|middle)\s", l)]
+        self.assertEqual([o.split()[0] for o in order],
+                         ["strong", "middle", "weak"])
+
+    def test_demand_and_price_are_named_separately(self):
+        self.scan("cheap and hot",
+                  [self.row("cheap thing", 1000, 0.200, 4.00, 0.06)])
+        self.scan("dear and quiet",
+                  [self.row("dear thing", 1000, 0.005, 28.00, 0.002)])
+        out = self.run_it().stdout
+        self.assertIn("Most demand:  cheap and hot", out)
+        self.assertIn("Dearest item: dear and quiet", out)
+
+    def test_nothing_is_multiplied_into_a_revenue_figure(self):
+        # The Dennis trap: price x demand looks like money and is not.
+        self.scan("a", [self.row("a thing", 1000, 0.100, 10.00, 0.03)])
+        out = self.run_it().stdout
+        self.assertIn("Favourites are not sales", out)
+        self.assertNotIn("revenue", out.lower())
+        self.assertNotIn("$/day", out)
+        self.assertNotIn("1.00", out, "0.100 x 10.00 must not appear anywhere")
+
+    def test_a_market_with_no_price_is_shown_with_a_question(self):
+        self.scan("no price", [self.row("x", 100, 0.01, None, 0.004)])
+        out = self.run_it().stdout
+        self.assertIn("?", out)
+        self.assertNotIn("$0.00", out)
+
+    def test_it_says_what_actually_settles_it(self):
+        self.scan("a", [self.row("a thing", 1000, 0.1, 10.0, 0.03)])
+        out = self.run_it().stdout
+        self.assertIn("margin", out)
+        self.assertIn("production cost", out)
+
+    def test_no_scans_is_an_instruction_not_a_crash(self):
+        r = self.run_it()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("--save", r.stderr)
+
+    def test_a_scan_with_no_scorable_phrase_is_skipped_not_crashed_on(self):
+        self.scan("empty", [])
+        self.scan("good", [self.row("a thing", 1000, 0.1, 10.0, 0.03)])
+        r = self.run_it()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("a thing", r.stdout)
+        self.assertIn("1 market(s)", r.stdout)
+
+    def test_a_broken_scan_file_does_not_stop_the_others(self):
+        (self.scans / "broken.json").write_text("{not json")
+        self.scan("good", [self.row("a thing", 1000, 0.1, 10.0, 0.03)])
+        r = self.run_it()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("a thing", r.stdout)
