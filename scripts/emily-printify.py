@@ -269,6 +269,24 @@ ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.par
 CATALOG = ROOT / "agents" / "emily" / "state" / "printify-catalog.json"
 
 
+# Keys in the catalogue that are NOT products. The fee table lives at the
+# top level beside the product entries, and everything that enumerated the
+# catalogue counted it as one - so `costs --product tote` answered "the
+# catalogue already has: _fees, hoodie, kisscut, sticker" and offered to
+# alias _fees to tote.
+#
+# One prefix, one rule, one place. Anything starting with an underscore is
+# the catalogue's own housekeeping.
+def is_meta(key):
+    return str(key).startswith("_")
+
+
+def products(cat):
+    """(key, entry) for every real product in the catalogue, and nothing else."""
+    return [(k, v) for k, v in (cat or {}).items()
+            if not is_meta(k) and isinstance(v, dict)]
+
+
 def write_catalog(cat):
     """Save the catalogue. ONE place.
 
@@ -347,16 +365,16 @@ def resolve(cat, product_type):
     if not want:
         return None, None
 
-    for key, entry in cat.items():
+    for key, entry in products(cat):
         if str(key).lower() == str(product_type).lower():
             return key, entry
 
-    hits = [k for k in cat if " ".join(words(k)) == want]
+    hits = [k for k, _e in products(cat) if " ".join(words(k)) == want]
     if not hits:
-        hits = [k for k, e in cat.items()
+        hits = [k for k, e in products(cat)
                 if any(" ".join(words(x)) == want for x in (e.get("aliases") or []))]
     if not hits:
-        hits = [k for k, e in cat.items()
+        hits = [k for k, e in products(cat)
                 if title_answers_to(e.get("blueprint_title"), product_type)]
 
     if len(hits) > 1:
@@ -376,14 +394,14 @@ def no_entry(cat, product_type):
     lines = [f"no catalogue entry for '{product_type}'."]
     if cat:
         lines.append("\n  The catalogue already has:")
-        for key, entry in sorted(cat.items()):
+        for key, entry in sorted(products(cat)):
             title = entry.get("blueprint_title") or f"blueprint {entry.get('blueprint_id')}"
             extra = ", ".join(entry.get("aliases") or [])
             lines.append(f"    {key:<14} {title}" + (f"  (also: {extra})" if extra else ""))
         asked = set(words(product_type))
-        likely = next((k for k, e in sorted(cat.items())
+        likely = next((k for k, e in sorted(products(cat))
                        if asked & set(words(e.get("blueprint_title")) + words(k))),
-                      sorted(cat)[0])
+                      sorted(k for k, _e in products(cat))[0])
         lines.append(f"\n  If one of those IS this product, say so rather than "
                      f"picking it twice:\n"
                      f"    emily-printify.py alias {likely} {product_type}")
@@ -410,7 +428,7 @@ def cmd_refresh(a):
         print("the catalogue is empty - nothing to refresh")
         return 0
     filled, already, failed = [], [], []
-    for key, entry in sorted(cat.items()):
+    for key, entry in sorted(products(cat)):
         if entry.get("blueprint_title"):
             already.append(key)
             continue

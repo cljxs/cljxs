@@ -10127,3 +10127,63 @@ class AToteIsNotASticker(unittest.TestCase):
         providers = code.split("def cmd_providers")[1].split("\ndef ")[0]
         self.assertNotIn("--product sticker", providers)
         self.assertIn("product_word", providers)
+
+
+class TheFeeTableIsNotAProduct(unittest.TestCase):
+    """The fee table lives at the top level of the catalogue beside the
+    product entries, and everything that enumerated the catalogue counted it
+    as one:
+
+        The catalogue already has:
+          _fees          blueprint None
+          hoodie         blueprint 77
+          ...
+        If one of those IS this product, say so rather than picking it twice:
+          emily-printify.py alias _fees tote
+
+    Following that advice would have aliased the fee table to a tote bag.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = load("emily_printify", SCRIPTS / "emily-printify.py")
+
+    CAT = {"_fees": {"transaction_pct": 0.065, "ship_cost": 6.0},
+           "hoodie": {"blueprint_id": 77, "aliases": ["sweatshirt"]},
+           "kisscut": {"blueprint_id": 400},
+           "sticker": {"blueprint_id": 564}}
+
+    def test_metadata_is_not_listed_as_a_product(self):
+        self.assertEqual(sorted(k for k, _v in self.m.products(self.CAT)),
+                         ["hoodie", "kisscut", "sticker"])
+
+    def test_any_underscore_key_is_housekeeping(self):
+        self.assertTrue(self.m.is_meta("_fees"))
+        self.assertTrue(self.m.is_meta("_anything_later"))
+        self.assertFalse(self.m.is_meta("sticker"))
+        self.assertFalse(self.m.is_meta("t-shirt"))
+
+    def test_a_non_dict_value_is_not_a_product_either(self):
+        cat = dict(self.CAT, version=3, notes="hello")
+        self.assertEqual(sorted(k for k, _v in self.m.products(cat)),
+                         ["hoodie", "kisscut", "sticker"])
+
+    def test_an_empty_or_missing_catalogue_is_no_products(self):
+        self.assertEqual(self.m.products({}), [])
+        self.assertEqual(self.m.products(None), [])
+
+    def test_resolve_cannot_return_the_fee_table(self):
+        for word in ("_fees", "fees"):
+            with self.subTest(word=word):
+                _key, entry = self.m.resolve(self.CAT, word)
+                self.assertIsNone(entry)
+
+    def test_the_message_does_not_offer_to_alias_it(self):
+        said = self.m.no_entry(self.CAT, "tote")
+        self.assertNotIn("_fees", said)
+        self.assertIn("hoodie", said)
+
+    def test_a_real_product_still_resolves(self):
+        _key, entry = self.m.resolve(self.CAT, "sweatshirt")
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["blueprint_id"], 77)
