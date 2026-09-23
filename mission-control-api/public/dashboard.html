@@ -388,8 +388,18 @@ function render(d){
 
   const k = d.kpis;
   $('kpis').innerHTML = [
-    {l:'Portfolio value', v:money(k.total_value), d:k.total_pnl!==null?`${pct(k.total_pnl_pct)} all time`:'', c:cls(k.total_pnl),
-     s:k.total_pnl!==null?`${k.total_pnl>=0?'+':''}${money(k.total_pnl)} vs start`:'no portfolio yet'},
+    // A blank here used to mean 'no portfolio yet' whatever the reason. Now
+    // it says WHOSE starting capital is missing, because that is the thing
+    // you would have to go and fix - and because a combined percentage
+    // computed without it is how this tile reported +101.93% on a profit of
+    // $193.49.
+    {l:'Portfolio value', v:money(k.total_value),
+     d:k.total_pnl!==null?`${pct(k.total_pnl_pct)} all time`:'', c:cls(k.total_pnl),
+     s:k.total_pnl!==null
+        ? `${k.total_pnl>=0?'+':''}${money(k.total_pnl)} vs ${money(k.total_start)} in`
+        : ((k.start_unknown_for||[]).length
+            ? `no combined figure — ${k.start_unknown_for.join(', ')} ${k.start_unknown_for.length>1?'have':'has'} no recorded starting capital`
+            : 'no portfolio yet')},
     {l:'Open positions', v:k.open_positions ?? 0, d:'', c:'flat',
      s:k.open_positions?'marked to live prices':'no positions yet'},
     {l:'Spend today', v:k.has_cost_data?money(k.spend_today,2):'—', d:'', c:'flat',

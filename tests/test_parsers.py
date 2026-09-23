@@ -8978,3 +8978,181 @@ class TheEvidenceSurvivesEveryHandOff(unittest.TestCase):
             m.subprocess.run = real
         for word in ("thumbnail", "impulse", "listings compete"):
             self.assertNotIn(word, seen["prompt"])
+
+
+class ADepositIsNotAGain(unittest.TestCase):
+    """The Command Deck reported +101.93% all time on a profit of $193.49.
+
+        portfolio value   $20,193.49
+        +101.93% all time · +$10,193.49 vs start
+
+    Belfort held $10,193.49 against a recorded start of $10,000. Ace held
+    $10,000 and had no recorded start, so `a.starting_cash ?? 0` contributed
+    ZERO to the baseline while its whole $10,000 contributed to the value.
+    Adding a second agent's bankroll was reported as doubling the money.
+
+        (20193.49 - 10000) / 10000 = 101.93%
+
+    Three pieces of code decided Ace's starting capital and two of them made
+    it up: ace.js fell back to the literal 10000, ace-verify.py falls back to
+    10000, and dashboard-data.js returned null. The Deck and Ace's own panel
+    disagreed on screen.
+    """
+
+    API = ROOT / "mission-control-api"
+
+    def node(self, expr):
+        r = subprocess.run(
+            ["node", "-e", f"const m=require({json.dumps(str(self.API / 'dashboard-data.js'))});"
+                           f"process.stdout.write(JSON.stringify({expr}))"],
+            capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def test_the_exact_numbers_off_the_screenshot(self):
+        got = self.node("m.combineCapital(["
+                        "{name:'belfort',value:10193.49,starting_cash:10000},"
+                        "{name:'ace',value:10000,starting_cash:10000}])")
+        self.assertAlmostEqual(got["value"], 20193.49, places=2)
+        self.assertEqual(got["start"], 20000)
+        self.assertAlmostEqual(got["pnl"], 193.49, places=2)
+        self.assertAlmostEqual(got["pct"], 0.967, places=2)
+
+    def test_the_wrong_answer_is_not_produced(self):
+        # The number that was on the screen. If it ever comes back, this is
+        # the test that says so.
+        got = self.node("m.combineCapital(["
+                        "{name:'belfort',value:10193.49,starting_cash:10000},"
+                        "{name:'ace',value:10000,starting_cash:10000}])")
+        self.assertNotAlmostEqual(got["pct"], 101.93, places=1)
+        self.assertNotAlmostEqual(got["pnl"], 10193.49, places=1)
+
+    def test_an_unknown_start_withholds_the_total_and_names_the_agent(self):
+        # Not zero, and not a guess: no combined baseline at all, plus the
+        # name of whoever has to be fixed.
+        got = self.node("m.combineCapital(["
+                        "{name:'belfort',value:10193.49,starting_cash:10000},"
+                        "{name:'ace',value:10000,starting_cash:null}])")
+        self.assertAlmostEqual(got["value"], 20193.49, places=2)
+        self.assertIsNone(got["start"])
+        self.assertIsNone(got["pnl"])
+        self.assertIsNone(got["pct"])
+        self.assertEqual(got["noStart"], ["ace"])
+
+    def test_undefined_counts_as_unknown_too(self):
+        got = self.node("m.combineCapital([{name:'x',value:100}])")
+        self.assertIsNone(got["start"])
+        self.assertEqual(got["noStart"], ["x"])
+
+    def test_one_agent_alone_is_unchanged(self):
+        got = self.node("m.combineCapital("
+                        "[{name:'belfort',value:10193.49,starting_cash:10000}])")
+        self.assertAlmostEqual(got["pct"], 1.9349, places=3)
+
+    def test_no_agents_is_not_a_division(self):
+        got = self.node("m.combineCapital([])")
+        self.assertIsNone(got["value"])
+        self.assertIsNone(got["pct"])
+        self.assertEqual(got["noStart"], [])
+
+    def test_a_loss_is_still_reported(self):
+        got = self.node("m.combineCapital(["
+                        "{name:'a',value:9000,starting_cash:10000},"
+                        "{name:'b',value:9500,starting_cash:10000}])")
+        self.assertAlmostEqual(got["pnl"], -1500, places=2)
+        self.assertLess(got["pct"], 0)
+
+
+class OneOpinionAboutWhatAnAgentStartedWith(unittest.TestCase):
+    """startingCapital() in dashboard-data.js, imported by ace.js rather than
+    written twice. The seed file is a real recorded value; the literal 10000
+    that used to be here was not."""
+
+    API = ROOT / "mission-control-api"
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        (self.dir / "state").mkdir()
+
+    def call(self, portfolio):
+        r = subprocess.run(
+            ["node", "-e",
+             f"const m=require({json.dumps(str(self.API / 'dashboard-data.js'))});"
+             f"process.stdout.write(JSON.stringify("
+             f"m.startingCapital({json.dumps(str(self.dir))},{json.dumps(portfolio)})))"],
+            capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def seed(self, name, body):
+        (self.dir / "state" / name).write_text(json.dumps(body))
+
+    def test_the_live_file_wins(self):
+        self.seed("bankroll.seed.json", {"starting_bankroll": 5000})
+        self.assertEqual(self.call({"starting_bankroll": 12345}), 12345)
+
+    def test_the_seed_file_is_used_when_the_live_one_forgot(self):
+        # What actually happened to Ace: a live bankroll.json with no
+        # starting_bankroll in it.
+        self.seed("bankroll.seed.json", {"starting_bankroll": 10000})
+        self.assertEqual(self.call({"bankroll": 10000}), 10000)
+
+    def test_a_seed_with_only_a_bankroll_still_answers(self):
+        self.seed("bankroll.seed.json", {"bankroll": 2500})
+        self.assertEqual(self.call({"cash": 2500}), 2500)
+
+    def test_with_neither_the_answer_is_unknown_not_ten_thousand(self):
+        self.assertIsNone(self.call({"bankroll": 10000}))
+        self.assertIsNone(self.call(None))
+
+    def test_absent_is_not_zero(self):
+        # num(null) returned 0, because Number(null) is 0 and 0 is finite.
+        # THIS, not the `?? 0` beside it, is what gave an agent with no
+        # recorded starting capital a baseline of zero - a number that looks
+        # real and reads as "started with nothing".
+        r = subprocess.run(
+            ["node", "-e",
+             f"const m=require({json.dumps(str(self.API / 'dashboard-data.js'))});"
+             "const d=require('fs').mkdtempSync('/tmp/sc-');"
+             "require('fs').mkdirSync(d+'/state');"
+             "process.stdout.write(JSON.stringify("
+             "[m.startingCapital(d,{bankroll:1}),m.startingCapital(d,{starting_cash:''}),"
+             "m.startingCapital(d,{starting_cash:0})]))"],
+            capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        absent, empty, real_zero = json.loads(r.stdout)
+        self.assertIsNone(absent, "a missing key is unknown, not zero")
+        self.assertIsNone(empty, "an empty string is unknown, not zero")
+        self.assertEqual(real_zero, 0, "a recorded zero is still a zero")
+
+    def test_no_invented_starting_balance_survives_in_the_code(self):
+        # The literal that caused it. ace.js said `?? 10000`, which is how
+        # Ace's own panel showed a confident percentage against a number
+        # nobody had read from anywhere.
+        ace = (self.API / "ace.js").read_text()
+        code = "\n".join(l for l in ace.splitlines()
+                         if not l.lstrip().startswith("//"))
+        self.assertNotIn("?? 10000", code)
+        self.assertIn("startingCapital", code)
+
+    def test_the_rule_is_imported_not_copied(self):
+        ace = (self.API / "ace.js").read_text()
+        self.assertIn("require('./dashboard-data')", ace)
+
+
+class TheValueChartRecordsWhatWasPutIn(unittest.TestCase):
+    """The near-vertical rise on the left of the value history is the moment
+    a second bankroll was added. Without the baseline stored next to the
+    value, a deposit and a gain draw identically."""
+
+    API = ROOT / "mission-control-api"
+
+    def test_each_snapshot_carries_its_baseline(self):
+        src = (self.API / "dashboard-data.js").read_text()
+        self.assertIn("b: totalStart === null ? null", src)
+        self.assertIn("function snapshotHistory(totalValue, totalStart)", src)
+
+    def test_the_caller_passes_it(self):
+        src = (self.API / "dashboard-data.js").read_text()
+        self.assertIn("snapshotHistory(totalValue, totalStart)", src)

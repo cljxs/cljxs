@@ -36,6 +36,15 @@ function firstOf(obj, keys, fallback = null) {
 }
 
 function num(v) {
+  // ABSENT IS NOT ZERO. Number(null) is 0 and Number('') is 0, and both are
+  // finite, so this returned 0 for a field that was not there at all. That
+  // is how an agent with no recorded starting capital got a baseline of
+  // zero - a number that looks real, reads as "started with nothing", and
+  // turned a $10,000 deposit into a $10,000 gain on the Deck.
+  if (v === null || v === undefined) return null;
+  // An empty string needs no guard of its own: parseFloat('') is NaN, which
+  // the finite check below already turns into null. One was written here and
+  // removed - it could not fail, so no test could hold it up.
   const n = typeof v === 'string' ? parseFloat(v.replace(/[$,]/g, '')) : Number(v);
   return Number.isFinite(n) ? n : null;
 }
@@ -172,6 +181,35 @@ function markToMarket(agentDir, portfolio) {
   return { rows, quotes_asof: quotes ? quotes.asof_utc : null };
 }
 
+// WHAT DID THIS AGENT START WITH. One answer, one place.
+//
+// Three pieces of code used to decide this and two of them made it up:
+// ace.js fell back to the literal 10000, ace-verify.py falls back to 10000,
+// and this file returned null. So the Deck showed Ace with no percentage
+// while Ace's own panel showed a confident one, computed against a number
+// nobody had read from anywhere.
+//
+// The seed file is a real recorded value and is used when the live file has
+// lost the key. A literal is not, and there is no longer one here: if
+// neither file says, the answer is "unknown", and everything downstream has
+// to cope with that rather than substituting a zero.
+function startingCapital(agentDir, portfolio) {
+  const fromLive = portfolio
+    ? num(firstOf(portfolio, ['starting_cash', 'starting_bankroll', 'start_balance', 'initial'], null))
+    : null;
+  if (fromLive !== null) return fromLive;
+  const dir = path.join(agentDir, 'state');
+  for (const f of ['bankroll.seed.json', 'portfolio.seed.json']) {
+    const seed = readJson(path.join(dir, f));
+    const v = seed
+      ? num(firstOf(seed, ['starting_cash', 'starting_bankroll', 'start_balance', 'initial', 'bankroll', 'cash'], null))
+      : null;
+    if (v !== null) return v;
+  }
+  return null;
+}
+
+
 function buildAgent(name) {
   const dir = path.join(AGENTS_DIR, name);
   const portfolio = readPortfolio(dir);
@@ -182,7 +220,7 @@ function buildAgent(name) {
 
   const { rows, quotes_asof } = markToMarket(dir, portfolio);
   const cash = portfolio ? num(firstOf(portfolio, ['cash', 'bankroll', 'balance', 'available_cash'], 0)) ?? 0 : null;
-  const start = portfolio ? num(firstOf(portfolio, ['starting_cash', 'starting_bankroll', 'start_balance', 'initial'], null)) : null;
+  const start = startingCapital(dir, portfolio);
   const held = rows.reduce((s, r) => s + (r.value ?? 0), 0);
   const value = portfolio ? cash + held : null;
   const pnl = value !== null && start !== null ? value - start : null;
@@ -311,13 +349,19 @@ function dailyActivity(db, agents) {
 }
 
 // Dashboard-owned value history. Agents never see this file.
-function snapshotHistory(totalValue) {
+function snapshotHistory(totalValue, totalStart) {
   let hist = readJson(SNAPSHOT_PATH);
   if (!Array.isArray(hist)) hist = [];
   const now = Date.now();
   const last = hist[hist.length - 1];
   if (totalValue !== null && (!last || now - Date.parse(last.t) >= SNAPSHOT_MIN_GAP_MS)) {
-    hist.push({ t: new Date(now).toISOString(), v: Number(totalValue.toFixed(2)) });
+    // The baseline is recorded WITH the value. Without it the series is just
+    // a line that jumps when capital is added, and the jump reads as a gain -
+    // which is exactly what the near-vertical rise on the left of this chart
+    // has always been. Points carrying a baseline can be drawn as profit
+    // instead of as total money in the building.
+    hist.push({ t: new Date(now).toISOString(), v: Number(totalValue.toFixed(2)),
+                b: totalStart === null ? null : Number(totalStart.toFixed(2)) });
     if (hist.length > SNAPSHOT_MAX_POINTS) hist = hist.slice(-SNAPSHOT_MAX_POINTS);
     try {
       fs.mkdirSync(TASKS_DIR, { recursive: true });
@@ -327,14 +371,43 @@ function snapshotHistory(totalValue) {
   return hist;
 }
 
+// A DEPOSIT IS NOT A GAIN, and `?? 0` turned one into one.
+//
+// Every agent's VALUE counted towards the total; an agent whose starting
+// capital was unknown contributed zero to the START. Adding Ace's $10,000
+// bankroll therefore moved the total to $20,193.49 against a baseline still
+// holding only Belfort's $10,000, and the Deck reported +101.93% all time on
+// a combined profit of $193.49.
+//
+// So the total start is only summable when EVERY contributor's start is
+// known. When one is not, the combined figure is withheld and the agent is
+// named, rather than being computed from a baseline that silently excludes
+// somebody's capital.
+//
+// Pulled out of build() so it can be tested without a database.
+function combineCapital(withPortfolio) {
+  const value = withPortfolio.length
+    ? withPortfolio.reduce((s, a) => s + a.value, 0) : null;
+  const noStart = withPortfolio.filter(
+    a => a.starting_cash === null || a.starting_cash === undefined);
+  const start = noStart.length ? null
+    : (withPortfolio.reduce((s, a) => s + a.starting_cash, 0) || null);
+  const pnl = value !== null && start !== null ? value - start : null;
+  return {
+    value, start, pnl,
+    pct: pnl !== null && start ? (pnl / start) * 100 : null,
+    noStart: noStart.map(a => a.name),
+  };
+}
+
+
 function build() {
   const db = openDb();
   const agents = listAgents().map(buildAgent);
 
   const withPortfolio = agents.filter(a => a.has_portfolio && a.value !== null);
-  const totalValue = withPortfolio.length ? withPortfolio.reduce((s, a) => s + a.value, 0) : null;
-  const totalStart = withPortfolio.reduce((s, a) => s + (a.starting_cash ?? 0), 0) || null;
-  const totalPnl = totalValue !== null && totalStart !== null ? totalValue - totalStart : null;
+  const combined = combineCapital(withPortfolio);
+  const totalValue = combined.value, totalStart = combined.start, totalPnl = combined.pnl;
   const openPositions = agents.reduce((s, a) => s + a.positions.length, 0);
 
   let queue = { total: 0, byStatus: {} };
@@ -345,7 +418,7 @@ function build() {
   } catch { /* ignore */ }
 
   const spend = queueSpend(db);
-  const history = snapshotHistory(totalValue);
+  const history = snapshotHistory(totalValue, totalStart);
   const daily = dailyActivity(db, agents);   // must run BEFORE the db is closed
   const stale = agents.filter(a => a.status === 'stale').length;
 
@@ -364,7 +437,11 @@ function build() {
     kpis: {
       total_value: totalValue,
       total_pnl: totalPnl,
-      total_pnl_pct: totalPnl !== null && totalStart ? (totalPnl / totalStart) * 100 : null,
+      total_pnl_pct: combined.pct,
+      total_start: totalStart,
+      // Named, so the Deck can say WHY there is no combined percentage
+      // instead of showing a blank where a number used to be.
+      start_unknown_for: combined.noStart,
       open_positions: openPositions,
       spend_today: spend.total_today,
       has_cost_data: spend.has_cost_data,
@@ -382,4 +459,4 @@ function build() {
   };
 }
 
-module.exports = { build };
+module.exports = { build, startingCapital, combineCapital };

@@ -11,6 +11,11 @@
 const fs = require('fs');
 const path = require('path');
 const { AGENTS_DIR } = require('./db');
+// THE starting-capital rule, imported rather than written a second time.
+// This file used to fall back to the literal 10000, which is why Ace's own
+// panel showed a confident percentage while the Deck showed none - two
+// pieces of code deciding one thing, and they disagreed.
+const { startingCapital } = require('./dashboard-data');
 
 const DIR = path.join(AGENTS_DIR, 'ace');
 
@@ -114,7 +119,12 @@ function build() {
   const open = (bank && (bank.open_bets || bank.positions)) || [];
   const settled = (bank && bank.settled_bets) || [];
   const cash = bank ? (bank.bankroll ?? bank.cash ?? bank.balance ?? null) : null;
-  const start = bank ? (bank.starting_bankroll ?? bank.starting_cash ?? 10000) : null;
+  // Was `?? 10000` - a literal nobody had read from anywhere, and the reason
+  // this panel showed Ace a confident percentage while the Deck showed none.
+  // THE starting-capital rule is dashboard-data's, imported rather than
+  // written a second time; it falls back to the seed file, which is a real
+  // recorded value, and to nothing after that.
+  const start = startingCapital(DIR, bank);
 
   const picked = candidates.filter(c => c.status === 'bet' || c.status === 'picked');
 
