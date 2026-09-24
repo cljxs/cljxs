@@ -699,20 +699,6 @@
        "periods": 4
       }
      },
-     "tickets": [
-      {
-       "summary": "Tickets as low as $102",
-       "numberAvailable": 2691,
-       "links": [
-        {
-         "href": "https://www.vividseats.com/green-bay-packers-tickets-green-bay-lambeau-field-3-4-2026/production/6489939?wsUser=717"
-        },
-        {
-         "href": "https://www.vividseats.com/lambeau-field-tickets/venue/895?wsUser=717"
-        }
-       ]
-      }
-     ],
      "startDate": "2026-09-25T00:15Z",
      "broadcast": "Prime Video",
      "geoBroadcasts": [
@@ -1774,20 +1760,6 @@
        "periods": 4
       }
      },
-     "tickets": [
-      {
-       "summary": "Tickets as low as $255",
-       "numberAvailable": 2796,
-       "links": [
-        {
-         "href": "https://www.vividseats.com/buffalo-bills-tickets-orchard-park-highmark-stadium-3-3-2026/production/6488324?wsUser=717"
-        },
-        {
-         "href": "https://www.vividseats.com/highmark-stadium-tickets/venue/1385?wsUser=717"
-        }
-       ]
-      }
-     ],
      "startDate": "2026-09-27T17:00Z",
      "broadcast": "FOX",
      "geoBroadcasts": [
@@ -3885,20 +3857,6 @@
        "periods": 4
       }
      },
-     "tickets": [
-      {
-       "summary": "Tickets as low as $250",
-       "numberAvailable": 4593,
-       "links": [
-        {
-         "href": "https://www.vividseats.com/chicago-bears-tickets-chicago-soldier-field-3-5-2026/production/6488786?wsUser=717"
-        },
-        {
-         "href": "https://www.vividseats.com/soldier-field-tickets/venue/1567?wsUser=717"
-        }
-       ]
-      }
-     ],
      "startDate": "2026-09-29T00:15Z",
      "broadcast": "ESPN/ABC",
      "geoBroadcasts": [
