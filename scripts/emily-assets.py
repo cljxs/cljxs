@@ -349,7 +349,8 @@ def directed(prompt, product=""):
             f"{ALL_OVER_DIRECTION if all_over(product) else PRINT_DIRECTION}")
 
 
-def generate(path, prompt, key, model=None, product=""):
+def generate(path, prompt, key, model=None, product="", direction=None,
+             aspect=None):
     """Draw one image. Returns (bytes written, usage).
 
     `usage.include` asks OpenRouter to price the call and hand the number back
@@ -358,14 +359,20 @@ def generate(path, prompt, key, model=None, product=""):
     an image is depends on the model, the size and the quality. So rather than
     estimate it and be wrong in a direction nobody can check, the run reports
     what it actually cost.
+
+    `direction` and `aspect` are for art that is not a print file - the shop
+    banner. Left out, a product's art gets its print direction and its face's
+    shape exactly as before; the request is still built here, once.
     """
+    content = (f"{prompt.strip()}\n\n{direction}" if direction is not None
+               else directed(prompt, product))
     request = {
         "model": model or image_model(),
-        "messages": [{"role": "user", "content": directed(prompt, product)}],
+        "messages": [{"role": "user", "content": content}],
         "modalities": ["image", "text"],
         "usage": {"include": True},
     }
-    ratio = shape(product)
+    ratio = aspect or shape(product)
     if ratio:
         # Asked for, not assumed. main() reports the shape that actually
         # came back, and draft covers the face whatever it is - a model that

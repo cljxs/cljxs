@@ -12327,3 +12327,87 @@ class TheBriefingValuesBelfortsBookAsBelfortDoes(unittest.TestCase):
         text = self.fc.build_briefing(report, "2026-09-24")
         line = [l for l in text.splitlines() if l.startswith("- **Belfort**")][0]
         self.assertNotIn("(-", line, line)
+
+
+class TheShopBannerIsCroppedByCode(unittest.TestCase):
+    """Etsy's big banner is 4:1; the image model's widest shape is 21:9.
+
+    Asked for "4:1" in words, a model returns whatever it likes. So it is
+    asked for 21:9 and code keeps the centre 4:1 band. And a banner is not a
+    print file: the print direction ("plain background") would be wrong on
+    it, so generate() takes the banner's own direction - no text, no bags.
+    """
+
+    def setUp(self):
+        self.eb = load("emily_banner", "emily-banner.py")
+        self.ea = load("emily_assets_banner", "emily-assets.py")
+
+    def test_a_wide_image_keeps_full_height(self):
+        self.assertEqual(self.eb.crop_box(1536, 672), (0, 144, 1536, 384))
+
+    def test_a_squarer_image_trims_top_and_bottom(self):
+        x, y, w, h = self.eb.crop_box(1024, 1024)
+        self.assertEqual((w, h), (1024, 256))
+        self.assertEqual((x, y), (0, 384))
+
+    def test_an_image_wider_than_four_to_one_trims_the_sides(self):
+        x, y, w, h = self.eb.crop_box(2000, 300)
+        self.assertEqual((w, h), (1200, 300))
+        self.assertEqual(x, 400)
+
+    def test_the_crop_takes_exactly_that_band(self):
+        # Each pixel holds its own (x, y), so every one can be checked. Both
+        # shapes: one trims the sides, one trims top and bottom.
+        for w, h in ((20, 3), (8, 6)):
+            px = bytearray()
+            for y in range(h):
+                for x in range(w):
+                    px += bytes((x, y, 0, 255))
+            x0, y0, cw, ch = self.eb.crop_box(w, h)
+            out = self.eb.crop(px, w, (x0, y0, cw, ch))
+            self.assertEqual(len(out), cw * ch * 4)
+            got = [(out[i], out[i + 1]) for i in range(0, len(out), 4)]
+            want = [(x, y) for y in range(y0, y0 + ch) for x in range(x0, x0 + cw)]
+            self.assertEqual(got, want, f"{w}x{h}")
+
+    def request_for(self, **kw):
+        sent = {}
+
+        class Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return b'{"choices": [{"message": {}}]}'
+
+        def urlopen(req, timeout=None):
+            sent["body"] = json.loads(req.data)
+            return Resp()
+        old = self.ea.urllib.request.urlopen
+        self.ea.urllib.request.urlopen = urlopen
+        try:
+            with self.assertRaises(RuntimeError):      # no image in the reply
+                self.ea.generate("/dev/null", "a prompt", "k", model="m", **kw)
+        finally:
+            self.ea.urllib.request.urlopen = old
+        return sent["body"]
+
+    def test_the_banner_gets_its_own_direction_and_shape(self):
+        body = self.request_for(direction="NO text, no bags.", aspect="21:9")
+        text = body["messages"][0]["content"]
+        self.assertIn("NO text, no bags.", text)
+        self.assertNotIn(self.ea.PRINT_DIRECTION, text)
+        self.assertEqual(body["image_config"], {"aspect_ratio": "21:9"})
+
+    def test_product_art_is_unchanged(self):
+        body = self.request_for()
+        self.assertIn(self.ea.PRINT_DIRECTION, body["messages"][0]["content"])
+        self.assertNotIn("image_config", body)
+
+    def test_the_banner_asks_for_no_words_and_no_products(self):
+        for must in ("NO text", "no bags", "no products", "no logo"):
+            self.assertIn(must.lower(), self.eb.DIRECTION.lower())
+
+    def test_the_deck_serves_only_plain_filenames_from_the_shop_folder(self):
+        src = (ROOT / "mission-control-api" / "emily.js").read_text()
+        route = src.split("app.get('/api/emily/shop/:name'", 1)[1].split("app.get(", 1)[0]
+        self.assertIn("IMAGE_RE.test(name", route)
+        self.assertIn("path.join(SHOP, name)", route)

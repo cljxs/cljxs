@@ -22,6 +22,9 @@ const { ROOT, AGENTS_DIR } = require('./db');
 const BUILD_SCRIPT = path.join(ROOT, 'scripts', 'emily-build.py');
 
 const BUILDS = path.join(AGENTS_DIR, 'emily', 'builds');
+// Shop-level art - the Etsy banner - kept out of builds/ so nothing that walks
+// the builds (draft, status, the gallery) mistakes it for a product.
+const SHOP = path.join(AGENTS_DIR, 'emily', 'shop');
 
 // A slug comes from emily-new-build.py's slugify(), so it is already
 // [a-z0-9-]. Anything else is not a build we made.
@@ -234,6 +237,23 @@ function register(app) {
     const b = describe(req.params.slug);
     if (!b) return res.status(404).json({ error: 'no such build' });
     res.json(b);
+  });
+
+  // The shop banner, for saving to a tablet and uploading to Etsy. A plain
+  // filename only: IMAGE_RE refuses a slash, so nothing outside SHOP is
+  // reachable.
+  app.get('/api/emily/shop/:name', (req, res) => {
+    const name = req.params.name;
+    if (!IMAGE_RE.test(name || '')) return res.status(400).json({ error: 'bad name' });
+    const full = path.join(SHOP, name);
+    let st;
+    try { st = fs.statSync(full); } catch {
+      return res.status(404).json({ error: 'not drawn yet - run scripts/emily-banner.py' });
+    }
+    if (!st.isFile()) return res.status(404).json({ error: 'not found' });
+    res.type(TYPES[path.extname(full).toLowerCase()] || 'application/octet-stream');
+    res.set('Cache-Control', 'no-cache');
+    fs.createReadStream(full).pipe(res);
   });
 
   app.get('/api/emily/builds/:slug/file/:name', (req, res) => {
