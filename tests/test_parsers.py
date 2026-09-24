@@ -12411,3 +12411,62 @@ class TheShopBannerIsCroppedByCode(unittest.TestCase):
         route = src.split("app.get('/api/emily/shop/:name'", 1)[1].split("app.get(", 1)[0]
         self.assertIn("IMAGE_RE.test(name", route)
         self.assertIn("path.join(SHOP, name)", route)
+
+
+class ABuildThatStoppedDoesNotSayBuilding(unittest.TestCase):
+    """"It's been building for like 20 minutes."
+
+    The gallery took a build's status from its build.json, and called a
+    folder with none "in_progress". The dispatcher stops an Emily run at ten
+    minutes and marks the task FAILED in the queue - which the gallery never
+    asked - so the card said "building..." for as long as anyone looked. Now
+    Emily's own record wins where she wrote one, and the queue answers where
+    she did not.
+    """
+
+    API = ROOT / "mission-control-api"
+    NODE = shutil.which("node")
+
+    def status(self, build, task):
+        if not (self.NODE and (self.API / "node_modules" / "better-sqlite3").is_dir()):
+            self.skipTest("node or the Deck's node_modules are not installed")
+        js = (f"const m=require({json.dumps(str(self.API / 'emily.js'))});"
+              f"process.stdout.write(JSON.stringify(m.statusOf({json.dumps(build)},"
+              f"{json.dumps(task)})))")
+        r = subprocess.run([self.NODE, "-e", js], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def test_a_run_the_dispatcher_stopped_reads_failed(self):
+        self.assertEqual(self.status({}, {"status": "failed"}), "failed")
+
+    def test_a_running_task_reads_in_progress(self):
+        self.assertEqual(self.status({}, {"status": "in_progress"}), "in_progress")
+
+    def test_a_task_not_yet_started_reads_queued(self):
+        for st in ("pending", "assigned"):
+            self.assertEqual(self.status({}, {"status": st}), "queued")
+
+    def test_a_folder_nothing_is_working_on_says_so(self):
+        self.assertEqual(self.status({}, None), "no_record")
+
+    def test_emilys_own_record_wins(self):
+        self.assertEqual(self.status({"status": "ready_for_review"}, {"status": "failed"}),
+                         "ready_for_review")
+
+    def test_the_task_is_found_by_its_build_dedupe_key(self):
+        # emily-new-build.py gives every build task this key; the Deck joins on it.
+        nb = (SCRIPTS / "emily-new-build.py").read_text()
+        self.assertIn('"dedupe_key": f"emily-build-{slug}"', nb)
+        js = (self.API / "emily.js").read_text()
+        self.assertIn("`emily-build-${slug}`", js)
+
+    def test_the_gallery_says_why_a_build_failed(self):
+        src = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        body = src.split("function blockedReason(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("b.status === 'failed'", body)
+        self.assertIn("b.task.note", body)
+
+    def test_the_server_hands_emily_the_queue(self):
+        src = (ROOT / "mission-control-api" / "server.js").read_text()
+        self.assertIn("emilyRoutes.register(app, db)", src)

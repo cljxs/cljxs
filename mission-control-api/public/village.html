@@ -1334,7 +1334,8 @@ function openPanel(name) {
       : `<div class="muted" style="margin-top:10px">📄 <span class="doclink" onclick="openDoc('${esc(a.name)}')">reports…</span></div>`}
     ${a.name === 'scout' ? `<h2 style="font-size:15px;margin:18px 0 8px">Ideas awaiting you</h2>
       <div id="scoutIdeas"><div class="muted">loading…</div></div>` : ''}
-    ${a.name === 'emily' ? `<h2 style="font-size:15px;margin:18px 0 8px">The gallery</h2>
+    ${a.name === 'emily' ? `<div id="emilyShop"></div>
+      <h2 style="font-size:15px;margin:18px 0 8px">The gallery</h2>
       <div id="emilyBuilds"><div class="muted">loading…</div></div>` : ''}
     ${a.name === 'ace' ? `<div id="aceLedger"><div class="muted">loading the ledger…</div></div>` : ''}
     <button id="close">Close</button>`;
@@ -1342,7 +1343,7 @@ function openPanel(name) {
   $('panel').style.display = 'flex';
   $('close').onclick = closePanel;
   if (a.name === 'scout') loadScoutIdeas();
-  if (a.name === 'emily') loadEmilyBuilds();
+  if (a.name === 'emily') { loadEmilyShop(); loadEmilyBuilds(); }
   if (a.name === 'ace') loadAceLedger();
 }
 let ideaBusy = false;
@@ -1570,11 +1571,21 @@ const kb = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.round(n /
 
 // Say plainly whether a build is finished and whether the art is real. A
 // placeholder thumbnail looks like art until you open it.
+// Minutes since a UTC "YYYY-MM-DD HH:MM:SS" from SQLite, or null.
+function minsSince(utc){
+  const t = Date.parse(String(utc || '').replace(' ', 'T') + 'Z');
+  return isNaN(t) ? null : Math.max(0, Math.round((Date.now() - t) / 60000));
+}
+
 function buildPills(b) {
   const p = [];
+  const m = b.task ? minsSince(b.task.started_at) : null;
   if (b.status === 'ready_for_review') p.push(['ok', 'ready']);
   else if (b.status === 'ready_local') p.push(['', 'local only']);
-  else if (b.status === 'in_progress') p.push(['', 'building…']);
+  else if (b.status === 'in_progress') p.push(['', m === null ? 'building…' : `building ${m} min`]);
+  else if (b.status === 'queued') p.push(['', 'queued']);
+  else if (b.status === 'failed') p.push(['warn', 'failed']);
+  else if (b.status === 'no_record') p.push(['warn', 'no build record']);
   else p.push(['', String(b.status).replace(/_/g, ' ')]);
   if (b.art_mode === 'placeholder') p.push(['warn', 'placeholder']);
   if (b.listing_error) p.push(['warn', 'listing unreadable']);
@@ -1586,9 +1597,36 @@ function buildPills(b) {
 // sat in a dispatcher log nobody reads.
 function blockedReason(b){
   if (b.published || b.printify) return '';
+  if (b.status === 'failed' && b.task)
+    return `Emily's run ended without finishing it${b.task.note ? ' — ' + b.task.note : ''}. ` +
+           `Approve the idea again, or remove this folder.`;
+  if (b.status === 'no_record')
+    return 'No build.json and no task in the queue for this folder - nothing is working on it.';
   if (b.draft_blocked && b.draft_blocked.reason) return b.draft_blocked.reason;
   if (b.listing_error) return `listing.json will not parse — ${b.listing_error}`;
   return '';
+}
+
+// The shop banner from emily-banner.py, if one has been drawn. Asked for with
+// its timestamp so the six-second refresh reuses the cached image.
+async function loadEmilyShop() {
+  const host = $('emilyShop');
+  if (!host) return;
+  let d;
+  try { d = await (await fetch('/api/emily/shop', { cache: 'no-store' })).json(); }
+  catch (e) { return; }
+  if (!d.banner) {
+    host.innerHTML = `<h2 style="font-size:15px;margin:18px 0 8px">Shop banner</h2>
+      <div class="muted">Not drawn yet. On the droplet:
+      <code>python3 scripts/emily-banner.py</code></div>`;
+    return;
+  }
+  const src = '/api/emily/shop/banner.png?v=' + encodeURIComponent(d.banner.updated_at);
+  host.innerHTML = `<h2 style="font-size:15px;margin:18px 0 8px">Shop banner</h2>
+    <a href="${src}" target="_blank"><img src="${src}" alt="shop banner"
+      style="width:100%;border-radius:10px;border:1px solid var(--line);display:block"></a>
+    <div class="muted" style="margin-top:6px">Tap it to open full size, press and hold to save,
+      then Etsy &rsaquo; Shop Manager &rsaquo; Edit shop &rsaquo; Banner.</div>`;
 }
 
 async function loadEmilyBuilds() {

@@ -281,7 +281,7 @@ app.get('/village', (req, res) => {
 });
 
 scoutRoutes.register(app, PORT);
-emilyRoutes.register(app);
+emilyRoutes.register(app, db);
 reportRoutes.register(app);
 aceRoutes.register(app);
 propsRoutes.register(app);

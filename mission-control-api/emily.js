@@ -69,6 +69,36 @@ function safeJoin(slug, name) {
 // Emily writes build.json last, so a build without one is either mid-flight
 // or a build that died. Either way the folder is still worth showing - the
 // files on disk are the truth, build.json is her account of them.
+// The task queue, for the one thing a build folder cannot say about itself:
+// what happened to the run that was meant to fill it. Set by register().
+let DB = null;
+
+// Emily's latest task for a build, found by the dedupe key emily-new-build
+// gives every build task: emily-build-<slug>.
+function taskFor(slug) {
+  if (!DB) return null;
+  try {
+    return DB.prepare(`SELECT id, status, created_at, started_at, completed_at, result
+                       FROM tasks WHERE dedupe_key = ? ORDER BY id DESC LIMIT 1`)
+      .get(`emily-build-${slug}`) || null;
+  } catch { return null; }
+}
+
+// A build's status, in one place.
+//
+// It used to be build.json's status, or "in_progress" when build.json was
+// empty - so a run the dispatcher had stopped at its ten-minute limit, and
+// marked FAILED in the queue, went on saying "building..." in the gallery
+// for as long as anyone looked. Emily's own record still wins when she wrote
+// one; when she did not, the queue says what happened.
+function statusOf(build, task) {
+  if (build && build.status) return build.status;
+  if (!task) return 'no_record';
+  if (task.status === 'pending' || task.status === 'assigned') return 'queued';
+  if (task.status === 'done') return 'finished_unrecorded';
+  return task.status;                     // in_progress, failed, cancelled ...
+}
+
 function describe(slug) {
   const dir = safeJoin(slug, null);
   if (!dir) return null;
@@ -91,6 +121,7 @@ function describe(slug) {
   });
 
   const build = readJson(path.join(dir, 'build.json')) || {};
+  const task = build.status ? null : taskFor(slug);
   const read = readJsonOrWhy(path.join(dir, 'listing.json'));
   const listing = read.data || {};
 
@@ -103,7 +134,12 @@ function describe(slug) {
   return {
     slug,
     title: listing.title || build.idea || build.title || slug.replace(/-/g, ' '),
-    status: build.status || (Object.keys(build).length ? 'unknown' : 'in_progress'),
+    status: statusOf(build, task),
+    task: task ? {
+      id: task.id, status: task.status, started_at: task.started_at,
+      completed_at: task.completed_at,
+      note: task.result ? String(task.result).slice(0, 400) : null,
+    } : null,
     art_mode: art.includes('placeholder') ? 'placeholder'
             : art.includes('generated') ? 'generated' : null,
     product_type: listing.product_type || build.product || null,
@@ -162,7 +198,18 @@ function runBuildScript(args) {
   });
 }
 
-function register(app) {
+function register(app, db) {
+  DB = db || null;
+
+  // What shop-level art exists, so Emily's house can show the banner and
+  // cache it by its timestamp rather than re-download it every refresh.
+  app.get('/api/emily/shop', (req, res) => {
+    let st = null;
+    try { st = fs.statSync(path.join(SHOP, 'banner.png')); } catch { /* not drawn */ }
+    res.json({ banner: st && st.isFile()
+      ? { bytes: st.size, updated_at: new Date(st.mtimeMs).toISOString() } : null });
+  });
+
   // Archive a build. The script decides whether it may go: a build with a
   // live Printify product is refused, because moving the folder would leave
   // that product in Printify with nothing here pointing at it. `force` is the
@@ -252,7 +299,9 @@ function register(app) {
     }
     if (!st.isFile()) return res.status(404).json({ error: 'not found' });
     res.type(TYPES[path.extname(full).toLowerCase()] || 'application/octet-stream');
-    res.set('Cache-Control', 'no-cache');
+    // Emily's house asks for it with ?v=<timestamp>, so a cached copy is
+    // only ever the current one; a bare URL still revalidates.
+    res.set('Cache-Control', req.query.v ? 'max-age=31536000, immutable' : 'no-cache');
     fs.createReadStream(full).pipe(res);
   });
 
@@ -270,4 +319,4 @@ function register(app) {
   });
 }
 
-module.exports = { register, listBuilds, describe };
+module.exports = { register, listBuilds, describe, statusOf };
