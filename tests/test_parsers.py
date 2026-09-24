@@ -13,6 +13,7 @@ with nothing installed:
     python3 -m unittest discover -s tests -v
 """
 
+import collections
 import copy
 import contextlib
 import io
@@ -11303,7 +11304,7 @@ class AnInjuredPlayerIsFlaggedNotAdjusted(unittest.TestCase):
     def test_forecast_hands_the_designation_to_the_row(self):
         body = (SCRIPTS / "props-forecast.py").read_text()
         body = body.split("def cmd_forecast(", 1)[1].split("\ndef ", 1)[0]
-        self.assertIn("samples, seasons, avail, injury)", body)
+        self.assertIn("samples, seasons, avail, injury, ", body)
         self.assertIn("injury_note(injury)", body)
         self.assertIn("carry an injury designation", body)
 
@@ -11654,3 +11655,155 @@ class ThePropsHallIsNotRebuiltUnderYourFingers(unittest.TestCase):
 
     def test_a_healthy_card_carries_no_flag(self):
         self.assertNotIn("\u26a0", self.card(dict(self.ROW, injury=None)))
+
+    def test_the_card_shows_the_books_line_as_written(self):
+        html = self.card(dict(self.ROW, line={"book": "DraftKings", "line": [4.5],
+                                              "shown": "DraftKings 4.5"}))
+        self.assertIn('class="fcline">DraftKings 4.5<', html)
+        self.assertNotIn("fcline", self.card(dict(self.ROW, line=None)))
+
+
+class TheBooksLineIsShownAndNeverUsed(unittest.TestCase):
+    """DraftKings' line beside each forecast - and nothing more.
+
+    ESPN carries one sportsbook's player props for every game: 1,072 for
+    LAC @ BUF, each with its current and opening line but no price. The line
+    is where the book expects a 50/50 split, which makes it the one number
+    worth reading beside a percentage. The owner asked to SEE it and was
+    explicit that it must not change a percentage, so that is the first thing
+    tested here.
+
+    Fixtures: ESPN's real odds listing and real propBets page for LAC @ BUF,
+    trimmed to three players plus the look-alike props the parser must skip.
+    """
+
+    def setUp(self):
+        self.m = load("props_forecast_lines", "props-forecast.py")
+        self.odds = json.loads((FIXTURES / "espn-nfl-odds.json").read_text())
+        self.props = json.loads((FIXTURES / "espn-nfl-propbets.json").read_text())
+
+    def aid(self, it):
+        return re.search(r"/athletes/(\d+)", it["athlete"]["$ref"]).group(1)
+
+    # --- the one rule ---------------------------------------------------
+
+    def test_a_line_changes_no_percentage(self):
+        sample = [255.0, 198.0, 241.0, 310.0, 226.0, 187.0, 264.0, 233.0, 219.0, 280.0]
+        args = ("1", "A @ B", None, "2", "A Passer", "QB", "AAA",
+                {"passing_yards": sample}, ["2026"], None, None)
+        bare = self.m.rows_for_player(*args)
+        for value in ([241.5], [150.5], [400.5], [225.5, 229.5]):
+            lined = self.m.rows_for_player(*args, {"passing_yards": {
+                "book": "DraftKings", "line": value, "open": value, "shown": "x"}})
+            for key in ("probabilities", "interval", "sample_mean", "p25", "p75",
+                        "bandwidth", "coarse", "seed"):
+                self.assertEqual(bare[0][key], lined[0][key], f"{key} moved with line {value}")
+            self.assertEqual(lined[0]["line"]["line"], value)
+
+    def test_nothing_that_computes_a_percentage_mentions_a_line(self):
+        src = (SCRIPTS / "props-forecast.py").read_text()
+        for fn in ("bandwidth", "point_prob", "smoothed_probs", "interval",
+                   "percentile", "is_coarse", "samples_for", "strongest"):
+            body = src.split(f"def {fn}(", 1)[1].split("\ndef ", 1)[0]
+            self.assertNotIn("line", re.sub(r'""".*?"""|#.*', "", body, flags=re.S)
+                             .replace("newline", ""), fn)
+
+    # --- reading ESPN ---------------------------------------------------
+
+    def test_every_full_game_line_in_the_fixture_is_read(self):
+        # Round trip against the payload, not restated numbers.
+        book_of = {spec["book"]: m for m, spec in self.m.MARKETS.items() if spec.get("book")}
+        got = self.m.lines_from(self.props["items"], "DraftKings")
+        want = {}
+        for it in self.props["items"]:
+            market = book_of.get(it["type"]["name"])
+            if market:
+                want.setdefault((self.aid(it), market), set()).add(it["current"]["target"]["value"])
+        self.assertTrue(want)
+        self.assertEqual({k: sorted(v) for k, v in want.items()},
+                         {k: v["line"] for k, v in got.items()})
+
+    def test_look_alike_props_are_not_read_as_full_game_lines(self):
+        names = {it["type"]["name"] for it in self.props["items"]}
+        decoys = {"1st Half Total Passing Yards", "Passing Yards Milestones",
+                  "Anytime Touchdown Scorer", "Total Pass Completions (incl. overtime)"}
+        self.assertTrue(decoys <= names, "the fixture must still hold the decoys")
+        read = self.m.lines_from(self.props["items"], "DraftKings")
+        self.assertTrue(all(m in self.m.MARKETS for _a, m in read))
+        self.assertEqual(len(read), len({(a, m) for a, m in read}))
+
+    def test_the_over_and_under_copies_collapse_to_one_line(self):
+        pairs = collections.Counter((self.aid(i), i["type"]["name"]) for i in self.props["items"]
+                                    if i["type"]["name"].startswith("Total"))
+        self.assertTrue(any(n == 2 for n in pairs.values()), "ESPN sends each side")
+        for v in self.m.lines_from(self.props["items"], "DraftKings").values():
+            self.assertEqual(len(v["line"]), 1, v)
+
+    def test_a_split_line_is_kept_as_it_was_offered(self):
+        def side(v):
+            return {"type": {"name": "Total Passing Yards (incl. overtime)"},
+                    "athlete": {"$ref": "http://x/athletes/7?lang=en"},
+                    "current": {"target": {"value": v}}, "open": {"target": {"value": v}}}
+        got = self.m.lines_from([side(225.5), side(229.5)], "DraftKings")[("7", "passing_yards")]
+        self.assertEqual(got["line"], [225.5, 229.5])
+        self.assertEqual(got["shown"], "DraftKings o225.5/u229.5")
+
+    def test_the_book_is_named_from_espn_not_assumed(self):
+        pages = {"odds": self.odds, "props": dict(self.props, pageCount=1)}
+        self.m.get = lambda url: pages["props"] if "propBets" in url else pages["odds"]
+        lines, note = self.m.book_lines("401872953")
+        self.assertIsNone(note)
+        self.assertEqual({v["book"] for v in lines.values()},
+                         {self.odds["items"][0]["provider"]["name"]})
+
+    def test_every_page_is_read(self):
+        # 1,072 props arrive as two pages of 1,000. Reading one loses the rest.
+        asked = []
+        first = dict(self.props, pageCount=2, items=self.props["items"][:10])
+        second = dict(self.props, pageCount=2, items=self.props["items"][10:])
+
+        def get(url):
+            asked.append(url)
+            if "propBets" not in url:
+                return self.odds
+            return second if "page=2" in url else first
+        self.m.get = get
+        lines, _ = self.m.book_lines("401872953")
+        self.assertEqual(sum("propBets" in u for u in asked), 2)
+        self.assertEqual(lines, self.m.lines_from(self.props["items"], lines and
+                                                  next(iter(lines.values()))["book"]))
+        self.assertTrue(all(u.startswith("https://") for u in asked))
+
+    def test_no_lines_is_a_note_not_a_failure(self):
+        def down(url):
+            raise OSError("ESPN is down")
+        self.m.get = down
+        self.assertEqual(self.m.book_lines("1")[0], {})
+        self.m.get = lambda url: {"items": [{"provider": {"name": "X"}}]}
+        lines, note = self.m.book_lines("1")
+        self.assertEqual(lines, {})
+        self.assertIn("no book has posted", note)
+
+    # --- where it shows ------------------------------------------------
+
+    def test_forecast_passes_each_player_only_his_own_lines(self):
+        body = (SCRIPTS / "props-forecast.py").read_text()
+        body = body.split("def cmd_forecast(", 1)[1].split("\ndef ", 1)[0]
+        self.assertEqual(body.count("book_lines(event_id)"), 1, "fetched once per run")
+        self.assertIn("if a == aid", body)
+        self.assertIn("avail, injury, mine)", body)
+
+    def test_best_shows_it(self):
+        row = self.m.rows_for_player("1", "A @ B", None, "2", "A Receiver", "WR", "AAA",
+                                     {"receptions": [3.0, 5.0, 4.0, 6.0, 2.0, 5.0, 4.0, 3.0, 7.0, 4.0]},
+                                     ["2026"], None, None,
+                                     {"receptions": {"book": "DraftKings", "line": [4.5],
+                                                     "open": [4.5], "shown": "DraftKings 4.5"}})[0]
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.m.STORE = Path(tmp.name) / "f.json"
+        self.m.save({"forecasts": [row]})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.m.cmd_best("1")
+        self.assertIn("DraftKings 4.5", out.getvalue())

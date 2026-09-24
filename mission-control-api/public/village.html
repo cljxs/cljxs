@@ -203,6 +203,9 @@
   .fcfoot{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:10px;letter-spacing:.04em;color:var(--mute)}
   .fcfoot span{white-space:nowrap}
   .fcwarn{color:#e8b566;font-weight:700}
+  /* A book's line, for reading beside the percentages. Deliberately quiet:
+     it is context, and nothing on the card was computed from it. */
+  .fcline{color:#9fb4d0}
   .fcres{margin-top:10px;padding-top:8px;border-top:1px solid var(--line);font-size:12px;font-weight:600}
   .fcres.pend{color:var(--mute);font-weight:400}
   .verdict b{color:var(--ink)}
@@ -1761,6 +1764,7 @@ function forecastCard(f){
       ${f.availability && f.availability.thin
         ? `<span class="fcwarn">PLAYED ${f.availability.played}/${f.availability.team_games}</span>` : ''}
       ${f.coarse ? `<span class="fcwarn">FLAT</span>` : ''}
+      ${f.line && f.line.shown ? `<span class="fcline">${esc(f.line.shown)}</span>` : ''}
       ${f.injury && f.injury.status
         ? `<span class="fcwarn">\u26a0 ${esc(String(f.injury.status).toUpperCase())}${
             f.injury.date ? ' ' + esc(String(f.injury.date).slice(5)) : ''}</span>` : ''}
@@ -2001,7 +2005,9 @@ function drawProps(){
             percentage carries its 90% interval — how far it moves when his own games
             are resampled, so a small sample says so rather than reading like a big one.
             A percentage is what he does <em>when he plays</em>; PLAYED n/m marks the rows
-            where that is a different question from the one a book prices.</div>`
+            where that is a different question from the one a book prices. Where a
+            sportsbook has posted a line it is shown in blue for reference - it is not a
+            price, and no percentage here was computed from it.</div>`
           + `<div class="fcards">` + rows.map(forecastCard).join('') + `</div>`
         : `<div class="muted">Nobody on the fixtures forecast so far reaches
            ${esc(marketLabel(propsTab))} in a quarter of his games. That is the filter

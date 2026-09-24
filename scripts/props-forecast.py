@@ -52,6 +52,7 @@ import json
 import math
 import os
 import random
+import re
 import ssl
 import sys
 import urllib.request
@@ -71,7 +72,9 @@ UA = "Mozilla/5.0 (compatible; props-forecast/1.0)"
 # Printed with every forecast. It is the claim this script is allowed to make
 # and the one it is not, and it lives here so a test can check the script says
 # it rather than merely that the words appear somewhere in the file.
-NOT_A_BET = ("NOT A BET and UNPRICED - there are no odds in this file. "
+NOT_A_BET = ("NOT A BET and UNPRICED - there are no odds in this file; a "
+             "book's line is\nshown where one exists, and nothing is computed "
+             "from it. "
              "Grade it after the game:\n"
              "  python3 scripts/props-forecast.py grade")
 
@@ -122,29 +125,38 @@ MIN_GAMES = 8
 SEASONS_BACK = 1                  # current season plus this many previous
 
 # Every market, once: the ESPN stat name it is read from, the unit it is
-# quoted in, and the bars worth asking about. Adding a market is a line here -
+# quoted in, the bars worth asking about, and the name a sportsbook gives the
+# same market on ESPN's prop feed (None where no book offers it). Adding a
+# market is a line here -
 # the log reader, the box score reader, the forecast rows and the Deck all
 # come off this table, so there is nowhere else for a second opinion to live.
 MARKETS = {
     "passing_yards":     {"stat": "passingYards",      "unit": "yds",
+                          "book": "Total Passing Yards (incl. overtime)",
                           "thresholds": (200, 225, 250, 275),
                           "counts": False},
     "passing_tds":       {"stat": "passingTouchdowns", "unit": "td",
+                          "book": "Total Passing Touchdowns (incl. overtime)",
                           "thresholds": (1, 2, 3),
                           "counts": True},
     "receiving_yards":   {"stat": "receivingYards",    "unit": "yds",
+                          "book": "Total Receiving Yards (incl. overtime)",
                           "thresholds": (40, 50, 60, 70),
                           "counts": False},
     "receptions":        {"stat": "receptions",        "unit": "rec",
+                          "book": "Total Receptions (incl. overtime)",
                           "thresholds": (3, 4, 5, 6),
                           "counts": True},
     "receiving_targets": {"stat": "receivingTargets",  "unit": "tgts",
+                          "book": None,       # no book offers targets
                           "thresholds": (4, 5, 6, 8),
                           "counts": True},
     "rushing_yards":     {"stat": "rushingYards",      "unit": "yds",
+                          "book": "Total Rushing Yards (incl. overtime)",
                           "thresholds": (30, 50, 70, 90),
                           "counts": False},
     "rushing_attempts":  {"stat": "rushingAttempts",   "unit": "att",
+                          "book": "Total Carries (incl. overtime)",
                           "thresholds": (8, 12, 15, 18),
                           "counts": True},
 }
@@ -447,6 +459,89 @@ def availability(season_games, played):
             "thin": rate < AVAILABILITY_FLOOR}
 
 
+CORE = "https://sports.core.api.espn.com/v2/sports/football/leagues/nfl"
+
+
+def lines_from(items, book):
+    """{(athlete_id, market): {"book", "line", "open", "updated"}} off ESPN's
+    propBets items.
+
+    SHOWN, NEVER USED. A line sits beside a forecast so the two can be read
+    together; nothing that computes a percentage reads it, and the tests
+    hold that. A forecast built from his own games is the thing being graded,
+    and one nudged toward the book's number would stop being that.
+
+    ESPN sends each prop twice, the over and the under, with the prices
+    stripped and the lines usually identical. Both values are kept, so a book
+    that splits them - o225.5 / u229.5 - is shown as it is rather than
+    averaged into a number it never offered. Only full-game props are read:
+    "1st Half Total Passing Yards" and the milestone ladders have their own
+    names and are not the question a forecast answers.
+    """
+    market_of = {spec["book"]: m for m, spec in MARKETS.items() if spec.get("book")}
+    out = {}
+    for it in items or []:
+        market = market_of.get(((it.get("type") or {}).get("name")) or "")
+        ref = ((it.get("athlete") or {}).get("$ref")) or ""
+        found = re.search(r"/athletes/(\d+)", ref)
+        current = (((it.get("current") or {}).get("target") or {}).get("value"))
+        if not market or not found or not isinstance(current, (int, float)):
+            continue
+        opened = (((it.get("open") or {}).get("target") or {}).get("value"))
+        row = out.setdefault((found.group(1), market),
+                             {"book": book, "line": [], "open": [], "updated": None})
+        if current not in row["line"]:
+            row["line"] = sorted(row["line"] + [current])
+        if isinstance(opened, (int, float)) and opened not in row["open"]:
+            row["open"] = sorted(row["open"] + [opened])
+        stamp = it.get("lastUpdated")
+        if stamp and (row["updated"] is None or stamp > row["updated"]):
+            row["updated"] = stamp
+    # The words the Deck prints, written here once so the page does not
+    # carry a second copy of how a split line is shown.
+    for row in out.values():
+        row["shown"] = line_text(row)
+    return out
+
+
+def book_lines(event_id):
+    """(lines, note) for one game: the first sportsbook ESPN carries props for.
+
+    Never raises. No lines - not posted yet, ESPN down, a game without a
+    prop market - is a forecast without a line beside it, not a failed run.
+    """
+    try:
+        odds = get(f"{CORE}/events/{event_id}/competitions/{event_id}/odds")
+    except Exception as exc:
+        return {}, f"no book lines: {exc}"
+    for item in odds.get("items") or []:
+        ref = ((item.get("propBets") or {}).get("$ref")) or ""
+        if not ref:
+            continue
+        book = ((item.get("provider") or {}).get("name")) or "book"
+        base = ref.replace("http://", "https://", 1).split("?")[0]
+        items, page, pages = [], 1, 1
+        try:
+            while page <= pages:
+                d = get(f"{base}?limit=1000&page={page}")
+                items += d.get("items") or []
+                pages = int(d.get("pageCount") or 1)
+                page += 1
+        except Exception as exc:
+            return {}, f"no {book} lines: {exc}"
+        return lines_from(items, book), None
+    return {}, "no book has posted player props for this game yet"
+
+
+def line_text(line):
+    """'DraftKings 241.5', or 'DraftKings o225.5/u229.5' when the sides differ."""
+    if not line or not line.get("line"):
+        return ""
+    vals = line["line"]
+    shown = f"{vals[0]:g}" if len(vals) == 1 else f"o{vals[0]:g}/u{vals[-1]:g}"
+    return f"{line.get('book') or 'book'} {shown}"
+
+
 def injury_of(athlete):
     """{"status", "date"} of a player's latest injury designation, or None.
 
@@ -612,7 +707,7 @@ def fixture_of(summary):
 
 
 def rows_for_player(event_id, fixture, kickoff, aid, name, pos, team,
-                    samples, seasons, avail, injury=None):
+                    samples, seasons, avail, injury=None, lines=None):
     """One row per market this player actually has a history in."""
     rows = []
     for market, spec in MARKETS.items():
@@ -640,6 +735,9 @@ def rows_for_player(event_id, fixture, kickoff, aid, name, pos, team,
             "p75": percentile(sample, 75),
             "availability": avail,
             "injury": injury,
+            # The book's line, for reading beside the percentages. Stored
+            # after they are computed and read by nothing that computes them.
+            "line": (lines or {}).get(market),
             "coarse": is_coarse(probs, thresholds),
             "counts": counts, "bandwidth": round(h, 2),
             "resamples": RESAMPLES, "interval_span": INTERVAL_SPAN,
@@ -684,6 +782,9 @@ def cmd_forecast(event_id):
                                  and f.get("athlete_id") in gone)]
     available = [c for c in everyone if c[0] not in gone]
 
+    lines, no_lines = book_lines(event_id)
+    lined = 0
+
     for aid, name, pos, team, tid, *more in top_by_usage(available, now):
         injury = more[0] if more else None
         if tid not in played_in:
@@ -698,8 +799,9 @@ def cmd_forecast(event_id):
             thin += 1
             continue
         avail = availability(played_in.get(tid), current)
+        mine = {m: v for (a, m), v in lines.items() if a == aid}
         rows = rows_for_player(event_id, fixture, kickoff, aid, name, pos, team,
-                               samples, seasons, avail, injury)
+                               samples, seasons, avail, injury, mine)
         if not rows:
             print(f"  {name:<24} {pos:<3} {team:<4} SKIPPED - no market he "
                   f"reaches in a quarter of his games")
@@ -725,6 +827,9 @@ def cmd_forecast(event_id):
             if avail and avail["thin"]:
                 note += f"  PLAYED {avail['played']}/{avail['team_games']}"
                 flagged += 1
+            if row["line"]:
+                note += f"  | {line_text(row['line'])}"
+                lined += 1
             if injury:
                 note += injury_note(injury)
                 hurt[name] = injury
@@ -751,6 +856,13 @@ def cmd_forecast(event_id):
               f"percentage is what he\ndoes WHEN HE PLAYS. A book prices that "
               f"times the chance he is active, which is\nwhy a row like this "
               f"can look like a huge edge and be nothing of the kind.")
+    if lined:
+        book = next(iter(lines.values()))["book"]
+        print(f"\n{lined} row(s) show {book}'s line after the |. It is there to "
+              f"read beside the\npercentages and nothing else: none of them "
+              f"was computed from it, and a\nline is not a price.")
+    elif no_lines:
+        print(f"\n{no_lines}")
     if hurt:
         print(f"\n\u26a0 {len(hurt)} player(s) carry an injury designation:")
         for who, inj in sorted(hurt.items()):
@@ -832,6 +944,8 @@ def cmd_best(event_id):
         a = r.get("availability") or {}
         if a.get("thin"):
             ctx += f", PLAYED {a['played']}/{a['team_games']}"
+        if r.get("line"):
+            ctx += f", {line_text(r['line'])}"
         ctx += injury_note(r.get("injury"))
         model = b["probability"] if b["side"] == "OVER" else 100.0 - b["probability"]
         print(f"  {r['player']:<20}{r['market']:<18}{call:<22}"
