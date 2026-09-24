@@ -107,6 +107,23 @@ def _chunks(data):
         i += 8 + length + 4          # +4 for the CRC we do not check
 
 
+def size(path):
+    """(width, height) of a PNG, from its header alone.
+
+    For callers that need the shape and not the pixels - decoding a
+    four-megapixel image to learn two numbers from its first 24 bytes would
+    cost seconds for nothing. Same chunk reader, so a JPEG is refused here
+    with the same sentence as everywhere else.
+    """
+    data = Path(path).read_bytes()
+    for tag, body in _chunks(data):
+        if tag == b"IHDR":
+            w, h = struct.unpack(">II", body[:8])
+            return w, h
+        break
+    raise PngError("no IHDR chunk - the file is truncated or not a PNG")
+
+
 def _paeth(a, b, c):
     p = a + b - c
     pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)

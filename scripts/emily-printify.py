@@ -31,6 +31,7 @@ import argparse
 import base64
 import importlib.util
 import json
+import math
 import os
 import re
 import subprocess
@@ -694,6 +695,126 @@ def is_all_over(entry):
     return bool(re.search(r"\baop\b|\ball[- ]over\b", title, re.I))
 
 
+# WHERE THE ART GOES.
+#
+# draft used to place every file the same way: one image, centred, scale 1.
+# Printify's scale 1 means "as wide as the print area", so a sticker or a
+# chest print came out right and nobody looked further.
+#
+# The all-over tote is one tall sheet, folded under the bag. The front face
+# is the top half, the BACK face is the bottom half printed upside down (so
+# it is the right way up once folded), and the strip between them is the
+# bottom of the bag. A 1408x768 wildflower field at scale 1 landed as a band
+# across the middle - on the bottom of the bag, the one place nobody sees -
+# with both faces left blank.
+#
+# Nothing here is guessed from that picture. The print area's size comes
+# from Printify's own variants endpoint, per variant, recorded by `layout`.
+# The one fact Printify does not publish - that this sheet folds - is
+# recorded by the person who has seen the canvas, with `layout --folded`.
+def front_sizes(payload):
+    """{variant_id: (width, height)} of each variant's "front" print area.
+
+    Read from GET /catalog/blueprints/B/print_providers/P/variants.json, where
+    each variant carries placeholders: [{"position", "width", "height"}].
+    A variant with no front placeholder is left out rather than invented.
+    """
+    out = {}
+    for v in (payload or {}).get("variants") or []:
+        for ph in v.get("placeholders") or []:
+            if ph.get("position") == "front" and ph.get("width") and ph.get("height"):
+                out[int(v["id"])] = (int(ph["width"]), int(ph["height"]))
+    return out
+
+
+def face_of(area, folded):
+    """(width, height) of what one face shows: all of it, or half if folded."""
+    w, h = area
+    return (w, h / 2.0) if folded else (w, float(h))
+
+
+def cover_scale(image, face, area_w):
+    """The smallest Printify scale at which the image covers the face.
+
+    Printify's scale is the image's width as a fraction of the print area's
+    width. Covering means wide enough AND tall enough; whichever needs more
+    wins, and the overflow is cropped at the edge. Leaving a gap instead
+    would print a blank band, which is the bug this replaces.
+    """
+    iw, ih = image
+    fw, fh = face
+    need_w = fw / area_w                       # image width  = scale * area_w
+    need_h = fh / (area_w * ih / iw)           # image height = scale * area_w * ih/iw
+    return round(max(need_w, need_h), 4)
+
+
+def layout_images(image_id, image, area, folded):
+    """The images list for one placeholder. One per face.
+
+    Folded: the front at y=0.25 the right way up, the back at y=0.75 turned
+    180 degrees, because the lower half of the sheet is the back of the bag
+    upside down. Both overflow a little into the strip between them, which
+    is the bottom of the bag and is folded under.
+    """
+    sc = cover_scale(image, face_of(area, folded), area[0])
+    if not folded:
+        return [{"id": image_id, "x": 0.5, "y": 0.5, "scale": sc, "angle": 0}]
+    return [{"id": image_id, "x": 0.5, "y": 0.25, "scale": sc, "angle": 0},
+            {"id": image_id, "x": 0.5, "y": 0.75, "scale": sc, "angle": 180}]
+
+
+def print_areas(image_id, image, variant_ids, entry):
+    """print_areas for a product spec.
+
+    With recorded print sizes, variants are grouped by size and each group
+    gets its own layout - a 13" and an 18" tote are different sheets, and
+    one set of numbers for both would cover one and gap the other. Without
+    them, the old single centred image, which is right for everything that
+    is not an all-over print and is what those products have always had.
+    """
+    sizes = {int(k): tuple(v) for k, v in (entry.get("print_sizes") or {}).items()}
+    if not sizes:
+        return [{"variant_ids": list(variant_ids), "placeholders": [{
+            "position": "front",
+            "images": [{"id": image_id, "x": 0.5, "y": 0.5, "scale": 1, "angle": 0}],
+        }]}]
+    folded = bool(entry.get("folded"))
+    groups = {}
+    for v in variant_ids:
+        if v not in sizes:
+            raise KeyError(v)
+        groups.setdefault(sizes[v], []).append(v)
+    return [{"variant_ids": vids, "placeholders": [{
+                "position": "front",
+                "images": layout_images(image_id, image, area, folded)}]}
+            for area, vids in sorted(groups.items())]
+
+
+# The shapes the image model can be asked for. Gemini's set, which is also
+# inside OpenRouter's published list; asking for one it does not know is at
+# best ignored.
+ASPECTS = ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]
+
+
+def aspect_for(entry):
+    """The model aspect ratio closest to one face of this product, or None.
+
+    None when no print sizes are recorded - the request then says nothing
+    about shape, which is what it always said. Closest is measured in log
+    space, so 2:1 is as far from 1:1 as 1:2 is.
+    """
+    sizes = list((entry or {}).get("print_sizes", {}).values())
+    if not sizes:
+        return None
+    w, h = face_of(max(sizes, key=lambda s: s[0] * s[1]), bool(entry.get("folded")))
+    want = math.log(w / h)
+
+    def dist(r):
+        a, b = (int(x) for x in r.split(":"))
+        return abs(math.log(a / b) - want)
+    return min(ASPECTS, key=dist)
+
+
 def colour_of(title):
     """The colour half of "Dark Heather / 2XL". None if there is no colour."""
     parts = [x.strip() for x in str(title or "").split("/")]
@@ -1305,6 +1426,71 @@ def cmd_prices(a):
     return 0
 
 
+def _knockout():
+    """knockout.py as a module - it owns reading PNGs."""
+    spec = importlib.util.spec_from_file_location(
+        "knockout", Path(__file__).resolve().parent / "knockout.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def cmd_layout(a):
+    """Record each variant's print-area size, and whether the sheet folds.
+
+    The sizes come from Printify. Whether the sheet folds does not - it is
+    visible on the canvas in Printify's editor and nowhere in the API - so
+    it is said once, here, by someone who has looked.
+    """
+    cat = read_catalog()
+    try:
+        key, entry = resolve(cat, a.product)
+    except Ambiguous as exc:
+        print(f"'{a.product}' matches {', '.join(exc.keys)} - use one of those.",
+              file=sys.stderr)
+        return 2
+    if not entry:
+        print(no_entry(cat, a.product), file=sys.stderr)
+        return 2
+
+    payload = call(f"/catalog/blueprints/{entry['blueprint_id']}/print_providers/"
+                   f"{entry['provider_id']}/variants.json")
+    sizes = front_sizes(payload)
+    ours = {v: sizes[v] for v in entry.get("variant_ids") or [] if v in sizes}
+    missing = [v for v in entry.get("variant_ids") or [] if v not in sizes]
+    if missing:
+        print(f"Printify gave no front print area for {len(missing)} of this "
+              f"product's variants: {missing[:5]}\n  Nothing written.",
+              file=sys.stderr)
+        return 1
+
+    entry["print_sizes"] = {str(v): list(wh) for v, wh in ours.items()}
+    if a.folded:
+        entry["folded"] = True
+    elif a.flat:
+        entry.pop("folded", None)
+    cat[key] = entry
+    write_catalog(cat)
+
+    folded = bool(entry.get("folded"))
+    titles = dict(zip(entry.get("variant_ids") or [], entry.get("variant_titles") or []))
+    by_size = {}
+    for v, wh in ours.items():
+        by_size.setdefault(wh, []).append(titles.get(v) or str(v))
+    print(f"'{key}': {len(ours)} variant(s), {len(by_size)} print size(s), "
+          f"{'FOLDED - front on top, back upside down below' if folded else 'one face'}")
+    for (w, h), names in sorted(by_size.items()):
+        fw, fh = face_of((w, h), folded)
+        print(f"  {w} x {h} px   each face {fw:.0f} x {fh:.0f}   "
+              f"{len(names)} variant(s), e.g. {names[0]}")
+    print(f"\nart will be asked for at {aspect_for(entry)}")
+    if not folded and max(h / w for w, h in by_size) > 1.6:
+        print("\n  This print area is much taller than it is wide. If Printify's "
+              "editor shows\n  'BOTTOM OF BAG' across the middle, the sheet folds - "
+              "run this again with --folded.")
+    return 0
+
+
 def cmd_draft(a):
     """Turn a finished build folder into an UNPUBLISHED Printify product.
 
@@ -1362,6 +1548,17 @@ def cmd_draft(a):
         # Say it out loud. A listing that says "sweatshirt" drafted against the
         # "hoodie" entry is right, but only if nobody has to guess that it was.
         print(f"'{product_type}' -> catalogue entry '{cat_key}'")
+
+    # An all-over print is placed from its real print-area size, and there is
+    # no safe default: scale 1 centred is what put a wildflower field on the
+    # bottom of the bag and left both faces blank.
+    if is_all_over(cat) and not cat.get("print_sizes"):
+        print(f"not drafting: '{cat_key}' is an all-over print and its print "
+              f"area has not been measured.\n  Record it once:\n"
+              f"    emily-printify.py layout --product {cat_key}\n"
+              f"  and add --folded if Printify's editor shows BOTTOM OF BAG "
+              f"across the middle.", file=sys.stderr)
+        sys.exit(2)
 
     shop_id = os.environ.get("PRINTIFY_SHOP_ID")
     if not shop_id:
@@ -1460,6 +1657,18 @@ def cmd_draft(a):
               f"so they go up at ${fallback/100:.2f}. Set them properly with:\n"
               f"  emily-printify.py prices --product {product_type}")
 
+    try:
+        areas = print_areas(image_id, _knockout().size(upload_from),
+                            variant_ids, cat)
+    except KeyError as exc:
+        print(f"variant {exc} has no recorded print size. Re-measure:\n"
+              f"  emily-printify.py layout --product {cat_key}", file=sys.stderr)
+        sys.exit(2)
+    for area in areas:
+        for img in area["placeholders"][0]["images"]:
+            print(f"  placing at y={img['y']} scale={img['scale']} "
+                  f"angle={img['angle']}  ({len(area['variant_ids'])} variant(s))")
+
     spec = {
         "title": str(listing.get("title") or d.name)[:140],
         "description": str(listing.get("description") or ""),
@@ -1467,13 +1676,7 @@ def cmd_draft(a):
         "blueprint_id": cat["blueprint_id"],
         "print_provider_id": cat["provider_id"],
         "variants": [{"id": v, "price": price_of[v], "is_enabled": True} for v in variant_ids],
-        "print_areas": [{
-            "variant_ids": variant_ids,
-            "placeholders": [{
-                "position": "front",
-                "images": [{"id": image_id, "x": 0.5, "y": 0.5, "scale": 1, "angle": 0}],
-            }],
-        }],
+        "print_areas": areas,
     }
 
     lo, hi = min(price_of.values()), max(price_of.values())
@@ -1718,6 +1921,14 @@ def main():
 
     p = sub.add_parser("status"); p.add_argument("build_dir", nargs="?")
     p.set_defaults(fn=cmd_status)
+
+    p = sub.add_parser("layout", help="record the print area, and whether it folds")
+    p.add_argument("--product", required=True)
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--folded", action="store_true",
+                   help="one sheet: front on top, back upside down below")
+    g.add_argument("--flat", action="store_true", help="undo --folded")
+    p.set_defaults(fn=cmd_layout)
 
     p = sub.add_parser("draft"); p.add_argument("build_dir")
     p.add_argument("--product", default=""); p.set_defaults(fn=cmd_draft)

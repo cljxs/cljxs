@@ -191,17 +191,40 @@ def all_over(product):
     picture, an AOP direction on a sticker is a file with no background to
     cut out and a refused build.
     """
+    mod, entry = _catalogue_entry(product)
+    return bool(entry) and mod.is_all_over(entry)
+
+
+def shape(product):
+    """The aspect ratio to ask the model for, or None to leave it the model's.
+
+    The first all-over tote came back 1408x768 - the model's own choice,
+    because nothing asked for anything else - for a face that is square.
+    emily-printify.py knows the face from Printify's measured print area;
+    this only passes its answer on.
+    """
+    mod, entry = _catalogue_entry(product)
+    return mod.aspect_for(entry) if entry else None
+
+
+def _catalogue_entry(product):
+    """(emily-printify module, catalogue entry) for a product word.
+
+    (None, None) when there is no product, no catalogue or no match. Drawing
+    art must never stop because the catalogue is missing; the prompt just
+    goes without what the catalogue would have added.
+    """
     if not (product or "").strip():
-        return False
+        return None, None
     try:
         spec = importlib.util.spec_from_file_location(
             "emily_printify_ao", Path(__file__).resolve().parent / "emily-printify.py")
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         _key, entry = mod.resolve(mod.read_catalog(), product)
-        return bool(entry) and mod.is_all_over(entry)
+        return (mod, entry) if entry else (None, None)
     except Exception:
-        return False
+        return None, None
 
 
 def market_notes(evidence):
@@ -304,6 +327,18 @@ def compose(idea, brief="", product="", evidence=None, already=()):
     return "\n\n".join(p for p in parts if p)
 
 
+def _size_of(path):
+    """[width, height] of what came back, or None if it is not a readable PNG."""
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "knockout_sz", Path(__file__).resolve().parent / "knockout.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return list(mod.size(path))
+    except Exception:
+        return None
+
+
 def directed(prompt, product=""):
     """The art direction on the end, once, however the prompt already reads.
 
@@ -324,12 +359,19 @@ def generate(path, prompt, key, model=None, product=""):
     estimate it and be wrong in a direction nobody can check, the run reports
     what it actually cost.
     """
-    body = json.dumps({
+    request = {
         "model": model or image_model(),
         "messages": [{"role": "user", "content": directed(prompt, product)}],
         "modalities": ["image", "text"],
         "usage": {"include": True},
-    }).encode()
+    }
+    ratio = shape(product)
+    if ratio:
+        # Asked for, not assumed. main() reports the shape that actually
+        # came back, and draft covers the face whatever it is - a model that
+        # ignores this costs some cropping, not a blank tote.
+        request["image_config"] = {"aspect_ratio": ratio}
+    body = json.dumps(request).encode()
     req = urllib.request.Request(OR_URL, data=body, headers={
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -467,6 +509,8 @@ def main():
             n, usage = generate(a.out, a.prompt, key, model, a.product)
             print(json.dumps({"ok": True, "mode": "generated", "model": model,
                               "path": a.out, "bytes": n,
+                              "asked_shape": shape(a.product),
+                              "got_size": _size_of(a.out),
                               "cost_usd": cost_of(usage)}))
             return 0
         except Exception as exc:

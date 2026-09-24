@@ -10924,4 +10924,166 @@ class AnAllOverPrintHasNoBackground(unittest.TestCase):
         src = (SCRIPTS / "emily-assets.py").read_text()
         self.assertIn('ap.add_argument("--product"', src)
         gen = src.split("def main(", 1)[1]
-        self.assertIn("a.product", gen, "parsed and never passed is not passed")
+        self.assertIn("generate(a.out, a.prompt, key, model, a.product)", gen,
+                      "parsed and never passed is not passed")
+
+
+class TheArtCoversTheFacesOfAFoldedSheet(unittest.TestCase):
+    """A wildflower field printed on the bottom of the bag.
+
+    The all-over tote is one tall sheet: the front face on top, the back
+    face below it printed upside down, and the strip between them folded
+    under as the bottom of the bag. draft placed every file the same way -
+    one image, centred, scale 1 - so a 1408x768 field landed as a band
+    across the middle, on the one part nobody sees, with both faces blank.
+
+    Nothing told the model what shape to draw, and nothing told Printify
+    where to put what came back.
+    """
+
+    # Printify's documented shape for a variant's print area. The numbers
+    # are illustrative - the real ones are recorded by `layout` on the
+    # droplet and are not asserted anywhere here.
+    PAYLOAD = {"variants": [
+        {"id": 101, "placeholders": [{"position": "front", "decoration_method": "dtf",
+                                      "height": 8400, "width": 4050}]},
+        {"id": 102, "placeholders": [{"position": "front", "height": 10200, "width": 4950}]},
+        {"id": 103, "placeholders": [{"position": "front", "height": 10200, "width": 4950}]},
+        {"id": 104, "placeholders": [{"position": "back", "height": 10, "width": 10}]},
+    ]}
+
+    def setUp(self):
+        self.ep = load("emily_printify_fold", "emily-printify.py")
+        self.entry = {"variant_ids": [101, 102, 103], "folded": True,
+                      "print_sizes": {"101": [4050, 8400], "102": [4950, 10200],
+                                      "103": [4950, 10200]}}
+
+    def imgs(self, image, entry=None, vids=(101,)):
+        return self.ep.print_areas("IMG", image, list(vids),
+                                   entry or self.entry)[0]["placeholders"][0]["images"]
+
+    # --- reading Printify -------------------------------------------------
+
+    def test_front_sizes_reads_each_variants_front_area(self):
+        self.assertEqual(self.ep.front_sizes(self.PAYLOAD),
+                         {101: (4050, 8400), 102: (4950, 10200), 103: (4950, 10200)})
+
+    def test_a_variant_with_no_front_area_is_left_out_not_invented(self):
+        self.assertNotIn(104, self.ep.front_sizes(self.PAYLOAD))
+        self.assertEqual(self.ep.front_sizes({}), {})
+
+    # --- the placement ----------------------------------------------------
+
+    def test_a_folded_sheet_gets_one_image_per_face(self):
+        front, back = self.imgs((1024, 1024))
+        self.assertEqual((front["y"], front["angle"]), (0.25, 0))
+        self.assertEqual((back["y"], back["angle"]), (0.75, 180),
+                         "the back face is printed upside down")
+
+    def test_wide_art_is_scaled_until_it_covers_the_face_height(self):
+        # The bug: scale 1 on a 1408x768 file left most of the face blank.
+        (img, _), area = self.imgs((1408, 768)), (4050, 8400)
+        tall = img["scale"] * area[0] * 768 / 1408
+        self.assertGreaterEqual(tall, area[1] / 2 - 1,
+                                "the image must be at least as tall as one face")
+        self.assertAlmostEqual(img["scale"], 1.9012, places=3)
+
+    def test_tall_art_is_scaled_until_it_covers_the_width(self):
+        img = self.imgs((500, 2000))[0]
+        self.assertAlmostEqual(img["scale"], 1.0, places=3)
+
+    def test_it_covers_and_does_not_overshoot(self):
+        # Cover, not "make it huge": the smaller side must fit exactly, or the
+        # crop throws away art for nothing.
+        img = self.imgs((1408, 768))[0]
+        w_frac = img["scale"]
+        h = img["scale"] * 4050 * 768 / 1408
+        self.assertTrue(abs(w_frac - 1) < 1e-3 or abs(h - 4200) < 5,
+                        "one side should fit the face exactly")
+
+    def test_a_flat_sheet_is_one_centred_image_over_all_of_it(self):
+        entry = dict(self.entry, folded=False)
+        imgs = self.imgs((1024, 1024), entry)
+        self.assertEqual(len(imgs), 1)
+        self.assertEqual(imgs[0]["y"], 0.5)
+        self.assertAlmostEqual(imgs[0]["scale"], 8400 / 4050, places=3)
+
+    def test_each_print_size_gets_its_own_numbers(self):
+        # A 13" and an 18" tote are different sheets.
+        areas = self.ep.print_areas("IMG", (1408, 768), [101, 102, 103], self.entry)
+        self.assertEqual(sorted(sorted(a["variant_ids"]) for a in areas),
+                         [[101], [102, 103]])
+        self.assertEqual(sum(len(a["variant_ids"]) for a in areas), 3)
+
+    def test_a_variant_with_no_recorded_size_is_refused_not_guessed(self):
+        with self.assertRaises(KeyError):
+            self.ep.print_areas("IMG", (1024, 1024), [101, 555], self.entry)
+
+    def test_everything_else_is_placed_exactly_as_before(self):
+        # Stickers and hoodies drafted correctly with this; it must not move.
+        areas = self.ep.print_areas("IMG", (1408, 768), [7, 8], {"variant_ids": [7, 8]})
+        self.assertEqual(areas, [{"variant_ids": [7, 8], "placeholders": [{
+            "position": "front",
+            "images": [{"id": "IMG", "x": 0.5, "y": 0.5, "scale": 1, "angle": 0}]}]}])
+
+    # --- the shape asked for ---------------------------------------------
+
+    def test_the_model_is_asked_for_the_faces_shape(self):
+        self.assertEqual(self.ep.aspect_for(self.entry), "1:1")
+        self.assertEqual(self.ep.aspect_for(dict(self.entry, folded=False)), "9:16")
+        self.assertEqual(self.ep.aspect_for({"print_sizes": {"1": [3000, 2000]}}), "3:2")
+
+    def test_nothing_recorded_means_nothing_asked(self):
+        self.assertIsNone(self.ep.aspect_for({}))
+        self.assertIsNone(self.ep.aspect_for(None))
+
+    def test_the_shape_reaches_the_request(self):
+        src = (SCRIPTS / "emily-assets.py").read_text()
+        gen = src.split("def generate(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("shape(product)", gen)
+        self.assertIn('"image_config"', gen)
+        self.assertIn('"aspect_ratio"', gen)
+        shp = src.split("def shape(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("aspect_for", shp, "one place decides the shape")
+
+    # --- wiring -----------------------------------------------------------
+
+    def test_draft_uses_the_layout(self):
+        body = (SCRIPTS / "emily-printify.py").read_text()
+        body = body.split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("print_areas(image_id", body)
+        self.assertIn('"print_areas": areas', body)
+        self.assertNotIn('"scale": 1, "angle": 0', body,
+                         "the old fixed placement must not survive in draft")
+
+    def test_an_unmeasured_all_over_product_is_refused_before_upload(self):
+        body = (SCRIPTS / "emily-printify.py").read_text()
+        body = body.split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
+        guard = body.index('if is_all_over(cat) and not cat.get("print_sizes"):')
+        self.assertLess(guard, body.index("/uploads/images.json"))
+        self.assertIn("layout --product", body[guard:guard + 600])
+
+    def test_layout_records_sizes_and_the_fold(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        cat = {"tote": {"blueprint_id": 1389, "provider_id": 10,
+                        "blueprint_title": "Tote Bag (AOP)",
+                        "variant_ids": [101, 102], "variant_titles": ["13", "16"]}}
+        path = Path(tmp.name) / "cat.json"
+        path.write_text(json.dumps(cat))
+        self.ep.CATALOG = path
+        self.ep.call = lambda *_a, **_k: self.PAYLOAD
+        a = types.SimpleNamespace(product="tote", folded=True, flat=False)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.ep.cmd_layout(a), 0)
+        got = json.loads(path.read_text())["tote"]
+        self.assertEqual(got["print_sizes"], {"101": [4050, 8400], "102": [4950, 10200]})
+        self.assertTrue(got["folded"])
+        a = types.SimpleNamespace(product="tote", folded=False, flat=True)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.ep.cmd_layout(a)
+        self.assertNotIn("folded", json.loads(path.read_text())["tote"])
+
+    def test_png_size_reads_the_header(self):
+        ko = load("knockout_sz_t", "knockout.py")
+        self.assertEqual(ko.size(ROOT / "hall.png"), (460, 330))
