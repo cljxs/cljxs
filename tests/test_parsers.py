@@ -11306,3 +11306,95 @@ class AnInjuredPlayerIsFlaggedNotAdjusted(unittest.TestCase):
         self.assertIn("samples, seasons, avail, injury)", body)
         self.assertIn("injury_note(injury)", body)
         self.assertIn("carry an injury designation", body)
+
+
+class ARuledOutPlayerGivesUpHisSlot(unittest.TestCase):
+    """Flagging Josh Jacobs was not enough: he still took a Packers slot.
+
+    The six skill slots per side are ranked by volume, and Jacobs - Out for
+    Falcons week - had the most, so he held one, was forecast, and `best`
+    ranked him third while the player who would get his touches was not in
+    the file. A player ruled out is now set aside before the ranking, the
+    next one by volume moves up, and rows an earlier run wrote for him are
+    removed. Questionable and Doubtful keep their slot and their warning.
+    """
+
+    OUT = {"status": "Out", "date": "2026-09-13"}
+    MAYBE = {"status": "Questionable", "date": "2026-09-22"}
+
+    def setUp(self):
+        self.m = load("props_forecast_bench", "props-forecast.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.m.STORE = Path(self.tmp.name) / "forecasts.json"
+        self.ranked = []
+        sample = [55.0, 62.0, 71.0, 48.0, 90.0, 33.0, 66.0, 77.0, 41.0, 58.0]
+        self.m.get = lambda url: {"header": {"competitions": [{"competitors": []}]}}
+        self.m.team_games = lambda tid: 3
+        self.m.samples_for = lambda aid, now=None: (
+            {"receiving_yards": sample}, ["2026"], 3)
+
+        def rank(cands, now=None):
+            self.ranked = [c[1] for c in cands]
+            return cands
+        self.m.top_by_usage = rank
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_with(self, roster):
+        self.m.players_in = lambda eid: roster
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.m.cmd_forecast("7")
+        return out.getvalue()
+
+    def cand(self, aid, name, injury=None):
+        return (str(aid), name, "WR", "GB", "9", injury)
+
+    def written(self):
+        return {f["player"] for f in self.m.load()["forecasts"]}
+
+    def test_only_a_real_ruling_counts(self):
+        self.assertTrue(self.m.ruled_out(self.OUT))
+        self.assertTrue(self.m.ruled_out({"status": "Injured Reserve"}))
+        for keep in (self.MAYBE, {"status": "Doubtful"}, {"status": "Day-To-Day"},
+                     {"status": "Something New"}, None, {}):
+            self.assertFalse(self.m.ruled_out(keep), keep)
+
+    def test_he_is_removed_before_the_ranking_not_after(self):
+        # After would leave his slot empty instead of passing it on.
+        self.run_with([self.cand(1, "Josh Jacobs", self.OUT),
+                       self.cand(2, "Next Man")])
+        self.assertEqual(self.ranked, ["Next Man"])
+
+    def test_he_is_named_not_silently_dropped(self):
+        out = self.run_with([self.cand(1, "Josh Jacobs", self.OUT),
+                             self.cand(2, "Next Man")])
+        line = [l for l in out.splitlines() if "Josh Jacobs" in l][0]
+        self.assertIn("SKIPPED - OUT", line)
+        self.assertIn("slot goes to the next player", line)
+        self.assertIn("1 ruled out", out)
+
+    def test_an_earlier_runs_rows_for_him_are_removed(self):
+        self.run_with([self.cand(1, "Josh Jacobs"), self.cand(2, "Next Man")])
+        self.assertIn("Josh Jacobs", self.written())
+        self.run_with([self.cand(1, "Josh Jacobs", self.OUT), self.cand(2, "Next Man")])
+        self.assertNotIn("Josh Jacobs", self.written())
+        self.assertIn("Next Man", self.written())
+
+    def test_only_this_games_rows_are_removed(self):
+        self.run_with([self.cand(1, "Josh Jacobs")])
+        data = self.m.load()
+        for f in data["forecasts"]:
+            f["event_id"] = "6"                       # last week's game
+        self.m.save(data)
+        self.run_with([self.cand(1, "Josh Jacobs", self.OUT)])
+        self.assertEqual({f["event_id"] for f in self.m.load()["forecasts"]
+                          if f["player"] == "Josh Jacobs"}, {"6"},
+                         "last week's rows are graded history and must stay")
+
+    def test_a_questionable_player_keeps_his_slot_and_his_warning(self):
+        out = self.run_with([self.cand(1, "Maybe Plays", self.MAYBE)])
+        self.assertEqual(self.ranked, ["Maybe Plays"])
+        self.assertIn("Maybe Plays", self.written())
+        self.assertIn("⚠ QUESTIONABLE", out)

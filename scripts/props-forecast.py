@@ -470,6 +470,19 @@ def injury_of(athlete):
             "date": str(latest.get("date") or "")[:10] or None}
 
 
+# Designations that mean he will not play, as ESPN writes them. Only values
+# seen on a real roster are here. Anything else - Questionable, Doubtful, a
+# word never seen before - keeps its slot and is FLAGGED, which is the safe
+# way round: a player wrongly benched costs a forecast, a player wrongly
+# kept costs nothing but a warning the reader can see.
+RULED_OUT = {"out", "injured reserve"}
+
+
+def ruled_out(injury):
+    """Is this designation one that means he does not take the field?"""
+    return bool(injury) and str(injury.get("status") or "").strip().lower() in RULED_OUT
+
+
 def injury_note(injury):
     """The warning printed beside a forecast: '⚠ OUT (09-23)'. Empty if none."""
     if not injury:
@@ -646,7 +659,28 @@ def cmd_forecast(event_id):
     made = thin = flagged = 0
     hurt = {}
     played_in = {}
-    for aid, name, pos, team, tid, *more in top_by_usage(players_in(event_id), now):
+
+    # A player ruled out does not take a slot. He used to: Josh Jacobs, Out
+    # for Falcons week, was one of the Packers' six, forecast and ranked
+    # third by `best`, while the player who would actually get his touches
+    # was not in the file. So he is set aside BEFORE the ranking, and the
+    # next player by volume moves up into the slot.
+    everyone = players_in(event_id)
+    benched = [c for c in everyone if ruled_out(c[5] if len(c) > 5 else None)]
+    for aid, name, pos, team, _tid, injury in benched:
+        print(f"  {name:<24} {pos:<3} {team:<4} SKIPPED - "
+              f"{injury['status'].upper()}"
+              + (f" ({injury['date']})" if injury.get("date") else "")
+              + ", his slot goes to the next player by volume")
+    # Rows written for him by an earlier run of this game go too, or `best`
+    # would still rank a player who is not playing.
+    gone = {c[0] for c in benched}
+    data["forecasts"] = [f for f in data["forecasts"]
+                         if not (f.get("event_id") == str(event_id)
+                                 and f.get("athlete_id") in gone)]
+    available = [c for c in everyone if c[0] not in gone]
+
+    for aid, name, pos, team, tid, *more in top_by_usage(available, now):
         injury = more[0] if more else None
         if tid not in played_in:
             played_in[tid] = team_games(tid)
@@ -698,7 +732,8 @@ def cmd_forecast(event_id):
     rough = sum(1 for f in data["forecasts"]
                 if f.get("event_id") == str(event_id) and f.get("coarse"))
     print(f"\n{made} forecast(s) written across {len(MARKETS)} markets, "
-          f"{thin} player(s) skipped.")
+          f"{thin} player(s) skipped"
+          + (f", {len(benched)} ruled out." if benched else "."))
     print(f"Each percentage carries its {INTERVAL_SPAN}% interval in brackets - how far it "
           f"moves when his\nown games are resampled. A wide one is a small "
           f"sample saying so out loud.")
@@ -718,10 +753,10 @@ def cmd_forecast(event_id):
             print(f"    {who:<24} {inj['status']}"
                   + (f"  (as of {inj['date']})" if inj.get("date") else ""))
         print(f"  Their percentages are unchanged - each one is what he does "
-              f"IF HE PLAYS. An\n  OUT player will not, so ignore his rows; "
-              f"a QUESTIONABLE one may not.\n  A teammate who picks up his "
-              f"work is NOT adjusted up either. Check the\n  final inactives "
-              f"about 90 minutes before kickoff.")
+              f"IF HE PLAYS, and\n  a QUESTIONABLE or DOUBTFUL player may not. "
+              f"A teammate who picks up his\n  work is NOT adjusted up either. "
+              f"Check the final inactives about 90\n  minutes before kickoff "
+              f"and run this again.")
     print(NOT_A_BET)
     return 0 if made else 1
 
