@@ -100,14 +100,10 @@ agents/fury/reports/*
 !agents/fury/reports/.gitkeep
 agents/fury/MEMORY.md
 
-# Timmy — fetcher-owned data, daily reports and live memory stay local.
-# The seeds (watchlist.json, MEMORY.seed.md) are tracked; the live files are not.
-agents/timmy/data/*
-!agents/timmy/data/.gitkeep
-agents/timmy/reports/*
-!agents/timmy/reports/.gitkeep
-agents/timmy/MEMORY.md
-agents/timmy/state/memory-archive.md
+# Timmy — retired 2026-09-16 and no longer tracked. Whatever is left of his
+# folder on the droplet stays there for reference, including the RETIRED
+# marker that keeps preflight, health-check and the Deck from counting him.
+agents/timmy/
 
 
 # Test fixtures are captured output, not runtime logs. The *.log rule above
