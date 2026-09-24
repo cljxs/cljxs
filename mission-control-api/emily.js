@@ -99,6 +99,36 @@ function statusOf(build, task) {
   return task.status;                     // in_progress, failed, cancelled ...
 }
 
+// Minutes since SQLite's UTC "YYYY-MM-DD HH:MM:SS", or null.
+function minutesSince(utc) {
+  const t = Date.parse(String(utc || '').replace(' ', 'T') + 'Z');
+  return Number.isNaN(t) ? null : Math.max(0, Math.round((Date.now() - t) / 60000));
+}
+
+// The words both pages print for a build's state, and why it is stuck when
+// it is. The village and the Deck each had their own copy of this, and a fix
+// to one left the other saying "building..." about a run that had failed.
+// { label, warn, note }
+function statusWords(status, task) {
+  const mins = task ? minutesSince(task.started_at) : null;
+  switch (status) {
+    case 'ready_for_review': return { label: 'ready for review', warn: false, note: null };
+    case 'ready_local': return { label: 'local only', warn: false, note: null };
+    case 'in_progress':
+      return { label: mins === null ? 'building…' : `building ${mins} min`, warn: false, note: null };
+    case 'queued': return { label: 'queued', warn: false, note: null };
+    case 'failed':
+      return { label: 'failed', warn: true,
+               note: `Emily's run ended without finishing it${task && task.result
+                 ? ' — ' + String(task.result).slice(0, 300) : ''}. Approve the idea again, `
+                 + `or remove this folder.` };
+    case 'no_record':
+      return { label: 'no build record', warn: true,
+               note: 'No build.json and no task in the queue for this folder - nothing is working on it.' };
+    default: return { label: String(status).replace(/_/g, ' '), warn: false, note: null };
+  }
+}
+
 function describe(slug) {
   const dir = safeJoin(slug, null);
   if (!dir) return null;
@@ -112,7 +142,16 @@ function describe(slug) {
     let st;
     try { st = fs.statSync(path.join(dir, e.name)); } catch { continue; }
     if (st.mtimeMs > newest) newest = st.mtimeMs;
-    if (IMAGE_RE.test(e.name)) images.push({ name: e.name, bytes: st.size });
+    // The URL carries the file's timestamp. Both pages redraw the gallery on
+    // a timer, and served as no-cache every redraw re-downloaded every image
+    // - 13 MB every 20 seconds over a tablet's VPN, so the larger ones never
+    // finished and seven of eight cards sat blank. Versioned, a redraw is
+    // served from the browser's cache and a rebuilt design gets a new URL.
+    if (IMAGE_RE.test(e.name)) images.push({
+      name: e.name, bytes: st.size,
+      url: `/api/emily/builds/${encodeURIComponent(slug)}/file/${encodeURIComponent(e.name)}`
+         + `?v=${Math.round(st.mtimeMs)}`,
+    });
   }
   images.sort((a, b) => {
     // cover first, then design, then mockups in name order.
@@ -135,6 +174,7 @@ function describe(slug) {
     slug,
     title: listing.title || build.idea || build.title || slug.replace(/-/g, ' '),
     status: statusOf(build, task),
+    status_words: statusWords(statusOf(build, task), task),
     task: task ? {
       id: task.id, status: task.status, started_at: task.started_at,
       completed_at: task.completed_at,
@@ -312,11 +352,12 @@ function register(app, db) {
     try { st = fs.statSync(full); } catch { return res.status(404).json({ error: 'not found' }); }
     if (!st.isFile()) return res.status(404).json({ error: 'not found' });
     res.type(TYPES[path.extname(full).toLowerCase()] || 'application/octet-stream');
-    // The artwork changes when Emily rebuilds a slug, so revalidate rather
-    // than let a phone cache yesterday's design forever.
-    res.set('Cache-Control', 'no-cache');
+    // Versioned by the file's timestamp (?v=, from describe), a cached copy is
+    // always the current file, so it may be kept. A bare URL still
+    // revalidates, so nothing old is ever shown under a new design.
+    res.set('Cache-Control', req.query.v ? 'max-age=31536000, immutable' : 'no-cache');
     fs.createReadStream(full).pipe(res);
   });
 }
 
-module.exports = { register, listBuilds, describe, statusOf };
+module.exports = { register, listBuilds, describe, statusOf, statusWords };

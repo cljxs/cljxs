@@ -12461,11 +12461,46 @@ class ABuildThatStoppedDoesNotSayBuilding(unittest.TestCase):
         js = (self.API / "emily.js").read_text()
         self.assertIn("`emily-build-${slug}`", js)
 
-    def test_the_gallery_says_why_a_build_failed(self):
-        src = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
-        body = src.split("function blockedReason(", 1)[1].split("\nfunction ", 1)[0]
-        self.assertIn("b.status === 'failed'", body)
-        self.assertIn("b.task.note", body)
+    def words(self, status, task):
+        if not (self.NODE and (self.API / "node_modules" / "better-sqlite3").is_dir()):
+            self.skipTest("node or the Deck's node_modules are not installed")
+        js = (f"const m=require({json.dumps(str(self.API / 'emily.js'))});"
+              f"process.stdout.write(JSON.stringify(m.statusWords({json.dumps(status)},"
+              f"{json.dumps(task)})))")
+        r = subprocess.run([self.NODE, "-e", js], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def test_a_failed_build_says_why_in_the_dispatchers_words(self):
+        w = self.words("failed", {"result": "agent exited with code -9: timed out after 600s"})
+        self.assertEqual(w["label"], "failed")
+        self.assertTrue(w["warn"])
+        self.assertIn("timed out after 600s", w["note"])
+
+    def test_a_running_build_says_for_how_long(self):
+        started = (datetime.now(timezone.utc) - timedelta(minutes=12)).strftime("%Y-%m-%d %H:%M:%S")
+        self.assertEqual(self.words("in_progress", {"started_at": started})["label"], "building 12 min")
+
+    def test_both_pages_print_the_apis_words_not_their_own(self):
+        # The Deck kept its own copy of the labels after the village was fixed,
+        # and went on saying "building..." about a failed run.
+        for page in ("village.html", "dashboard.html"):
+            src = (ROOT / "mission-control-api" / "public" / page).read_text()
+            pills = src.split("function buildPills(", 1)[1].split("\nfunction ", 1)[0]
+            self.assertIn("b.status_words", pills, page)
+            self.assertNotIn("'building…'", pills, page)
+            why = src.split("function blockedReason(", 1)[1].split("\nfunction ", 1)[0]
+            self.assertIn("b.status_words.note", why, page)
+
+    def test_images_are_versioned_so_a_redraw_can_use_the_cache(self):
+        js = (self.API / "emily.js").read_text()
+        self.assertIn("?v=${Math.round(st.mtimeMs)}", js)
+        route = js.split("app.get('/api/emily/builds/:slug/file/:name'", 1)[1].split("app.", 1)[0]
+        self.assertIn("req.query.v ? 'max-age=31536000, immutable' : 'no-cache'", route)
+        for page in ("village.html", "dashboard.html"):
+            src = (ROOT / "mission-control-api" / "public" / page).read_text()
+            self.assertIn("cover.url ||", src, page)
+            self.assertIn("lbFiles[i].url ||", src, page)
 
     def test_the_server_hands_emily_the_queue(self):
         src = (ROOT / "mission-control-api" / "server.js").read_text()
