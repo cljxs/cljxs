@@ -26,8 +26,15 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import et_time  # noqa: E402
+
 API = os.environ.get("MISSION_CONTROL_API", "http://127.0.0.1:3001")
 DAILY_DRAFT_CAP = int(os.environ.get("EMILY_DAILY_CAP", "3"))
+
+# Distinct from a failure, so scout-review can say how to override the cap
+# for the one idea that hit it, rather than repeat a flag the Deck cannot pass.
+CAP_REACHED = 3
 
 
 def call(method, path, body=None):
@@ -52,12 +59,46 @@ def slugify(s):
     return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", s.lower())).strip("-")[:60]
 
 
+def started_today(rows, today=None):
+    """Emily's build tasks started on today's EASTERN date, whatever became
+    of them.
+
+    Every status counts, finished and failed alike: the cap is on spending,
+    and a build that finished spent its money on artwork just the same. What
+    this used to get wrong was the day. It took the date off a UTC clock, so
+    the day rolled over at 8 PM Eastern - three totes approved after 8 PM on
+    the 23rd filled the cap for the 24th, and the Deck refused an approval the
+    next morning saying three builds were "queued" when none was. The Eastern
+    date comes from et_time, like every other date here.
+
+    created_at is SQLite's datetime('now'): UTC with no marker, which
+    to_eastern reads as UTC.
+    """
+    today = today or et_time.day()
+    out = []
+    for t in rows if isinstance(rows, list) else []:
+        when = et_time.to_eastern(str(t.get("created_at") or ""))
+        if when is not None and et_time.day(when) == today:
+            out.append(t)
+    return out
+
+
 def drafts_today():
     status, rows = call("GET", "/tasks?assignee=emily")
-    if status != 200 or not isinstance(rows, list):
-        return 0
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    return sum(1 for t in rows if (t.get("created_at") or "").startswith(today))
+    if status != 200:
+        return []
+    return started_today(rows)
+
+
+def task_label(t):
+    """'Coastal Tide Botanical Collage Tote (done)' for the cap message."""
+    try:
+        payload = json.loads(t.get("payload") or "{}") if isinstance(t.get("payload"), str) \
+            else (t.get("payload") or {})
+    except Exception:
+        payload = {}
+    return f"{payload.get('idea') or payload.get('title') or 'task ' + str(t.get('id'))} " \
+           f"({t.get('status') or '?'})"
 
 
 def _assets():
@@ -137,12 +178,16 @@ def main():
                     help="bypass the daily draft cap (an explicit go-ahead)")
     a = ap.parse_args()
 
-    n = drafts_today()
-    if n >= DAILY_DRAFT_CAP and not a.force:
-        print(f"Emily already has {n} build task(s) queued today "
-              f"(cap {DAILY_DRAFT_CAP}). Re-run with --force to override.",
-              file=sys.stderr)
-        return 1
+    done_today = drafts_today()
+    if len(done_today) >= DAILY_DRAFT_CAP and not a.force:
+        print(f"Emily has started {len(done_today)} build(s) today "
+              f"({et_time.day()}, Eastern) and the daily cap is "
+              f"{DAILY_DRAFT_CAP}:", file=sys.stderr)
+        for t in done_today:
+            print(f"  - {task_label(t)}", file=sys.stderr)
+        print("Finished builds count too - each one paid for its artwork. "
+              "The cap resets at midnight Eastern.", file=sys.stderr)
+        return CAP_REACHED
 
     slug = slugify(a.idea)
 

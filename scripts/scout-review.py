@@ -17,6 +17,7 @@ Standard library only.
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import subprocess
@@ -32,6 +33,14 @@ ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.par
 IDEAS = ROOT / "agents" / "scout" / "state" / "ideas.json"
 LESSONS = ROOT / "agents" / "emily" / "state" / "lessons.md"
 NEW_BUILD = ROOT / "scripts" / "emily-new-build.py"
+
+# The exit code emily-new-build uses for "the daily cap was reached", read
+# from that script rather than written here as a second copy of the number.
+_nb = importlib.util.spec_from_file_location(
+    "emily_new_build", Path(__file__).resolve().parent / "emily-new-build.py")
+_nbm = importlib.util.module_from_spec(_nb)
+_nb.loader.exec_module(_nbm)
+CAP_REACHED = _nbm.CAP_REACHED
 
 
 def load():
@@ -149,6 +158,13 @@ def cmd_approve(a, d):
     sys.stderr.write(r.stderr)
     if r.returncode != 0:
         print("\nEmily was NOT queued. The idea stays pending.", file=sys.stderr)
+        if r.returncode == CAP_REACHED and not a.force:
+            # Named for THIS idea, with its id - the Deck's button cannot pass
+            # a flag, and "re-run with --force" told the owner nothing they
+            # could do from where they were.
+            print(f"To build it anyway today, on the droplet:\n"
+                  f"  python3 scripts/scout-review.py approve {idea.get('id')} --force",
+                  file=sys.stderr)
         return r.returncode
     idea["status"] = "approved"
     idea["verdict_reason"] = a.reason or "approved by you"

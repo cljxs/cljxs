@@ -95,14 +95,20 @@ def state_summary(d):
         out = {"file": name, "cycle_count": j.get("cycle_count"),
                "last_cycle_utc": j.get("last_cycle_utc"),
                "last_cycle_age_min": mins_since_iso(j.get("last_cycle_utc"))}
-        for k in ("cash", "bankroll", "starting_cash", "starting_bankroll"):
+        # market_value is the book's own total, written by belfort-trade.py
+        # `mark` at the end of every cycle - carried so the briefing can read
+        # it rather than redo the sum.
+        for k in ("cash", "bankroll", "starting_cash", "starting_bankroll",
+                  "market_value"):
             if k in j:
                 out[k] = j[k]
         if isinstance(j.get("positions"), list):
             out["open_positions"] = len(j["positions"])
             out["positions"] = [{"symbol": p.get("symbol"),
                                  "shares": p.get("shares"),
-                                 "cost_basis": p.get("cost_basis") or p.get("entry_price")}
+                                 "cost_basis": p.get("cost_basis") or p.get("entry_price"),
+                                 "last_price": p.get("last_price"),
+                                 "market_value": p.get("market_value")}
                                 for p in j["positions"]]
         if isinstance(j.get("open_bets"), list):
             out["open_bets"] = len(j["open_bets"])
@@ -152,15 +158,30 @@ def agent_money(state):
     positions = pick(state, "positions", "open_bets") or []
     if cash is None:
         return None, None, None
-    held = 0.0
-    for p in positions if isinstance(positions, list) else []:
-        if not isinstance(p, dict):
-            continue
-        px = pick(p, "price", "last", "entry")
-        sh = pick(p, "shares", "qty", "stake")
-        if px is not None and sh is not None:
-            held += float(px) * float(sh)
-    value = float(cash) + held
+    # THE BOOK'S OWN TOTAL FIRST. The briefing printed "Belfort $1,593.29
+    # (-84.07%)" beside a Deck showing +0.95%: state_summary copied each
+    # position as symbol, shares and cost_basis, and this looked for a price
+    # under "price", "last" or "entry" - none of which it had been given - so
+    # every open position counted as nothing and the value was the cash.
+    # Belfort's `mark` writes the whole book's market value every cycle; the
+    # code that owns the book has already done this sum.
+    book = pick(state, "market_value")
+    if isinstance(book, (int, float)) and not isinstance(book, bool):
+        value = float(book)
+    else:
+        held = 0.0
+        for p in positions if isinstance(positions, list) else []:
+            if not isinstance(p, dict):
+                continue
+            mv = pick(p, "market_value")
+            if isinstance(mv, (int, float)):
+                held += float(mv)
+                continue
+            px = pick(p, "last_price", "price", "last", "cost_basis", "entry")
+            sh = pick(p, "shares", "qty", "stake")
+            if px is not None and sh is not None:
+                held += float(px) * float(sh)
+        value = float(cash) + held
     if not start:
         return value, None, None
     start = float(start)

@@ -12145,3 +12145,185 @@ class TheGateJudgesAScanTheWayCompareDoes(unittest.TestCase):
         self.assertNotIn("tote bag pattern", kept)
         self.assertNotIn("tote bag coach", kept)
         self.assertIn("tote bag", kept)
+
+
+class TheBuildCapCountsTheEasternDay(unittest.TestCase):
+    """"Emily already has 3 build task(s) queued today" - with nothing queued.
+
+    The owner approved three totes after 8 PM Eastern on the 23rd. The cap
+    took its date off a UTC clock, where 8 PM Eastern is already the 24th, so
+    the next morning's approval from the Deck was refused on the strength of
+    last night's finished builds. "Queued" was wrong as well: every status
+    counts, which is right for a cap on spending and wrong as a description.
+    And the advice, "re-run with --force", was a flag the Deck's button cannot
+    pass.
+    """
+
+    def setUp(self):
+        self.nb = load("emily_new_build_cap", "emily-new-build.py")
+
+    def task(self, n, created, status="done", idea=None):
+        return {"id": n, "created_at": created, "status": status,
+                "payload": json.dumps({"idea": idea or f"Tote {n}"})}
+
+    def test_last_nights_builds_belong_to_last_night(self):
+        rows = [self.task(1, "2026-09-24 00:05:10"),          # 20:05 ET on the 23rd
+                self.task(2, "2026-09-24 00:31:44"),
+                self.task(3, "2026-09-24 01:02:09", "failed"),
+                self.task(4, "2026-09-24 14:20:00")]           # 10:20 ET on the 24th
+        self.assertEqual([t["id"] for t in self.nb.started_today(rows, "2026-09-24")], [4])
+        self.assertEqual([t["id"] for t in self.nb.started_today(rows, "2026-09-23")], [1, 2, 3])
+
+    def test_every_status_counts_because_each_one_spent(self):
+        rows = [self.task(n, "2026-09-24 15:00:00", st)
+                for n, st in enumerate(("done", "failed", "cancelled", "pending"))]
+        self.assertEqual(len(self.nb.started_today(rows, "2026-09-24")), 4)
+
+    def test_junk_rows_are_not_a_crash(self):
+        self.assertEqual(self.nb.started_today(None, "2026-09-24"), [])
+        self.assertEqual(self.nb.started_today([{"created_at": "soon"}, {}], "2026-09-24"), [])
+
+    def test_the_day_is_not_worked_out_here(self):
+        src = (SCRIPTS / "emily-new-build.py").read_text()
+        body = src.split("def started_today(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("et_time.day()", body)
+        self.assertNotIn("strftime", body)
+
+    # --- through the real scripts, against a stub task API -----------------
+
+    def serve(self, rows):
+        import http.server, threading
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = json.dumps(rows).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        return f"http://127.0.0.1:{srv.server_address[1]}"
+
+    def now_utc(self):
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    def test_the_cap_names_what_it_counted_and_says_finished_ones_count(self):
+        api = self.serve([self.task(n, self.now_utc(), idea=f"Tote {n}") for n in (1, 2, 3)])
+        r = subprocess.run([sys.executable, str(SCRIPTS / "emily-new-build.py"), "Another Tote",
+                            "--product", "tote"], capture_output=True, text=True,
+                           env=dict(os.environ, MISSION_CONTROL_API=api))
+        self.assertEqual(r.returncode, self.nb.CAP_REACHED, r.stderr)
+        self.assertIn("Tote 1 (done)", r.stderr)
+        self.assertIn("Eastern", r.stderr)
+        self.assertNotIn("queued", r.stderr)
+
+    def test_the_deck_is_told_the_command_for_this_idea(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "scripts").symlink_to(SCRIPTS)
+        state = root / "agents" / "scout" / "state"
+        state.mkdir(parents=True)
+        (state / "ideas.json").write_text(json.dumps({"ideas": [
+            {"id": 7, "title": "Book Market Tote", "product": "tote", "status": "pending"}]}))
+        api = self.serve([self.task(n, self.now_utc()) for n in (1, 2, 3)])
+        r = subprocess.run([sys.executable, str(SCRIPTS / "scout-review.py"), "approve", "7"],
+                           capture_output=True, text=True,
+                           env=dict(os.environ, ECOSYSTEM_ROOT=str(root), MISSION_CONTROL_API=api))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("scout-review.py approve 7 --force", r.stderr)
+        self.assertEqual(json.loads((state / "ideas.json").read_text())["ideas"][0]["status"],
+                         "pending", "a refused approval must leave the idea pending")
+
+    def test_under_the_cap_nothing_is_refused_for_last_night(self):
+        # The morning in question: three builds last night, none today.
+        yesterday_evening = [self.task(n, "2000-01-02 01:00:00") for n in (1, 2, 3)]
+        self.assertEqual(self.nb.started_today(yesterday_evening), [])
+
+
+class TheBriefingValuesBelfortsBookAsBelfortDoes(unittest.TestCase):
+    """"Belfort $1,593.29 (-84.07%)" in the briefing; "+0.95%" on the Deck.
+
+    fury-collect copied each open position as symbol, shares and cost basis,
+    then valued it by looking for a price under "price", "last" or "entry" -
+    none of which it had copied - so all five positions counted as nothing and
+    Belfort's value was its cash. The book's total is already on disk:
+    belfort-trade.py `mark` writes it every cycle, from the code that owns
+    the book. The briefing reads that now.
+
+    The portfolio here is written by the real belfort-trade.py buy and mark,
+    not typed into the test.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        b = self.root / "agents" / "belfort"
+        (b / "state").mkdir(parents=True)
+        (b / "data").mkdir(parents=True)
+        (b / "state" / "portfolio.json").write_text(
+            (ROOT / "agents" / "belfort" / "state" / "portfolio.seed.json").read_text())
+        self.quotes = b / "data" / "quotes.json"
+        self.fc = load("fury_collect_money", "fury-collect.py")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def trade(self, *args):
+        r = subprocess.run([sys.executable, str(SCRIPTS / "belfort-trade.py"), *args],
+                           capture_output=True, text=True,
+                           env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def price(self, **px):
+        self.quotes.write_text(json.dumps({"quotes": {k: {"price": v} for k, v in px.items()}}))
+
+    def book(self):
+        """Buy at one set of prices, mark at another - the real shape."""
+        self.price(CRWD=241.88, MRVL=241.48)
+        self.trade("buy", "CRWD", "4")
+        self.trade("buy", "MRVL", "9")
+        self.price(CRWD=261.30, MRVL=254.10)
+        self.trade("mark")
+        return json.loads((self.root / "agents" / "belfort" / "state" / "portfolio.json").read_text())
+
+    def test_the_briefing_value_is_the_books_own_value(self):
+        p = self.book()
+        state = self.fc.state_summary(self.root / "agents" / "belfort")
+        value, _pnl, pct = self.fc.agent_money(state)
+        self.assertAlmostEqual(value, p["market_value"], places=2)
+        self.assertGreater(value, p["cash"] + 1000, "the positions must count for something")
+        self.assertGreater(pct, -10, "a small gain must not read as a large loss")
+
+    def test_without_the_book_total_the_positions_are_still_valued(self):
+        # An older portfolio.json, marked before market_value was written at
+        # book level, still carries each position's own market value.
+        p = self.book()
+        state = self.fc.state_summary(self.root / "agents" / "belfort")
+        state.pop("market_value")
+        value, _pnl, _pct = self.fc.agent_money(state)
+        self.assertAlmostEqual(value, p["market_value"], places=1)
+
+    def test_the_books_own_total_wins_over_a_recount(self):
+        # When the two disagree - a position with no mark of its own - the
+        # figure the book's owner wrote is the answer, not a sum redone here.
+        state = {"cash": 1000.0, "starting_cash": 10000, "market_value": 10250.0,
+                 "positions": [{"symbol": "X", "shares": 10, "cost_basis": 900.0}]}
+        self.assertEqual(self.fc.agent_money(state)[0], 10250.0)
+
+    def test_a_position_with_only_a_cost_basis_is_valued_at_cost_not_zero(self):
+        state = {"cash": 1000.0, "starting_cash": 10000,
+                 "positions": [{"symbol": "X", "shares": 10, "cost_basis": 900.0}]}
+        self.assertEqual(self.fc.agent_money(state)[0], 10000.0)
+
+    def test_the_briefing_line(self):
+        self.book()
+        report = {"agents": {"belfort": {"state": self.fc.state_summary(
+            self.root / "agents" / "belfort")}}, "generated_utc": "now"}
+        text = self.fc.build_briefing(report, "2026-09-24")
+        line = [l for l in text.splitlines() if l.startswith("- **Belfort**")][0]
+        self.assertNotIn("(-", line, line)
