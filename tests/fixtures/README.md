@@ -13,6 +13,7 @@ Provenance of each file, and how to refresh it:
 | `config-timeout-300.txt` | the same path once set | captured from the droplet |
 | `systemd-show.txt` | `systemctl show` timestamp format | captured from the droplet |
 | `ace-timeout.log` | the wake that timed out before any response | captured from the droplet |
+| `espn-nfl-roster-gb.json` | ESPN's NFL team roster, with each athlete's `injuries` history | fetched from ESPN's public roster endpoint for Green Bay on 2026-09-24, trimmed to eight athletes; two in the active `offense` group are designated Out, which is the bug it guards |
 | `schema-dump-401.log` | a tool-schema dump containing `401` as a VALUE | format captured from a real `last-run.py` dump; the `401` line is the one that caused the false positive |
 
 `scripts/capture-fixtures.py` refreshes these from the live droplet and

@@ -11155,3 +11155,154 @@ class AReportInTheWrongFolderIsNamed(unittest.TestCase):
         for a in ("ace", "belfort"):
             src = (ROOT / "agents" / a / f"_{a}-agents-header.md").read_text()
             self.assertIn("reports/<report_name>", src, a)
+
+
+class AnInjuredPlayerIsFlaggedNotAdjusted(unittest.TestCase):
+    """Josh Jacobs was forecast for a game he was ruled out of.
+
+    ESPN's roster puts a player in "offense" whatever his status, and the
+    forecaster took that group as "might take the field". On the real Packers
+    roster the week of Falcons, Jacobs and Jayden Reed were in it and both
+    carried {"status": "Out"}. Jacobs's rows were written, and `best` ranked
+    him third, with nothing saying he would not play.
+
+    The number itself is left alone - it is P(clears the bar | he plays), and
+    calibration grades exactly that. The fix is that the reader is told.
+
+    The fixture is the real roster, trimmed to eight athletes.
+    """
+
+    def setUp(self):
+        self.m = load("props_forecast_inj", "props-forecast.py")
+        self.roster = json.loads((FIXTURES / "espn-nfl-roster-gb.json").read_text())
+        self.tmp = tempfile.TemporaryDirectory()
+        self.m.STORE = Path(self.tmp.name) / "forecasts.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def athlete(self, name):
+        for g in self.roster["athletes"]:
+            for a in g["items"]:
+                if a["displayName"] == name:
+                    return a
+        raise KeyError(name)
+
+    # --- reading ESPN -----------------------------------------------------
+
+    def offense(self):
+        return [a for g in self.roster["athletes"] if g["position"] == "offense"
+                for a in g["items"]]
+
+    def test_every_designation_in_the_real_roster_is_read_back(self):
+        # Round trip, not a restated value: whatever ESPN's newest entry says
+        # is what comes back. The fixture can be refreshed without this test
+        # knowing who is hurt this week.
+        seen = 0
+        for g in self.roster["athletes"]:
+            for a in g["items"]:
+                raw = a.get("injuries") or []
+                got = self.m.injury_of(a)
+                if not raw:
+                    self.assertIsNone(got, a["displayName"])
+                    continue
+                newest = max(raw, key=lambda i: i.get("date") or "")
+                self.assertEqual(got, {"status": newest["status"],
+                                       "date": newest["date"][:10]}, a["displayName"])
+                seen += 1
+        self.assertGreater(seen, 0, "the fixture must hold at least one injury")
+
+    def test_the_fixture_still_shows_the_bug(self):
+        # The premise, measured: someone in the ACTIVE offense group is
+        # designated. If a refresh loses that, this fixture stops testing
+        # the thing it was captured for.
+        self.assertTrue(any(a.get("injuries") for a in self.offense()))
+        self.assertTrue(any(not a.get("injuries") for a in self.offense()))
+
+    def test_the_latest_designation_wins(self):
+        # The list is a history. Questionable on Monday, Out on Wednesday.
+        a = {"injuries": [{"status": "Out", "date": "2026-09-23T20:13Z"},
+                          {"status": "Questionable", "date": "2026-09-20T01:00Z"}]}
+        self.assertEqual(self.m.injury_of(a)["status"], "Out")
+        a["injuries"].reverse()
+        self.assertEqual(self.m.injury_of(a)["status"], "Out", "order must not matter")
+
+    def test_nothing_usable_is_no_designation(self):
+        for a in ({}, None, {"injuries": []}, {"injuries": [{"status": " "}]},
+                  {"injuries": ["Out"]}):
+            self.assertIsNone(self.m.injury_of(a), a)
+
+    def test_the_players_the_roster_reader_returns_carry_it(self):
+        summary = {"header": {"competitions": [{"competitors": [
+            {"team": {"id": "9", "abbreviation": "GB"}}]}]}}
+        self.m.get = lambda url: self.roster if "/roster" in url else summary
+        got = {p[1]: p[5] for p in self.m.players_in("401872948")}
+        wanted = [a for a in self.offense()
+                  if (a.get("position") or {}).get("abbreviation") in self.m.POSITIONS]
+        self.assertTrue(wanted)
+        for a in wanted:
+            self.assertEqual(got[a["displayName"]], self.m.injury_of(a), a["displayName"])
+        self.assertTrue(any(got[a["displayName"]] for a in wanted),
+                        "an injured active player must come back flagged")
+        # The groups that were already excluded stay excluded.
+        for g in self.roster["athletes"]:
+            if g["position"] != "offense":
+                for a in g["items"]:
+                    self.assertNotIn(a["displayName"], got)
+
+    # --- what it does to a forecast ---------------------------------------
+
+    def row_args(self):
+        sample = [55.0, 62.0, 71.0, 48.0, 90.0, 33.0, 66.0, 77.0, 41.0, 58.0]
+        return ("1", "A @ B", None, "2", "A Receiver", "WR", "AAA",
+                {"receiving_yards": sample}, ["2026"], None)
+
+    def test_the_percentage_is_not_touched(self):
+        well = self.m.rows_for_player(*self.row_args())
+        hurt = self.m.rows_for_player(*self.row_args(),
+                                      {"status": "Out", "date": "2026-09-23"})
+        self.assertEqual(well[0]["probabilities"], hurt[0]["probabilities"])
+        self.assertEqual(well[0]["interval"], hurt[0]["interval"])
+
+    def test_the_designation_is_saved_on_the_row(self):
+        # So a later calibration can split graded rows by it, and so `best`,
+        # which reads the file rather than ESPN, can show it.
+        hurt = self.m.rows_for_player(*self.row_args(),
+                                      {"status": "Out", "date": "2026-09-23"})
+        self.assertEqual(hurt[0]["injury"]["status"], "Out")
+        self.assertIsNone(self.m.rows_for_player(*self.row_args())[0]["injury"])
+
+    def test_the_warning_says_what_and_when(self):
+        note = self.m.injury_note({"status": "Questionable", "date": "2026-09-22"})
+        self.assertIn("⚠", note)
+        self.assertIn("QUESTIONABLE", note)
+        self.assertIn("09-22", note)
+        self.assertEqual(self.m.injury_note(None), "")
+
+    def test_best_shows_the_flag_beside_the_pick(self):
+        row = self.m.rows_for_player(*self.row_args(),
+                                     {"status": "Out", "date": "2026-09-23"})[0]
+        self.m.save({"forecasts": [row]})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.m.cmd_best("1")
+        line = [l for l in out.getvalue().splitlines() if "A Receiver" in l][0]
+        self.assertIn("⚠ OUT", line)
+        self.assertIn("row is not a pick", out.getvalue())
+
+    def test_best_says_nothing_when_nobody_is_hurt(self):
+        row = self.m.rows_for_player(*self.row_args())[0]
+        self.m.save({"forecasts": [row]})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.m.cmd_best("1")
+        self.assertNotIn("⚠", out.getvalue())
+
+    # --- wiring -----------------------------------------------------------
+
+    def test_forecast_hands_the_designation_to_the_row(self):
+        body = (SCRIPTS / "props-forecast.py").read_text()
+        body = body.split("def cmd_forecast(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("samples, seasons, avail, injury)", body)
+        self.assertIn("injury_note(injury)", body)
+        self.assertIn("carry an injury designation", body)

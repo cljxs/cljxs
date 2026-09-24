@@ -443,8 +443,47 @@ def availability(season_games, played):
             "thin": rate < AVAILABILITY_FLOOR}
 
 
+def injury_of(athlete):
+    """{"status", "date"} of a player's latest injury designation, or None.
+
+    FLAGGED, NEVER APPLIED. A forecast is P(clears the bar | he plays), and
+    that stays the number - multiplying it by a guess at P(plays) would mix a
+    judgement into the one thing calibration is here to grade. What changes
+    is that the reader is told.
+
+    Read off the roster ESPN already sends, where each athlete carries
+    "injuries": [{"status": "Out", "date": "2026-09-23T20:13Z"}]. Being in
+    the active offense group does not mean healthy: on the real Packers
+    roster the week of Falcons, Josh Jacobs and Jayden Reed were both in
+    "offense" and both "Out", and both were being forecast.
+
+    The latest entry by date wins, because the list is a history and a
+    player can go Questionable -> Out in a week. The date comes back too: a
+    designation from ten days ago is a reason to check, not a fact.
+    """
+    rows = [i for i in ((athlete or {}).get("injuries") or [])
+            if isinstance(i, dict) and str(i.get("status") or "").strip()]
+    if not rows:
+        return None
+    latest = max(rows, key=lambda i: str(i.get("date") or ""))
+    return {"status": str(latest["status"]).strip(),
+            "date": str(latest.get("date") or "")[:10] or None}
+
+
+def injury_note(injury):
+    """The warning printed beside a forecast: '⚠ OUT (09-23)'. Empty if none."""
+    if not injury:
+        return ""
+    when = f" ({injury['date'][5:]})" if injury.get("date") else ""
+    return f"  \u26a0 {injury['status'].upper()}{when}"
+
+
 def players_in(event_id):
-    """[(athlete_id, name, position, team_abbr, team_id)] for both sides."""
+    """[(athlete_id, name, position, team_abbr, team_id, injury)] for both sides.
+
+    injury is injury_of() for that athlete - read here, from the roster this
+    already fetched, rather than from a second request for the same page.
+    """
     summary = get(f"{API}/summary?event={event_id}")
     header = (summary.get("header") or {})
     comps = ((header.get("competitions") or [{}])[0].get("competitors") or [])
@@ -468,7 +507,7 @@ def players_in(event_id):
                 pos = ((a.get("position") or {}).get("abbreviation") or "")
                 if pos in POSITIONS:
                     out.append((str(a.get("id")), a.get("displayName"), pos,
-                                abbr, str(tid)))
+                                abbr, str(tid), injury_of(a)))
     return out
 
 
@@ -556,7 +595,7 @@ def fixture_of(summary):
 
 
 def rows_for_player(event_id, fixture, kickoff, aid, name, pos, team,
-                    samples, seasons, avail):
+                    samples, seasons, avail, injury=None):
     """One row per market this player actually has a history in."""
     rows = []
     for market, spec in MARKETS.items():
@@ -583,6 +622,7 @@ def rows_for_player(event_id, fixture, kickoff, aid, name, pos, team,
             "p25": percentile(sample, 25), "p50": percentile(sample, 50),
             "p75": percentile(sample, 75),
             "availability": avail,
+            "injury": injury,
             "coarse": is_coarse(probs, thresholds),
             "counts": counts, "bandwidth": round(h, 2),
             "resamples": RESAMPLES, "interval_span": INTERVAL_SPAN,
@@ -604,8 +644,10 @@ def cmd_forecast(event_id):
 
     data = load()
     made = thin = flagged = 0
+    hurt = {}
     played_in = {}
-    for aid, name, pos, team, tid in top_by_usage(players_in(event_id), now):
+    for aid, name, pos, team, tid, *more in top_by_usage(players_in(event_id), now):
+        injury = more[0] if more else None
         if tid not in played_in:
             played_in[tid] = team_games(tid)
         samples, seasons, current = samples_for(aid, now)
@@ -619,7 +661,7 @@ def cmd_forecast(event_id):
             continue
         avail = availability(played_in.get(tid), current)
         rows = rows_for_player(event_id, fixture, kickoff, aid, name, pos, team,
-                               samples, seasons, avail)
+                               samples, seasons, avail, injury)
         if not rows:
             print(f"  {name:<24} {pos:<3} {team:<4} SKIPPED - no market he "
                   f"reaches in a quarter of his games")
@@ -645,6 +687,9 @@ def cmd_forecast(event_id):
             if avail and avail["thin"]:
                 note += f"  PLAYED {avail['played']}/{avail['team_games']}"
                 flagged += 1
+            if injury:
+                note += injury_note(injury)
+                hurt[name] = injury
             print(f"  {name:<20} {row['market']:<17} {line}   "
                   f"(exp {row['sample_mean']:.1f} {row['unit']}, "
                   f"{row['sample_games']}g, h={row['bandwidth']:g}){note}")
@@ -667,6 +712,16 @@ def cmd_forecast(event_id):
               f"percentage is what he\ndoes WHEN HE PLAYS. A book prices that "
               f"times the chance he is active, which is\nwhy a row like this "
               f"can look like a huge edge and be nothing of the kind.")
+    if hurt:
+        print(f"\n\u26a0 {len(hurt)} player(s) carry an injury designation:")
+        for who, inj in sorted(hurt.items()):
+            print(f"    {who:<24} {inj['status']}"
+                  + (f"  (as of {inj['date']})" if inj.get("date") else ""))
+        print(f"  Their percentages are unchanged - each one is what he does "
+              f"IF HE PLAYS. An\n  OUT player will not, so ignore his rows; "
+              f"a QUESTIONABLE one may not.\n  A teammate who picks up his "
+              f"work is NOT adjusted up either. Check the\n  final inactives "
+              f"about 90 minutes before kickoff.")
     print(NOT_A_BET)
     return 0 if made else 1
 
@@ -738,9 +793,15 @@ def cmd_best(event_id):
         a = r.get("availability") or {}
         if a.get("thin"):
             ctx += f", PLAYED {a['played']}/{a['team_games']}"
+        ctx += injury_note(r.get("injury"))
         model = b["probability"] if b["side"] == "OVER" else 100.0 - b["probability"]
         print(f"  {r['player']:<20}{r['market']:<18}{call:<22}"
               f"{model:>6.1f}%{b['confidence']:>7.1f}%   {ctx}")
+    hurt = sorted({b["row"]["player"] for b in picks if b["row"].get("injury")})
+    if hurt:
+        print(f"\n  \u26a0 injury designation: {', '.join(hurt)}. Their "
+              f"percentages assume they\n  play - an OUT player's row is not "
+              f"a pick.")
     print(f"\n  One line per player: his call that sits furthest from 50/50, "
           f"not his\n  highest percentage - the highest percentage is always "
           f"the easiest bar, and\n  without a price that ranking says nothing.")
