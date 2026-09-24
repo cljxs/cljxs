@@ -42,14 +42,23 @@ function runReview(args, port) {
   });
 }
 
+// The standing focus, read from the one file scout-ideas.py writes. Shown in
+// Scout's house because a focus nobody can see is a focus nobody clears.
+const FOCUS = path.join(AGENTS_DIR, 'scout', 'state', 'focus.txt');
+function readFocus() {
+  try { return fs.readFileSync(FOCUS, 'utf8').trim() || null; } catch { return null; }
+}
+
 function register(app, port) {
   app.get('/api/scout/ideas', (req, res) => {
     const ideas = readIdeas();
     if (ideas === null) {
-      return res.json({ available: false, reason: 'no ideas.json yet - Scout writes it on its first run', ideas: [] });
+      return res.json({ available: false, reason: 'no ideas.json yet - Scout writes it on its first run',
+                        ideas: [], focus: readFocus() });
     }
     res.json({
       available: true,
+      focus: readFocus(),
       counts: {
         pending: ideas.filter(i => i.status === 'pending').length,
         approved: ideas.filter(i => i.status === 'approved').length,

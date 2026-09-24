@@ -1374,7 +1374,7 @@ async function actOnIdea(id, verb) {
   }
 }
 
-let openIdea = null, IDEAS = [];
+let openIdea = null, IDEAS = [], SCOUT_FOCUS = null;
 
 function ideaSlug(i){
   const ev = i.evidence || {};
@@ -1487,7 +1487,10 @@ function drawIdeas(){
     <div class="vt lead"><b>${tally.pending}</b><span>Pending verdict</span></div>
     <div class="vt"><b>${tally.approved}</b><span>Approved</span></div>
     <div class="vt"><b>${tally.rejected}</b><span>Rejected</span></div>
-  </div>`;
+  </div>` + (SCOUT_FOCUS ? `<div class="verdict" style="margin:0 0 12px">
+    <b>Focus: ${esc(SCOUT_FOCUS)} only.</b> Every idea Scout proposes is a ${esc(SCOUT_FOCUS)},
+    and code refuses anything else. It stays on until you clear it:
+    <code>scripts/scout-ideas.py focus --clear</code></div>` : '');
 
   if(!pending.length){
     host.innerHTML = head + `<div class="muted">Nothing waiting on you. Scout proposes
@@ -1531,6 +1534,7 @@ async function loadScoutIdeas() {
     const r = await fetch('/api/scout/ideas', { cache: 'no-store' });
     const d = await r.json();
     IDEAS = d.ideas || [];
+    SCOUT_FOCUS = d.focus || null;
     drawIdeas();
   } catch {
     host.innerHTML = '<div class="muted">Could not load ideas.</div>';

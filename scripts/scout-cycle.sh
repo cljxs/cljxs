@@ -20,22 +20,52 @@ AGENT="$ROOT/agents/scout"
 LAST="$AGENT/state/last-run.txt"
 MEM="$AGENT/MEMORY.md"
 
+IDEAS="python3 $ROOT/scripts/scout-ideas.py"
+
+# Two kinds of focus. Words on the command line steer THIS run only. The
+# standing focus - `scout-ideas.py focus tote` - holds until it is cleared,
+# is printed at the top of every run, and is enforced by the intake, which
+# refuses any other product whatever the model writes.
+FOCUS_ON="$*"
+STANDING=$($IDEAS focus --word 2>/dev/null)
+if [ -z "$FOCUS_ON" ] && [ -n "$STANDING" ]; then
+  FOCUS_ON="$STANDING"
+  echo "== standing focus: $STANDING  (clear it: scripts/scout-ideas.py focus --clear)"
+elif [ -n "$FOCUS_ON" ]; then
+  echo "== focused run: $FOCUS_ON"
+fi
+
+# Whether to wake the model at all is decided HERE. Scout used to count its
+# own pending ideas; it said "4 pending" on a morning when the log held none
+# and proposed nothing on the strength of it. Code counts, and a run with
+# nothing to do does not wake a model that costs money to say so.
+if ! WHY=$($IDEAS should-run); then
+  LINE="$(date -u '+%Y-%m-%d %H:%M UTC') | held by code, model not woken - $WHY"
+  printf '%s\n' "$LINE" > "$LAST"
+  printf '%s\n' "$LINE" >> "$MEM"
+  echo "$LINE"
+  exit 0
+fi
+
 MESSAGE="scheduled idea run"
-if [ "$#" -gt 0 ]; then
-  MESSAGE="Focused idea run. Every idea you propose must be for: $*
+if [ -n "$FOCUS_ON" ]; then
+  MESSAGE="Focused idea run. Every idea you propose must be for: $FOCUS_ON
 
-Propose nothing for any other product type this run - not stickers, not mugs,
-not prints. If you cannot find enough that fit, propose fewer. A short list
-that fits is the job; padding it out with something else is not.
-
-Set \"product\" on each idea to the product type it is for, so approving one
-drafts against the right catalogue entry.
+Propose nothing for any other product type - code refuses it. If you cannot
+find enough that fit, propose fewer. A short list that fits is the job;
+padding it out with something else is not.
 
 Everything else is unchanged: read the files first, write state/last-run.txt
-whatever you decide, and put this run's new ideas in state/proposals.json.
-Do not write state/ideas.json - code appends to it for you."
-  echo "== focused run: $*"
+whatever you decide, and write your ideas to state/drafts.txt, one per line:
+phrase | title | product | angle"
 fi
+
+# The facts the run starts from - how many ideas are waiting, the focus, and
+# every measured phrase it may use - computed now and handed over, so the
+# model spends its turns on ideas rather than on counting.
+MESSAGE="$MESSAGE
+
+$($IDEAS brief)"
 
 T=$(stat -c %Y "$LAST" 2>/dev/null || echo 0)
 

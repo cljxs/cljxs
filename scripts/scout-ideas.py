@@ -52,6 +52,20 @@ _ip.loader.exec_module(ipc)
 # from this morning.
 STALE_DAYS = 14
 
+# THE FOCUS. One product word - "tote" - that every idea must be for, until
+# it is cleared. It lives in one file so the cycle, the intake and the Deck
+# all read the same answer, and it is printed in every run's log and shown
+# in Scout's house: the reason focus used to be one-run-only was that a
+# steering edit nobody remembers to undo is how an agent runs last week's
+# rules for a month. A focus that is on screen every time is not forgotten.
+FOCUS = STATE / "focus.txt"
+
+# At this many ideas waiting on the user, a run adds nothing - review is the
+# bottleneck, not supply. It used to be Scout's job to count them. It said
+# "4 pending" on a morning when the log held none, and proposed nothing on
+# the strength of a number it had got wrong. Code counts now.
+PENDING_HOLD = 5
+
 # An inch mark is a quote with more text after it; a quote that really ends a
 # JSON string is followed by a comma, brace, bracket or line end. Scout wrote
 # `sized for a 3.5" chest print` and closed the string on the inches.
@@ -137,6 +151,58 @@ def _rows_of(d):
     return good
 
 
+def product_word_of(text):
+    """The catalogue product word in some text, or None - emily-printify's
+    list, the same one catalogue_word() uses."""
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "emily_printify", SCRIPTS / "emily-printify.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.product_word(str(text or ""))
+    except Exception:
+        return None
+
+
+def focus():
+    """The product word every idea must be for, or None when unfocused."""
+    try:
+        word = FOCUS.read_text().strip().lower()
+    except Exception:
+        return None
+    return word or None
+
+
+def pending_count():
+    d, _ = load_ideas()
+    return sum(1 for i in d["ideas"] if (i.get("status") or "pending") == "pending")
+
+
+def proposable():
+    """[(phrase, row)] Scout may propose into right now, in focus if focused.
+
+    Decided by the gate itself - measured() and a score above zero, which is
+    what propose and the log's door both apply - so this list and a refusal
+    can never disagree about a phrase.
+    """
+    want = focus()
+    seen, out = set(), []
+    for scan in scans():
+        for row in scan["rows"]:
+            phrase = str(row.get("phrase") or "").strip()
+            key = phrase.lower()
+            if not phrase or key in seen:
+                continue
+            seen.add(key)
+            if want and product_word_of(phrase) != want:
+                continue
+            best, _scan, problem = measured(phrase)
+            if problem or not (best or {}).get("score"):
+                continue
+            out.append((phrase, best))
+    return out
+
+
 def catalogue_word(product):
     """'all-over-print canvas tote bag' -> 'tote'.
 
@@ -146,15 +212,8 @@ def catalogue_word(product):
     the scan reader, and at module level that is a cycle.
     """
     text = str(product or "").strip()
-    try:
-        spec = importlib.util.spec_from_file_location(
-            "emily_printify", SCRIPTS / "emily-printify.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        word = mod.product_word(text)
-    except Exception:
-        word = None                  # never lose the suggestion over this
-    return word or text or "PRODUCT"
+    # None on any failure - never lose the suggestion over this.
+    return product_word_of(text) or text or "PRODUCT"
 
 
 def row_problem(row):
@@ -468,6 +527,13 @@ def cmd_intake(_argv):
                         "no phrase. Every idea names a MEASURED phrase - "
                         "see scout-ideas.py evidence"))
             continue
+        want = focus()
+        if want and product_word_of(product) != want:
+            bad.append((n, title or line[:40],
+                        f"the focus is {want} - this is a "
+                        f"{product_word_of(product) or product!r}. Clear the "
+                        f"focus to propose other products."))
+            continue
         angle = parts[3] if len(parts) > 3 else ""
         brief = parts[4] if len(parts) > 4 else ""
         argv = ["--phrase", phrase, "--title", title, "--product", product]
@@ -630,8 +696,100 @@ def cmd_show():
     return 0
 
 
+def cmd_focus(argv):
+    """scout-ideas.py focus            show it
+    scout-ideas.py focus tote          every idea must be a tote, until cleared
+    scout-ideas.py focus --clear       any product again
+    scout-ideas.py focus --word        just the word, for scout-cycle.sh"""
+    if "--word" in argv:
+        print(focus() or "")
+        return 0
+    if "--clear" in argv:
+        FOCUS.unlink(missing_ok=True)
+        print("focus cleared - Scout may propose any product again.")
+        return 0
+    if not argv:
+        print(f"focus: {focus()} - every idea must be one" if focus()
+              else "no focus - Scout may propose any product.")
+        return 0
+    word = product_word_of(" ".join(argv))
+    if not word:
+        print(f"{' '.join(argv)!r} is not a product this shop knows. Try a word "
+              f"like tote, sticker or hoodie.", file=sys.stderr)
+        return 2
+    FOCUS.parent.mkdir(parents=True, exist_ok=True)
+    FOCUS.write_text(word + "\n")
+    left = proposable()
+    print(f"focus set: {word}. Every idea is a {word} until "
+          f"`scout-ideas.py focus --clear`.")
+    print(f"{len(left)} measured {word} phrase(s) Scout can propose into now.")
+    if not left:
+        print(f"  None yet - measure some:\n"
+              f"    python3 scripts/market-scan.py scan {word} bag --save"
+              if word == "tote" else
+              f"  None yet - measure some:\n"
+              f"    python3 scripts/market-scan.py scan {word} --save")
+    return 0
+
+
+def should_run():
+    """(True, None) to wake Scout, or (False, why) - decided here, not by it."""
+    waiting = pending_count()
+    if waiting >= PENDING_HOLD:
+        return False, (f"{waiting} ideas are waiting on your verdict - review "
+                       f"those first; a run now only adds to the pile")
+    if not proposable():
+        where = f"{focus()} " if focus() else ""
+        return False, (f"no measured {where}phrase is left to propose into - "
+                       f"run market-scan.py scan ... --save first")
+    return True, None
+
+
+def cmd_should_run(_argv):
+    ok, why = should_run()
+    print(why or "run")
+    return 0 if ok else 1
+
+
+def cmd_brief(_argv):
+    """The facts a run starts from, counted here and handed to Scout.
+
+    Scout used to count its own pending ideas and read its own scans. It got
+    the count wrong and stopped on it. Everything below is computed; the
+    only thing left to the model is the idea.
+    """
+    want = focus()
+    d, _ = load_ideas()
+    used = {}
+    for i in d["ideas"]:
+        ph = str(((i.get("evidence") or {}).get("phrase")) or "").strip().lower()
+        if ph:
+            used.setdefault(ph, []).append(str(i.get("title") or ""))
+    print("FACTS, COUNTED BY CODE - use these numbers, do not recount them:")
+    print(f"- ideas waiting on the user's verdict: {pending_count()}")
+    if want:
+        print(f"- FOCUS: {want}. Every idea this run is a {want}, with "
+              f"\"{want}\" as its product.\n  Any other product is refused "
+              f"by code, whatever the wording.")
+    print("- measured phrases you may use" + (f" ({want} only)" if want else "")
+          + ", fresh and above zero:")
+    for phrase, row in proposable():
+        have = used.get(phrase.lower())
+        tail = f"  - already has: {'; '.join(have)[:90]}" if have else ""
+        print(f"    {phrase}  ({row.get('supply') or 0:,} listings){tail}")
+    print("- An idea on a phrase that already has one must be a clearly "
+          "different design,\n  not a rewording of it.")
+    return 0
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if cmd == "focus":
+        return cmd_focus(sys.argv[2:])
+    if cmd == "brief":
+        return cmd_brief(sys.argv[2:])
+    if cmd == "should-run":
+        return cmd_should_run(sys.argv[2:])
     if cmd == "merge":
         return cmd_merge()
     if cmd == "propose":
@@ -642,8 +800,8 @@ def main():
         return cmd_evidence(sys.argv[2:])
     if cmd == "intake":
         return cmd_intake(sys.argv[2:])
-    print("usage: scout-ideas.py propose|intake|merge|show|evidence",
-          file=sys.stderr)
+    print("usage: scout-ideas.py propose|intake|merge|show|evidence|"
+          "focus|brief|should-run", file=sys.stderr)
     return 2
 
 

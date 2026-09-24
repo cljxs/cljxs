@@ -1291,8 +1291,13 @@ class ApparelIsCutOutBeforeItIsUploaded(unittest.TestCase):
 class ScoutCanBeFocusedForOneRun(unittest.TestCase):
     """Steering one run by editing AGENTS.md means remembering to edit it back,
     and a forgotten edit is an agent running last week's rules - what
-    preflight.py reports as stale/broken. The focus is an argument instead: it
+    preflight.py reports as stale/broken. A ONE-RUN focus is an argument: it
     is written to no file and nothing remembers it.
+
+    A STANDING focus ("totes until we find another market") exists too, and
+    answers the same worry differently: it lives in one file, is printed at
+    the top of every run, is shown in Scout's house, and is cleared by one
+    command. A focus nobody can see is the problem; this one is always seen.
 
     Scout was also the last agent whose whole cycle lived inline in its unit,
     with nested quotes, escaped quotes and systemd %% escaping stacked. The
@@ -1329,19 +1334,16 @@ class ScoutCanBeFocusedForOneRun(unittest.TestCase):
                       "a run that proposes nothing must still say the log is intact")
 
     def test_the_default_run_is_unfocused(self):
+        # Unfocused unless asked: by words on the command line for one run,
+        # or by the standing focus scout-ideas.py owns. Nothing else.
         src = self.WRAPPER.read_text()
         self.assertIn('MESSAGE="scheduled idea run"', src)
-        self.assertIn('if [ "$#" -gt 0 ]; then', src)
+        self.assertIn('FOCUS_ON="$*"', src)
+        self.assertIn("focus --word", src)
 
-    def test_a_focus_reaches_the_message_verbatim(self):
-        r = subprocess.run(
-            ["bash", "-c",
-             'set -- "the Gildan 18500 hoodie"; '
-             'MESSAGE="scheduled idea run"; '
-             'if [ "$#" -gt 0 ]; then MESSAGE="Focused idea run. Every idea you '
-             'propose must be for: $*"; fi; echo "$MESSAGE"'],
-            capture_output=True, text=True)
-        self.assertIn("the Gildan 18500 hoodie", r.stdout)
+    # A focus reaching the message is tested end to end, through the real
+    # wrapper, in TheStandingFocusAndTheCountAreCode. This used to run a copy
+    # of the wrapper's bash typed into the test, which tested the copy.
 
     def test_the_focus_is_not_written_anywhere(self):
         # If it touched a file, it would outlive the run it was meant for.
@@ -11807,3 +11809,234 @@ class TheBooksLineIsShownAndNeverUsed(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             self.m.cmd_best("1")
         self.assertIn("DraftKings 4.5", out.getvalue())
+
+
+class TheStandingFocusAndTheCountAreCode(unittest.TestCase):
+    """Scout said "4 pending" on a morning when the log held none.
+
+    Its instructions told it to count pending ideas and stop at five, and the
+    example summary under that rule read "proposed 0 - 6 pending, nothing new
+    that is not a rewording". Its line that morning was nearly that example,
+    word for word, and it proposed nothing on the strength of a count it had
+    got wrong.
+
+    So code counts. The cycle does not wake the model at all when there is
+    nothing for it to do, and when it does, the message ends in the facts:
+    the count, the focus, and every phrase the gate would accept.
+
+    The owner also asked for totes only "until we find another market". That
+    is a standing focus, kept in one file, enforced at the intake - a sticker
+    draft is refused by code whatever the model writes - and shown on every
+    run and in the Deck.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.state = self.root / "agents" / "scout" / "state"
+        (self.state / "scans").mkdir(parents=True)
+        (self.root / "scripts").symlink_to(SCRIPTS)
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.scan("canvas tote bag", now, [("canvas tote bag", 0.012),
+                                           ("canvas tote bag with zipper", 0.0)])
+        self.scan("laptop sticker", now, [("laptop sticker", 0.022)])
+        self.ideas([])
+        self.old = os.environ.get("ECOSYSTEM_ROOT")
+        os.environ["ECOSYSTEM_ROOT"] = str(self.root)
+        self.si = load("scout_ideas_focus", "scout-ideas.py")
+
+    def tearDown(self):
+        if self.old is None:
+            os.environ.pop("ECOSYSTEM_ROOT", None)
+        else:
+            os.environ["ECOSYSTEM_ROOT"] = self.old
+        self.tmp.cleanup()
+
+    def scan(self, seed, when, rows):
+        doc = {"seed": seed, "scanned_at": when, "excluded": [], "rows": [
+            {"phrase": p, "supply": 1000, "heat": 1, "pull": 0.01, "price": 20.0,
+             "match": 0.9, "returned": 100, "heat_n": 10, "pull_n": 10,
+             "score": sc, "tags": []} for p, sc in rows]}
+        (self.state / "scans" / (seed.replace(" ", "-") + ".json")).write_text(json.dumps(doc))
+
+    def ideas(self, statuses):
+        (self.state / "ideas.json").write_text(json.dumps({"ideas": [
+            {"id": n + 1, "title": f"Idea {n + 1}", "product": "tote", "status": st,
+             "evidence": {"phrase": "canvas tote bag"}} for n, st in enumerate(statuses)]}))
+
+    def run_py(self, *args):
+        return subprocess.run([sys.executable, str(SCRIPTS / "scout-ideas.py"), *args],
+                              capture_output=True, text=True,
+                              env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)))
+
+    # --- the count ------------------------------------------------------
+
+    def test_pending_is_counted_from_the_log(self):
+        self.ideas(["approved", "rejected", "pending", "approved"])
+        self.assertEqual(self.si.pending_count(), 1)
+        self.ideas([])
+        self.assertEqual(self.si.pending_count(), 0)
+
+    def test_the_run_is_held_at_the_limit_and_not_below_it(self):
+        self.ideas(["pending"] * (self.si.PENDING_HOLD - 1))
+        self.assertEqual(self.si.should_run(), (True, None))
+        self.ideas(["pending"] * self.si.PENDING_HOLD)
+        ok, why = self.si.should_run()
+        self.assertFalse(ok)
+        self.assertIn(str(self.si.PENDING_HOLD), why)
+
+    def test_nothing_to_propose_into_holds_the_run(self):
+        for f in (self.state / "scans").iterdir():
+            f.unlink()
+        ok, why = self.si.should_run()
+        self.assertFalse(ok)
+        self.assertIn("market-scan.py", why)
+
+    def test_the_instructions_no_longer_ask_scout_to_count(self):
+        header = (ROOT / "agents" / "scout" / "_scout-agents-header.md").read_text()
+        self.assertNotIn("Count what is still", header)
+        self.assertNotIn("6 pending", header, "the example it copied is gone")
+        self.assertIn("FACTS, COUNTED BY CODE", header)
+
+    # --- the focus --------------------------------------------------------
+
+    def test_a_focus_is_set_from_plain_words_and_cleared(self):
+        r = self.run_py("focus", "tote", "bags")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.si.focus(), "tote")
+        self.run_py("focus", "--clear")
+        self.assertIsNone(self.si.focus())
+
+    def test_a_word_that_is_not_a_product_is_refused(self):
+        r = self.run_py("focus", "rocketship")
+        self.assertEqual(r.returncode, 2)
+        self.assertIsNone(self.si.focus())
+
+    def test_the_intake_refuses_another_product_while_focused(self):
+        self.run_py("focus", "tote")
+        (self.state / "drafts.txt").write_text(
+            "canvas tote bag | Map Tote | tote | x\n"
+            "laptop sticker | Retro Sticker | sticker | y\n")
+        r = self.run_py("intake")
+        self.assertIn("1 filed, 1 refused", r.stdout)
+        self.assertIn("the focus is tote", r.stderr)
+        filed = self.si._rows_of(json.loads((self.state / "proposals.json").read_text()))
+        self.assertEqual([p["title"] for p in filed], ["Map Tote"])
+
+    def test_unfocused_takes_any_product(self):
+        (self.state / "drafts.txt").write_text(
+            "canvas tote bag | Map Tote | tote | x\n"
+            "laptop sticker | Retro Sticker | sticker | y\n")
+        self.assertIn("2 filed, 0 refused", self.run_py("intake").stdout)
+
+    def test_the_phrases_handed_over_are_exactly_what_the_gate_accepts(self):
+        # Zero-score phrases are out; the sticker is out under a tote focus.
+        self.assertEqual({p for p, _ in self.si.proposable()},
+                         {"canvas tote bag", "laptop sticker"})
+        self.run_py("focus", "tote")
+        self.assertEqual([p for p, _ in self.si.proposable()], ["canvas tote bag"])
+        for phrase, _row in self.si.proposable():
+            _r, _s, problem = self.si.measured(phrase)
+            self.assertIsNone(problem)
+
+    def test_the_brief_carries_the_real_count_and_the_focus(self):
+        self.ideas(["pending", "pending", "approved"])
+        self.run_py("focus", "tote")
+        out = self.run_py("brief").stdout
+        self.assertIn("waiting on the user's verdict: 2", out)
+        self.assertIn("FOCUS: tote", out)
+        self.assertIn("canvas tote bag", out)
+        self.assertNotIn("laptop sticker", out)
+        self.assertNotIn("with zipper", out)
+
+    # --- the real wrapper, with a stand-in model --------------------------
+
+    FAKE = (
+        "#!/bin/bash\n"
+        "for ((i=1;i<=$#;i++)); do [ \"${!i}\" = \"--message\" ] && j=$((i+1)) && "
+        "printf '%s' \"${!j}\" > \"$ECOSYSTEM_ROOT/received.txt\"; done\n"
+        "sleep 1\n"
+        "echo 'proposed 1' > \"$ECOSYSTEM_ROOT/agents/scout/state/last-run.txt\"\n"
+        "printf 'canvas tote bag | Map Tote | tote | x\\nlaptop sticker | S | sticker | y\\n' "
+        "> \"$ECOSYSTEM_ROOT/agents/scout/state/drafts.txt\"\n"
+    )
+
+    def cycle(self):
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        fake = bin_dir / "openclaw"
+        fake.write_text(self.FAKE)
+        fake.chmod(0o755)
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root),
+                   PATH=f"{bin_dir}:{os.environ.get('PATH', '')}")
+        return subprocess.run(["bash", str(SCRIPTS / "scout-cycle.sh")],
+                              capture_output=True, text=True, env=env, timeout=60)
+
+    def test_a_held_run_never_wakes_the_model(self):
+        self.ideas(["pending"] * self.si.PENDING_HOLD)
+        r = self.cycle()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse((self.root / "received.txt").exists(), "the model was woken")
+        line = (self.state / "last-run.txt").read_text()
+        self.assertIn("held by code", line)
+        self.assertIn(line.strip(), (self.root / "agents" / "scout" / "MEMORY.md").read_text())
+
+    def test_a_focused_run_gets_the_facts_and_code_enforces_the_focus(self):
+        self.run_py("focus", "tote")
+        r = self.cycle()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        msg = (self.root / "received.txt").read_text()
+        self.assertIn("must be for: tote", msg)
+        self.assertIn("FACTS, COUNTED BY CODE", msg)
+        self.assertIn("waiting on the user's verdict: 0", msg)
+        self.assertIn("state/drafts.txt", msg)
+        self.assertNotIn("proposals.json", msg, "the old instruction is back")
+        self.assertIn("standing focus: tote", r.stdout)
+        self.assertEqual([i["title"] for i in json.loads((self.state / "ideas.json").read_text())["ideas"]],
+                         ["Map Tote"], "the sticker draft must have been refused")
+
+    def test_words_on_the_command_line_are_still_for_one_run_only(self):
+        self.assertIsNone(self.si.focus())
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        (bin_dir / "openclaw").write_text(self.FAKE)
+        (bin_dir / "openclaw").chmod(0o755)
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root),
+                   PATH=f"{bin_dir}:{os.environ.get('PATH', '')}")
+        subprocess.run(["bash", str(SCRIPTS / "scout-cycle.sh"), "sticker"],
+                       capture_output=True, text=True, env=env, timeout=60)
+        self.assertIn("must be for: sticker", (self.root / "received.txt").read_text())
+        self.assertIsNone(self.si.focus(), "a one-run focus was persisted")
+
+
+class ScoutsHouseShowsTheFocus(unittest.TestCase):
+    """A focus nobody can see is a focus nobody clears."""
+
+    def test_the_api_reads_the_one_file(self):
+        src = (ROOT / "mission-control-api" / "scout.js").read_text()
+        self.assertIn("'focus.txt'", src)
+        self.assertEqual(src.count("focus: readFocus()"), 2, "both answers carry it")
+
+    def render(self, focus):
+        """drawIdeas() from the page, run by node against a one-element DOM."""
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        src = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        esc = re.search(r"const esc = .*\n", src).group(0)
+        fn = re.search(r"^function drawIdeas\(.*?^\}\n", src, re.S | re.M).group(0)
+        js = (esc + "const host = {innerHTML: ''};"
+              "const document = {getElementById: () => host};"
+              f"let IDEAS = [], openIdea = null, SCOUT_FOCUS = {json.dumps(focus)};"
+              + fn + "drawIdeas(); process.stdout.write(host.innerHTML);")
+        r = subprocess.run([node, "-e", js], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def test_the_house_shows_it_with_how_to_clear_it(self):
+        html = self.render("tote")
+        self.assertIn("Focus: tote only.", html)
+        self.assertIn("focus --clear", html)
+
+    def test_no_focus_no_banner(self):
+        self.assertNotIn("Focus:", self.render(None))

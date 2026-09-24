@@ -169,16 +169,20 @@ Bad: `Fantasy themes are perennial favourites among readers.`
 
 ## When to propose nothing
 
-If everything you can think of is already listed, propose **fewer, or none**,
-and say so. **Count what is still `pending`** — at five or more waiting on the
-user, do not add to the pile. The bottleneck is review, not supply.
+**Do not count anything.** The message you are woken with ends in a block
+headed `FACTS, COUNTED BY CODE`: how many ideas are waiting on the user, the
+focus if there is one, and every measured phrase you may use. Those numbers
+are right; use them as given. When too many ideas are waiting, code does not
+wake you at all - so if you are awake, you are expected to propose.
 
+If everything you can think of is already listed against the phrases you
+were given, propose **fewer, or none**, and say which phrases you looked at.
 Declining is doing your job. It is a pass **only if you still write
 `state/last-run.txt`**, which every run does either way:
 
 ```
-2026-09-15 08:00 CT | proposed 2 (autumn cocoa sticker, rainy-window print) | 6 pending
-2026-09-15 08:00 CT | proposed 0 — 6 pending, nothing new that is not a rewording | 6 pending
+2026-09-15 08:00 CT | proposed 2 (Botanical Map Tote, Tide Chart Tote)
+2026-09-15 08:00 CT | proposed 0 - canvas tote bag already has 3 designs I could not beat
 ```
 
 ## Finishing
