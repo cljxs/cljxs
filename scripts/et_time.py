@@ -106,6 +106,31 @@ def stamp_is_wellformed(name, agent_name):
     return re.match(rf"^\d{{4}}-\d{{2}}-\d{{2}}-(?:{names})\.md$", str(name)) is not None
 
 
+def strays(agent_dir, name):
+    """Where a report owed as reports/<name> was filed instead, if anywhere.
+
+    Two ways it goes missing, and both are named rather than reported as
+    "no report":
+
+      the right folder, the wrong slot - reports/<date>-close.md for an open;
+      the right name, the wrong folder  - <agent>/<name>, because report_name
+        is a bare filename and a model writes a bare filename into whatever
+        directory it is standing in. Belfort left 2026-09-17-close.md and two
+        siblings in its own root, where no verifier looked and git showed
+        them as untracked litter.
+
+    Returned as paths relative to the agent folder, same date only. Both
+    verifiers call this; it used to be two copies of the first half.
+    """
+    d = Path(agent_dir)
+    date = str(name)[:10]
+    found = []
+    if (d / "reports").is_dir():
+        found += [f"reports/{x.name}" for x in sorted((d / "reports").glob(f"{date}-*.md"))]
+    found += [x.name for x in sorted(d.glob(f"{date}-*.md"))]
+    return found
+
+
 def expected_report(agent_dir, agent_name, now=None, started=None):
     """The exact report this cycle owes, for EVERY caller.
 

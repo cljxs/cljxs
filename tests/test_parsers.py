@@ -11087,3 +11087,71 @@ class TheArtCoversTheFacesOfAFoldedSheet(unittest.TestCase):
     def test_png_size_reads_the_header(self):
         ko = load("knockout_sz_t", "knockout.py")
         self.assertEqual(ko.size(ROOT / "hall.png"), (460, 330))
+
+
+class AReportInTheWrongFolderIsNamed(unittest.TestCase):
+    """Belfort left 2026-09-17-close.md and two siblings in its top folder.
+
+    report_name in data/_meta.json is a bare filename, and both agents'
+    instructions said "use that string" without saying where. A model given a
+    filename writes it into the directory it is standing in. The verifier
+    looked only in reports/, so it said "no report" - true, and no help - and
+    git showed the real one as untracked litter for a week.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.agent = self.root / "agents" / "belfort"
+        for sub in ("reports", "state", "data"):
+            (self.agent / sub).mkdir(parents=True)
+        shutil.copy(ROOT / "agents" / "belfort" / "state" / "portfolio.seed.json",
+                    self.agent / "state" / "portfolio.json")
+        self.name, _ = et_time.expected_report(self.agent, "belfort")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def verify(self):
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+        return subprocess.run([sys.executable, str(SCRIPTS / "belfort-verify.py"),
+                               "0", "-1", "0"], capture_output=True, text=True, env=env)
+
+    def test_strays_finds_the_top_folder(self):
+        (self.agent / "2026-09-17-close.md").write_text("x")
+        self.assertEqual(et_time.strays(self.agent, "2026-09-17-open.md"),
+                         ["2026-09-17-close.md"])
+
+    def test_strays_still_finds_the_wrong_slot(self):
+        (self.agent / "reports" / "2026-09-17-close.md").write_text("x")
+        self.assertEqual(et_time.strays(self.agent, "2026-09-17-open.md"),
+                         ["reports/2026-09-17-close.md"])
+
+    def test_strays_ignores_other_days(self):
+        (self.agent / "2026-09-16-close.md").write_text("x")
+        (self.agent / "reports" / "2026-09-16-open.md").write_text("x")
+        self.assertEqual(et_time.strays(self.agent, "2026-09-17-open.md"), [])
+
+    def test_the_verifier_names_the_misfiled_report(self):
+        (self.agent / self.name).write_text("word " * 80)
+        r = self.verify()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(f"written to belfort/{self.name}", r.stdout)
+        self.assertIn("reports go in reports/", r.stdout)
+
+    def test_the_right_folder_still_passes_the_report_check(self):
+        (self.agent / "reports" / self.name).write_text("word " * 80)
+        r = self.verify()
+        self.assertNotIn(f"no reports/{self.name}", r.stdout)
+
+    def test_both_verifiers_ask_et_time(self):
+        # One search, two callers. The copy each verifier had is gone.
+        for f in ("ace-verify.py", "belfort-verify.py"):
+            src = (SCRIPTS / f).read_text()
+            self.assertIn("et_time.strays(AGENT, report.name)", src, f)
+            self.assertNotIn('(AGENT / "reports").glob(', src, f)
+
+    def test_both_agents_are_told_the_folder(self):
+        for a in ("ace", "belfort"):
+            src = (ROOT / "agents" / a / f"_{a}-agents-header.md").read_text()
+            self.assertIn("reports/<report_name>", src, a)

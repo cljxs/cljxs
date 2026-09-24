@@ -133,13 +133,15 @@ def main():
     # boundary is judged against the name it was actually given.
     report, want = expected_report("belfort", AGENT, started)
     if not report.exists():
-        # Everything already filed for this date, whatever slot it claims -
-        # that is how the wrongly-named report gets surfaced rather than just
-        # reported missing.
-        others = sorted(x.name for x in (AGENT / "reports").glob(f"{report.name[:10]}-*.md")) \
-            if (AGENT / "reports").is_dir() else []
+        # Everything already filed for this date, whatever slot it claims and
+        # whichever folder it landed in - that is how a misfiled report gets
+        # surfaced rather than just reported missing.
+        others = et_time.strays(AGENT, report.name)
         extra = f" (found {', '.join(others)})" if others else ""
         hint = f" - the {want} slot files as `-{want}.md`" if want else ""
+        if report.name in others:
+            hint = (f" - it was written to {AGENT.name}/{report.name}; reports go "
+                    f"in reports/, not the top folder")
         problems.append(f"no reports/{report.name} for this wake{extra}{hint}. "
                         f"Notes dropped in exit_log.txt or into the chat do not count")
     elif started and report.stat().st_mtime < started:
