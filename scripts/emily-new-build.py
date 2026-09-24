@@ -32,6 +32,27 @@ import et_time  # noqa: E402
 API = os.environ.get("MISSION_CONTROL_API", "http://127.0.0.1:3001")
 DAILY_DRAFT_CAP = int(os.environ.get("EMILY_DAILY_CAP", "3"))
 
+# A raised cap for ONE Eastern day, written by emily-cap.py. It carries its
+# date and stops applying at midnight Eastern by itself: the alternative - a
+# higher EMILY_DAILY_CAP on the service - stays raised until somebody
+# remembers to lower it, which is the forgotten-edit failure this repo keeps
+# naming.
+ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
+CAP_TODAY = ROOT / "agents" / "emily" / "state" / "cap-today.json"
+
+
+def daily_cap(today=None):
+    """(cap, raised) for today: the raised cap if one was set for today's
+    Eastern date, otherwise the standing one."""
+    today = today or et_time.day()
+    try:
+        d = json.loads(CAP_TODAY.read_text())
+        if d.get("day") == today and int(d.get("cap")) > 0:
+            return int(d["cap"]), True
+    except Exception:
+        pass
+    return DAILY_DRAFT_CAP, False
+
 # Distinct from a failure, so scout-review can say how to override the cap
 # for the one idea that hit it, rather than repeat a flag the Deck cannot pass.
 CAP_REACHED = 3
@@ -179,10 +200,11 @@ def main():
     a = ap.parse_args()
 
     done_today = drafts_today()
-    if len(done_today) >= DAILY_DRAFT_CAP and not a.force:
+    cap, raised = daily_cap()
+    if len(done_today) >= cap and not a.force:
         print(f"Emily has started {len(done_today)} build(s) today "
               f"({et_time.day()}, Eastern) and the daily cap is "
-              f"{DAILY_DRAFT_CAP}:", file=sys.stderr)
+              f"{cap}{' (raised for today)' if raised else ''}:", file=sys.stderr)
         for t in done_today:
             print(f"  - {task_label(t)}", file=sys.stderr)
         print("Finished builds count too - each one paid for its artwork. "

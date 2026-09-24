@@ -12531,3 +12531,65 @@ class AComparisonIsDrawnAsTheProduct(unittest.TestCase):
     def test_the_command_line_hands_it_over(self):
         src = (SCRIPTS / "emily-assets.py").read_text()
         self.assertIn("compare(a.prompt, a.compare, key, Path(a.out), a.product)", src)
+
+
+class TheCapCanBeRaisedForOneDay(unittest.TestCase):
+    """"I want to override the 3 per day limit just for today."
+
+    The only way to change the cap was EMILY_DAILY_CAP on the service, which
+    stays raised until somebody remembers to lower it. A raise now carries
+    today's Eastern date and is ignored from midnight Eastern on.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.old = os.environ.get("ECOSYSTEM_ROOT")
+        os.environ["ECOSYSTEM_ROOT"] = str(self.root)
+        self.nb = load("emily_new_build_raise", "emily-new-build.py")
+
+    def tearDown(self):
+        if self.old is None:
+            os.environ.pop("ECOSYSTEM_ROOT", None)
+        else:
+            os.environ["ECOSYSTEM_ROOT"] = self.old
+        self.tmp.cleanup()
+
+    def raise_to(self, n, day):
+        self.nb.CAP_TODAY.parent.mkdir(parents=True, exist_ok=True)
+        self.nb.CAP_TODAY.write_text(json.dumps({"day": day, "cap": n}))
+
+    def test_a_raise_applies_on_its_day(self):
+        self.raise_to(6, "2026-09-24")
+        self.assertEqual(self.nb.daily_cap("2026-09-24"), (6, True))
+
+    def test_it_is_gone_the_next_day_by_itself(self):
+        self.raise_to(6, "2026-09-24")
+        self.assertEqual(self.nb.daily_cap("2026-09-25"), (self.nb.DAILY_DRAFT_CAP, False))
+
+    def test_junk_is_the_standing_cap(self):
+        self.nb.CAP_TODAY.parent.mkdir(parents=True, exist_ok=True)
+        for junk in ("{", '{"day": "2026-09-24", "cap": 0}', '{"day": "2026-09-24", "cap": "x"}', "[]"):
+            self.nb.CAP_TODAY.write_text(junk)
+            self.assertEqual(self.nb.daily_cap("2026-09-24"), (self.nb.DAILY_DRAFT_CAP, False), junk)
+
+    def test_the_command_writes_todays_eastern_date(self):
+        r = subprocess.run([sys.executable, str(SCRIPTS / "emily-cap.py"), "today", "6"],
+                           capture_output=True, text=True,
+                           env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root),
+                                    MISSION_CONTROL_API="http://127.0.0.1:9"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        saved = json.loads(self.nb.CAP_TODAY.read_text())
+        self.assertEqual(saved, {"day": et_time.day(), "cap": 6})
+        self.assertIn("for " + et_time.day() + " only", r.stdout)
+        r = subprocess.run([sys.executable, str(SCRIPTS / "emily-cap.py"), "clear"],
+                           capture_output=True, text=True,
+                           env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root),
+                                    MISSION_CONTROL_API="http://127.0.0.1:9"))
+        self.assertFalse(self.nb.CAP_TODAY.exists())
+
+    def test_the_build_uses_it(self):
+        src = (SCRIPTS / "emily-new-build.py").read_text()
+        body = src.split("def main(", 1)[1]
+        self.assertIn("cap, raised = daily_cap()", body)
+        self.assertIn("len(done_today) >= cap", body)
