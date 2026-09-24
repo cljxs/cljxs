@@ -7484,6 +7484,24 @@ class SomebodyElsesPropertyReachesTheArtGenerator(unittest.TestCase):
         self.assertEqual(tier, "check")
         self.assertEqual(self.m.risky("friends are like autumn leaves")[0], "check")
 
+    def test_a_tote_scan_does_not_walk_into_a_handbag_brand(self):
+        # "tote bag coach" was the fourth phrase of the first real 'tote bag'
+        # scan, and the screen let it through. Coach is also a word - a
+        # sports coach - so it is flagged for the owner, like 'frozen'. The
+        # fashion houses are not words and are refused outright.
+        for phrase in ("tote bag coach", "gift for coach"):
+            with self.subTest(phrase=phrase):
+                self.assertEqual(self.m.risky(phrase)[0], "check", phrase)
+        for phrase in ("marc jacobs tote bag", "the tote bag marc jacobs",
+                       "kate spade tote", "baggu tote", "michael kors tote",
+                       "hermes birkin tote", "longchamp le pliage"):
+            with self.subTest(phrase=phrase):
+                self.assertEqual(self.m.risky(phrase)[0], "blocked", phrase)
+        for phrase in ("coaching tote", "tote bag for school", "canvas tote bag",
+                       "prairie tote", "diorama tote"):
+            with self.subTest(phrase=phrase):
+                self.assertIsNone(self.m.risky(phrase)[0], phrase)
+
     def test_a_plain_product_phrase_passes(self):
         for phrase in ("cozy fall sweatshirt", "fall leaf sticker",
                        "pumpkin spice tumbler", "autumn vinyl sticker pack"):

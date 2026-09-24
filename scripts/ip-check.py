@@ -61,6 +61,15 @@ BLOCKED = [
               r"olivia rodrigo|bad bunny|billie eilish"),
     ("brands", r"starbucks|nike|adidas|lululemon|coca[- ]cola|john deere|"
                r"in-?n-?out|chick-?fil-?a|jeep|harley davidson"),
+    # Bag and fashion houses. A tote market expands straight into them -
+    # "tote bag coach" was the fourth phrase of the first real 'tote bag'
+    # scan - and a tote named after one is the plainest trademark problem
+    # there is. None of these is an ordinary word; Coach is, so it is in
+    # CHECK below instead.
+    ("bag & fashion", r"marc jacobs|michael kors|kate spade|longchamp|"
+                      r"louis vuitton|\bgucci\b|\bprada\b|\bchanel\b|"
+                      r"tory burch|\btelfar\b|\bbaggu\b|\bdior\b|"
+                      r"\bhermes\b|herm[eè]s birkin"),
     ("pro sports", r"\bnfl\b|\bnba\b|\bmlb\b|\bnhl\b|super bowl|"
                    r"march madness|world series"),
 ]
@@ -77,6 +86,7 @@ CHECK = [
     ("bratz / barbie", r"\bbratz\b|\bbarbie\b", "the doll line?"),
     ("dune", r"\bdune\b", "the film, or a sand dune?"),
     ("up", r"\bup house\b", "the Pixar film?"),
+    ("coach", r"\bcoach\b", "the handbag brand, or a sports coach?"),
 ]
 
 # Phrasings that are a trademark problem whatever the name attached to them.
