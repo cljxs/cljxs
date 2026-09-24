@@ -5,6 +5,7 @@ store-report.py — how the shop's own listings are doing, from Etsy.
     store-report.py setup VintageLoomTreasures   find the shop's id, once
     store-report.py fetch                        snapshot every active listing today
     store-report.py show                         the report: today against the last snapshot
+    store-report.py pins                         a Pinterest pin for every listing, and its board
 
 Nothing in the system looked at the store itself. Scout measures other
 people's listings and Emily makes new ones; which of OURS get looked at, and
@@ -83,6 +84,9 @@ def snapshot_row(listing):
         "price": ms.price_of(listing),
         "age_days": round(ms.age_days(listing), 1) if ms.age_days(listing) is not None else None,
         "url": listing.get("url"),
+        # Kept for the pins: a pin is written from the listing's own words.
+        "tags": [str(t) for t in (listing.get("tags") or []) if str(t).strip()][:13],
+        "description": str(listing.get("description") or "")[:600],
     }
 
 
@@ -243,6 +247,96 @@ def lines(s):
     return out
 
 
+# ------------------------------------------------------------------ pinterest
+#
+# Pinterest boards are searched like Etsy is, so each is named for a phrase a
+# shopper types. A listing goes to the first board whose words it carries,
+# read from its title and tags; anything else falls to the catch-all for its
+# product. The list lives here, once - rename a board here and every pin
+# follows.
+BOARDS = [
+    ("Bookish Tote Bags & Library Gifts",
+     "Tote bags for readers, library runs and book markets - vintage-inspired "
+     "designs from VintageLoom Treasures.",
+     r"\b(book|books|bookish|library|librarian|reading|reader)\b"),
+    ("Coastal & Nautical Tote Bags",
+     "Wave, sea and coastal pattern totes with a vintage seaside feel.",
+     r"\b(wave|waves|coastal|seaside|ocean|sea|nautical|beach|tide)\b"),
+    ("Vintage Botanical Tote Bags",
+     "Botanical, floral and leaf-pattern tote bags inspired by antique "
+     "herbarium plates.",
+     r"\b(botanical|floral|flower|flowers|leaf|leaves|fern|wildflower|garden)\b"),
+    ("Heritage Pattern & Map Tote Bags",
+     "Old maps, town landmarks, compasses and heritage patterns on everyday "
+     "canvas totes.",
+     r"\b(map|landmark|town|city|compass|heritage|geometric)\b"),
+]
+TOTE_BOARD = ("Vintage-Inspired Tote Bags",
+              "Every-day canvas totes with vintage-inspired all-over patterns.")
+OTHER_BOARD = ("Vintage Stickers & Gifts",
+               "Stickers, apparel and small gifts in a vintage style.")
+SHOP_LINE = "VintageLoom Treasures on Etsy"
+
+
+def board_for(row):
+    """(board name, description) for one listing, by its own words."""
+    text = " ".join([str(row.get("title") or "")] + list(row.get("tags") or [])).lower()
+    if not re.search(r"\btote", text):
+        return OTHER_BOARD
+    for name, desc, words in BOARDS:
+        if re.search(words, text):
+            return name, desc
+    return TOTE_BOARD
+
+
+def first_sentence(text, limit=220):
+    t = re.sub(r"\s+", " ", str(text or "")).strip()
+    m = re.match(r"(.+?[.!?])(\s|$)", t)
+    t = m.group(1) if m else t
+    return t if len(t) <= limit else t[:limit - 1].rsplit(" ", 1)[0] + "…"
+
+
+def pin_for(row):
+    """{board, title, description, link} - Pinterest allows 100 characters of
+    title and 500 of description, and both are cut here, not by Pinterest."""
+    title = re.split(r"\s+\|\s+", str(row.get("title") or "").strip())[0][:100]
+    lead = first_sentence(row.get("description")) or title
+    if not re.search(r"[.!?…]$", lead):
+        lead += "."
+    tags = [t for t in (row.get("tags") or []) if t.lower() not in title.lower()][:6]
+    desc = lead + (f" {', '.join(tags).capitalize()}." if tags else "") + f" {SHOP_LINE}."
+    board, _ = board_for(row)
+    return {"board": board, "title": title, "description": desc[:500], "link": row.get("url")}
+
+
+def cmd_pins(_args):
+    days = snapshots()
+    if not days:
+        print("No store snapshot yet: store-report.py fetch", file=sys.stderr)
+        return 2
+    rows = [r for r in days[-1].get("listings") or [] if r.get("url")]
+    if rows and not any("tags" in r for r in rows):
+        print("This snapshot was taken before pins were added - run "
+              "store-report.py fetch once more, then pins.", file=sys.stderr)
+        return 2
+    used = {}
+    for r in rows:
+        pin = pin_for(r)
+        used.setdefault(pin["board"], []).append(pin)
+    print("BOARDS TO CREATE (name, then description):\n")
+    for name, desc in [b[:2] for b in BOARDS] + [TOTE_BOARD, OTHER_BOARD]:
+        if name in used:
+            print(f"  {name}\n    {desc}\n")
+    print("PINS (one per listing):")
+    n = 0
+    for board, pins in used.items():
+        for pin in pins:
+            n += 1
+            print(f"\n#{n}  board: {board}\n    link: {pin['link']}"
+                  f"\n    title: {pin['title']}\n    description: {pin['description']}")
+    return 0
+
+
 def cmd_show(_args):
     print("\n".join(lines(latest_summary())))
     return 0
@@ -250,7 +344,8 @@ def cmd_show(_args):
 
 def main():
     cmd, args = (sys.argv[1] if len(sys.argv) > 1 else ""), sys.argv[2:]
-    fn = {"setup": cmd_setup, "fetch": cmd_fetch, "show": cmd_show}.get(cmd)
+    fn = {"setup": cmd_setup, "fetch": cmd_fetch, "show": cmd_show,
+          "pins": cmd_pins}.get(cmd)
     if not fn:
         print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
         return 2

@@ -12723,3 +12723,60 @@ class TheStoreReportIsSubtractionNotMemory(unittest.TestCase):
         r = subprocess.run(["git", "check-ignore", "-q", "agents/emily/state/store/2026-09-24.json"],
                            cwd=ROOT)
         self.assertEqual(r.returncode, 0)
+
+
+class EveryListingGetsAPinAndABoard(unittest.TestCase):
+    """store-report.py pins: a Pinterest pin for each listing, written from
+    the listing's own title, description and tags, on a board named for a
+    phrase shoppers search. Pinterest cuts titles at 100 characters and
+    descriptions at 500; the cut happens here, where it can be seen."""
+
+    def setUp(self):
+        self.sr = load("store_report_pins", "store-report.py")
+
+    def row(self, title, desc="", tags=()):
+        return {"title": title, "description": desc, "tags": list(tags),
+                "url": "https://www.etsy.com/listing/1"}
+
+    def test_boards_follow_the_listings_words(self):
+        cases = {
+            "Read Local Library Tote Bag, Vintage Bookshop Typography": "Bookish Tote Bags & Library Gifts",
+            "Navy Wave Print Tote Bag | Modern Seaside Pattern": "Coastal & Nautical Tote Bags",
+            "Abstract Botanical Pattern Tote Bag | Colorful Leaf Print": "Vintage Botanical Tote Bags",
+            "Town Landmark Pattern Tote": "Heritage Pattern & Map Tote Bags",
+            "Plain Canvas Everyday Tote Bag": "Vintage-Inspired Tote Bags",
+            "Crisp Air Hiking Sticker": "Vintage Stickers & Gifts",
+            "Vintage Compass Logo Hoodie": "Vintage Stickers & Gifts",
+        }
+        for title, board in cases.items():
+            self.assertEqual(self.sr.board_for(self.row(title))[0], board, title)
+
+    def test_tags_count_toward_the_board(self):
+        r = self.row("Everyday Pattern Tote Bag", tags=["beach tote"])
+        self.assertEqual(self.sr.board_for(r)[0], "Coastal & Nautical Tote Bags")
+
+    def test_the_pin_title_is_the_part_before_the_bar_and_fits(self):
+        pin = self.sr.pin_for(self.row("Navy Wave Print Tote Bag | Modern Seaside Pattern"))
+        self.assertEqual(pin["title"], "Navy Wave Print Tote Bag")
+        self.assertLessEqual(len(self.sr.pin_for(self.row("x" * 300))["title"]), 100)
+
+    def test_the_description_is_a_sentence_then_keywords_then_the_shop(self):
+        pin = self.sr.pin_for(self.row("Navy Wave Print Tote Bag", "Navy waves on cream. Made to carry.",
+                                       ["beach tote", "wave print tote bag", "coastal gift"]))
+        self.assertTrue(pin["description"].startswith("Navy waves on cream."))
+        self.assertIn("Beach tote, coastal gift.", pin["description"])
+        self.assertNotIn("wave print tote bag", pin["description"].lower().split(".")[1],
+                         "a tag the title already says is not repeated")
+        self.assertTrue(pin["description"].endswith("VintageLoom Treasures on Etsy."))
+        long = self.sr.pin_for(self.row("T", "y " * 400, ["t" * 19] * 13))
+        self.assertLessEqual(len(long["description"]), 500)
+
+    def test_no_description_still_reads_as_sentences(self):
+        pin = self.sr.pin_for(self.row("Plain Canvas Tote Bag"))
+        self.assertEqual(pin["description"], "Plain Canvas Tote Bag. VintageLoom Treasures on Etsy.")
+
+    def test_the_snapshot_keeps_what_a_pin_needs(self):
+        r = self.sr.snapshot_row({"listing_id": 1, "title": "x", "tags": ["a", " ", "b"],
+                                  "description": "d" * 900})
+        self.assertEqual(r["tags"], ["a", "b"])
+        self.assertEqual(len(r["description"]), 600)
