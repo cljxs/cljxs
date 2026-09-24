@@ -9,6 +9,7 @@ use, pointed at the ecosystem itself instead of at a market.
 Standard library only.
 """
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -188,6 +189,19 @@ def agent_money(state):
     return value, value - start, (value / start - 1) * 100
 
 
+def store_lines():
+    """The store report's lines, or [] when it cannot be read. A briefing with
+    no store section is better than no briefing."""
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "store_report", Path(__file__).resolve().parent / "store-report.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.lines(mod.latest_summary())
+    except Exception as exc:
+        return [f"store report unavailable: {type(exc).__name__}"]
+
+
 def build_briefing(report, date_str):
     agents = report.get("agents") or {}
     needs, happened, monies = [], [], []
@@ -254,6 +268,16 @@ def build_briefing(report, date_str):
             out.append(bit)
         if len(monies) > 1:
             out.append(f"- **Combined** {money(total)}")
+        out.append("")
+
+    # THE STORE. Read through store-report.py's own summary, so the briefing
+    # and `store-report.py show` print the same numbers from the same sums.
+    store = store_lines()
+    if store:
+        out.append("## The store")
+        out.append("")
+        out += [f"- {line.strip()}" if not line.startswith("  ") else f"  - {line.strip()}"
+                for line in store]
         out.append("")
 
     out.append(f"_Assembled from data/system.json at {report.get('generated_utc', '?')} UTC. "

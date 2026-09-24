@@ -12593,3 +12593,133 @@ class TheCapCanBeRaisedForOneDay(unittest.TestCase):
         body = src.split("def main(", 1)[1]
         self.assertIn("cap, raised = daily_cap()", body)
         self.assertIn("len(done_today) >= cap", body)
+
+
+class TheStoreReportIsSubtractionNotMemory(unittest.TestCase):
+    """Nothing in the system looked at the shop's own listings.
+
+    store-report.py snapshots them once a day through the one Etsy client,
+    and the change since yesterday is a subtraction between two files. A
+    number Etsy did not send is shown as missing, never as zero - a listing
+    "with 0 views" and one Etsy said nothing about are different findings.
+    """
+
+    NOW = 1790265600          # 2026-09-24 16:00 UTC
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.old = os.environ.get("ECOSYSTEM_ROOT")
+        os.environ["ECOSYSTEM_ROOT"] = str(self.root)
+        self.sr = load("store_report_t", "store-report.py")
+
+    def tearDown(self):
+        if self.old is None:
+            os.environ.pop("ECOSYSTEM_ROOT", None)
+        else:
+            os.environ["ECOSYSTEM_ROOT"] = self.old
+        self.tmp.cleanup()
+
+    def row(self, i, views, favs, age=5, title=None):
+        return {"listing_id": i, "title": title or f"Tote {i}", "views": views, "favs": favs,
+                "age_days": age, "price": 24.99, "url": None}
+
+    def snap(self, day, rows):
+        return {"day": day, "listings": rows}
+
+    # --- reading Etsy -----------------------------------------------------
+
+    def test_the_owners_shop_is_the_exact_name_not_the_first_result(self):
+        results = [{"shop_id": 9, "shop_name": "VintageLoomTreasuresShop"},
+                   {"shop_id": 555, "shop_name": "VintageLoomTreasures"}]
+        self.assertEqual(self.sr.pick_shop(results, "vintageloomtreasures")["shop_id"], 555)
+        self.assertIsNone(self.sr.pick_shop(results, "VintageLoom"))
+
+    def test_a_listing_is_read_with_the_shared_arithmetic(self):
+        created = int(time.time() - 4 * 86400)
+        r = self.sr.snapshot_row({"listing_id": 1, "title": "Wave Tote", "views": 31,
+                                  "num_favorers": 3, "original_creation_timestamp": created,
+                                  "price": {"amount": 2499, "divisor": 100, "currency_code": "USD"}})
+        self.assertEqual((r["views"], r["favs"], r["price"]), (31, 3, 24.99))
+        self.assertAlmostEqual(r["age_days"], 4.0, delta=0.2)
+
+    def test_a_count_etsy_did_not_send_is_missing_not_zero(self):
+        r = self.sr.snapshot_row({"listing_id": 1, "title": "x"})
+        self.assertIsNone(r["views"])
+        self.assertIsNone(r["favs"])
+        s = self.sr.summary(self.snap("d", [r]))
+        self.assertIn("?", "\n".join(self.sr.lines(s)))
+
+    def test_every_page_is_read(self):
+        pages = {0: [{"listing_id": n} for n in range(100)], 100: [{"listing_id": 100}]}
+        asked = []
+
+        def call(path, key):
+            asked.append(path)
+            off = int(re.search(r"offset=(\d+)", path).group(1))
+            return {"count": 101, "results": pages[off]}, {}, None
+        self.sr._ep = lambda: types.SimpleNamespace(api_key=lambda: ("k:s", None), call=call)
+        self.sr.STORE.mkdir(parents=True)
+        self.sr.SHOP.write_text(json.dumps({"shop_id": 5, "shop_name": "S"}))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.sr.cmd_fetch([]), 0)
+        saved = json.loads((self.sr.STORE / f"{et_time.day()}.json").read_text())
+        self.assertEqual(len(saved["listings"]), 101)
+        self.assertEqual(len(asked), 2)
+
+    # --- the sums --------------------------------------------------------
+
+    def test_since_yesterday_is_the_difference_per_listing(self):
+        s = self.sr.summary(self.snap("2026-09-24", [self.row(1, 31, 3), self.row(2, 5, 1)]),
+                            self.snap("2026-09-23", [self.row(1, 20, 2), self.row(2, 4, 1)]))
+        by = {r["title"]: r for r in s["rows"]}
+        self.assertEqual((by["Tote 1"]["views_gained"], by["Tote 1"]["favs_gained"]), (11, 1))
+        self.assertEqual((s["views_gained"], s["favs_gained"]), (12, 1))
+        self.assertEqual(s["rows"][0]["title"], "Tote 1", "the biggest gain leads")
+
+    def test_a_new_listing_is_new_not_a_gain_from_zero(self):
+        s = self.sr.summary(self.snap("b", [self.row(1, 5, 0), self.row(9, 40, 0)]),
+                            self.snap("a", [self.row(1, 5, 0)]))
+        new = [r for r in s["rows"] if r["title"] == "Tote 9"][0]
+        self.assertTrue(new["new"])
+        self.assertIsNone(new["views_gained"])
+        self.assertEqual(s["views_gained"], 0)
+
+    def test_the_first_snapshot_claims_no_change(self):
+        s = self.sr.summary(self.snap("a", [self.row(1, 5, 0)]))
+        self.assertIsNone(s["views_gained"])
+        self.assertFalse(s["rows"][0]["new"])
+
+    def test_old_listings_with_no_views_are_named(self):
+        s = self.sr.summary(self.snap("a", [self.row(1, 0, 0, age=10, title="Hoodie"),
+                                            self.row(2, 0, 0, age=2, title="Just Listed")]))
+        self.assertEqual(s["quiet"], ["Hoodie"])
+
+    def test_most_favourited_is_by_favourites(self):
+        s = self.sr.summary(self.snap("a", [self.row(1, 90, 1), self.row(2, 10, 4), self.row(3, 5, 0)]))
+        self.assertEqual([r["title"] for r in s["most_saved"]], ["Tote 2", "Tote 1"])
+
+    # --- where it shows --------------------------------------------------
+
+    def test_the_briefing_prints_the_reports_own_lines(self):
+        self.sr.STORE.mkdir(parents=True)
+        (self.sr.STORE / "2026-09-24.json").write_text(json.dumps(
+            self.snap("2026-09-24", [self.row(1, 31, 3, title="Navy Wave Tote")])))
+        fc = load("fury_collect_store", "fury-collect.py")
+        text = fc.build_briefing({"agents": {}, "generated_utc": "now"}, "2026-09-24")
+        self.assertIn("## The store", text)
+        self.assertIn("Navy Wave Tote", text)
+
+    def test_no_snapshot_says_how_to_start(self):
+        self.assertIn("store-report.py setup", self.sr.lines(None)[0])
+
+    def test_the_fetch_runs_before_the_briefing_and_cannot_break_it(self):
+        unit = (ROOT / "deploy" / "fury-cycle.service").read_text()
+        pre = [l for l in unit.splitlines() if l.startswith("ExecStartPre=")]
+        self.assertTrue(any("store-report.py fetch" in l and l.startswith("ExecStartPre=-")
+                            for l in pre), pre)
+
+    def test_snapshots_are_not_tracked(self):
+        r = subprocess.run(["git", "check-ignore", "-q", "agents/emily/state/store/2026-09-24.json"],
+                           cwd=ROOT)
+        self.assertEqual(r.returncode, 0)

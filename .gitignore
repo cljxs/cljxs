@@ -112,3 +112,6 @@ agents/timmy/
 # went green while testing nothing, because a missing log and a clean log
 # both exit 0.
 !tests/fixtures/*.log
+
+# The store report - daily snapshots of the shop's own listings, live data.
+agents/emily/state/store/
