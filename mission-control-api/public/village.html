@@ -180,6 +180,24 @@
   .ptab:hover{border-color:#3d4a60;color:#c7d3e4}
   .ptab.on{background:#26344a;border-color:#4d6a96;color:#e8f0fa}
   .ptn{font-size:10px;opacity:.6;font-weight:400}
+  /* The week's games. A search box and a list rather than a dropdown: on a
+     tablet a sixteen-item select is a scroll wheel you cannot see into. */
+  .gsearch{width:100%;box-sizing:border-box;margin:4px 0 10px;padding:10px 12px;border-radius:10px;
+    border:1px solid var(--line);background:rgba(255,255,255,.05);color:var(--ink);font-size:14px}
+  .gday{font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute);
+    margin:10px 0 6px;font-family:ui-monospace,Menlo,monospace}
+  .glist{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px}
+  .gbtn{text-align:left;background:#1b2330;border:1px solid #2c3647;color:#c7d3e4;border-radius:9px;
+    padding:9px 10px;cursor:pointer;font:600 13px ui-monospace,Menlo,monospace}
+  .gbtn:hover{border-color:#3d4a60}
+  .gbtn.on{background:#26344a;border-color:#4d6a96;color:#fff}
+  .gbtn .gt{display:block;font:400 11px system-ui,sans-serif;color:var(--mute);margin-top:3px}
+  .gbtn .gok{color:#7fd19b}
+  .grun{margin:12px 0 4px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;
+    background:rgba(255,255,255,.03);font-size:12.5px}
+  .grun button{margin-left:8px;padding:6px 10px;border-radius:8px;font-size:12px;font-weight:600;
+    border:1px solid var(--line);background:rgba(255,255,255,.07);color:var(--ink);cursor:pointer}
+  .grun pre{white-space:pre-wrap;font-size:11px;max-height:260px;overflow:auto;color:var(--mute)}
   /* One line per fact, wrapping as a unit - a footer that breaks between
      "10,000" and "DRAWS" reads as two different numbers. */
   .fcfoot{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:10px;letter-spacing:.04em;color:var(--mute)}
@@ -1743,6 +1761,9 @@ function forecastCard(f){
       ${f.availability && f.availability.thin
         ? `<span class="fcwarn">PLAYED ${f.availability.played}/${f.availability.team_games}</span>` : ''}
       ${f.coarse ? `<span class="fcwarn">FLAT</span>` : ''}
+      ${f.injury && f.injury.status
+        ? `<span class="fcwarn">\u26a0 ${esc(String(f.injury.status).toUpperCase())}${
+            f.injury.date ? ' ' + esc(String(f.injury.date).slice(5)) : ''}</span>` : ''}
     </div>
     ${graded ? `<div class="fcres ${hit ? 'up' : 'down'}">
         FINAL ${Number(f.actual).toFixed(0)} ${esc(unit)} · ${lead}+ ${hit ? 'HIT' : 'MISS'}</div>`
@@ -1761,18 +1782,154 @@ function forecastCard(f){
 
 let PROPS = null;          // the last payload, so switching tabs is instant
 let propsTab = null;
+let WEEK = null;           // this week's games, from props-forecast.py week
+let propsEvent = null;     // the game picked, or null for every forecast
+let propsPoll = null;
 
 function openPropsPanel(){
   openAgent = PROPS_DOOR;
   $('card').innerHTML = `
     <h2>${esc(PROPS_DOOR)}</h2>
     <div class="sub">model forecasts · no odds are held or shown</div>
+    <div class="sect">This week's games</div>
+    <input id="gsearch" class="gsearch" type="search" autocomplete="off"
+           placeholder="search a team - packers, GB, chiefs…">
+    <div id="gameList"><div class="muted">loading this week…</div></div>
+    <div id="propsRun"></div>
     <div id="propsBody"><div class="muted">loading the forecasts…</div></div>
     <button id="close">Close</button>`;
   $('card').className = 'wide';
   $('panel').style.display = 'flex';
   $('close').onclick = closePanel;
+  $('gsearch').oninput = drawWeek;
+  // One listener for every game button. Inline onclick strings would put the
+  // fixture inside a quoted attribute, and esc() does not escape quotes.
+  $('gameList').onclick = e => {
+    const b = e.target.closest('[data-event]');
+    if(b) pickGame(b.dataset.event);
+  };
+  $('propsRun').onclick = e => {
+    const b = e.target.closest('[data-rerun]');
+    if(b) runForecast(b.dataset.rerun);
+  };
+  loadWeek();
   loadProps();
+}
+
+function gameOf(id){ return ((WEEK && WEEK.games) || []).find(g => g.event_id === id) || null; }
+
+async function loadWeek(){
+  try{
+    const r = await fetch('/api/props/week', {cache:'no-store'});
+    WEEK = await r.json();
+  }catch(e){ WEEK = {available:false, reason:'the Deck could not be reached', games:[]}; }
+  drawWeek();
+  // A run started earlier - from this tablet or another - is picked up
+  // rather than forgotten because the panel was closed.
+  const job = WEEK && WEEK.job;
+  if(job && job.state === 'running'){ propsEvent = propsEvent || job.event_id; watchJob(); }
+}
+
+function drawWeek(){
+  const host = $('gameList');
+  if(!host) return;
+  if(!WEEK || !WEEK.available){
+    host.innerHTML = `<div class="muted">${esc((WEEK && WEEK.reason) || 'no games this week')}</div>`;
+    return;
+  }
+  const q = (($('gsearch') || {}).value || '').trim().toLowerCase();
+  const games = WEEK.games.filter(g => !q || [g.fixture, g.away, g.home, g.away_name, g.home_name]
+    .some(x => String(x || '').toLowerCase().includes(q)));
+  if(!games.length){ host.innerHTML = `<div class="muted">no game this week matches "${esc(q)}".</div>`; return; }
+  const days = [];
+  for(const g of games){
+    const d = g.day_et || '?';
+    if(!days.length || days[days.length - 1][0] !== d) days.push([d, []]);
+    days[days.length - 1][1].push(g);
+  }
+  host.innerHTML = (WEEK.week ? `<div class="muted">NFL week ${esc(WEEK.week)}</div>` : '')
+    + days.map(([d, gs]) => `<div class="gday">${esc(d)}</div><div class="glist">`
+      + gs.map(g => {
+          const when = g.state === 'post' ? 'FINAL' : g.state === 'in' ? 'LIVE' : (g.time_et || '');
+          const done = g.forecast_rows ? ` · <span class="gok">\u2713 ${g.forecast_rows}</span>` : '';
+          return `<button class="gbtn${g.event_id === propsEvent ? ' on' : ''}" data-event="${esc(g.event_id)}">`
+               + `${esc(g.fixture)}<span class="gt">${esc(when)}${done}</span></button>`;
+        }).join('') + `</div>`).join('');
+}
+
+function pickGame(id){
+  propsEvent = id;
+  drawWeek();
+  const g = gameOf(id);
+  // Already forecast: show it, and offer a re-run for when the injury report
+  // has moved. Not yet: run it - that is what the click was for.
+  if(g && g.forecast_rows){
+    drawRunBar(null, g);
+    drawProps();
+  } else {
+    runForecast(id);
+  }
+}
+
+function drawRunBar(job, g){
+  const host = $('propsRun');
+  if(!host) return;
+  const name = esc((g && g.fixture) || (job && job.fixture) || '');
+  if(job && job.state === 'running'){
+    host.innerHTML = `<div class="grun">Forecasting <b>${name}</b>… reading two seasons of
+      game logs from ESPN for every player. Usually well under a minute.</div>`;
+    return;
+  }
+  const log = job && job.log
+    ? `<details><summary>what the script said</summary><pre>${esc(job.log)}</pre></details>` : '';
+  const head = job && job.state === 'failed'
+    ? `The forecast for <b>${name}</b> did not finish (exit ${esc(job.code)}).`
+    : `<b>${name}</b>` + (g && g.forecast_rows ? ` · ${g.forecast_rows} forecast rows` : '');
+  host.innerHTML = `<div class="grun">${head}`
+    + (g ? `<button data-rerun="${esc(g.event_id)}">Re-run</button>` : '')
+    + `<div class="muted" style="margin-top:6px">Re-run after the injury report moves - about
+       90 minutes before kickoff the inactives are final.</div>${log}</div>`;
+}
+
+async function runForecast(id){
+  const g = gameOf(id);
+  propsEvent = id;
+  drawWeek();
+  let r, d;
+  try{
+    r = await fetch('/api/props/forecast', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({event_id: id, fixture: g ? g.fixture : ''})});
+    d = await r.json();
+  }catch(e){ drawRunBar({state:'failed', code:'-', log:'the Deck could not be reached'}, g); return; }
+  if(r.status === 409){
+    const host = $('propsRun');
+    if(host) host.innerHTML = `<div class="grun">${esc(d.error)} - one at a time, because two runs
+      would write over each other's forecasts. This one will be ready in a minute.</div>`;
+    watchJob();
+    return;
+  }
+  if(!r.ok){ drawRunBar({state:'failed', code:r.status, log:d.error || ''}, g); return; }
+  drawRunBar(d.job, g);
+  watchJob();
+}
+
+function watchJob(){
+  clearInterval(propsPoll);
+  propsPoll = setInterval(async () => {
+    // The panel was closed or turned into another house: stop asking.
+    if(!$('propsRun')){ clearInterval(propsPoll); return; }
+    let job;
+    try{ job = (await (await fetch('/api/props/job', {cache:'no-store'})).json()).job; }
+    catch(e){ return; }
+    if(!job || job.state === 'running'){
+      if(job && job.event_id === propsEvent) drawRunBar(job, gameOf(job.event_id));
+      return;
+    }
+    clearInterval(propsPoll);
+    await loadWeek();                 // the row counts have changed
+    if(job.event_id === propsEvent) drawRunBar(job, gameOf(job.event_id));
+    loadProps();
+  }, 3000);
 }
 
 async function loadProps(){
@@ -1786,8 +1943,8 @@ async function loadProps(){
     return;
   }
   if(!PROPS.available || !(PROPS.forecasts || []).length){
-    host.innerHTML = `<div class="muted">Nothing forecast yet. On the droplet:<br>
-      <code>python3 scripts/props-forecast.py forecast &lt;event id&gt;</code></div>`;
+    host.innerHTML = `<div class="muted">Nothing forecast yet. Pick a game above and it
+      will run.</div>`;
     return;
   }
   const tabs = propsTabs();
@@ -1810,16 +1967,24 @@ function propsPick(tab){ propsTab = tab; drawProps(); }
 
 function marketLabel(m){ return String(m || '').replace(/_/g, ' '); }
 
+// The forecasts in view: the picked game's, or every game's until one is
+// picked. One filter, used by the tab counts and the cards alike, so a tab
+// can never promise rows the list then does not show.
+function propsInView(){
+  const all = (PROPS && PROPS.forecasts) || [];
+  return propsEvent ? all.filter(f => String(f.event_id) === String(propsEvent)) : all;
+}
+
 function drawProps(){
   const host = $('propsBody');
   if(!host || !PROPS) return;
   const tabs = propsTabs();
-  const rows = (PROPS.forecasts || []).filter(f => f.market === propsTab);
+  const rows = propsInView().filter(f => f.market === propsTab);
   const spec = ((PROPS.markets || {})[propsTab]) || {};
   const graded = rows.filter(f => f.actual !== null && f.actual !== undefined).length;
 
   const bar = tabs.map(t => {
-    const n = (PROPS.forecasts || []).filter(f => f.market === t).length;
+    const n = propsInView().filter(f => f.market === t).length;
     return `<button class="ptab${t === propsTab ? ' on' : ''}" onclick="propsPick('${esc(t)}')">`
          + `${esc(marketLabel(t))}<span class="ptn">${n}</span></button>`;
   }).join('');
@@ -1974,7 +2139,11 @@ async function pull(first) {
     $('chip').textContent = `${DATA.agents.length} agent${DATA.agents.length===1?'':'s'} · ${DATA.health.status}`;
     if (first) boot();
     else if (changed && scene) scene.scene.restart();   // a new agent gets a house
-    if (openAgent) openPanel(openAgent);
+    // Redraws an agent's panel with the fresh numbers. Not the props hall: it
+    // reads nothing from /api/dashboard, and rebuilding it every six seconds
+    // wiped the search box mid-word and blanked a running forecast's status.
+    // It refreshes itself while a run is going.
+    if (openAgent && openAgent !== PROPS_DOOR) openPanel(openAgent);
   } catch (e) {
     $('chip').textContent = 'offline';
     if (first) $('boot').textContent = 'Cannot reach /api/dashboard — is mission-control-api running?';

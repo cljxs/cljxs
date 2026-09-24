@@ -45,6 +45,29 @@ def eastern_now():
     return datetime.now(timezone.utc) - timedelta(hours=4)
 
 
+def to_eastern(when):
+    """A UTC datetime, or an ISO string such as ESPN's "2026-09-25T00:15Z",
+    as Eastern time. None if it cannot be read.
+
+    Every UTC-to-Eastern conversion goes through here, for the same reason the
+    slots do: a kickoff at 00:15 UTC is Thursday night in Green Bay, and a
+    page that did its own arithmetic would file it under Friday.
+    """
+    if isinstance(when, str):
+        text = when.strip().replace("Z", "+00:00")
+        try:
+            when = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+    if not isinstance(when, datetime):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    if _ET is not None:
+        return when.astimezone(_ET)
+    return when.astimezone(timezone.utc) - timedelta(hours=4)
+
+
 def day(now=None):
     """The Eastern date. A 23:30 ET wake belongs to the day it is in ET, not
     the UTC day that has already started."""

@@ -8,6 +8,7 @@ const scoutRoutes = require('./scout');
 const emilyRoutes = require('./emily');
 const reportRoutes = require('./reports');
 const aceRoutes = require('./ace');
+const propsRoutes = require('./props');
 
 const PORT = Number(process.env.PORT || 3001);
 // Bind to loopback by default, matching the OpenClaw gateway's posture.
@@ -283,6 +284,7 @@ scoutRoutes.register(app, PORT);
 emilyRoutes.register(app);
 reportRoutes.register(app);
 aceRoutes.register(app);
+propsRoutes.register(app);
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'mission-control-api' }));
 

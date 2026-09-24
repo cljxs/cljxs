@@ -3,6 +3,7 @@
 props-forecast.py — player prop forecasts across several markets, and the
 scorekeeping that says whether they are any good.
 
+    props-forecast.py week                   this week's games and their ids
     props-forecast.py forecast 401872947     write forecasts for one game
     props-forecast.py best 401872947         the strongest claim per player
     props-forecast.py grade                  score the ones whose game is over
@@ -56,6 +57,9 @@ import sys
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import et_time  # noqa: E402
 
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
 STORE = ROOT / "agents" / "ace" / "data" / "forecasts.json"
@@ -1071,25 +1075,91 @@ def cmd_markets():
     return 0
 
 
+def week_games(board):
+    """This week's games off ESPN's NFL scoreboard, Thursday to Monday.
+
+    The scoreboard with no date IS the current week - ESPN's own `week`
+    block says which - so nothing here decides what "this week" means.
+    Kickoff days and times are Eastern, from et_time, because 00:15 UTC is
+    Thursday night and a page doing its own arithmetic would say Friday.
+
+    The fixture is ESPN's shortName as written. A neutral-site game comes
+    back "BAL VS DAL", not "@", and rewriting it would claim a home side
+    the game does not have.
+    """
+    out = []
+    for e in (board or {}).get("events") or []:
+        comp = ((e.get("competitions") or [{}])[0])
+        side, names = {}, {}
+        for c in comp.get("competitors") or []:
+            team = c.get("team") or {}
+            side[c.get("homeAway")] = team.get("abbreviation") or "?"
+            names[c.get("homeAway")] = team.get("displayName") or ""
+        kind = ((comp.get("status") or {}).get("type") or {})
+        et = et_time.to_eastern(e.get("date") or "")
+        out.append({
+            "event_id": str(e.get("id")),
+            "fixture": e.get("shortName") or f"{side.get('away')} @ {side.get('home')}",
+            "away": side.get("away"), "home": side.get("home"),
+            # Full names ride along so the page can be searched for "packers"
+            # as well as "GB"; ESPN has them, so nothing keeps a list of them.
+            "away_name": names.get("away"), "home_name": names.get("home"),
+            "kickoff_utc": e.get("date"),
+            "day_et": et.strftime("%a %-m/%-d") if et else None,
+            "time_et": et.strftime("%-I:%M %p") if et else None,
+            "status": kind.get("name"), "state": kind.get("state"),
+            "detail": kind.get("shortDetail"),
+        })
+    out.sort(key=lambda g: str(g["kickoff_utc"] or ""))
+    return out
+
+
+def cmd_week(as_json=False):
+    """Every game this week, and how many forecast rows each already has."""
+    try:
+        board = get(f"{API}/scoreboard")
+    except Exception as exc:
+        print(f"cannot read this week's scoreboard: {exc}", file=sys.stderr)
+        return 1
+    games = week_games(board)
+    have = {}
+    for f in load().get("forecasts") or []:
+        have[str(f.get("event_id"))] = have.get(str(f.get("event_id")), 0) + 1
+    for g in games:
+        g["forecast_rows"] = have.get(g["event_id"], 0)
+    wk = (board.get("week") or {}).get("number")
+    if as_json:
+        print(json.dumps({"week": wk, "games": games}))
+        return 0
+    print(f"NFL week {wk}: {len(games)} game(s)\n")
+    for g in games:
+        done = f"{g['forecast_rows']} rows" if g["forecast_rows"] else ""
+        print(f"  {g['event_id']}  {str(g['day_et']):<9} {str(g['time_et']):>8}  "
+              f"{g['fixture']:<12} {g['state'] or '':<5} {done}")
+    print(f"\nForecast one:  python3 scripts/props-forecast.py forecast "
+          f"{games[0]['event_id'] if games else ''}")
+    return 0
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd in ("forecast", "best"):
         if len(sys.argv) < 3:
             print(f"usage: props-forecast.py {cmd} <event_id>\n"
-                  "  find one with: curl -s "
-                  "'https://site.web.api.espn.com/apis/site/v2/sports/football/"
-                  "nfl/scoreboard' | python3 -m json.tool | grep -A2 shortName",
+                  "  this week's games and their ids: props-forecast.py week",
                   file=sys.stderr)
             return 2
         return cmd_forecast(sys.argv[2]) if cmd == "forecast" else cmd_best(sys.argv[2])
+    if cmd == "week":
+        return cmd_week("--json" in sys.argv)
     if cmd == "grade":
         return cmd_grade()
     if cmd == "calibration":
         return cmd_calibration()
     if cmd == "markets":
         return cmd_markets()
-    print("usage: props-forecast.py forecast <event_id> | best <event_id> | "
-          "grade | calibration | markets", file=sys.stderr)
+    print("usage: props-forecast.py week | forecast <event_id> | "
+          "best <event_id> | grade | calibration | markets", file=sys.stderr)
     return 2
 
 

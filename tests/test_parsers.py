@@ -11398,3 +11398,259 @@ class ARuledOutPlayerGivesUpHisSlot(unittest.TestCase):
         self.assertEqual(self.ranked, ["Maybe Plays"])
         self.assertIn("Maybe Plays", self.written())
         self.assertIn("⚠ QUESTIONABLE", out)
+
+
+class ThisWeeksGamesAreOneClickAway(unittest.TestCase):
+    """The Props Hall lists the week's NFL games, and a click forecasts one.
+
+    Finding a game used to mean pasting a one-line Python command that read
+    Ace's cached slate - a slate that only holds what Ace's fetcher saw last,
+    and that needs a team pair typed into it. `props-forecast.py week` asks
+    ESPN for the current week directly, so ESPN access stays in one script,
+    and the Deck runs `forecast` for whichever game is clicked.
+
+    The scoreboard fixture is ESPN's real week-3 payload, trimmed to four
+    games, one of them the neutral-site BAL VS DAL.
+    """
+
+    def setUp(self):
+        self.m = load("props_forecast_week", "props-forecast.py")
+        self.board = json.loads((FIXTURES / "espn-nfl-scoreboard-week.json").read_text())
+        self.tmp = tempfile.TemporaryDirectory()
+        self.m.STORE = Path(self.tmp.name) / "forecasts.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    # --- the clock --------------------------------------------------------
+
+    def test_a_thursday_night_kickoff_is_thursday(self):
+        # 00:15 UTC on the 25th is 20:15 on the 24th in Green Bay. A page
+        # doing its own arithmetic files this game under Friday.
+        et = et_time.to_eastern("2026-09-25T00:15Z")
+        self.assertEqual((et.day, et.hour, et.minute), (24, 20, 15))
+
+    def test_unreadable_times_are_none_not_a_crash(self):
+        for bad in ("", "soon", None, 42):
+            self.assertIsNone(et_time.to_eastern(bad))
+
+    # --- the week ---------------------------------------------------------
+
+    def test_every_game_comes_back_with_its_id(self):
+        games = self.m.week_games(self.board)
+        self.assertEqual(sorted(g["event_id"] for g in games),
+                         sorted(e["id"] for e in self.board["events"]))
+
+    def test_the_eastern_time_matches_espns_own_label(self):
+        # Checked against a DIFFERENT field of the same payload: ESPN writes
+        # its own Eastern label, "9/24 - 8:15 PM EDT", beside the UTC date.
+        # Two independent routes to one answer, and no time restated here.
+        detail = {e["id"]: e["competitions"][0]["status"]["type"]["shortDetail"]
+                  for e in self.board["events"]}
+        for g in self.m.week_games(self.board):
+            date_part = g["day_et"].split(" ", 1)[1]
+            self.assertTrue(detail[g["event_id"]].startswith(f"{date_part} - {g['time_et']}"),
+                            f"{g['fixture']}: {g['day_et']} {g['time_et']} vs {detail[g['event_id']]}")
+
+    def test_the_fixture_is_written_as_espn_wrote_it(self):
+        # A neutral-site game is "BAL VS DAL". Rewriting it as "@" would name
+        # a home side the game does not have.
+        short = {e["id"]: e["shortName"] for e in self.board["events"]}
+        for g in self.m.week_games(self.board):
+            self.assertEqual(g["fixture"], short[g["event_id"]])
+        self.assertTrue(any(" VS " in g["fixture"] for g in self.m.week_games(self.board)),
+                        "the fixture must still hold the neutral-site game")
+
+    def test_games_are_in_kickoff_order(self):
+        # ESPN happens to send them in order; reversed here, because a sort
+        # nobody can see working is a sort nobody would notice was deleted.
+        board = dict(self.board, events=list(reversed(self.board["events"])))
+        kick = [g["kickoff_utc"] for g in self.m.week_games(board)]
+        self.assertEqual(kick, sorted(kick))
+        self.assertNotEqual([e["date"] for e in board["events"]], kick)
+
+    def test_team_names_ride_along_for_the_search_box(self):
+        names = {c["team"]["displayName"] for e in self.board["events"]
+                 for c in e["competitions"][0]["competitors"]}
+        got = {n for g in self.m.week_games(self.board) for n in (g["away_name"], g["home_name"])}
+        self.assertEqual(got, names)
+
+    def test_an_empty_board_is_an_empty_week(self):
+        self.assertEqual(self.m.week_games({}), [])
+        self.assertEqual(self.m.week_games(None), [])
+
+    def test_the_json_says_which_games_are_already_forecast(self):
+        first = self.board["events"][0]["id"]
+        self.m.save({"forecasts": [{"event_id": first}, {"event_id": first}]})
+        self.m.get = lambda url: self.board
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.m.cmd_week(as_json=True), 0)
+        d = json.loads(out.getvalue())
+        rows = {g["event_id"]: g["forecast_rows"] for g in d["games"]}
+        self.assertEqual(rows[first], 2)
+        self.assertEqual(sum(rows.values()), 2)
+        self.assertEqual(d["week"], self.board["week"]["number"])
+
+
+class TheDeckRunsTheForecastForAClickedGame(unittest.TestCase):
+    """props.js: list the week, start one run, report on it.
+
+    Driven through the real module with a fake Express app and a stub
+    props-forecast.py, so nothing reaches ESPN and nothing needs a server.
+    """
+
+    API = ROOT / "mission-control-api"
+    NODE = shutil.which("node")
+    DEPS = (API / "node_modules" / "better-sqlite3").is_dir()
+
+    STUB = (
+        "import json, sys, time\n"
+        "cmd = sys.argv[1]\n"
+        "if cmd == 'week':\n"
+        "    print(json.dumps({'week': 3, 'games': [{'event_id': '401872948', 'fixture': 'ATL @ GB'}]}))\n"
+        "elif cmd == 'forecast' and sys.argv[2] == '11111':\n"
+        "    print('partial', flush=True); print('boom', file=sys.stderr); sys.exit(1)\n"
+        "elif cmd == 'forecast':\n"
+        "    time.sleep(0.6); print('ran ' + sys.argv[2])\n"
+    )
+
+    def setUp(self):
+        if not (self.NODE and self.DEPS):
+            self.skipTest("node or the Deck's node_modules are not installed")
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        (root / "scripts").mkdir()
+        (root / "scripts" / "props-forecast.py").write_text(self.STUB)
+        self.root = root
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def drive(self, steps):
+        """Run JS against the registered routes. `call(method, path, body)`
+        resolves to {status, body}; `wait()` resolves when the job settles."""
+        js = (
+            f"const props = require({json.dumps(str(self.API / 'props.js'))});"
+            "const routes = {};"
+            "const app = {get:(p,f)=>routes['GET '+p]=f, post:(p,f)=>routes['POST '+p]=f};"
+            "props.register(app);"
+            "function call(m, p, body){ return new Promise(ok => {"
+            "  const res = {code:200, status(c){this.code=c;return this;},"
+            # Copied at the moment of sending, as Express serialises it -
+            # a reference would show the job as it is later, not as sent.
+            "               json(b){ok({status:this.code, body:JSON.parse(JSON.stringify(b))});}};"
+            "  Promise.resolve(routes[m+' '+p]({body:body||{}}, res)); }); }"
+            "async function wait(){ for(let i=0;i<100;i++){"
+            "  const j=(await call('GET','/api/props/job')).body.job;"
+            "  if(j && j.state!=='running') return j; await new Promise(r=>setTimeout(r,100)); } }"
+            "(async () => { const out = {};" + steps +
+            " process.stdout.write(JSON.stringify(out)); })();"
+        )
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+        r = subprocess.run([self.NODE, "-e", js], capture_output=True, text=True,
+                           env=env, cwd=str(self.API), timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def test_the_week_is_the_scripts_answer(self):
+        out = self.drive("out.w = await call('GET', '/api/props/week');")
+        self.assertTrue(out["w"]["body"]["available"])
+        self.assertEqual(out["w"]["body"]["games"][0]["fixture"], "ATL @ GB")
+
+    def test_anything_but_digits_is_refused(self):
+        out = self.drive(
+            "out.a = await call('POST', '/api/props/forecast', {event_id: '1; rm -rf /'});"
+            "out.b = await call('POST', '/api/props/forecast', {});"
+            "out.c = await call('POST', '/api/props/forecast', {event_id: '12'});"
+            "out.d = await call('POST', '/api/props/forecast', {event_id: '401872948; rm -rf /'});"
+            "out.e = await call('POST', '/api/props/forecast', {event_id: 'x401872948'});"
+            "out.j = await call('GET', '/api/props/job');")
+        for k in ("a", "b", "c", "d", "e"):
+            self.assertEqual(out[k]["status"], 400, k)
+        self.assertIsNone(out["j"]["body"]["job"], "nothing may have started")
+
+    def test_a_run_starts_and_finishes(self):
+        out = self.drive(
+            "out.s = await call('POST', '/api/props/forecast', {event_id: '401872948', fixture: 'ATL @ GB'});"
+            "out.done = await wait();")
+        self.assertEqual(out["s"]["status"], 202)
+        self.assertEqual(out["s"]["body"]["job"]["state"], "running")
+        self.assertEqual(out["done"]["state"], "done")
+        self.assertIn("ran 401872948", out["done"]["log"])
+
+    def test_one_run_at_a_time(self):
+        # Two runs write the same forecasts.json; the later save would drop
+        # the earlier run's rows.
+        out = self.drive(
+            "out.a = await call('POST', '/api/props/forecast', {event_id: '401872948'});"
+            "out.b = await call('POST', '/api/props/forecast', {event_id: '401872953'});"
+            "out.done = await wait();"
+            "out.c = await call('POST', '/api/props/forecast', {event_id: '401872953'});"
+            "await wait();")
+        self.assertEqual(out["b"]["status"], 409)
+        self.assertEqual(out["done"]["event_id"], "401872948")
+        self.assertEqual(out["c"]["status"], 202, "a finished run must not block the next")
+
+    def test_a_failed_run_says_so_with_what_the_script_said(self):
+        out = self.drive(
+            "await call('POST', '/api/props/forecast', {event_id: '11111'});"
+            "out.done = await wait();")
+        self.assertEqual(out["done"]["state"], "failed")
+        self.assertEqual(out["done"]["code"], 1)
+        self.assertIn("boom", out["done"]["log"])
+
+    def test_the_process_gets_an_argument_list_not_a_shell(self):
+        src = (self.API / "props.js").read_text()
+        self.assertIn("execFile('python3', [SCRIPT, ...args]", src)
+        self.assertNotIn("exec(", src.replace("execFile(", ""))
+
+
+class ThePropsHallIsNotRebuiltUnderYourFingers(unittest.TestCase):
+    """The village re-renders the open panel every six seconds.
+
+    Harmless for a panel that only shows numbers. The Props Hall has a search
+    box and a live run status, and the rebuild wiped the box mid-word and
+    blanked the status - found by driving the page in a browser, where the
+    status line read "Forecasting…", then nothing, then "Forecasting…".
+    """
+
+    def test_the_six_second_pull_leaves_the_hall_alone(self):
+        src = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        pull = src.split("async function pull(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("openAgent !== PROPS_DOOR", pull)
+
+    def test_game_buttons_carry_data_not_code(self):
+        # esc() does not escape quotes, so a fixture inside an inline onclick
+        # string would be one apostrophe from breaking the page.
+        src = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        body = src.split("function drawWeek(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn('data-event="', body)
+        self.assertNotIn("onclick", body)
+
+    def card(self, row):
+        """forecastCard() from the page, rendered by node - the real function,
+        lifted out with the two helpers it calls."""
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        src = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        esc = re.search(r"const esc = .*\n", src).group(0)
+        # A top-level function ends at the first "}" in column 0.
+        fns = "".join(re.search(rf"^function {n}\(.*?^\}}\n", src, re.S | re.M).group(0)
+                      for n in ("fcTile", "forecastCard"))
+        js = esc + fns + f"process.stdout.write(forecastCard({json.dumps(row)}));"
+        r = subprocess.run([node, "-e", js], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    ROW = {"player": "Nico Collins", "team": "HOU", "market": "receptions", "unit": "rec",
+           "probabilities": {"3": 86.7, "4": 66.1}, "interval": {"3": [81, 92], "4": [54, 77]},
+           "sample_mean": 4.8, "p25": 3, "p75": 7, "sample_games": 17, "actual": None}
+
+    def test_the_cards_show_the_injury_flag(self):
+        html = self.card(dict(self.ROW, injury={"status": "Questionable", "date": "2026-09-23"}))
+        self.assertIn("\u26a0 QUESTIONABLE 09-23", html)
+
+    def test_a_healthy_card_carries_no_flag(self):
+        self.assertNotIn("\u26a0", self.card(dict(self.ROW, injury=None)))
