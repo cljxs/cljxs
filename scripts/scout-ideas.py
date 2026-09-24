@@ -151,6 +151,14 @@ def _rows_of(d):
     return good
 
 
+def _market_scan():
+    """market-scan.py as a module, lazily - it owns judging a saved scan."""
+    spec = importlib.util.spec_from_file_location("market_scan", SCRIPTS / "market-scan.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def product_word_of(text):
     """The catalogue product word in some text, or None - emily-printify's
     list, the same one catalogue_word() uses."""
@@ -419,6 +427,13 @@ def measured(phrase):
                         f"old, and supply moves. Re-scan it:\n"
                         f"    python3 ../../scripts/market-scan.py scan "
                         f"{scan.get('seed')} --save")
+                # Judged by market-scan's rules as they are TODAY - the same
+                # verdict compare uses, asked of the one function that makes
+                # it. A trademark CHECK is not a refusal here: the idea is
+                # filed with its IP flag and the owner decides.
+                verdict = _market_scan().verdicts(scan).get(row.get("phrase"))
+                if verdict and verdict[0] != "check":
+                    return None, scan, f"{phrase!r} is measured, but {verdict[1]}."
                 return row, scan, None
         for row in scan.get("excluded") or []:
             if str(row.get("phrase", "")).strip().lower() == want:

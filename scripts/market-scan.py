@@ -577,21 +577,57 @@ def usable_rows(doc):
     they are applied on READ, and a scan improves when the rules do without
     being re-run.
     """
+    verdict = verdicts(doc)
+    return [r for r in (doc.get("rows") or [])
+            if isinstance(r.get("score"), (int, float))
+            and r.get("phrase") in verdict and verdict[r.get("phrase")] is None]
+
+
+def verdicts(doc):
+    """{phrase: None, or (kind, why)} for every scored row of a scan.
+
+    THE judgement of which saved rows still count, in one place. usable_rows
+    keeps the None ones, for compare. scout-ideas.py asks this directly,
+    because its gate used to read a scan's rows as saved - and the first real
+    'tote bag' scan put "tote bag pattern" top at $4.00 against a $21.99
+    market, flagged on screen as a different product and handed to Scout as
+    the best tote market there was. Two readers of one scan disagreeing about
+    which rows count is the drift this repo keeps paying for.
+
+    `kind` lets a caller treat a trademark CHECK - an ordinary word that is
+    also a property - as the owner's call rather than a refusal.
+    """
     rows = [r for r in (doc.get("rows") or [])
             if isinstance(r.get("score"), (int, float))]
     seed = doc.get("seed") or ""
-    kept = []
+    out, kept = {}, []
     for r in rows:
         phrase = str(r.get("phrase") or "")
-        if tp.bucket(seed, phrase)[0] != "buying":
-            continue                       # digital, offsite, drift, blocked
+        label, what = tp.bucket(seed, phrase)
+        if label == "check":
+            out[phrase] = (label, f"it names {what}, an ordinary word that is "
+                                  f"also somebody's property - your call")
+            continue
+        if label != "buying":
+            out[phrase] = (label, f"not a search for the product itself - "
+                                  f"{label}{': ' + what if what else ''}")
+            continue
         match = r.get("match")
         if isinstance(match, (int, float)) and match < LOOSE:
+            out[phrase] = ("loose", f"only {match:.0%} of the listings Etsy "
+                                    f"returned contain it")
             continue
         kept.append(r)
-    odd, _typical = price_outliers([(r.get("phrase"), r) for r in kept])
-    dropped = {c for c, _m in odd}
-    return [r for r in kept if r.get("phrase") not in dropped]
+    odd, typical = price_outliers([(r.get("phrase"), r) for r in kept])
+    for phrase, m in odd:
+        out[phrase] = ("price", f"priced like a different product - "
+                                f"${m['price']:.2f} against about "
+                                f"${typical:.2f} for the rest of its scan. "
+                                f"Usually design files or sewing patterns, "
+                                f"not the thing itself")
+    for r in kept:
+        out.setdefault(r.get("phrase"), None)
+    return out
 
 
 def best_row(doc):

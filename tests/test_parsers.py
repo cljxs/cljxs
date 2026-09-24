@@ -9553,7 +9553,7 @@ class PostageIsTheWholeStoryOnASticker(unittest.TestCase):
             "variant_ids": [1], "variant_titles": ['2" x 2"'],
             "prices": {"1": 399}, "costs": {"1": 1.42}}}))
         (root / "agents" / "scout" / "state" / "scans" / "s.json").write_text(
-            json.dumps({"seed": "s", "scanned_at": datetime.now(timezone.utc)
+            json.dumps({"seed": "water bottle sticker", "scanned_at": datetime.now(timezone.utc)
                         .strftime("%Y-%m-%dT%H:%M:%SZ"),
                         "rows": [{"phrase": "water bottle stickers", "supply": 1,
                                   "heat": 0.1, "pull": 0.1, "price": 3.99,
@@ -12058,3 +12058,90 @@ class ScoutsHouseShowsTheFocus(unittest.TestCase):
 
     def test_no_focus_no_banner(self):
         self.assertNotIn("Focus:", self.render(None))
+
+
+class TheGateJudgesAScanTheWayCompareDoes(unittest.TestCase):
+    """"tote bag pattern" topped the first real 'tote bag' scan at $4.00.
+
+    The scan flagged it on screen - "PRICED LIKE A DIFFERENT PRODUCT", about
+    $21 for the rest - and saved it anyway, because a saved scan keeps every
+    row and is re-judged on read. compare re-judged it. The evidence gate did
+    not: it read the rows as saved, so the phrase would have gone to Scout as
+    the best tote market measured, and every idea on it would have been a
+    sewing pattern's market.
+
+    One verdict now, market-scan's, used by both. A trademark CHECK stays the
+    owner's call at the gate, as it is everywhere else.
+
+    The rows are the nine the real scan saved, numbers as printed.
+    """
+
+    ROWS = [("tote bag pattern", 73534, 4.00, 0.96, 0.0370),
+            ("tote bag for school", 78015, 16.95, 1.00, 0.0025),
+            ("tote bag women", 162369, 120.00, 0.96, 0.0022),
+            ("tote bag etsy", 2778, 9.70, 0.68, 0.0011),
+            ("tote bag", 1111895, 11.65, 1.00, 0.0009),
+            ("tote bag coach", 4628, 21.99, 0.80, 0.0007),
+            ("tote bag black", 186557, 30.00, 0.80, 0.0005),
+            ("tote bag sale", 3285, 25.00, 0.92, 0.0005),
+            ("tote bag designer", 15922, 150.00, 1.00, 0.0003)]
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        scans = self.root / "agents" / "scout" / "state" / "scans"
+        scans.mkdir(parents=True)
+        self.doc = {"seed": "tote bag", "excluded": [],
+                    "scanned_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "rows": [{"phrase": p, "supply": s, "heat": 0.01, "pull": 0.02, "price": pr,
+                              "match": m, "returned": 25, "heat_n": 25, "pull_n": 25,
+                              "score": sc, "tags": []} for p, s, pr, m, sc in self.ROWS]}
+        (scans / "tote-bag.json").write_text(json.dumps(self.doc))
+        self.old = os.environ.get("ECOSYSTEM_ROOT")
+        os.environ["ECOSYSTEM_ROOT"] = str(self.root)
+        self.si = load("scout_ideas_gate", "scout-ideas.py")
+        self.ms = load("market_scan_gate", "market-scan.py")
+
+    def tearDown(self):
+        if self.old is None:
+            os.environ.pop("ECOSYSTEM_ROOT", None)
+        else:
+            os.environ["ECOSYSTEM_ROOT"] = self.old
+        self.tmp.cleanup()
+
+    def test_the_sewing_pattern_market_is_refused_at_the_gate(self):
+        row, _scan, problem = self.si.measured("tote bag pattern")
+        self.assertIsNone(row)
+        self.assertIn("priced like a different product", problem)
+
+    def test_it_is_not_handed_to_scout(self):
+        handed = [p for p, _ in self.si.proposable()]
+        self.assertNotIn("tote bag pattern", handed)
+        self.assertIn("tote bag for school", handed)
+
+    def test_a_trademark_check_is_still_the_owners_call(self):
+        kind, why = self.ms.verdicts(self.doc)["tote bag coach"]
+        self.assertEqual(kind, "check")
+        self.assertIn("your call", why)
+        row, _scan, problem = self.si.measured("tote bag coach")
+        self.assertIsNone(problem)
+        self.assertEqual(row["phrase"], "tote bag coach")
+
+    def test_compare_and_the_gate_agree(self):
+        # Every row compare keeps, the gate accepts; every row the gate
+        # refuses, compare drops. The only rows they treat differently are
+        # the CHECK ones, on purpose.
+        kept = {r["phrase"] for r in self.ms.usable_rows(self.doc)}
+        verdict = self.ms.verdicts(self.doc)
+        for p, *_ in self.ROWS:
+            refused = self.si.measured(p)[2] is not None
+            if p in kept:
+                self.assertFalse(refused, p)
+            elif verdict[p][0] != "check":
+                self.assertTrue(refused, p)
+
+    def test_usable_rows_still_drops_what_it_dropped(self):
+        kept = {r["phrase"] for r in self.ms.usable_rows(self.doc)}
+        self.assertNotIn("tote bag pattern", kept)
+        self.assertNotIn("tote bag coach", kept)
+        self.assertIn("tote bag", kept)
