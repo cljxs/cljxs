@@ -101,7 +101,12 @@ def generate_artwork(slug, idea, brief, product, evidence=None):
     try:
         res = subprocess.run(
             [sys.executable, str(here / "emily-assets.py"),
-             "--prompt", prompt, "--out", str(out), "--size", "1024"],
+             "--prompt", prompt, "--out", str(out), "--size", "1024",
+             # The product decides the art direction, so it has to travel
+             # with the prompt. Without it an all-over tote is drawn with
+             # PRINT_DIRECTION's plain background and prints a blob in the
+             # middle of an even field.
+             "--product", str(product or "")],
             capture_output=True, text=True, timeout=180,
         )
     except Exception as exc:

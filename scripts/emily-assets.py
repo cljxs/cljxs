@@ -19,6 +19,7 @@ Standard library only.
 import argparse
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 import struct
@@ -151,6 +152,57 @@ PRINT_DIRECTION = (
     "no border."
 )
 
+# ...except on a product that prints its whole surface, where PRINT_DIRECTION
+# asks for the wrong picture.
+#
+# "Solid plain background in one even colour, filling the frame" describes a
+# subject sitting on a field, which is right for a sticker or a chest print
+# and is exactly what an all-over tote must not be: printed edge to edge, the
+# even field becomes most of the bag and the subject a blob near the middle.
+#
+# The refusals that come after are the same ones, because the failure they
+# guard is the same - a model asked for a print file returning a photograph
+# of the product.
+ALL_OVER_DIRECTION = (
+    "Flat 2D vector-style illustration intended as an all-over print file: "
+    "the design covers the whole square, edge to edge, with no background "
+    "field and no empty margin. A repeating pattern drawn from a few solid "
+    "colours, even in density across the frame, seen straight on. "
+    "NOT a photograph and NOT a product mockup: no desk, no table, no wood "
+    "grain, no ruler, no hand, no packaging, no shelf, no room, no bag, no "
+    "tote, no garment, no perspective, no drop shadow, no reflection, no "
+    "watermark, no border."
+)
+
+
+def all_over(product):
+    """Does this product print its whole surface?
+
+    Asked of emily-printify.py rather than answered here. It reads the
+    blueprint title Printify gave the catalogue entry, and it is the same
+    call that decides whether the background gets cut out. Two pieces of
+    code deciding that a tote is an all-over print would eventually
+    disagree, and the prompt is the half nobody would notice had drifted -
+    the art would just quietly get worse.
+
+    Imported lazily and inside a try: drawing art must not stop because the
+    catalogue is missing. Unknown means "not all-over", which is the safe
+    way round - a normal print direction on an AOP product is a worse
+    picture, an AOP direction on a sticker is a file with no background to
+    cut out and a refused build.
+    """
+    if not (product or "").strip():
+        return False
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "emily_printify_ao", Path(__file__).resolve().parent / "emily-printify.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _key, entry = mod.resolve(mod.read_catalog(), product)
+        return bool(entry) and mod.is_all_over(entry)
+    except Exception:
+        return False
+
 
 def market_notes(evidence):
     """Design constraints that follow from the numbers, not from taste.
@@ -252,12 +304,17 @@ def compose(idea, brief="", product="", evidence=None, already=()):
     return "\n\n".join(p for p in parts if p)
 
 
-def directed(prompt):
-    """The art direction on the end, once, however the prompt already reads."""
-    return f"{prompt.strip()}\n\n{PRINT_DIRECTION}"
+def directed(prompt, product=""):
+    """The art direction on the end, once, however the prompt already reads.
+
+    Which direction depends on the product, because an all-over print wants
+    the opposite of a plain background.
+    """
+    return (f"{prompt.strip()}\n\n"
+            f"{ALL_OVER_DIRECTION if all_over(product) else PRINT_DIRECTION}")
 
 
-def generate(path, prompt, key, model=None):
+def generate(path, prompt, key, model=None, product=""):
     """Draw one image. Returns (bytes written, usage).
 
     `usage.include` asks OpenRouter to price the call and hand the number back
@@ -269,7 +326,7 @@ def generate(path, prompt, key, model=None):
     """
     body = json.dumps({
         "model": model or image_model(),
-        "messages": [{"role": "user", "content": directed(prompt)}],
+        "messages": [{"role": "user", "content": directed(prompt, product)}],
         "modalities": ["image", "text"],
         "usage": {"include": True},
     }).encode()
@@ -388,6 +445,10 @@ def main():
     ap.add_argument("--placeholder-only", action="store_true")
     ap.add_argument("--model", default="",
                     help="draw with this model instead of the configured one")
+    ap.add_argument("--product", default="",
+                    help="the catalogue product this art is for. An all-over "
+                         "print gets the opposite art direction - edge to "
+                         "edge, no background field.")
     ap.add_argument("--compare", default="",
                     help="comma-separated models: draw the SAME prompt with "
                          "each, into a build folder the Deck already shows")
@@ -403,7 +464,7 @@ def main():
     if key and not a.placeholder_only:
         try:
             model = image_model(a.model)
-            n, usage = generate(a.out, a.prompt, key, model)
+            n, usage = generate(a.out, a.prompt, key, model, a.product)
             print(json.dumps({"ok": True, "mode": "generated", "model": model,
                               "path": a.out, "bytes": n,
                               "cost_usd": cost_of(usage)}))

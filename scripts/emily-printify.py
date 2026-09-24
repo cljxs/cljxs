@@ -665,7 +665,33 @@ def needs_cutout(entry):
     """
     if "cutout" in (entry or {}):
         return bool(entry["cutout"])
+    # AN ALL-OVER PRINT HAS NO BACKGROUND TO REMOVE.
+    #
+    # The first AOP tote came back refused: "only 36% of the border is one
+    # colour - there is no flat background here. That is what a photograph
+    # looks like." The art was correct - a wave pattern edge to edge, which
+    # is the entire point of the product - and the check that rejected it
+    # was written for apparel, where a design is cut out and placed ON a
+    # garment. Here the file IS the garment's surface.
+    #
+    # Printify says which in the blueprint's own title, so nothing has to be
+    # remembered or configured.
+    if is_all_over(entry):
+        return False
     return True
+
+
+def is_all_over(entry):
+    """Does this blueprint print the whole surface?
+
+    Read from the blueprint title Printify gave it - 'Tote Bag (AOP)',
+    'Shoulder Tote Bag (AOP)' - rather than from a flag somebody has to
+    remember to set. A product whose title does not say so is treated as a
+    normal print, which is the safe way round: a missed AOP is a refused
+    build, and a wrongly-assumed one is a background printed onto a garment.
+    """
+    title = str((entry or {}).get("blueprint_title") or "")
+    return bool(re.search(r"\baop\b|\ball[- ]over\b", title, re.I))
 
 
 def colour_of(title):
@@ -1366,9 +1392,18 @@ def cmd_draft(a):
     # the artwork: wood grain, ruler and all, and it would have printed that
     # way. It looked perfectly good as a thumbnail, which is how it got past
     # everyone including me.
+    # ...but WHICH question is asked depends on the product, because an
+    # all-over print has no background and the background questions have no
+    # answer on one. The first AOP tote was refused for "only 36% of the
+    # border is one colour" - correct, and the reason the art was right.
+    # knockout --all-over asks the one thing still worth asking there:
+    # palette, not background. The product decides, and is_all_over() is the
+    # single place that decides it - the same call needs_cutout() makes.
+    check = [sys.executable, str(ko), str(design), "--check"]
+    if is_all_over(cat):
+        check.append("--all-over")
     print(f"checking {design.name} is artwork and not a photograph ...")
-    r = subprocess.run([sys.executable, str(ko), str(design), "--check"],
-                       capture_output=True, text=True)
+    r = subprocess.run(check, capture_output=True, text=True)
     sys.stdout.write(r.stdout)
     if r.returncode != 0:
         sys.stderr.write(r.stderr)

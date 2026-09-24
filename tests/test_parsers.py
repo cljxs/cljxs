@@ -16,6 +16,7 @@ with nothing installed:
 import copy
 import contextlib
 import io
+import math
 import importlib.util
 import json
 import os
@@ -6469,7 +6470,7 @@ class APhotographIsNotAPrintFile(unittest.TestCase):
         # request body, not on the constant existing.
         src = (SCRIPTS / "emily-assets.py").read_text()
         body = src.split("def generate(", 1)[1].split("\ndef ", 1)[0]
-        self.assertIn("directed(prompt)", body)
+        self.assertIn("directed(prompt", body)
         self.assertNotIn('"content": prompt', body)
 
     def test_the_agents_own_words_are_kept(self):
@@ -10621,3 +10622,306 @@ class ARefusalThatIsADeadEndLosesTheWork(unittest.TestCase):
         r = self.merge_with([{"title": "X", "product": "something unheard of"}])
         line = [l for l in r.stderr.splitlines() if l.strip().startswith("<phrase>")][0]
         self.assertIn("something unheard of", line)
+
+
+class AnAllOverPrintHasNoBackground(unittest.TestCase):
+    """The first AOP tote was refused, and the refusal was the bug.
+
+    Emily built "Minimal Wave Line All-over Tote" against blueprint 1389,
+    "Tote Bag (AOP)". The art was correct - a wave pattern edge to edge,
+    which is the entire point of the product. draft refused it:
+
+        knockout: only 36% of the border is one colour - there is no flat
+        background here. That is what a photograph looks like.
+
+    True, and the reason the art was right. The whole of knockout's verdict -
+    border agreement, percent removed, percent left - asks about a background
+    the file is not supposed to have. That check was written for apparel,
+    where a design is cut out and placed ON a garment. On an all-over print
+    the file IS the surface.
+
+    Two things had to change and a third had to NOT change:
+
+      the cutout is skipped - there is nothing to cut out;
+      the check asks a different question - palette, not background;
+      the check still runs, because the failure it guards is unchanged. A
+      model asked for a print file will hand back a photograph of the
+      product, and did, with a sticker on a desk.
+
+    And upstream of all of it, the art direction: PRINT_DIRECTION asks for
+    "a solid plain background in one even colour, filling the frame", which
+    printed edge to edge is a blob in the middle of a field.
+    """
+
+    def setUp(self):
+        self.ko = load("knockout4", "knockout.py")
+        self.ep = load("emily_printify_ao", "emily-printify.py")
+        self.ea = load("emily_assets_ao", "emily-assets.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def image(self, w, h, pixel):
+        px = bytearray()
+        for y in range(h):
+            for x in range(w):
+                px += bytes(pixel(x, y)) + b"\xff"
+        return w, h, px
+
+    def wave(self, w=200, h=200):
+        """An all-over pattern: two colours, edge to edge, no background."""
+        return self.image(w, h, lambda x, y:
+                          (245, 238, 228) if math.sin(x / 20.0 + y / 30.0) > 0
+                          else (38, 58, 78))
+
+    def photo(self, w=240, h=180):
+        """The same wood-grain desk the sticker failure produced."""
+        rnd = random.Random(7)
+        rows = [(150 + rnd.randrange(60), 100 + rnd.randrange(50),
+                 50 + rnd.randrange(40)) for _ in range(h)]
+        return self.image(w, h, lambda x, y: tuple(
+            max(0, min(255, c + ((x * 7 + y * 13) % 17) - 8)) for c in rows[y]))
+
+    def grainy(self, w=220, h=220):
+        """The same pattern as it actually comes back: soft edges and grain.
+
+        self.wave() is two exact colours, which no image model has ever
+        returned. This is the honest version - anti-aliased boundaries and a
+        few levels of noise over the whole frame.
+        """
+        rnd = random.Random(11)
+        a, b = (245, 238, 228), (38, 58, 78)
+
+        def px(x, y):
+            t = max(0.0, min(1.0, (math.sin(x / 22.0 + y / 31.0) + 0.03) / 0.06))
+            n = rnd.randrange(-3, 4)
+            return tuple(max(0, min(255, int(a[i] * t + b[i] * (1 - t)) + n))
+                         for i in range(3))
+        return self.image(w, h, px)
+
+    # --- which products ----------------------------------------------------
+
+    def test_printify_says_which_blueprints_are_all_over(self):
+        # Real blueprint titles, copied from the catalogue rather than
+        # imagined. "Aoplite Mug" is here because a substring match on "aop"
+        # would call it one.
+        for title, want in [("Tote Bag (AOP)", True),
+                            ("Shoulder Tote Bag (AOP)", True),
+                            ("All-Over Print Tote", True),
+                            ("All Over Print Tee", True),
+                            ("Cotton Tote Bag", False),
+                            ("Kiss-Cut Stickers", False),
+                            ("Aoplite Mug", False),
+                            ("Unisex Heavy Blend Hooded Sweatshirt", False)]:
+            self.assertIs(self.ep.is_all_over({"blueprint_title": title}), want,
+                          title)
+
+    def test_an_entry_with_no_title_is_not_assumed_all_over(self):
+        # The safe way round. A missed AOP costs one regeneration; a wrongly
+        # assumed one prints a white rectangle onto a garment.
+        self.assertFalse(self.ep.is_all_over({}))
+        self.assertFalse(self.ep.is_all_over(None))
+
+    def test_an_all_over_print_is_not_cut_out(self):
+        self.assertFalse(self.ep.needs_cutout({"blueprint_title": "Tote Bag (AOP)"}))
+        self.assertTrue(self.ep.needs_cutout({"blueprint_title": "Cotton Tote Bag"}))
+
+    def test_an_explicit_cutout_flag_still_wins(self):
+        # `pick --no-cutout` records a decision a person made. Nothing
+        # inferred from a title may overrule it.
+        self.assertTrue(self.ep.needs_cutout(
+            {"blueprint_title": "Tote Bag (AOP)", "cutout": True}))
+
+    # --- what is measured instead ------------------------------------------
+
+    def test_a_photograph_is_still_refused_on_an_all_over_product(self):
+        # The point of the whole exercise. Skipping the check would have been
+        # the easy fix and would have put the desk back on the tote.
+        w, h, px = self.photo()
+        ok, facts, problem = self.ko.all_over_verdict(w, h, px)
+        self.assertFalse(ok, facts)
+        self.assertIn("photograph", problem)
+
+    def test_an_edge_to_edge_pattern_passes(self):
+        w, h, px = self.wave()
+        ok, facts, problem = self.ko.all_over_verdict(w, h, px)
+        self.assertTrue(ok, f"{facts}\n{problem}")
+
+    def test_the_old_verdict_would_have_refused_that_same_pattern(self):
+        # The premise, measured rather than remembered: this is why a second
+        # verdict exists at all. If the background check ever starts passing
+        # edge-to-edge art, all_over_verdict is redundant and should go.
+        w, h, px = self.wave()
+        ok, facts, _problem = self.ko.verdict(w, h, px)
+        self.assertFalse(ok, facts)
+
+    def test_flat_art_committed_in_this_repo_passes(self):
+        # A real file, not a generator. hall.png is drawn art with gradients
+        # and dithering - the nearest thing here to what the image model
+        # returns, and the sample the threshold was set against.
+        w, h, px = self.ko.decode(ROOT / "hall.png")
+        cover, _distinct = self.ko.palette_coverage(w, h, px)
+        self.assertGreater(cover, self.ko.PALETTE_MIN_PCT,
+                           f"real art measured {cover:.0f}%")
+
+    def test_coverage_separates_them_and_a_colour_count_does_not(self):
+        # Why the measurement is coverage. Counted distinct, the desk has 92
+        # quantised colours and hall.png 66 - the wrong way round, and a
+        # threshold on that number would refuse the art and pass the photo.
+        pw, ph, ppx = self.photo()
+        aw, ah, apx = self.ko.decode(ROOT / "hall.png")
+        photo_cover, photo_n = self.ko.palette_coverage(pw, ph, ppx)
+        art_cover, art_n = self.ko.palette_coverage(aw, ah, apx)
+        self.assertGreater(art_cover, photo_cover + 20.0)
+        self.assertGreaterEqual(photo_n, art_n,
+                                "if this ever flips, a count would work and "
+                                "this comment is wrong")
+
+    def test_grain_and_soft_edges_do_not_cost_the_measurement(self):
+        """Why the colours are quantised before they are counted.
+
+        What the image model returns is not two flat colours. Every boundary
+        is anti-aliased and the whole frame carries a little grain, so counted
+        EXACTLY this pattern has 483 colours and its commonest eight cover
+        57% - a hair above the threshold, and falling as the art gets softer.
+        Quantised to 16 levels a channel it is 35 colours and 99%, which is
+        what it actually looks like.
+        """
+        w, h, px = self.grainy()
+        cover, _n = self.ko.palette_coverage(w, h, px)
+        self.assertGreater(cover, 90.0,
+                           f"soft-edged flat art measured {cover:.0f}%")
+
+    def test_an_empty_image_does_not_divide_by_zero(self):
+        self.assertEqual(self.ko.palette_coverage(0, 0, bytearray()), (0.0, 0))
+
+    # --- the command line ---------------------------------------------------
+
+    def test_check_all_over_passes_a_pattern_and_writes_nothing(self):
+        src = self.d / "wave.png"
+        w, h, px = self.wave()
+        self.ko.encode(src, w, h, px)
+        before = sorted(p.name for p in self.d.iterdir())
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knockout.py"),
+                            str(src), "--check", "--all-over"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(sorted(p.name for p in self.d.iterdir()), before)
+
+    def test_check_all_over_refuses_a_photograph(self):
+        src = self.d / "photo.png"
+        w, h, px = self.photo()
+        self.ko.encode(src, w, h, px)
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knockout.py"),
+                            str(src), "--check", "--all-over"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("photograph", r.stderr)
+
+    def test_all_over_without_check_is_a_usage_error_not_a_cutout(self):
+        # Two verdicts and a write is how a file gets knocked out under one
+        # rule and judged under the other.
+        src, dst = self.d / "wave.png", self.d / "out.png"
+        w, h, px = self.wave()
+        self.ko.encode(src, w, h, px)
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knockout.py"),
+                            str(src), str(dst), "--all-over"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertFalse(dst.exists())
+
+    # --- where it is wired in ------------------------------------------------
+
+    def test_draft_passes_all_over_to_the_check(self):
+        # The hand-off. A function that computes the right thing and a
+        # function that is CALLED with it are different facts, and this repo
+        # has paid for that difference four times.
+        src = (SCRIPTS / "emily-printify.py").read_text()
+        body = src.split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("is_all_over(cat)", body)
+        window = body[body.index('"--check"'):body.index("if needs_cutout(cat):")]
+        self.assertIn("--all-over", window,
+                      "the flag must be added to the check, not somewhere later")
+
+    def test_the_check_still_runs_for_every_product(self):
+        # Unchanged and asserted again, because the tempting fix was to skip
+        # the check for AOP entirely.
+        src = (SCRIPTS / "emily-printify.py").read_text()
+        body = src.split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
+        self.assertLess(body.index('"--check"'), body.index("if needs_cutout(cat):"))
+
+    # --- the art direction ---------------------------------------------------
+
+    def test_an_all_over_product_is_asked_for_edge_to_edge_art(self):
+        out = self.ea.ALL_OVER_DIRECTION.lower()
+        self.assertIn("edge to edge", out)
+        self.assertNotIn("plain background", out)
+        for forbidden in ("photograph", "mockup", "desk", "tote"):
+            self.assertIn(forbidden, out,
+                          f"the direction must rule out a {forbidden}")
+
+    def test_the_two_directions_disagree_about_the_background(self):
+        # If they ever stop disagreeing, one of them is doing nothing.
+        self.assertIn("plain background", self.ea.PRINT_DIRECTION.lower())
+        self.assertNotIn("edge to edge", self.ea.PRINT_DIRECTION.lower())
+
+    def test_the_prompt_asks_printify_which_direction_to_use(self):
+        # One fact, one place: the same is_all_over() the cutout uses. A
+        # second opinion here would drift silently - the art would just
+        # quietly get worse and nobody would know why.
+        body = (SCRIPTS / "emily-assets.py").read_text()
+        body = body.split("def all_over(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("is_all_over", body)
+        self.assertIn("emily-printify.py", body)
+
+    def test_the_product_reaches_the_direction(self):
+        root = self.d / "root"
+        (root / "agents" / "emily" / "state").mkdir(parents=True)
+        (root / "agents" / "emily" / "state" / "printify-catalog.json").write_text(
+            json.dumps({"tote": {"blueprint_title": "Tote Bag (AOP)",
+                                 "variant_ids": [1]},
+                        "sticker": {"blueprint_title": "Kiss-Cut Stickers",
+                                    "variant_ids": [1]}}))
+        old = os.environ.get("ECOSYSTEM_ROOT")
+        os.environ["ECOSYSTEM_ROOT"] = str(root)
+        try:
+            self.assertIn("edge to edge", self.ea.directed("waves", "tote"))
+            self.assertIn("plain background", self.ea.directed("a leaf", "sticker"))
+            self.assertIn("plain background", self.ea.directed("a leaf", ""))
+        finally:
+            if old is None:
+                os.environ.pop("ECOSYSTEM_ROOT", None)
+            else:
+                os.environ["ECOSYSTEM_ROOT"] = old
+
+    def test_a_missing_catalogue_does_not_stop_the_art(self):
+        old = os.environ.get("ECOSYSTEM_ROOT")
+        os.environ["ECOSYSTEM_ROOT"] = str(self.d / "nothing-here")
+        try:
+            self.assertFalse(self.ea.all_over("tote"))
+        finally:
+            if old is None:
+                os.environ.pop("ECOSYSTEM_ROOT", None)
+            else:
+                os.environ["ECOSYSTEM_ROOT"] = old
+
+    def test_the_product_reaches_directed_inside_generate(self):
+        # Parsed, passed to generate(), and then dropped on the floor one line
+        # later is still dropped. Asserted on the request body itself.
+        body = (SCRIPTS / "emily-assets.py").read_text()
+        body = body.split("def generate(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("directed(prompt, product)", body)
+
+    def test_new_build_hands_the_product_to_the_asset_script(self):
+        # The other hand-off. compose() has taken `product` for a while; the
+        # direction is chosen in a different process, so it needs the word on
+        # the command line too.
+        body = (SCRIPTS / "emily-new-build.py").read_text()
+        body = body.split("def generate_artwork(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("--product", body)
+        src = (SCRIPTS / "emily-assets.py").read_text()
+        self.assertIn('ap.add_argument("--product"', src)
+        gen = src.split("def main(", 1)[1]
+        self.assertIn("a.product", gen, "parsed and never passed is not passed")

@@ -16,6 +16,13 @@ global "remove everything near-white" rule also removes the white inside the
 design - eyes, glints, highlights - and leaves holes you only notice on the
 printed garment. Only background actually connected to the edge is removed.
 
+    python3 scripts/knockout.py design.png --check --all-over
+
+An all-over print is the exception: the pattern covers the whole surface, so
+there is no background to remove and nothing for the checks below to measure.
+--all-over asks the one question that still applies there - flat art or a
+photograph - off the palette instead of the border, and writes nothing.
+
 It refuses rather than guesses. If almost nothing was removed there was no
 flat background to find; if almost everything was, the art itself matched the
 background. Both produce a file that looks plausible and prints wrong, which
@@ -48,6 +55,35 @@ SPECK_MAX_PCT = 1.5
 # find, and guessing at one would delete half the art. If the largest piece
 # does not hold at least this much, nothing is touched and the caller is told.
 DOMINANT_MIN_PCT = 80.0
+
+# --- all-over prints ------------------------------------------------------
+#
+# An all-over print has NO background. The pattern is the product, edge to
+# edge, so every refusal above - border agreement, percent removed - is
+# asking a question the file cannot answer. The first AOP tote was refused
+# for "only 36% of the border is one colour", which was true and meant the
+# art was right.
+#
+# But the reason the check exists does not go away: a model told to produce
+# a print file will hand back a PHOTOGRAPH of the product instead, and that
+# happened here already with a sticker on a desk. So AOP art is measured on
+# something an edge-to-edge design still has - a palette.
+#
+# Flat art is drawn from a few colours and repeats them. A photograph is
+# continuous tone: no colour holds much of the frame. Quantise each channel
+# to 16 levels and ask how much of the image the eight commonest buckets
+# cover.
+#
+#   a wood-grain desk (the real failure, reproduced)   29%
+#   hall.png, flat art committed in this repo          75%
+#   a two-colour wave pattern                         100%
+#
+# The threshold sits between the first two, nearer the photograph, because
+# the cost is asymmetric: a refused build is one regeneration, and a
+# photograph printed onto 15 tote variants is a shop full of them.
+PALETTE_LEVELS = 16         # per channel, so 4096 buckets
+PALETTE_TOP_N = 8           # how many of them count as "the palette"
+PALETTE_MIN_PCT = 50.0      # below this there is no palette - it is a photograph
 
 
 class PngError(Exception):
@@ -370,10 +406,56 @@ def verdict(w, h, px, tol=DEFAULT_TOLERANCE):
     return True, facts, None
 
 
+def palette_coverage(w, h, px, top_n=PALETTE_TOP_N):
+    """What share of the image do its commonest colours cover?
+
+    Returns (share as a percent, number of distinct quantised colours).
+
+    Colours are quantised before counting because anti-aliasing and the PNG
+    the model returns put a hundred near-identical shades along every edge;
+    counted exactly, flat art looks as varied as a photograph. Distinct-count
+    alone does not separate them either - measured, the desk had 92 and
+    hall.png 66 - which is why the answer is coverage and not a count. The
+    count comes back only so a human reading the line can see both.
+    """
+    shift = 8 - (PALETTE_LEVELS - 1).bit_length()
+    counts = {}
+    for i in range(0, w * h * 4, 4):
+        key = (px[i] >> shift, px[i + 1] >> shift, px[i + 2] >> shift)
+        counts[key] = counts.get(key, 0) + 1
+    total = w * h
+    if not total:
+        return 0.0, 0
+    top = sorted(counts.values(), reverse=True)[:top_n]
+    return 100.0 * sum(top) / total, len(counts)
+
+
+def all_over_verdict(w, h, px):
+    """Is this fit to print edge to edge?
+
+    The counterpart to verdict() for a blueprint that prints the whole
+    surface. It asks the one question that still applies - art or photograph
+    - and none of the background questions, which have no answer here.
+
+    Unlike verdict() this does not touch px: there is no knockout to run.
+    """
+    cover, distinct = palette_coverage(w, h, px)
+    facts = (f"{w}x{h}, all-over print, {distinct} colours, the top "
+             f"{PALETTE_TOP_N} cover {cover:.0f}% of it")
+    if cover < PALETTE_MIN_PCT:
+        return False, facts, (
+            f"the eight commonest colours cover only {cover:.0f}% of this "
+            f"image - it is\n  continuous tone, which is what a photograph "
+            f"looks like: a product shot, a\n  mockup on a desk. Printify "
+            f"prints what it is given. Ask for flat art - a\n  repeating "
+            f"pattern drawn from a few colours, edge to edge, no mockup.")
+    return True, facts, None
+
+
 def main():
     if len(sys.argv) < 3:
         print("usage: knockout.py <in.png> <out.png> [--tolerance N] [--keep-specks]\n"
-              "       knockout.py <in.png> --check", file=sys.stderr)
+              "       knockout.py <in.png> --check [--all-over]", file=sys.stderr)
         return 2
     src = sys.argv[1]
     dst = None if sys.argv[2].startswith("--") else sys.argv[2]
@@ -387,7 +469,21 @@ def main():
         print(f"knockout: {exc}", file=sys.stderr)
         return 2
 
-    ok, facts, problem = verdict(w, h, px, tol)
+    # An all-over print is judged on its palette, not on a background it does
+    # not have. There is nothing to write in that mode - the file goes to
+    # Printify as it is - so --all-over without --check is a usage error
+    # rather than a cutout with a different opinion behind it.
+    all_over = "--all-over" in sys.argv
+    if all_over and "--check" not in sys.argv:
+        print("knockout: --all-over only makes sense with --check. An all-over "
+              "print has no\n  background to cut out, so there is nothing to "
+              "write.", file=sys.stderr)
+        return 2
+
+    if all_over:
+        ok, facts, problem = all_over_verdict(w, h, px)
+    else:
+        ok, facts, problem = verdict(w, h, px, tol)
     print(f"{src}: {facts}")
     if not ok:
         print(f"knockout: {problem}\n  Nothing written.", file=sys.stderr)
@@ -396,7 +492,9 @@ def main():
     # --check answers "is this fit to print at all" and writes nothing. It is
     # what emily-printify.py asks before every upload, for every product.
     if "--check" in sys.argv:
-        print("knockout: flat art on a plain background - fit to print.")
+        print("knockout: flat art, edge to edge - fit to print."
+              if all_over else
+              "knockout: flat art on a plain background - fit to print.")
         return 0
 
     # Only after the refusals above: despeckling a file that was never going
