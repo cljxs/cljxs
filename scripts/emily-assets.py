@@ -420,7 +420,7 @@ def safe_name(model):
     return "".join(c if c.isalnum() or c in "-." else "-" for c in model).strip("-")
 
 
-def compare(prompt, models, key, out_dir):
+def compare(prompt, models, key, out_dir, product=""):
     """Draw one prompt with several models, side by side.
 
     "Are the ChatGPT ones better" is not answerable in the abstract - it
@@ -461,7 +461,10 @@ def compare(prompt, models, key, out_dir):
     for model in wanted:
         path = out_dir / f"{safe_name(model)}.png"
         try:
-            n, usage = generate(path, prompt, key, model)
+            # The product travels, so a tote comparison is drawn as a tote -
+            # all-over direction, the face's shape - and the models are being
+            # compared on the picture that would actually be printed.
+            n, usage = generate(path, prompt, key, model, product)
             cost = cost_of(usage)
             results.append({"model": model, "ok": True, "file": path.name,
                             "bytes": n, "cost_usd": cost, "usage": usage})
@@ -508,7 +511,7 @@ def main():
     key = os.environ.get("OPENROUTER_API_KEY", "").strip()
 
     if a.compare:
-        return compare(a.prompt, a.compare, key, Path(a.out))
+        return compare(a.prompt, a.compare, key, Path(a.out), a.product)
 
     if key and not a.placeholder_only:
         try:

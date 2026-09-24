@@ -3106,7 +3106,7 @@ class ComparingModelsIsLookingAtThem(unittest.TestCase):
 
         self.costs = {}
 
-        def fake_generate(path, prompt, key, model=None):
+        def fake_generate(path, prompt, key, model=None, product="", **_kw):
             self.drawn.append((model, prompt))
             if "refuses" in (model or ""):
                 raise RuntimeError("provider returned 429")
@@ -12505,3 +12505,29 @@ class ABuildThatStoppedDoesNotSayBuilding(unittest.TestCase):
     def test_the_server_hands_emily_the_queue(self):
         src = (ROOT / "mission-control-api" / "server.js").read_text()
         self.assertIn("emilyRoutes.register(app, db)", src)
+
+
+class AComparisonIsDrawnAsTheProduct(unittest.TestCase):
+    """Compare mode drew every model with the plain-background print direction
+    and no shape, whatever the product - so a tote comparison compared
+    pictures that would never be printed. The product now travels to
+    generate(), the one place a request is built."""
+
+    def test_compare_passes_the_product_to_generate(self):
+        ea = load("emily_assets_cmp", "emily-assets.py")
+        seen = []
+
+        def fake(path, prompt, key, model=None, product="", direction=None, aspect=None):
+            seen.append((model, product))
+            Path(path).write_bytes(b"x")
+            return 1, {}
+        ea.generate = fake
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        with contextlib.redirect_stdout(io.StringIO()):
+            ea.compare("waves", "m/one,m/two", "key", Path(tmp.name) / "cmp", "tote")
+        self.assertEqual(seen, [("m/one", "tote"), ("m/two", "tote")])
+
+    def test_the_command_line_hands_it_over(self):
+        src = (SCRIPTS / "emily-assets.py").read_text()
+        self.assertIn("compare(a.prompt, a.compare, key, Path(a.out), a.product)", src)
