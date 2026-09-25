@@ -144,7 +144,7 @@ def hard_stop(limit, reset, cap):
 
 def lines(a):
     """The assessment as the few sentences a person reads."""
-    out = [f"Budget, {a['day']} (UTC day - it turns over at 8pm Eastern)"]
+    out = [f"Budget, {a['day']} (UTC day - it turns over at 7pm Central, 8pm Eastern)"]
     if a["state"] == "unknown":
         out.append("  AI today    unreadable - OpenRouter did not report usage_daily")
         out.append(f"  hard stop   {a['hard_stop']}")
