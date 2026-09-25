@@ -181,9 +181,17 @@ def focus():
     return word or None
 
 
+def is_pending(idea):
+    """The one rule for an idea still waiting on the owner. An idea with no
+    status, or an empty one, has not been decided. fury-collect.py imports
+    this rather than restating it: its copy read an empty status as decided,
+    while this file and the Deck read it as pending."""
+    return (idea.get("status") or "pending") == "pending"
+
+
 def pending_count():
     d, _ = load_ideas()
-    return sum(1 for i in d["ideas"] if (i.get("status") or "pending") == "pending")
+    return sum(1 for i in d["ideas"] if is_pending(i))
 
 
 def proposable():

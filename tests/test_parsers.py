@@ -34,6 +34,7 @@ import time
 import urllib.error
 import urllib.request
 import unittest
+import unittest.mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -13130,8 +13131,8 @@ class TheGMProposesOnlyWhatTheFactsSupport(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         t = Path(self.tmp.name)
-        self.days, self.reports = t / "days", t / "reports"
-        self.reports.mkdir()
+        self.days = t / "days"
+        self.brief_text = None
         self.con = self.gm.knowledge.connect(t / "k.db")
         self.now = datetime(2026, 9, 26, 13, 50, tzinfo=timezone.utc)   # 08:50 Central
 
@@ -13152,18 +13153,17 @@ class TheGMProposesOnlyWhatTheFactsSupport(unittest.TestCase):
         p.update(kw)
         return p
 
+    REPORT = {"generated_utc": "2026-09-26 13:31:02",
+              "agents": {"emily": {"last_memory_line": "- built 3 totes; library tote failed"}},
+              "failures": [], "queue": {"pending": 3}}
+
     def briefing(self):
         """A briefing written by Fury's own code, so the parser is tested
-        against the format Fury really writes."""
-        report = {"generated_utc": "2026-09-26 13:31:02",
-                  "agents": {"emily": {"last_memory_line": "- built 3 totes; library tote failed"}},
-                  "failures": [], "queue": {"pending": 3}}
-        text = self.fury.build_briefing(report, "2026-09-26")
-        f = self.reports / "2026-09-26.md"
-        f.write_text(text)
-        written = self.now.timestamp() - 20 * 60        # Fury's 08:30 run
-        os.utime(f, (written, written))
-        return f
+        against the format Fury really writes. Scout's count is pinned so the
+        checkout's own ideas.json cannot change the facts."""
+        with unittest.mock.patch.object(self.fury.scout, "pending_count", return_value=0):
+            self.brief_text = self.fury.build_briefing(self.REPORT, "2026-09-26")
+        return self.brief_text
 
     def run_gm(self, reply=None, budget=None, call=None, **kw):
         calls = []
@@ -13176,7 +13176,8 @@ class TheGMProposesOnlyWhatTheFactsSupport(unittest.TestCase):
                 {"cost": 0.0123, "prompt_tokens": 900, "completion_tokens": 400}
         code, doc = self.gm.run(now=kw.pop("now", self.now), days=self.days, con=self.con,
                                 read_budget=(budget if callable(budget) else (lambda: budget or self.OK_BUDGET)),
-                                call=call or fake, key="placeholder", reports=self.reports, **kw)
+                                call=call or fake, key="placeholder",
+                                briefing=kw.pop("briefing", lambda now: self.brief_text or ""), **kw)
         return code, doc, calls
 
     # --- the checks on a reply -------------------------------------------
@@ -13236,19 +13237,24 @@ class TheGMProposesOnlyWhatTheFactsSupport(unittest.TestCase):
     # --- the morning -----------------------------------------------------
 
     def test_fury_briefing_becomes_facts_with_their_sections(self):
-        self.briefing()
-        facts = self.gm.fury_facts(self.reports, now=self.now)
+        facts = self.gm.briefing_facts(self.briefing())
         self.assertIn("Needs you: 3 tasks pending in the queue", facts)
         self.assertTrue(any(f.startswith("What happened: Emily") for f in facts), facts)
         self.assertFalse(any("**" in f for f in facts))
 
-    def test_yesterdays_briefing_is_not_this_mornings(self):
-        f = self.briefing()
-        old = self.now.timestamp() - 20 * 3600
-        os.utime(f, (old, old))
-        facts = self.gm.fury_facts(self.reports, now=self.now)
-        self.assertEqual(len(facts), 1)
-        self.assertIn("there is none for this morning", facts[0])
+    def test_the_facts_are_read_when_the_gm_runs_not_at_fury_time(self):
+        # 2026-09-25: Fury's 08:30 briefing said 3 Scout ideas were waiting.
+        # The owner approved them in the Command Center; the GM ran at 11:00,
+        # read the 08:30 file and told the owner to review them anyway.
+        fury, pending = self.fury, {"n": 3}
+        with unittest.mock.patch.object(self.gm.fury, "collect", return_value=dict(self.REPORT)), \
+             unittest.mock.patch.object(self.gm.fury.scout, "pending_count",
+                                        side_effect=lambda: pending["n"]):
+            at_fury_time = self.gm.briefing_facts(self.gm.live_briefing(self.now))
+            self.assertIn("Needs you: 3 Scout ideas awaiting your review", at_fury_time)
+            pending["n"] = 0                         # approved before the GM ran
+            _, doc, _ = self.run_gm({"summary": "s"}, briefing=None)
+        self.assertFalse(any("Scout idea" in f for f in doc["facts"]), doc["facts"])
 
     def test_it_stays_asleep_when_the_budget_says_so(self):
         def boom(*a):
@@ -13400,3 +13406,26 @@ class TheTownHallRecordsTheOwnersAnswer(TheTownHallRunsTheScriptsItShows):
         self.assertEqual(out["d"]["status"], 200)
         self.assertEqual([c for c in self.gm_calls() if c[0] == "decide"],
                          [["decide", "2026-09-26", "2", "decline", "--note", "not now"]])
+
+
+class OneRuleForAPendingIdea(unittest.TestCase):
+    """scout-ideas.py owns "pending"; Fury imports it.
+
+    Fury's copy read an empty status as decided (`get("status", "pending")`
+    only defaults a missing key), while Scout and the Deck read it as waiting.
+    """
+
+    def test_an_empty_or_missing_status_is_pending_everywhere(self):
+        scout = load("scout_ideas_rule", "scout-ideas.py")
+        fury = load("fury_rule", "fury-collect.py")
+        for idea, want in (({}, True), ({"status": ""}, True), ({"status": None}, True),
+                           ({"status": "pending"}, True), ({"status": "approved"}, False),
+                           ({"status": "rejected"}, False)):
+            self.assertEqual(scout.is_pending(idea), want, idea)
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "state").mkdir()
+            (Path(d) / "state" / "ideas.json").write_text(json.dumps(
+                {"ideas": [{"status": ""}, {}, {"status": "approved"}]}))
+            self.assertEqual(fury.state_summary(d)["ideas_pending"], 2)
+        src = (SCRIPTS / "fury-collect.py").read_text()
+        self.assertNotIn('"pending") == "pending"', src, "Fury restates the rule again")

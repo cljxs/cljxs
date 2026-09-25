@@ -20,9 +20,10 @@ Fury and asks budget.py first: if today's AI allowance is spent, unreadable,
 or down to less than MIN_LEFT, it writes down why it skipped and stays asleep.
 It never runs twice in a day unless told to with --force.
 
-CODE COMPILES THE FACTS; THE MODEL ONLY WEIGHS THEM. Every fact is a numbered
-line - Fury's briefing, the budget, the knowledge store, yesterday's decisions
-- and every proposal must cite the facts it rests on. Code then checks the
+CODE COMPILES THE FACTS, WHEN IT RUNS; THE MODEL ONLY WEIGHS THEM. Every fact
+is a numbered line - Fury's briefing built live by Fury's own collector, the
+budget, the knowledge store, yesterday's decisions - and every proposal must
+cite the facts it rests on. Code then checks the
 reply, because a model asked to reason about numbers will eventually claim a
 number nobody gave it:
 
@@ -54,7 +55,6 @@ from pathlib import Path
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
 SCRIPTS = Path(__file__).resolve().parent
 DAYS = Path(os.environ.get("GM_DIR", ROOT / "tasks" / "gm"))
-FURY_REPORTS = ROOT / "agents" / "fury" / "reports"
 
 sys.path.insert(0, str(SCRIPTS))
 import et_time  # noqa: E402
@@ -70,6 +70,7 @@ def _load(name, file):
 budget = _load("budget", "budget.py")          # the daily cap and today's spend
 knowledge = _load("knowledge", "knowledge.py") # departments, the store, briefs
 ea = budget.preflight.ea                       # the OpenRouter URL and cost_of()
+fury = _load("fury_collect", "fury-collect.py") # the system's state, and the briefing
 
 # openai/gpt-5-mini is a slug captured from OpenRouter's own model list
 # (tests/fixtures/openrouter-models.json), not typed from memory. At its
@@ -98,10 +99,6 @@ TEXT_MAX = 400
 ASK_MAX = 300        # what the prompt asks for; TEXT_MAX is where code cuts
 SUMMARY_MAX = 700
 
-# Fury writes its briefing at 08:30 Central. Older than this and it is
-# yesterday's, which the GM must not present as this morning's.
-FURY_FRESH_HOURS = 12
-
 VERDICTS = ("approve", "decline")
 NOTE_MAX = 300
 
@@ -120,31 +117,30 @@ def _plain(text):
     return re.sub(r"\*\*|__|`", "", text).strip()
 
 
-def fury_facts(reports=FURY_REPORTS, now=None):
-    """Fury's newest briefing as fact lines, each with its section.
+def live_briefing(now=None):
+    """Fury's briefing, built from the system as it is right now.
 
-    Fury already turned every agent's state into sentences, in code. Reading
-    those sentences keeps one account of the system rather than a second
-    collector that would drift from the first.
+    Not the file Fury wrote at 08:30. The GM read that file once at 11:00 and
+    told the owner three Scout ideas were waiting - ideas approved in the
+    Command Center in between. Same collector and same wording as Fury's,
+    so there is still one account of the system; it is just read when the GM
+    runs, and never written.
     """
     now = now or utc_now()
-    try:
-        newest = max(Path(reports).glob("*.md"), key=lambda f: f.stat().st_mtime)
-    except ValueError:
-        return ["Fury's briefing: none has been written."]
-    age_h = (now.timestamp() - newest.stat().st_mtime) / 3600
-    if age_h > FURY_FRESH_HOURS:
-        return [f"Fury's briefing: the newest one ({newest.name}) is {age_h:.0f} hours "
-                f"old - there is none for this morning."]
+    return fury.build_briefing(fury.collect(now), now.strftime("%Y-%m-%d"))
+
+
+def briefing_facts(text):
+    """A briefing's bullet lines as facts, each with its section."""
     out, section = [], "Briefing"
-    for line in newest.read_text(errors="replace").splitlines():
+    for line in (text or "").splitlines():
         if line.startswith("## "):
-            section = _plain(line[3:]).strip(" ⚠️") or section
+            section = _plain(line[3:]).strip(" \u26a0\ufe0f") or section
             continue
         s = line.strip()
         if s.startswith("- ") and s[2:].strip().lower() not in ("nothing.",):
             out.append(f"{section}: {_plain(s[2:])}")
-    return out or [f"Fury's briefing ({newest.name}) lists nothing."]
+    return out or ["The system briefing lists nothing."]
 
 
 def budget_facts(b):
@@ -199,8 +195,10 @@ def decision_facts(doc):
     return out or [f"Last proposals ({doc['day']}): there were none."]
 
 
-def compile_facts(b, con, day, now=None, reports=FURY_REPORTS, days=None):
-    return (fury_facts(reports, now) + budget_facts(b) + knowledge_facts(con, now)
+def compile_facts(b, con, day, now=None, briefing=None, days=None):
+    """Every fact the GM is given, read at the moment it runs."""
+    text = (briefing or live_briefing)(now)
+    return (briefing_facts(text) + budget_facts(b) + knowledge_facts(con, now)
             + decision_facts(previous(day, days)))
 
 
@@ -428,9 +426,10 @@ def latest(days=None):
 
 
 def run(force=False, dry_run=False, now=None, days=None, con=None,
-        read_budget=None, call=None, key=None, reports=FURY_REPORTS):
+        read_budget=None, call=None, key=None, briefing=None):
     """The morning. Returns (exit code, the day's record). Injectable parts
-    are what the tests replace: the budget read, the model call and the key."""
+    are what the tests replace: the budget read, the briefing, the model call
+    and the key."""
     now = now or utc_now()
     day = et_time.day(et_time.to_eastern(now))
     existing = read_day(day_path(day, days))
@@ -460,7 +459,7 @@ def run(force=False, dry_run=False, now=None, days=None, con=None,
     own_con = con is None
     con = con or knowledge.connect()
     try:
-        facts = compile_facts(b, con, day, now, reports, days)
+        facts = compile_facts(b, con, day, now, briefing, days)
         rules = knowledge.brief(con, knowledge.EVERY)
         doc["facts"] = facts
         msgs = messages(facts, rules, day, b.get("cap"))

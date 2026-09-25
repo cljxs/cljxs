@@ -23,6 +23,12 @@ AGENTS = ROOT / "agents"
 OUT = AGENTS / "fury" / "data" / "system.json"
 API = os.environ.get("MISSION_CONTROL_API", "http://127.0.0.1:3001")
 
+# scout-ideas.py owns what "pending" means for an idea.
+_scout_spec = importlib.util.spec_from_file_location(
+    "scout_ideas", Path(__file__).resolve().parent / "scout-ideas.py")
+scout = importlib.util.module_from_spec(_scout_spec)
+_scout_spec.loader.exec_module(scout)
+
 
 def sh(cmd, timeout=15):
     try:
@@ -90,7 +96,7 @@ def state_summary(d):
             ideas = j.get("ideas", []) if isinstance(j, dict) else []
             return {"file": name,
                     "ideas_total": len(ideas),
-                    "ideas_pending": sum(1 for i in ideas if i.get("status", "pending") == "pending"),
+                    "ideas_pending": sum(1 for i in ideas if scout.is_pending(i)),
                     "ideas_approved": sum(1 for i in ideas if i.get("status") == "approved"),
                     "ideas_rejected": sum(1 for i in ideas if i.get("status") == "rejected")}
         out = {"file": name, "cycle_count": j.get("cycle_count"),
@@ -217,11 +223,8 @@ def build_briefing(report, date_str):
     if report.get("queue_error"):
         needs.append(f"the task queue could not be read ({report['queue_error'][:60]})")
 
-    ideas = ROOT / "agents" / "scout" / "state" / "ideas.json"
     try:
-        j = json.loads(ideas.read_text())
-        lst = j.get("ideas") if isinstance(j, dict) else j
-        n = sum(1 for i in lst if (i.get("status") or "pending") == "pending")
+        n = scout.pending_count()
         if n:
             needs.append(f"{n} Scout idea{'s' if n != 1 else ''} awaiting your review")
     except Exception:
@@ -307,9 +310,15 @@ def log_line(agent_dir, date_str, report):
     return mem
 
 
-def main():
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    now = datetime.now(timezone.utc)
+def collect(now=None):
+    """The whole system's state, read now. No file is written.
+
+    Split from main() so the GM can build the same briefing live when it
+    runs: it used to read the file written at 08:30, and a GM run at 11:00
+    told the owner three Scout ideas were waiting that had been approved in
+    between.
+    """
+    now = now or datetime.now(timezone.utc)
 
     agents = sorted(p.name for p in AGENTS.iterdir()
                     if p.is_dir() and not p.name.startswith(".")) if AGENTS.is_dir() else []
@@ -359,7 +368,13 @@ def main():
                                        for t in rows][:20]
     except Exception as exc:
         report["queue_error"] = str(exc)[:160]
+    return report
 
+
+def main():
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    report = collect()
+    agents = report["agents"]
     OUT.write_text(json.dumps(report, indent=1) + "\n")
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
