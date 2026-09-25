@@ -253,7 +253,7 @@ function listVideos() {
   const index = readJson(path.join(VIDEOS, 'index.json')) || {};
   const out = [];
   for (const name of names) {
-    const m = /^(\d{1,15})\.mp4$/.exec(name);
+    const m = name.match(/^(\d{1,15})\.mp4$/);
     if (!m) continue;
     let st;
     try { st = fs.statSync(path.join(VIDEOS, name)); } catch { continue; }
