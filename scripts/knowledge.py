@@ -352,11 +352,11 @@ SEEDS = [
               "yet, so such a listing may promise what cannot be delivered.",
          evidence=""),
     dict(dept="all", kind="decision", confidence="observed", source="owner",
-         title="Monthly budget: $25 all-in until there is a return",
-         body="Everything - droplet and AI - stays near $25 a month until the "
-              "store earns. budget.py reads the real spend against it; the GM "
-              "stays asleep when the AI allowance is gone.",
-         evidence="tasks/limits.json monthly_budget; python3 scripts/budget.py"),
+         title="AI spend: at most $1 a day until there is a return",
+         body="The agents' AI costs stay under $1 a UTC day (the day turns over "
+              "at 8pm Eastern) until the store earns. budget.py reads the real "
+              "spend against it; the GM stays asleep once today's is gone.",
+         evidence="tasks/limits.json daily_ai_budget; python3 scripts/budget.py"),
     dict(dept="all", kind="decision", confidence="observed", source="owner",
          title="The GM proposes; it does not assign (first month)",
          body="For the first month the GM writes proposals the owner approves or "

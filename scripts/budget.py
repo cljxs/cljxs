@@ -1,25 +1,32 @@
 #!/usr/bin/env python3
 """
-budget.py — what this month has cost, against the monthly budget.
+budget.py — what today's AI has cost, against the daily cap.
 
-    python3 scripts/budget.py            # the month so far, in plain words
+    python3 scripts/budget.py            # today and the month so far, in plain words
     python3 scripts/budget.py --json     # the same, for the Deck
-    python3 scripts/budget.py check      # exit 4 when the AI allowance is spent
+    python3 scripts/budget.py check      # exit 4 when today's AI allowance is spent
 
-THE BUDGET is `monthly_budget` in tasks/limits.json, next to the other spend
-caps. It is everything: the droplet and any other fixed bill come off the top,
-and what is left is the AI allowance. The owner set it at $25 a month until
-the ecosystem earns its keep.
+THE CAP is `daily_ai_budget` in tasks/limits.json, next to the other spend
+caps: dollars of AI a day. The owner set it at $1 a day (2026-09-25),
+replacing a $25-a-month-all-in budget that left nine cents a day for AI once
+the droplet came off the top. The month is shown too, as what it can cost at
+most - the cap times the days, plus the fixed bills - so the bigger number is
+never a surprise.
 
-THE AI SPEND is OpenRouter's own count, `usage_monthly` on the key endpoint -
-the current UTC month, in dollars, measured by the provider on every call.
-Nothing here estimates it. cost-estimate.py plans a cycle; this reads the bill.
+THE DAY IS OpenRouter's: `usage_daily` counts the current UTC day, so the
+day turns over at midnight UTC - 8pm Eastern in summer, 7pm in winter. Pacing
+against an Eastern day would compare two different windows, and the provider's
+hard stop resets on its clock, not ours.
+
+THE AI SPEND is OpenRouter's own count, measured by the provider on every
+call. Nothing here estimates it. cost-estimate.py plans a cycle; this reads
+the bill.
 
 THE HARD STOP is not this script. OpenRouter can cap a key and reset the cap
-monthly; a capped key refuses the call that would cross it, whatever any agent
-does. This script says whether that cap is set and whether it matches the
-allowance. `check` is the soft stop for things that choose to wake a model -
-the GM calls it and stays asleep when it exits 4.
+daily; a capped key refuses the call that would cross it, whatever any agent
+does. This script says whether that cap is set and whether it matches.
+`check` is the soft stop for things that choose to wake a model - the GM
+calls it and stays asleep when it exits 4.
 
 Reads nothing secret into its output: the key is sent to OpenRouter and never
 printed, stored or returned.
@@ -53,13 +60,13 @@ FIXED_MONTHLY = {
     "droplet": 12.00,
 }
 
-OVER = 4          # `check` exit code: the AI allowance for this month is spent
+OVER = 4          # `check` exit code: today's AI allowance is spent
 
 
-def monthly_budget(path=LIMITS):
-    """The owner's monthly ceiling, or None when it has not been set."""
+def daily_budget(path=LIMITS):
+    """The owner's daily AI cap in dollars, or None when it has not been set."""
     try:
-        v = json.loads(Path(path).read_text()).get("monthly_budget")
+        v = json.loads(Path(path).read_text()).get("daily_ai_budget")
     except Exception:
         return None
     try:
@@ -69,104 +76,92 @@ def monthly_budget(path=LIMITS):
     return v if v > 0 else None
 
 
-def assess(key_data, budget, fixed=None, now=None):
-    """Everything the month's money question needs, from one key read.
+def _dollars(key_data, field):
+    v = key_data.get(field)
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def assess(key_data, cap, fixed=None, now=None):
+    """Everything the money question needs, from one key read.
 
     Pure: no network, no files. `key_data` is the `data` object of
-    OpenRouter's /api/v1/key. The month is the UTC month because that is the
-    month OpenRouter counts `usage_monthly` in - pacing against an Eastern
-    month would compare two different windows.
+    OpenRouter's /api/v1/key; `cap` is dollars of AI a day.
     """
     now = now or datetime.now(timezone.utc)
     fixed = FIXED_MONTHLY if fixed is None else fixed
     fixed_total = round(sum(fixed.values()), 2)
-
-    raw = key_data.get("usage_monthly")
-    ai = float(raw) if isinstance(raw, (int, float)) else None
-
     days = calendar.monthrange(now.year, now.month)[1]
-    day = now.day
+
+    today = _dollars(key_data, "usage_daily")
+    month = _dollars(key_data, "usage_monthly")
+
     out = {
-        "month": now.strftime("%Y-%m"),
-        "day": day, "days": days,
-        "budget": budget,
+        "day": now.strftime("%Y-%m-%d"), "month": now.strftime("%Y-%m"),
+        "days_in_month": days,
+        "cap": cap,
         "fixed": dict(fixed), "fixed_total": fixed_total,
-        "ai_spent": None if ai is None else round(ai, 2),
-        "ai_allowance": None, "ai_left": None,
-        "projected_ai": None, "per_day_left": None,
-        "total_spent": None,
+        "ai_today": None if today is None else round(today, 2),
+        "ai_left_today": None,
+        "ai_month": None if month is None else round(month, 2),
+        "month_at_most": None if cap is None else round(cap * days + fixed_total, 2),
         "state": "unknown",
         "key_limit": key_data.get("limit"),
         "key_limit_reset": key_data.get("limit_reset"),
-        "hard_stop": None,
+        "hard_stop": hard_stop(key_data.get("limit"), key_data.get("limit_reset"), cap),
     }
-    if ai is None:
-        out["state"] = "unknown"
+    # A missing count is unknown, never $0: reading it as zero would report a
+    # quiet day in the middle of a runaway loop.
+    if today is None:
         return out
-
-    out["total_spent"] = round(ai + fixed_total, 2)
-    # Straight-line pace: what the whole month costs if the rest of it goes
-    # like the part so far. Crude, and honest about being crude - a single
-    # expensive day early in the month reads as a warning, which is the
-    # direction worth erring in on a small budget.
-    out["projected_ai"] = round(ai / day * days, 2)
-
-    if budget is None:
-        out["state"] = "no budget set"
-    else:
-        allowance = round(budget - fixed_total, 2)
-        left = round(allowance - ai, 2)
-        out["ai_allowance"] = allowance
-        out["ai_left"] = left
-        remaining_days = days - day + 1
-        out["per_day_left"] = round(max(left, 0) / remaining_days, 2)
-        if left <= 0:
-            out["state"] = "over"
-        elif out["projected_ai"] > allowance:
-            out["state"] = "on pace to go over"
-        else:
-            out["state"] = "ok"
-
-    out["hard_stop"] = hard_stop(out["key_limit"], out["key_limit_reset"],
-                                 out["ai_allowance"])
+    if cap is None:
+        out["state"] = "no cap set"
+        return out
+    left = round(cap - today, 2)
+    out["ai_left_today"] = left
+    out["state"] = "over" if left <= 0 else "ok"
     return out
 
 
-def hard_stop(limit, reset, allowance):
-    """Whether OpenRouter itself will stop spending at the allowance.
+def hard_stop(limit, reset, cap):
+    """Whether OpenRouter itself will stop spending at the daily cap.
 
-    Only a cap that resets monthly is a monthly budget. A one-off cap is a
-    lifetime total that runs out in some month nobody chose; no cap at all
-    means only this script and the owner stand between an agent loop and
-    the card.
+    Only a cap that resets daily is a daily cap. A monthly one lets a bad day
+    spend a month's worth before it bites; a one-off cap is a lifetime total
+    that runs out on some day nobody chose; no cap at all means only this
+    script and the owner stand between an agent loop and the card.
     """
     if limit is None:
         return "none - OpenRouter will keep spending"
-    if reset != "monthly":
-        return f"${float(limit):.2f} lifetime cap, not monthly"
-    if allowance is not None and float(limit) > allowance + 0.005:
-        return f"${float(limit):.2f} monthly - above the ${allowance:.2f} AI allowance"
-    return f"${float(limit):.2f} monthly"
+    limit = float(limit)
+    if reset is None:
+        return f"${limit:.2f} lifetime cap, not daily"
+    if reset != "daily":
+        return f"${limit:.2f} {reset} - not a daily cap"
+    if cap is not None and limit > cap + 0.005:
+        return f"${limit:.2f} daily - above the ${cap:.2f} cap"
+    return f"${limit:.2f} daily"
 
 
 def lines(a):
     """The assessment as the few sentences a person reads."""
-    out = [f"Budget, {a['month']} (day {a['day']} of {a['days']}, UTC month)"]
+    out = [f"Budget, {a['day']} (UTC day - it turns over at 8pm Eastern)"]
     if a["state"] == "unknown":
-        out.append("  AI spend    unreadable - OpenRouter did not report usage_monthly")
+        out.append("  AI today    unreadable - OpenRouter did not report usage_daily")
+        out.append(f"  hard stop   {a['hard_stop']}")
         return out
-    fixed = ", ".join(f"{k} ${v:.2f}" for k, v in a["fixed"].items()) or "none"
-    out.append(f"  AI spend    ${a['ai_spent']:.2f} so far "
-               f"(on pace for ${a['projected_ai']:.2f} this month)")
-    out.append(f"  fixed       ${a['fixed_total']:.2f} ({fixed})")
-    out.append(f"  total       ${a['total_spent']:.2f}")
-    if a["budget"] is None:
-        out.append("  budget      not set - add monthly_budget to tasks/limits.json")
+    if a["cap"] is None:
+        out.append(f"  AI today    ${a['ai_today']:.2f}")
+        out.append("  cap         not set - add daily_ai_budget to tasks/limits.json")
     else:
-        out.append(f"  budget      ${a['budget']:.2f} a month, "
-                   f"leaving ${a['ai_allowance']:.2f} for AI")
-        out.append(f"  AI left     ${a['ai_left']:.2f} "
-                   f"(${a['per_day_left']:.2f} a day for the rest of the month)")
+        out.append(f"  AI today    ${a['ai_today']:.2f} of ${a['cap']:.2f} "
+                   f"(${max(a['ai_left_today'], 0):.2f} left)")
+    fixed = ", ".join(f"{k} ${v:.2f}" for k, v in a["fixed"].items()) or "none"
+    if a["ai_month"] is not None:
+        out.append(f"  AI month    ${a['ai_month']:.2f} so far in {a['month']}")
+    out.append(f"  fixed       ${a['fixed_total']:.2f} a month ({fixed})")
+    if a["month_at_most"] is not None:
+        out.append(f"  month max   ${a['month_at_most']:.2f} "
+                   f"({a['days_in_month']} days x ${a['cap']:.2f} + fixed)")
     out.append(f"  hard stop   {a['hard_stop']}")
     out.append(f"  verdict     {a['state']}")
     return out
@@ -177,7 +172,7 @@ def read(key=None):
     key = key if key is not None else preflight.openrouter_key()
     if not key:
         raise RuntimeError("no OPENROUTER_API_KEY found")
-    return assess(preflight.key_status(key), monthly_budget())
+    return assess(preflight.key_status(key), daily_budget())
 
 
 def main():
@@ -200,9 +195,9 @@ def main():
     if a.json:
         print(json.dumps(result, indent=2))
     elif a.cmd == "check":
-        left = result["ai_left"]
+        left = result["ai_left_today"]
         print(f"budget {result['state']}"
-              + (f" - ${left:.2f} of AI allowance left" if left is not None else ""))
+              + (f" - ${max(left, 0):.2f} of today's AI allowance left" if left is not None else ""))
     else:
         print("\n".join(lines(result)))
 

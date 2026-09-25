@@ -12785,11 +12785,11 @@ class EveryListingGetsAPinAndABoard(unittest.TestCase):
 
 
 class TheBudgetIsTheMonthsRealBill(unittest.TestCase):
-    """budget.py: OpenRouter's own monthly count against the owner's $25.
+    """budget.py: OpenRouter's own count for the day against the owner's cap.
 
-    The owner set the ceiling at $25 a month all-in until the ecosystem earns.
-    Each test is a way that number could be read wrong and nobody notice until
-    the card statement.
+    The owner set the cap at $1 of AI a day (2026-09-25), after a $25-a-month
+    all-in budget left nine cents a day for AI. Each test is a way that number
+    could be read wrong and nobody notice until the card statement.
     """
 
     @classmethod
@@ -12798,80 +12798,75 @@ class TheBudgetIsTheMonthsRealBill(unittest.TestCase):
 
     SEPT = datetime(2026, 9, 25, 12, tzinfo=timezone.utc)
 
-    def test_the_allowance_is_what_is_left_after_the_fixed_bills(self):
-        # Comparing AI spend against the whole $25 would let AI alone spend
-        # $25 while the droplet quietly takes the total to $37.
-        a = self.b.assess({"usage_monthly": 12.5}, 25.0, fixed={"droplet": 12.0}, now=self.SEPT)
-        self.assertEqual(a["ai_allowance"], 13.0)
-        self.assertEqual(a["ai_left"], 0.5)
-        self.assertEqual(a["total_spent"], 24.5)
-        a = self.b.assess({"usage_monthly": 13.2}, 25.0, fixed={"droplet": 12.0}, now=self.SEPT)
+    def test_the_cap_is_todays_spend_not_the_months(self):
+        # $12 spent across the month is fine; $1.05 spent today is not.
+        a = self.b.assess({"usage_daily": 0.40, "usage_monthly": 12.0}, 1.0, now=self.SEPT)
+        self.assertEqual((a["state"], a["ai_left_today"]), ("ok", 0.6))
+        a = self.b.assess({"usage_daily": 1.05, "usage_monthly": 1.05}, 1.0, now=self.SEPT)
         self.assertEqual(a["state"], "over")
+        a = self.b.assess({"usage_daily": 1.0}, 1.0, now=self.SEPT)
+        self.assertEqual(a["state"], "over", "exactly the cap is spent, not a cent left")
 
-    def test_a_fast_start_to_the_month_is_a_warning(self):
-        # $5 by the 10th of a 30-day month is $15 by the 30th: over a $13
-        # allowance, though only $5 has gone.
-        a = self.b.assess({"usage_monthly": 5.0}, 25.0, fixed={"droplet": 12.0},
-                          now=datetime(2026, 9, 10, tzinfo=timezone.utc))
-        self.assertEqual(a["projected_ai"], 15.0)
-        self.assertEqual(a["state"], "on pace to go over")
-        a = self.b.assess({"usage_monthly": 3.0}, 25.0, fixed={"droplet": 12.0},
-                          now=datetime(2026, 9, 10, tzinfo=timezone.utc))
-        self.assertEqual(a["state"], "ok")
-
-    def test_the_pace_uses_the_real_length_of_the_month(self):
-        a = self.b.assess({"usage_monthly": 1.4}, 25.0, fixed={},
+    def test_the_month_at_most_counts_every_day_and_the_droplet(self):
+        a = self.b.assess({"usage_daily": 0.1}, 1.0, fixed={"droplet": 12.0}, now=self.SEPT)
+        self.assertEqual(a["month_at_most"], 42.0)
+        a = self.b.assess({"usage_daily": 0.1}, 1.0, fixed={"droplet": 12.0},
                           now=datetime(2026, 2, 14, tzinfo=timezone.utc))
-        self.assertEqual(a["days"], 28)
-        self.assertEqual(a["projected_ai"], 2.8)
+        self.assertEqual(a["month_at_most"], 40.0, "February has 28 days")
 
     def test_a_missing_count_is_unknown_not_zero(self):
-        # Reading a missing usage_monthly as $0 would report a fresh month in
-        # the middle of a runaway loop.
-        for data in ({}, {"usage_monthly": None}, {"usage_monthly": "3.10"}):
-            a = self.b.assess(data, 25.0, now=self.SEPT)
+        # Reading a missing usage_daily as $0 would report a quiet day in the
+        # middle of a runaway loop.
+        for data in ({}, {"usage_daily": None}, {"usage_daily": "0.10"},
+                     {"usage_daily": True}, {"usage_monthly": 3.0}):
+            a = self.b.assess(data, 1.0, now=self.SEPT)
             self.assertEqual(a["state"], "unknown", data)
-            self.assertIsNone(a["ai_left"])
+            self.assertIsNone(a["ai_left_today"])
 
-    def test_only_a_monthly_cap_counts_as_the_hard_stop(self):
+    def test_only_a_daily_cap_counts_as_the_hard_stop(self):
         hs = self.b.hard_stop
-        self.assertIn("none", hs(None, None, 13.0))
-        self.assertIn("lifetime", hs(13.0, None, 13.0))
-        self.assertIn("lifetime", hs(13.0, "weekly", 13.0))
-        self.assertIn("above", hs(20.0, "monthly", 13.0))
-        self.assertEqual(hs(13.0, "monthly", 13.0), "$13.00 monthly")
+        self.assertIn("none", hs(None, None, 1.0))
+        self.assertIn("lifetime", hs(1.0, None, 1.0))
+        self.assertIn("not a daily cap", hs(30.0, "monthly", 1.0))
+        self.assertIn("not a daily cap", hs(7.0, "weekly", 1.0))
+        self.assertIn("above", hs(2.0, "daily", 1.0))
+        self.assertEqual(hs(1.0, "daily", 1.0), "$1.00 daily")
 
-    def test_the_budget_is_read_from_limits_json(self):
+    def test_the_cap_is_read_from_limits_json(self):
         with tempfile.TemporaryDirectory() as d:
             f = Path(d) / "limits.json"
-            f.write_text(json.dumps({"monthly_budget": 25}))
-            self.assertEqual(self.b.monthly_budget(f), 25.0)
-            for bad in ({}, {"monthly_budget": 0}, {"monthly_budget": "lots"}):
+            f.write_text(json.dumps({"daily_ai_budget": 1}))
+            self.assertEqual(self.b.daily_budget(f), 1.0)
+            for bad in ({}, {"daily_ai_budget": 0}, {"daily_ai_budget": "lots"},
+                        {"monthly_budget": 25}):
                 f.write_text(json.dumps(bad))
-                self.assertIsNone(self.b.monthly_budget(f), bad)
+                self.assertIsNone(self.b.daily_budget(f), bad)
         # And the tracked file carries the owner's number, so a fresh
-        # checkout is not silently budgetless.
-        self.assertEqual(self.b.monthly_budget(ROOT / "tasks" / "limits.json"), 25.0)
+        # checkout is not silently uncapped.
+        self.assertEqual(self.b.daily_budget(ROOT / "tasks" / "limits.json"), 1.0)
 
     def run_main(self, data, argv, key="placeholder-test-token-7c1f"):
         """main() with OpenRouter replaced by `data`; returns (code, stdout)."""
         pf = self.b.preflight
-        saved = (pf.openrouter_key, pf.key_status, self.b.monthly_budget, sys.argv)
+        saved = (pf.openrouter_key, pf.key_status, self.b.daily_budget, sys.argv)
         pf.openrouter_key = lambda: key
         pf.key_status = lambda k: data if not isinstance(data, Exception) else (_ for _ in ()).throw(data)
-        self.b.monthly_budget = lambda path=None: 25.0
+        self.b.daily_budget = lambda path=None: 1.0
         sys.argv = ["budget.py"] + argv
         out = io.StringIO()
         try:
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
                 code = self.b.main()
         finally:
-            pf.openrouter_key, pf.key_status, self.b.monthly_budget, sys.argv = saved
+            pf.openrouter_key, pf.key_status, self.b.daily_budget, sys.argv = saved
         return code, out.getvalue()
 
     def test_check_exits_over_only_when_the_allowance_is_spent(self):
-        self.assertEqual(self.run_main({"usage_monthly": 20.0}, ["check"])[0], self.b.OVER)
-        self.assertEqual(self.run_main({"usage_monthly": 1.0}, ["check"])[0], 0)
+        self.assertEqual(self.run_main({"usage_daily": 1.2, "usage_monthly": 3.0}, ["check"])[0],
+                         self.b.OVER)
+        self.assertEqual(self.run_main({"usage_daily": 0.3, "usage_monthly": 20.0}, ["check"])[0], 0)
+        # A day whose count is missing is not a day that is over.
+        self.assertEqual(self.run_main({"usage_monthly": 20.0}, ["check"])[0], 0)
         # Unreadable is its own answer: a network blip must not read as
         # "over" and silence the GM, nor as "fine".
         code, out = self.run_main(OSError("offline"), ["check", "--json"])
@@ -12881,7 +12876,7 @@ class TheBudgetIsTheMonthsRealBill(unittest.TestCase):
     def test_the_key_never_reaches_the_output(self):
         key = "placeholder-test-token-7c1f"
         for argv in (["--json"], [], ["check"]):
-            _, out = self.run_main({"usage_monthly": 2.0, "limit": 13, "limit_reset": "monthly",
+            _, out = self.run_main({"usage_daily": 0.2, "limit": 1, "limit_reset": "daily",
                                     "label": "ecosystem"}, argv, key=key)
             self.assertNotIn(key, out, argv)
             self.assertNotIn("7c1f", out, argv)

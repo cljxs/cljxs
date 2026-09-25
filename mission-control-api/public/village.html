@@ -2143,7 +2143,7 @@ function openHallPanel(){
   openAgent = HALL_DOOR;
   $('card').innerHTML = `
     <h2>${esc(HALL_DOOR)}</h2>
-    <div class="sub">the month's budget · what the ecosystem has learned</div>
+    <div class="sub">today's AI budget · what the ecosystem has learned</div>
     <div id="hallBudget"><div class="muted">reading the month…</div></div>
     <div class="sect">Knowledge</div>
     <div id="hallTabs" class="ptabs"></div>
@@ -2182,19 +2182,20 @@ function drawBudget(b){
       On the droplet: <b>python3 scripts/budget.py</b></div>`;
   }
   const cls = b.state === 'ok' ? 'up' : (b.state === 'over' ? 'down' : '');
+  const left = b.ai_left_today === null ? null : Math.max(b.ai_left_today, 0);
   return `<div class="grid">
-      <div class="stat"><div class="l">AI spent (${esc(b.month)})</div>
-        <div class="v num">${usd(b.ai_spent)}</div>
-        <div class="muted">on pace for ${usd(b.projected_ai)}</div></div>
-      <div class="stat"><div class="l">AI left of ${usd(b.ai_allowance)}</div>
-        <div class="v num ${cls}">${usd(b.ai_left)}</div>
-        <div class="muted">${usd(b.per_day_left)} a day, rest of month</div></div>
-      <div class="stat"><div class="l">Total this month</div>
-        <div class="v num">${usd(b.total_spent)}</div>
-        <div class="muted">of ${usd(b.budget)} · fixed ${usd(b.fixed_total)}</div></div>
-      <div class="stat"><div class="l">Verdict</div>
-        <div class="v ${cls}" style="font-size:15px">${esc(b.state)}</div>
-        <div class="muted">hard stop: ${esc(b.hard_stop || '—')}</div></div>
+      <div class="stat"><div class="l">AI today</div>
+        <div class="v num">${usd(b.ai_today)}</div>
+        <div class="muted">of ${usd(b.cap)} · day ends 8pm Eastern</div></div>
+      <div class="stat"><div class="l">Left today</div>
+        <div class="v num ${cls}">${usd(left)}</div>
+        <div class="muted">${esc(b.state)}</div></div>
+      <div class="stat"><div class="l">AI this month</div>
+        <div class="v num">${usd(b.ai_month)}</div>
+        <div class="muted">month at most ${usd(b.month_at_most)} with the droplet</div></div>
+      <div class="stat"><div class="l">Hard stop</div>
+        <div class="v" style="font-size:15px">${esc(b.hard_stop || '—')}</div>
+        <div class="muted">set on the OpenRouter key</div></div>
     </div>`;
 }
 

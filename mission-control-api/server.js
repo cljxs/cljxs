@@ -66,7 +66,7 @@ app.get('/tasks/limits', (req, res) => res.json(readLimits()));
 
 app.patch('/tasks/limits', (req, res) => {
   const allowed = ['single_task_cost_max', 'daily_total_spend_cap', 'daily_new_tasks_cap',
-                   'monthly_budget'];
+                   'daily_ai_budget'];
   const patch = {};
   for (const k of allowed) {
     if (req.body && req.body[k] !== undefined) {
