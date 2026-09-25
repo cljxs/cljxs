@@ -344,10 +344,6 @@ const PROPS_DOOR = 'Player Props';
 // the props hall.
 const HALL_DOOR = 'Town Hall';
 
-// Doors whose panels read nothing from /api/dashboard. The six-second pull
-// must not rebuild them - it would wipe a half-typed search or a reason box.
-const OWN_REFRESH = new Set([PROPS_DOOR, HALL_DOOR]);
-
 // The pond, one x-span per row. A rectangle of water in a field looks like a
 // swimming pool; the point of listing rows is that the edge can wander.
 const POND = { 16: [4, 7], 17: [3, 8], 18: [2, 9], 19: [1, 9], 20: [1, 8], 21: [2, 7], 22: [3, 6] };
@@ -2435,11 +2431,14 @@ async function pull(first) {
     $('chip').textContent = `${DATA.agents.length} agent${DATA.agents.length===1?'':'s'} · ${DATA.health.status}`;
     if (first) boot();
     else if (changed && scene) scene.scene.restart();   // a new agent gets a house
-    // Redraws an agent's panel with the fresh numbers. Not the props hall: it
-    // reads nothing from /api/dashboard, and rebuilding it every six seconds
-    // wiped the search box mid-word and blanked a running forecast's status.
-    // It refreshes itself while a run is going.
-    if (openAgent && !OWN_REFRESH.has(openAgent)) openPanel(openAgent);
+    // NO PANEL IS REDRAWN HERE. The pull keeps the village itself current -
+    // lamps, the notice board, a new agent's house - and an open panel shows
+    // what was true when it was opened. Redrawing every six seconds wiped the
+    // Props Hall's search box mid-word, and in the houses it re-fetched the
+    // gallery and ideas, jumped the scroll and could redraw under a finger
+    // about to press Approve. The owner asked for every house to behave like
+    // the Props Hall (2026-09-25): close and reopen for fresh numbers. A
+    // panel's own buttons reload what they changed.
   } catch (e) {
     $('chip').textContent = 'offline';
     if (first) $('boot').textContent = 'Cannot reach /api/dashboard — is mission-control-api running?';

@@ -38,6 +38,9 @@ number nobody gave it:
   * a proposal citing no fact, or a fact that does not exist, is dropped
   * a number in a proposal's `why` must appear in the facts it cites
   * departments and people must be real ones
+  * a proposal for an agent is in that agent's department and cites at
+    least one fact about it - "run Scout" once rested on a fact about Ace's
+    betting run and the knowledge count, and passed every other check
   * a proposal for an agent names one of that agent's TASKS, with a Scout
     idea that is really waiting when the task needs one; a proposal for an
     agent that has no tasks is dropped - that work belongs to the owner
@@ -278,6 +281,26 @@ def compile_facts(b, con, day, now=None, briefing=None, days=None, ideas=()):
 
 # ------------------------------------------------------------------ the call
 
+# Facts that belong to a department without naming one of its agents. The
+# store section is Fury's "## The store" (see briefing_facts), and waiting
+# ideas are written by idea_facts - both are the Etsy side.
+DEPT_MARKERS = {"etsy": ("The store:", "Scout idea #")}
+
+
+def department_of(agent):
+    return next((d for d, members in knowledge.DEPARTMENTS.items() if agent in members), None)
+
+
+def fact_departments(fact):
+    """The departments a fact is about: any whose agent it names, whole word,
+    plus the markers above. A fact about the budget or the knowledge store is
+    about no department in particular."""
+    out = {d for d, members in knowledge.DEPARTMENTS.items()
+           if any(re.search(rf"\b{re.escape(a)}\b", fact, re.I) for a in members)}
+    out |= {d for d, marks in DEPT_MARKERS.items() if fact.startswith(marks)}
+    return out
+
+
 def tasks_for(agent):
     return [t for t, spec in TASKS.items() if spec["who"] == agent]
 
@@ -323,7 +346,9 @@ proposal for an agent is sent to that agent as the task you named. An
 approved proposal for the owner is the owner's to-do.
 
 Rules - code checks the first four and drops any proposal that breaks them:
-1. Every proposal cites the facts it rests on, by id (F1, F2, ...).
+1. Every proposal cites the facts it rests on, by id (F1, F2, ...). A
+   proposal for an agent is in that agent's department and cites at least
+   one fact about that department.
 2. Do no arithmetic. Any number in a proposal's "why" must appear in a fact it cites.
 3. "dept" and "who" must come from the team list. "who" may also be "owner".
 4. A proposal for an agent names, in "task", one job that agent "can be sent".
@@ -467,6 +492,16 @@ def check_proposal(p, facts, waiting=frozenset()):
         ids.append(int(m.group(1)))
     if not ids:
         return None, "cites no facts"
+
+    if who != "owner":
+        home = department_of(who)
+        if dept != home:
+            return None, f"{who} works in {home}, not {dept}"
+        if not any(home in fact_departments(facts[i - 1]) for i in ids):
+            about = "; ".join(f"F{i} is about "
+                              f"{', '.join(sorted(fact_departments(facts[i - 1]))) or 'no department'}"
+                              for i in sorted(set(ids)))
+            return None, f"cites nothing about {home} ({about})"
 
     grounded = set()
     for i in ids:

@@ -11640,9 +11640,10 @@ class ThePropsHallIsNotRebuiltUnderYourFingers(unittest.TestCase):
     def test_the_six_second_pull_leaves_the_hall_alone(self):
         src = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
         pull = src.split("async function pull(", 1)[1].split("\nfunction ", 1)[0]
-        self.assertIn("!OWN_REFRESH.has(openAgent)", pull)
-        own = re.search(r"const OWN_REFRESH = new Set\(\[([^\]]*)\]\)", src).group(1)
-        self.assertIn("PROPS_DOOR", own)
+        # Since 2026-09-25 no panel is redrawn by the pull - every house works
+        # like the hall, at the owner's request.
+        self.assertNotIn("openPanel(", pull)
+        self.assertNotIn("Panel(", pull.split("NO PANEL IS REDRAWN HERE", 1)[1])
 
     def test_game_buttons_carry_data_not_code(self):
         # esc() does not escape quotes, so a fixture inside an inline onclick
@@ -13111,8 +13112,9 @@ class TheTownHallRunsTheScriptsItShows(unittest.TestCase):
 
     def test_the_hall_panel_is_not_rebuilt_by_the_pull(self):
         src = (self.API / "public" / "village.html").read_text()
-        own = re.search(r"const OWN_REFRESH = new Set\(\[([^\]]*)\]\)", src).group(1)
-        self.assertIn("HALL_DOOR", own)
+        pull = src.split("async function pull(", 1)[1].split("\nfunction ", 1)[0]
+        for rebuild in ("openPanel(", "openHallPanel(", "drawHall(", "loadHall("):
+            self.assertNotIn(rebuild, pull)
 
 
 class GMHarness:
@@ -13221,8 +13223,9 @@ class TheGMProposesOnlyWhatTheFactsSupport(GMHarness, unittest.TestCase):
         ok, why = self.gm.check_proposal(self.prop(who="timmy"), self.FACTS)
         self.assertIsNone(ok)
         self.assertIn("unknown person", why, "a retired agent is not on the team at all")
+        etsy = ["Needs you: 3 Scout ideas awaiting your review"]
         self.assertIsNotNone(self.gm.check_proposal(
-            self.prop(who="Scout", dept="etsy", task="run_scout"), self.FACTS)[0])
+            self.prop(who="Scout", dept="etsy", task="run_scout"), etsy)[0])
 
     def test_at_most_five_proposals_and_the_rest_are_dropped_with_a_reason(self):
         doc = {"summary": "s", "proposals": [self.prop(title=f"p{i}") for i in range(7)]}
@@ -13453,6 +13456,12 @@ class ApprovedProposalsAreSentToTheRightAgent(GMHarness, unittest.TestCase):
 
     IDEA = {"id": 7, "title": "Botanical library tote", "product": "tote", "status": "pending"}
 
+    # F2 is about Emily, so about Etsy - the same place it sits in the
+    # briefing the harness builds with Fury's own code.
+    FACTS = ["Needs you: 3 tasks pending in the queue",
+             "What happened: Emily — - built 3 totes; library tote failed",
+             "Budget: $0.49 of AI spent today of the $1.00 daily cap, $0.51 left."]
+
     def setUp(self):
         super().setUp()
         self.ideas = [dict(self.IDEA)]
@@ -13473,7 +13482,7 @@ class ApprovedProposalsAreSentToTheRightAgent(GMHarness, unittest.TestCase):
     def build(self, **kw):
         return self.prop(**dict({"title": "Build the library tote", "dept": "etsy", "who": "emily",
                                  "task": "build_idea", "idea": "#7",
-                                 "why": "It is waiting for review", "facts": ["F1"]}, **kw))
+                                 "why": "It is waiting for review", "facts": ["F2"]}, **kw))
 
     def decide(self, doc, n, verdict="approve", budget=None, code=0, err="", **kw):
         return self.gm.decide(doc["day"], n, verdict, "go", days=self.days,
@@ -13488,7 +13497,7 @@ class ApprovedProposalsAreSentToTheRightAgent(GMHarness, unittest.TestCase):
         cases = [
             (self.build(), None),
             (self.build(idea=7), None),
-            (self.prop(who="scout", dept="etsy", task="run_scout"), None),
+            (self.prop(who="scout", dept="etsy", task="run_scout", facts=["F2"]), None),
             (self.build(task="run_scout"), "emily can only be sent build_idea"),
             (self.build(task=None), "names no task for emily"),
             (self.build(task="edit_listing"), "emily can only be sent build_idea"),
@@ -13506,6 +13515,47 @@ class ApprovedProposalsAreSentToTheRightAgent(GMHarness, unittest.TestCase):
                 self.assertIn(reason, why, p)
         ok, _ = self.gm.check_proposal(self.build(), self.FACTS, waiting)
         self.assertEqual((ok["task"], ok["idea"]), ("build_idea", 7))
+
+    def test_an_agent_proposal_must_rest_on_its_own_department(self):
+        # 2026-09-25, from the Town Hall: "Scout: run the market search now",
+        # because Ace's night cycle found no candidates (F1) and no knowledge
+        # was waiting (F20). Every check passed; neither fact is about Etsy.
+        facts = ["What happened: Ace — - Passed on the 2026-09-24 night cycle because "
+                 "candidates.json was empty; no fresh injuries or market-moving events.",
+                 "Knowledge: 0 entries proposed and waiting for the owner.",
+                 "The store: 8 listing(s), 13 views, 0 favourites"]
+        seen = dict(title="Scout: Run market search now for new tote ideas", dept="etsy",
+                    who="scout", task="run_scout", action="Run Scout's market search now.",
+                    why="Night cycle left candidates empty; there are currently 0 proposed "
+                        "knowledge entries waiting.", facts=["F1", "F2"])
+        ok, why = self.gm.check_proposal(seen, facts)
+        self.assertIsNone(ok)
+        self.assertEqual(why, "cites nothing about etsy (F1 is about betting; "
+                              "F2 is about no department)")
+        ok, _ = self.gm.check_proposal(dict(seen, facts=["F3"], why="13 views, 0 favourites"), facts)
+        self.assertIsNotNone(ok, "the store's numbers are Etsy's")
+
+    def test_an_agent_works_in_its_own_department(self):
+        ok, why = self.gm.check_proposal(self.build(dept="ops"), self.FACTS, {7})
+        self.assertIsNone(ok)
+        self.assertEqual(why, "emily works in etsy, not ops")
+
+    def test_owner_proposals_may_rest_on_anything(self):
+        ok, _ = self.gm.check_proposal(self.prop(dept="etsy", facts=["F1"]), self.FACTS)
+        self.assertIsNotNone(ok)
+
+    def test_facts_are_placed_by_whole_names_and_by_the_briefings_own_sections(self):
+        fd = self.gm.fact_departments
+        self.assertEqual(fd("What happened: Emily — built a tote"), {"etsy"})
+        self.assertEqual(fd("The money: Belfort $10,095.12 (+0.95%)"), {"trading"})
+        self.assertEqual(fd("Needs you: `scout-cycle.service` failed"), {"etsy"})
+        self.assertEqual(fd("Budget: $0.49 of AI spent today"), set())
+        self.assertEqual(fd("Aces high and emilyish words"), set(), "whole words only")
+        self.assertEqual(fd("Scout idea #7 is waiting for review: Wave tote (tote)."), {"etsy"})
+        # The store marker is the heading Fury really writes, not a guess at it.
+        store = [f for f in self.gm.briefing_facts(self.briefing()) if f.startswith("The store:")]
+        self.assertTrue(store, "Fury's briefing has no store section to recognise")
+        self.assertEqual(fd(store[0]), {"etsy"})
 
     def test_the_team_the_model_reads_is_the_list_code_checks(self):
         team = self.gm.roster()
@@ -13551,7 +13601,7 @@ class ApprovedProposalsAreSentToTheRightAgent(GMHarness, unittest.TestCase):
         self.assertFalse(any("rm -rf" in c for c in cmd), "model text never reaches a command")
 
     def test_scout_is_started_the_way_its_timer_starts_it(self):
-        doc = self.morning(self.prop(who="scout", dept="etsy", task="run_scout"))
+        doc = self.morning(self.prop(who="scout", dept="etsy", task="run_scout", facts=["F2"]))
         self.decide(doc, 1)
         self.assertEqual(self.sent, [["systemctl", "start", "--no-block", "scout-cycle.service"]])
 
@@ -13597,7 +13647,7 @@ class ApprovedProposalsAreSentToTheRightAgent(GMHarness, unittest.TestCase):
 
     def test_tomorrow_the_gm_reads_what_happened(self):
         doc = self.morning(self.build(), self.prop(who="scout", dept="etsy", task="run_scout",
-                                                   title="Run Scout"))
+                                                   facts=["F2"], title="Run Scout"))
         self.decide(doc, 1)
         self.decide(doc, 2, budget=dict(self.OK_BUDGET, ai_left_today=0.0))
         _, _, calls = self.run_gm({"summary": "s"}, now=self.now + timedelta(days=1))
