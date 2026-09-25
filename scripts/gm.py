@@ -9,11 +9,19 @@ gm.py — the GM's morning: the day's facts in, a few proposals out.
     python3 scripts/gm.py decide 2026-09-26 1 approve --note "yes, today"
     python3 scripts/gm.py decide 2026-09-26 2 decline --note "not while totes-only"
 
-PROPOSE-ONLY. The owner decided (2026-09-25) that for the first month the GM
-writes proposals and nothing else. It creates no task, changes no agent's
-state and wakes no agent. A proposal is approved or declined in the Town Hall
-and the decision is kept, with its note, for the GM to read the next morning -
-that is how it learns what the owner wants.
+THE GM PROPOSES; THE OWNER DECIDES; CODE SENDS. The GM itself creates no
+task and wakes no agent. Each proposal is for the owner or for one agent, and
+an agent proposal must name one of that agent's TASKS - the only jobs that
+exist for it to be handed. When the owner approves an agent proposal, code
+sends that task at once (if today's budget has room and, for a build, the
+idea is still waiting); an owner proposal is the owner's to-do. Every
+decision is kept with its note, and with what happened when it was sent, for
+the GM to read the next morning - that is how it learns what the owner wants.
+
+Approving used to send nothing (the first-month rule, 2026-09-25). The owner
+changed it the same day, after the GM proposed jobs no agent could do -
+"Scout: edit the listing's tags" - which is also why an agent proposal must
+now name a task from the list rather than describe one.
 
 ONE MODEL CALL A DAY, AND ONLY WHEN THERE IS ROOM FOR IT. The GM runs after
 Fury and asks budget.py first: if today's AI allowance is spent, unreadable,
@@ -30,6 +38,9 @@ number nobody gave it:
   * a proposal citing no fact, or a fact that does not exist, is dropped
   * a number in a proposal's `why` must appear in the facts it cites
   * departments and people must be real ones
+  * a proposal for an agent names one of that agent's TASKS, with a Scout
+    idea that is really waiting when the task needs one; a proposal for an
+    agent that has no tasks is dropped - that work belongs to the owner
   * at most MAX_PROPOSALS proposals and MAX_KNOWLEDGE knowledge suggestions
     (zero for now - see MAX_KNOWLEDGE)
 
@@ -47,6 +58,7 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
 import sys
 import urllib.request
 from datetime import datetime, timezone
@@ -71,6 +83,7 @@ budget = _load("budget", "budget.py")          # the daily cap and today's spend
 knowledge = _load("knowledge", "knowledge.py") # departments, the store, briefs
 ea = budget.preflight.ea                       # the OpenRouter URL and cost_of()
 fury = _load("fury_collect", "fury-collect.py") # the system's state, and the briefing
+new_build = _load("emily_new_build", "emily-new-build.py")  # what a build is booked at
 
 # openai/gpt-5-mini is a slug captured from OpenRouter's own model list
 # (tests/fixtures/openrouter-models.json), not typed from memory. At its
@@ -101,6 +114,44 @@ SUMMARY_MAX = 700
 
 VERDICTS = ("approve", "decline")
 NOTE_MAX = 300
+
+# Each agent in a line, for the team the GM is shown. Every agent in
+# knowledge.DEPARTMENTS needs one; a test holds them together.
+ROLES = {
+    "emily":   "turns a Scout idea into a product draft (art, Printify product, "
+               "listing text). Never publishes.",
+    "scout":   "searches the Etsy market and proposes product ideas for the owner to review.",
+    "belfort": "paper-trades stocks on its own schedule.",
+    "ace":     "places paper sports bets on its own schedule.",
+    "fury":    "writes the morning briefing, in plain code.",
+}
+
+# THE ONLY JOBS AN APPROVED PROPOSAL CAN SEND. Each is a command that already
+# exists and already works from the Deck - nothing here asks an agent to do a
+# thing it has no instructions for. Emily's only task type is a product build;
+# a task handed to Scout would wake a model with no idea what to do with it,
+# so Scout's job is its own cycle, started the way its timer starts it.
+#
+# min_left is how much of today's AI allowance must be left before a task is
+# sent. A build uses Emily's own booking. Scout's run has its own gate
+# (should-run) and holds without waking a model when it has nothing to do.
+TASKS = {
+    "build_idea": {
+        "who": "emily", "needs_idea": True,
+        "does": 'build a product draft from one Scout idea waiting for review - '
+                'give its number as "idea"',
+        "min_left": new_build.COST_ESTIMATE,
+    },
+    "run_scout": {
+        "who": "scout", "needs_idea": False,
+        "does": "run Scout's market search now instead of at tomorrow's 08:00 run",
+        "min_left": MIN_LEFT,
+    },
+}
+
+# Long enough for a build's artwork to be drawn before Emily is queued - the
+# same path as Scout's Approve button, which the Deck gives sixty seconds.
+SEND_TIMEOUT = 110
 
 
 def model():
@@ -191,22 +242,63 @@ def decision_facts(doc):
             continue
         verb = "approved" if d["verdict"] == "approve" else "declined"
         note = f" Note: {d['note']}" if d.get("note") else ""
+        sent = p.get("sent") or {}
+        if sent.get("status") == "sent":
+            note += f" It was sent to {p['who']}."
+        elif sent:
+            note += f" It was not sent: {sent.get('detail')}"
         out.append(f"Last proposals ({doc['day']}): the owner {verb} \"{p['title']}\".{note}")
     return out or [f"Last proposals ({doc['day']}): there were none."]
 
 
-def compile_facts(b, con, day, now=None, briefing=None, days=None):
+def waiting_ideas():
+    """Scout's ideas still waiting on the owner, read now, by Scout's own rule."""
+    d, _ = fury.scout.load_ideas()
+    return [i for i in d["ideas"] if fury.scout.is_pending(i)]
+
+
+def idea_number(v):
+    """An idea number as the model may write it - 7, "7", "#7" - or None."""
+    m = re.fullmatch(r"#?\s*(\d{1,6})", str(v if v is not None else "").strip())
+    return int(m.group(1)) if m else None
+
+
+def idea_facts(ideas):
+    """One fact per waiting idea, with the number a build_idea task needs."""
+    return [f"Scout idea #{i.get('id')} is waiting for review: {i.get('title')} "
+            f"({i.get('product') or 'product not given'})." for i in ideas]
+
+
+def compile_facts(b, con, day, now=None, briefing=None, days=None, ideas=()):
     """Every fact the GM is given, read at the moment it runs."""
     text = (briefing or live_briefing)(now)
-    return (briefing_facts(text) + budget_facts(b) + knowledge_facts(con, now)
-            + decision_facts(previous(day, days)))
+    return (briefing_facts(text) + idea_facts(ideas) + budget_facts(b)
+            + knowledge_facts(con, now) + decision_facts(previous(day, days)))
 
 
 # ------------------------------------------------------------------ the call
 
+def tasks_for(agent):
+    return [t for t, spec in TASKS.items() if spec["who"] == agent]
+
+
 def roster():
-    return "\n".join(f"  {dept}: {', '.join(people) if people else '(no agent)'}"
-                     for dept, people in knowledge.DEPARTMENTS.items())
+    """The team as the GM is shown it: who each agent is and exactly what
+    each can be sent. Built from ROLES, DEPARTMENTS and TASKS, so the list
+    the model reads and the list code checks against cannot differ."""
+    out = []
+    for dept, members in knowledge.DEPARTMENTS.items():
+        for agent in members:
+            out.append(f"  {agent} ({dept}): {ROLES.get(agent, '')}")
+            jobs = tasks_for(agent)
+            for t in jobs:
+                out.append(f"      can be sent: {t} - {TASKS[t]['does']}")
+            if not jobs:
+                out.append(f"      nothing can be sent to {agent} - give that work to the owner")
+    out.append("  owner (any department): does everything else, including publishing "
+               "and editing listings. A proposal for the owner has no task.")
+    out.append("  departments: " + ", ".join(knowledge.DEPARTMENTS))
+    return "\n".join(out)
 
 
 def people():
@@ -226,25 +318,29 @@ def messages(facts, rules, day, cap):
     system = f"""You are the GM of a small business run by one owner and a few AI agents.
 Each morning you read the facts below and propose what should happen today.
 
-This month you are PROPOSE-ONLY. You write proposals; the owner approves or
-declines each one. You assign nothing and create no tasks.
+You propose; the owner approves or declines each proposal. An approved
+proposal for an agent is sent to that agent as the task you named. An
+approved proposal for the owner is the owner's to-do.
 
-Rules - code checks the first three and drops any proposal that breaks them:
+Rules - code checks the first four and drops any proposal that breaks them:
 1. Every proposal cites the facts it rests on, by id (F1, F2, ...).
 2. Do no arithmetic. Any number in a proposal's "why" must appear in a fact it cites.
 3. "dept" and "who" must come from the team list. "who" may also be "owner".
-4. At most {MAX_PROPOSALS} proposals, most valuable first. Fewer strong proposals
+4. A proposal for an agent names, in "task", one job that agent "can be sent".
+   build_idea also needs "idea": the number of a Scout idea the facts say is
+   waiting. If a job is not on an agent's list it is the owner's: set "who"
+   to "owner" and leave "task" out.
+5. At most {MAX_PROPOSALS} proposals, most valuable first. Fewer strong proposals
    beat many weak ones; none is a fine answer on a quiet day.
-5. A proposal is ONE concrete step a named person can take today that moves a
-   sale closer or fixes something that is broken. Not a new process, report,
-   scoring scheme, checklist or review of other proposals.
-6. Say nothing about the AI budget. It is capped at {cap_words} and code enforces it.
-7. Accepted knowledge marked "decision" is the owner's call. Do not propose
+6. A proposal is ONE concrete step that moves a sale closer or fixes
+   something that is broken. Not a new process, report, scoring scheme,
+   checklist or review of other proposals.
+7. Say nothing about the AI budget. It is capped at {cap_words} and code enforces it.
+8. Accepted knowledge marked "decision" is the owner's call. Do not propose
    reversing one unless a fact shows it is causing harm - then cite that fact.
-8. Apply a lesson or playbook only to what it names. A rule about all-over
+9. Apply a lesson or playbook only to what it names. A rule about all-over
    prints applies to all-over products, not to every tote. If no fact says what
    kind of product something is, do not assume.
-9. Only the owner can publish or edit a listing on Etsy. Agents cannot.
 10. Learn from the owner's decisions on the last proposals. Do not re-propose
     something declined unless a fact has changed.
 11. Keep "action" and "why" under {ASK_MAX} characters each.
@@ -252,11 +348,14 @@ Rules - code checks the first three and drops any proposal that breaks them:
 Reply with one JSON object and nothing else:
 {{"summary": "two or three sentences on the state of things",
   "proposals": [{{"title": "...", "dept": "...", "who": "...",
+                 "task": "build_idea | run_scout | leave out for the owner",
+                 "idea": 7,
                  "action": "what to do, concretely", "why": "...",
                  "facts": ["F1"]}}]{knowledge_shape}}}"""
     numbered = "\n".join(f"F{i} {f}" for i, f in enumerate(facts, 1))
     user = (f"Today is {day} (Eastern).\n\nFACTS\n{numbered}\n\n"
-            f"ACCEPTED KNOWLEDGE\n{rules or '(none accepted yet)'}\n\nTEAM\n{roster()}\n")
+            f"ACCEPTED KNOWLEDGE\n{rules or '(none accepted yet)'}\n\n"
+            f"TEAM - who each one is, and what each can be sent\n{roster()}\n")
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
@@ -315,7 +414,30 @@ def _text(v, limit):
     return t if len(t) <= limit else t[:limit - 1].rstrip() + "\u2026"
 
 
-def check_proposal(p, facts):
+def check_task(p, who, waiting):
+    """(task fields, None) or (None, reason). `waiting` is the set of Scout
+    idea numbers waiting for review right now."""
+    task = str(p.get("task") or "").strip().lower() or None
+    if who == "owner":
+        if task:
+            return None, "the owner is not sent tasks - an owner proposal has no task"
+        return {}, None
+    allowed = tasks_for(who)
+    if not allowed:
+        return None, f"nothing can be sent to {who} - that work is the owner's"
+    if task not in allowed:
+        return None, (f"{who} can only be sent {', '.join(allowed)}, not {task!r}"
+                      if task else f"names no task for {who} (one of: {', '.join(allowed)})")
+    out = {"task": task}
+    if TASKS[task]["needs_idea"]:
+        idea = idea_number(p.get("idea"))
+        if idea is None or idea not in waiting:
+            return None, (f"idea {p.get('idea')!r} is not a Scout idea waiting for review")
+        out["idea"] = idea
+    return out, None
+
+
+def check_proposal(p, facts, waiting=frozenset()):
     """(proposal, None) if it stands, (None, reason) if it is dropped."""
     if not isinstance(p, dict):
         return None, "not an object"
@@ -332,6 +454,9 @@ def check_proposal(p, facts):
     why = _text(p.get("why"), TEXT_MAX)
     if not action or not why:
         return None, "missing the action or the why"
+    task, reason = check_task(p, who, waiting)
+    if reason:
+        return None, reason
 
     cited = p.get("facts") if isinstance(p.get("facts"), list) else []
     ids = []
@@ -351,11 +476,11 @@ def check_proposal(p, facts):
         shown = ", ".join(f"{n:g}" for n in unfounded)
         return None, f"its why uses {shown}, which is in none of the facts it cites"
 
-    return {"title": title, "dept": dept, "who": who, "action": action, "why": why,
-            "facts": [f"F{i}" for i in sorted(set(ids))]}, None
+    return dict({"title": title, "dept": dept, "who": who, "action": action, "why": why,
+                 "facts": [f"F{i}" for i in sorted(set(ids))]}, **task), None
 
 
-def check_reply(doc, facts):
+def check_reply(doc, facts, waiting=frozenset()):
     """Split a parsed reply into what stands and what is dropped."""
     summary = _text(doc.get("summary"), SUMMARY_MAX)
     kept, dropped = [], []
@@ -365,7 +490,7 @@ def check_reply(doc, facts):
         if len(kept) >= MAX_PROPOSALS:
             dropped.append({"title": title, "reason": f"over the limit of {MAX_PROPOSALS}"})
             continue
-        ok, why = check_proposal(p, facts)
+        ok, why = check_proposal(p, facts, waiting)
         if ok:
             ok["n"] = len(kept) + 1
             ok["decision"] = None
@@ -426,10 +551,10 @@ def latest(days=None):
 
 
 def run(force=False, dry_run=False, now=None, days=None, con=None,
-        read_budget=None, call=None, key=None, briefing=None):
+        read_budget=None, call=None, key=None, briefing=None, ideas=None):
     """The morning. Returns (exit code, the day's record). Injectable parts
-    are what the tests replace: the budget read, the briefing, the model call
-    and the key."""
+    are what the tests replace: the budget read, the briefing, Scout's
+    waiting ideas, the model call and the key."""
     now = now or utc_now()
     day = et_time.day(et_time.to_eastern(now))
     existing = read_day(day_path(day, days))
@@ -459,7 +584,8 @@ def run(force=False, dry_run=False, now=None, days=None, con=None,
     own_con = con is None
     con = con or knowledge.connect()
     try:
-        facts = compile_facts(b, con, day, now, briefing, days)
+        waiting = (ideas or waiting_ideas)()
+        facts = compile_facts(b, con, day, now, briefing, days, waiting)
         rules = knowledge.brief(con, knowledge.EVERY)
         doc["facts"] = facts
         msgs = messages(facts, rules, day, b.get("cap"))
@@ -483,7 +609,9 @@ def run(force=False, dry_run=False, now=None, days=None, con=None,
             doc["reply_head"] = (text or "")[:500]
             return finish("failed", f"the reply could not be read: {exc}", 1)
 
-        doc["summary"], doc["proposals"], doc["dropped"], ks = check_reply(reply, facts)
+        numbers_waiting = {idea_number(i.get("id")) for i in waiting}
+        doc["summary"], doc["proposals"], doc["dropped"], ks = check_reply(
+            reply, facts, numbers_waiting)
         doc["knowledge"] = file_knowledge(con, ks)
         return finish("ran")
     finally:
@@ -491,9 +619,72 @@ def run(force=False, dry_run=False, now=None, days=None, con=None,
             con.close()
 
 
-def decide(day, n, verdict, note="", days=None, now=None):
-    """The owner's answer to one proposal. Changing one's mind is allowed;
-    the latest answer is the one kept."""
+def command_for(p, day):
+    """The one command that sends proposal `p`. Argument lists only - no
+    shell - so nothing the model wrote can become part of a command line
+    except a checked idea number."""
+    if p["task"] == "build_idea":
+        return [sys.executable, str(SCRIPTS / "scout-review.py"), "approve", str(p["idea"]),
+                "--reason", f"approved from the GM's proposal {day} #{p['n']}"]
+    if p["task"] == "run_scout":
+        return ["systemctl", "start", "--no-block", "scout-cycle.service"]
+    raise knowledge.Refused(f"no way to send task {p['task']!r}")
+
+
+def run_command(cmd):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=SEND_TIMEOUT)
+        return r.returncode, r.stdout, r.stderr
+    except subprocess.TimeoutExpired:
+        return 124, "", f"no answer within {SEND_TIMEOUT}s"
+    except OSError as exc:
+        return 127, "", str(exc)
+
+
+def _tail(text, n=3):
+    return " ".join(l.strip() for l in (text or "").strip().splitlines()[-n:] if l.strip())[:300]
+
+
+def send(p, day, read_budget=None, runner=None, ideas=None, now=None):
+    """Send an approved agent proposal. Returns what happened, as a record
+    kept on the proposal: {"status": "sent" | "not sent", "detail", "at"}.
+
+    Checked again at the moment of sending, not trusted from the morning:
+    the budget may be spent by now, and the idea may have been approved or
+    rejected in Scout's house since the GM read it.
+    """
+    at = (now or utc_now()).strftime("%Y-%m-%dT%H:%M:%SZ")
+    spec = TASKS[p["task"]]
+
+    def result(status, detail):
+        return {"status": status, "detail": detail, "at": at}
+
+    try:
+        b = (read_budget or budget.read)()
+    except Exception as exc:
+        return result("not sent", f"the budget could not be read ({exc})")
+    left = b.get("ai_left_today")
+    if b.get("state") != "ok" or left is None or left < spec["min_left"]:
+        shown = "unknown" if left is None else f"${max(left, 0):.2f}"
+        return result("not sent", f"today's AI allowance has {shown} left and this needs "
+                                  f"${spec['min_left']:.2f} - approve it again after the "
+                                  f"daily reset (7pm Central)")
+    if spec["needs_idea"]:
+        still = {idea_number(i.get("id")) for i in (ideas or waiting_ideas)()}
+        if p.get("idea") not in still:
+            return result("not sent", f"Scout idea #{p.get('idea')} is no longer waiting - "
+                                      f"it was approved or rejected since this morning")
+    code, out, err = (runner or run_command)(command_for(p, day))
+    if code == 0:
+        return result("sent", _tail(out) or "started")
+    return result("not sent", _tail(err) or _tail(out) or f"exit {code}")
+
+
+def decide(day, n, verdict, note="", days=None, now=None, **send_kw):
+    """The owner's answer to one proposal. Approving an agent proposal sends
+    its task; approving it again after a send that did not go through tries
+    again. What was sent cannot be declined afterwards - it is already on its
+    way, and the queue is where it can be stopped."""
     if verdict not in VERDICTS:
         raise knowledge.Refused(f"the verdict is approve or decline, not {verdict!r}")
     doc = read_day(day_path(day, days))
@@ -502,10 +693,17 @@ def decide(day, n, verdict, note="", days=None, now=None):
     match = [p for p in doc.get("proposals") or [] if p.get("n") == n]
     if not match:
         raise knowledge.Refused(f"{day} has no proposal {n}")
-    match[0]["decision"] = {"verdict": verdict, "note": _text(note, NOTE_MAX),
-                            "at": (now or utc_now()).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    p = match[0]
+    already = (p.get("sent") or {}).get("status") == "sent"
+    if verdict == "decline" and already:
+        raise knowledge.Refused(f"#{n} was already sent to {p['who']} - it cannot be "
+                                f"called back from here")
+    p["decision"] = {"verdict": verdict, "note": _text(note, NOTE_MAX),
+                     "at": (now or utc_now()).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    if verdict == "approve" and p.get("task") and not already:
+        p["sent"] = send(p, day, now=now, **send_kw)
     write_day(doc, days)
-    return match[0]
+    return p
 
 
 def lines(doc):
@@ -520,9 +718,12 @@ def lines(doc):
     for p in doc.get("proposals") or []:
         d = p.get("decision")
         state = "waiting" if not d else ("approved" if d["verdict"] == "approve" else "declined")
-        out.append(f"\n  {p['n']}. {p['title']}  [{p['dept']} / {p['who']}, {state}]")
+        job = f", task {p['task']}" + (f" idea #{p['idea']}" if p.get("idea") else "") if p.get("task") else ""
+        out.append(f"\n  {p['n']}. {p['title']}  [{p['dept']} / {p['who']}{job}, {state}]")
         out.append(f"     do:  {p['action']}")
         out.append(f"     why: {p['why']} ({', '.join(p['facts'])})")
+        if p.get("sent"):
+            out.append(f"     {p['sent']['status']}: {p['sent']['detail']}")
     for d in doc.get("dropped") or []:
         out.append(f"\n  dropped: {d['title']} - {d['reason']}")
     for k in doc.get("knowledge") or []:
@@ -559,7 +760,15 @@ def main(argv=None):
     except knowledge.Refused as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2
-    print(f"{a.verdict}d {a.day} #{p['n']}: {p['title']}")
+    said = f"{a.verdict}d {a.day} #{p['n']}: {p['title']}"
+    sent = p.get("sent")
+    if sent and sent["status"] == "sent" and a.verdict == "approve":
+        said += f" - sent to {p['who']}: {sent['detail']}"
+    elif sent and a.verdict == "approve":
+        said += f" - NOT sent to {p['who']}: {sent['detail']}"
+    elif a.verdict == "approve" and not p.get("task"):
+        said += " - this one is yours to do"
+    print(said)
     return 0
 
 

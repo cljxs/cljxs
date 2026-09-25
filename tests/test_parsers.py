@@ -13115,13 +13115,9 @@ class TheTownHallRunsTheScriptsItShows(unittest.TestCase):
         self.assertIn("HALL_DOOR", own)
 
 
-class TheGMProposesOnlyWhatTheFactsSupport(unittest.TestCase):
-    """gm.py: one model call a morning, checked by code before anyone sees it.
-
-    Propose-only for the first month (the owner's decision, 2026-09-25). The
-    GM reads facts code compiled, and code refuses any proposal that leans on
-    a fact it was not given or a number that is in none of the facts it cites.
-    """
+class GMHarness:
+    """The GM with every outside part replaced: budget, briefing, ideas,
+    model call and key. Shared by the GM test classes."""
 
     @classmethod
     def setUpClass(cls):
@@ -13133,6 +13129,7 @@ class TheGMProposesOnlyWhatTheFactsSupport(unittest.TestCase):
         t = Path(self.tmp.name)
         self.days = t / "days"
         self.brief_text = None
+        self.ideas = []
         self.con = self.gm.knowledge.connect(t / "k.db")
         self.now = datetime(2026, 9, 26, 13, 50, tzinfo=timezone.utc)   # 08:50 Central
 
@@ -13174,11 +13171,21 @@ class TheGMProposesOnlyWhatTheFactsSupport(unittest.TestCase):
                 raise reply
             return (reply if isinstance(reply, str) else json.dumps(reply or {})), \
                 {"cost": 0.0123, "prompt_tokens": 900, "completion_tokens": 400}
+        kw.setdefault("ideas", lambda: list(self.ideas))
         code, doc = self.gm.run(now=kw.pop("now", self.now), days=self.days, con=self.con,
                                 read_budget=(budget if callable(budget) else (lambda: budget or self.OK_BUDGET)),
                                 call=call or fake, key="placeholder",
                                 briefing=kw.pop("briefing", lambda now: self.brief_text or ""), **kw)
         return code, doc, calls
+
+
+class TheGMProposesOnlyWhatTheFactsSupport(GMHarness, unittest.TestCase):
+    """gm.py: one model call a morning, checked by code before anyone sees it.
+
+    Propose-only for the first month (the owner's decision, 2026-09-25). The
+    GM reads facts code compiled, and code refuses any proposal that leans on
+    a fact it was not given or a number that is in none of the facts it cites.
+    """
 
     # --- the checks on a reply -------------------------------------------
 
@@ -13211,8 +13218,11 @@ class TheGMProposesOnlyWhatTheFactsSupport(unittest.TestCase):
 
     def test_departments_and_people_must_be_real(self):
         self.assertIsNone(self.gm.check_proposal(self.prop(dept="marketing"), self.FACTS)[0])
-        self.assertIsNone(self.gm.check_proposal(self.prop(who="timmy"), self.FACTS)[0])
-        self.assertIsNotNone(self.gm.check_proposal(self.prop(who="Emily", dept="etsy"), self.FACTS)[0])
+        ok, why = self.gm.check_proposal(self.prop(who="timmy"), self.FACTS)
+        self.assertIsNone(ok)
+        self.assertIn("unknown person", why, "a retired agent is not on the team at all")
+        self.assertIsNotNone(self.gm.check_proposal(
+            self.prop(who="Scout", dept="etsy", task="run_scout"), self.FACTS)[0])
 
     def test_at_most_five_proposals_and_the_rest_are_dropped_with_a_reason(self):
         doc = {"summary": "s", "proposals": [self.prop(title=f"p{i}") for i in range(7)]}
@@ -13429,3 +13439,174 @@ class OneRuleForAPendingIdea(unittest.TestCase):
             self.assertEqual(fury.state_summary(d)["ideas_pending"], 2)
         src = (SCRIPTS / "fury-collect.py").read_text()
         self.assertNotIn('"pending") == "pending"', src, "Fury restates the rule again")
+
+
+class ApprovedProposalsAreSentToTheRightAgent(GMHarness, unittest.TestCase):
+    """An agent proposal names one of that agent's real jobs, and approving it
+    sends that job - checked again at the moment of sending.
+
+    2026-09-25: the GM proposed "Scout: edit the listing's tags" and "Emily:
+    run layout --folded" - jobs neither agent can be handed. The owner asked
+    for approvals to go to the agent instead of to them, so the list of what
+    can be sent became code, and the model may only pick from it.
+    """
+
+    IDEA = {"id": 7, "title": "Botanical library tote", "product": "tote", "status": "pending"}
+
+    def setUp(self):
+        super().setUp()
+        self.ideas = [dict(self.IDEA)]
+        self.sent = []
+
+    def runner(self, code=0, out="queued task #41 for emily -> builds/botanical-library-tote", err=""):
+        def run(cmd):
+            self.sent.append(cmd)
+            return code, out, err
+        return run
+
+    def morning(self, *proposals):
+        self.briefing()
+        _, doc, _ = self.run_gm({"summary": "s", "proposals": list(proposals)})
+        self.assertEqual(doc["dropped"], [], "the test's own proposals must stand")
+        return doc
+
+    def build(self, **kw):
+        return self.prop(**dict({"title": "Build the library tote", "dept": "etsy", "who": "emily",
+                                 "task": "build_idea", "idea": "#7",
+                                 "why": "It is waiting for review", "facts": ["F1"]}, **kw))
+
+    def decide(self, doc, n, verdict="approve", budget=None, code=0, err="", **kw):
+        return self.gm.decide(doc["day"], n, verdict, "go", days=self.days,
+                              read_budget=lambda: budget or self.OK_BUDGET,
+                              runner=self.runner(code=code, err=err),
+                              ideas=lambda: list(self.ideas), **kw)
+
+    # --- what may be proposed -------------------------------------------
+
+    def test_only_an_agents_own_jobs_can_be_proposed_for_it(self):
+        waiting = {7}
+        cases = [
+            (self.build(), None),
+            (self.build(idea=7), None),
+            (self.prop(who="scout", dept="etsy", task="run_scout"), None),
+            (self.build(task="run_scout"), "emily can only be sent build_idea"),
+            (self.build(task=None), "names no task for emily"),
+            (self.build(task="edit_listing"), "emily can only be sent build_idea"),
+            (self.build(idea=8), "not a Scout idea waiting"),
+            (self.build(idea=None), "not a Scout idea waiting"),
+            (self.prop(who="belfort", dept="trading"), "nothing can be sent to belfort"),
+            (self.prop(who="owner", task="build_idea", idea=7), "the owner is not sent tasks"),
+        ]
+        for p, reason in cases:
+            ok, why = self.gm.check_proposal(p, self.FACTS, waiting)
+            if reason is None:
+                self.assertIsNotNone(ok, (p, why))
+            else:
+                self.assertIsNone(ok, p)
+                self.assertIn(reason, why, p)
+        ok, _ = self.gm.check_proposal(self.build(), self.FACTS, waiting)
+        self.assertEqual((ok["task"], ok["idea"]), ("build_idea", 7))
+
+    def test_the_team_the_model_reads_is_the_list_code_checks(self):
+        team = self.gm.roster()
+        blocks, current = {}, None
+        for line in team.splitlines():
+            m = re.match(r"  (\w+) \(", line)
+            if m:
+                current = m.group(1)
+            elif current:
+                blocks.setdefault(current, []).append(line)
+        for task, spec in self.gm.TASKS.items():
+            self.assertTrue(any(f"can be sent: {task}" in l for l in blocks[spec["who"]]), task)
+            for other, lines in blocks.items():
+                if other != spec["who"]:
+                    self.assertFalse(any(f"can be sent: {task}" in l for l in lines), (task, other))
+        for members in self.gm.knowledge.DEPARTMENTS.values():
+            for agent in members:
+                self.assertIn(agent, self.gm.ROLES, f"{agent} has no role line")
+                if not self.gm.tasks_for(agent):
+                    self.assertIn(f"nothing can be sent to {agent}", team)
+
+    def test_waiting_ideas_are_facts_with_their_numbers(self):
+        doc = self.morning(self.build())
+        self.assertIn("Scout idea #7 is waiting for review: Botanical library tote (tote).",
+                      doc["facts"])
+        self.assertEqual(doc["proposals"][0]["idea"], 7)
+
+    def test_a_build_is_booked_at_emilys_own_estimate(self):
+        self.assertEqual(self.gm.TASKS["build_idea"]["min_left"], self.gm.new_build.COST_ESTIMATE)
+        src = (SCRIPTS / "emily-new-build.py").read_text()
+        self.assertIn('"--cost-estimate", type=float, default=COST_ESTIMATE', src)
+
+    # --- sending ----------------------------------------------------------
+
+    def test_approving_sends_the_one_command_for_that_job(self):
+        doc = self.morning(self.build(title="Build it; rm -rf / `x`"))
+        p = self.decide(doc, 1)
+        self.assertEqual(p["sent"]["status"], "sent")
+        self.assertEqual(len(self.sent), 1)
+        cmd = self.sent[0]
+        self.assertEqual(cmd[1:4], [str(SCRIPTS / "scout-review.py"), "approve", "7"])
+        self.assertEqual(cmd[4:], ["--reason", f"approved from the GM's proposal {doc['day']} #1"])
+        self.assertFalse(any("rm -rf" in c for c in cmd), "model text never reaches a command")
+
+    def test_scout_is_started_the_way_its_timer_starts_it(self):
+        doc = self.morning(self.prop(who="scout", dept="etsy", task="run_scout"))
+        self.decide(doc, 1)
+        self.assertEqual(self.sent, [["systemctl", "start", "--no-block", "scout-cycle.service"]])
+
+    def test_nothing_is_sent_without_room_in_todays_budget(self):
+        doc = self.morning(self.build())
+        short = dict(self.OK_BUDGET, ai_left_today=self.gm.new_build.COST_ESTIMATE - 0.01)
+        p = self.decide(doc, 1, budget=short)
+        self.assertEqual(p["sent"]["status"], "not sent")
+        self.assertIn("7pm Central", p["sent"]["detail"])
+        self.assertEqual(self.sent, [])
+        self.assertEqual(p["decision"]["verdict"], "approve", "the approval itself stands")
+
+    def test_an_idea_decided_since_the_morning_is_not_built(self):
+        doc = self.morning(self.build())
+        self.ideas = []                          # approved in Scout's house meanwhile
+        p = self.decide(doc, 1)
+        self.assertEqual(p["sent"]["status"], "not sent")
+        self.assertIn("no longer waiting", p["sent"]["detail"])
+        self.assertEqual(self.sent, [])
+
+    def test_a_failed_send_says_why_and_can_be_tried_again(self):
+        doc = self.morning(self.build())
+        p = self.decide(doc, 1, code=3, err="Emily has started 3 build(s) today\nThe cap resets at midnight Eastern.")
+        self.assertEqual(p["sent"]["status"], "not sent")
+        self.assertIn("cap resets", p["sent"]["detail"])
+        p = self.decide(doc, 1)
+        self.assertEqual(p["sent"]["status"], "sent")
+        self.assertEqual(len(self.sent), 2)
+
+    def test_what_was_sent_is_not_sent_twice_or_called_back(self):
+        doc = self.morning(self.build())
+        self.decide(doc, 1)
+        self.decide(doc, 1)
+        self.assertEqual(len(self.sent), 1, "approving again must not queue a second build")
+        with self.assertRaises(self.gm.knowledge.Refused):
+            self.decide(doc, 1, verdict="decline")
+
+    def test_an_owner_proposal_sends_nothing(self):
+        doc = self.morning(self.prop())
+        p = self.decide(doc, 1)
+        self.assertNotIn("sent", p)
+        self.assertEqual(self.sent, [])
+
+    def test_tomorrow_the_gm_reads_what_happened(self):
+        doc = self.morning(self.build(), self.prop(who="scout", dept="etsy", task="run_scout",
+                                                   title="Run Scout"))
+        self.decide(doc, 1)
+        self.decide(doc, 2, budget=dict(self.OK_BUDGET, ai_left_today=0.0))
+        _, _, calls = self.run_gm({"summary": "s"}, now=self.now + timedelta(days=1))
+        user = calls[0][1]["content"]
+        self.assertIn('approved "Build the library tote". Note: go It was sent to emily.', user)
+        self.assertIn('approved "Run Scout". Note: go It was not sent: today', user)
+
+    def test_the_deck_waits_longer_than_a_send(self):
+        js = (ROOT / "mission-control-api" / "townhall.js").read_text()
+        ms = int(re.search(r"DECIDE_TIMEOUT_MS = (\d+)", js).group(1))
+        self.assertGreater(ms, self.gm.SEND_TIMEOUT * 1000)
+        self.assertIn("DECIDE_TIMEOUT_MS));", js)

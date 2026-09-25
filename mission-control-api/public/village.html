@@ -2165,7 +2165,7 @@ function openHallPanel(){
   };
   $('hallGm').onclick = e => {
     const b = e.target.closest('[data-gm]');
-    if (b) actOnProposal(b.dataset.day, b.dataset.gm, b.dataset.verb);
+    if (b) actOnProposal(b.dataset.day, b.dataset.gm, b.dataset.verb, !!b.dataset.task);
   };
   loadHall();
 }
@@ -2222,22 +2222,37 @@ function drawGm(g){
   const facts = g.facts || [];
   const cards = (g.proposals || []).map(p => {
     const d = p.decision;
+    const sent = p.sent;
     const state = !d ? '' : d.verdict === 'approve'
       ? '<span class="pill ok">approved</span>' : '<span class="pill warn">declined</span>';
+    const who = p.who.charAt(0).toUpperCase() + p.who.slice(1);
+    const job = p.task
+      ? `<span class="pill">sends: ${esc(p.task)}${p.idea ? ' #' + esc(p.idea) : ''}</span>`
+      : '<span class="pill">your to-do</span>';
+    const sentLine = !sent ? '' : sent.status === 'sent'
+      ? `<div class="w" style="color:var(--up)">Sent to ${esc(who)}: ${esc(sent.detail)}</div>`
+      : `<div class="w" style="color:#f59e0b">Not sent: ${esc(sent.detail)}</div>`;
     const rests = (p.facts || []).map(f => {
       const i = Number(String(f).slice(1)) - 1;
       return `<div class="w">${esc(f)}: ${esc(facts[i] || '?')}</div>`;
     }).join('');
-    const btns = `<div class="acts">
-        <button class="yes" data-gm="${p.n}" data-day="${esc(g.day)}" data-verb="approve">Approve</button>
+    // Once sent, it is on its way: the page offers nothing that pretends to
+    // call it back. A send that did not go through can be approved again.
+    const approveLabel = p.task
+      ? (sent && sent.status !== 'sent' ? `Try sending to ${esc(who)} again` : `Approve & send to ${esc(who)}`)
+      : 'Approve (my to-do)';
+    const btns = sent && sent.status === 'sent' ? '' : `<div class="acts">
+        <button class="yes" data-gm="${p.n}" data-day="${esc(g.day)}" data-verb="approve"
+                data-task="${p.task ? 1 : ''}">${approveLabel}</button>
         <button class="no" data-gm="${p.n}" data-day="${esc(g.day)}" data-verb="decline">Decline</button></div>`;
     return `<div class="idea">
       <div class="t">${p.n}. ${esc(p.title)}</div>
-      <div class="ktags"><span class="pill">${esc(p.dept)}</span><span class="pill">${esc(p.who)}</span>${state}</div>
+      <div class="ktags"><span class="pill">${esc(p.dept)}</span><span class="pill">${esc(p.who)}</span>${job}${state}</div>
       <div class="d"><b>Do:</b> ${esc(p.action)}</div>
       <div class="d"><b>Why:</b> ${esc(p.why)}</div>
       ${rests}
       ${d && d.note ? `<div class="w">your note: ${esc(d.note)}</div>` : ''}
+      ${sentLine}
       ${btns}
     </div>`;
   }).join('');
@@ -2253,16 +2268,24 @@ function drawGm(g){
     (cards || '<div class="muted">No proposals this morning.</div>') + dropped + know;
 }
 
-async function actOnProposal(day, n, verdict){
+async function actOnProposal(day, n, verdict, sends){
   if (hallBusy) return;
-  const ask = verdict === 'approve'
-    ? 'Note for the GM (optional) - what you will do, or any condition:'
-    : 'Why not? The GM reads this tomorrow so it does not propose it again.';
+  const ask = verdict === 'decline'
+    ? 'Why not? The GM reads this tomorrow so it does not propose it again.'
+    : sends
+    ? 'This sends the job now. Note for the GM (optional):'
+    : 'This one is yours to do. Note for the GM (optional):';
   const note = window.prompt(ask, '');
   if (note === null) return;
   if (verdict === 'decline' && !note.trim()) return;
   hallBusy = true;
   document.querySelectorAll('#hallGm .acts button').forEach(b => b.disabled = true);
+  // A build draws its artwork before Emily is queued - up to a couple of
+  // minutes - so say so rather than look frozen.
+  if (sends && verdict === 'approve') {
+    const card = document.querySelector(`#hallGm [data-gm="${n}"]`);
+    if (card) card.textContent = 'Sending…';
+  }
   try {
     const r = await fetch(`/api/gm/${encodeURIComponent(day)}/${encodeURIComponent(n)}/${verdict}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2270,6 +2293,7 @@ async function actOnProposal(day, n, verdict){
     });
     const j = await r.json();
     if (!r.ok || j.ok === false) alert((j.error || 'That did not work').slice(0, 300));
+    else if (sends && verdict === 'approve') alert((j.message || '').slice(0, 400));
   } catch (e) {
     alert('Could not reach the API: ' + e.message);
   } finally {

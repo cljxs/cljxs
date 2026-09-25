@@ -28,6 +28,9 @@ const WHY_MAX = 300;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const N_RE = /^\d{1,2}$/;
 const VERDICTS = ['approve', 'decline'];
+// gm.py gives a send 110 seconds (SEND_TIMEOUT); the route outlasts it so the
+// page hears gm.py's own answer rather than a killed process.
+const DECIDE_TIMEOUT_MS = 130000;
 
 function run(script, args, timeout = 30000) {
   return new Promise(resolve => {
@@ -69,15 +72,17 @@ function register(app) {
     });
   });
 
-  // The owner's answer to one of the GM's proposals. Propose-only: this
-  // records the decision for the GM to read tomorrow, and does nothing else.
+  // The owner's answer to one of the GM's proposals. gm.py records it and,
+  // for an approved agent proposal, sends that agent's task - a build draws
+  // its artwork before Emily is queued, so this waits as long as gm.py's own
+  // send timeout and a little more.
   app.post('/api/gm/:day/:n/:verdict', async (req, res) => {
     const { day, n, verdict } = req.params;
     if (!DAY_RE.test(day) || !N_RE.test(n) || !VERDICTS.includes(verdict)) {
       return res.status(400).json({ ok: false, error: 'bad request' });
     }
     const note = String((req.body && req.body.note) || '').trim().slice(0, WHY_MAX);
-    reply(res, await run(GM, ['decide', day, n, verdict, '--note', note]));
+    reply(res, await run(GM, ['decide', day, n, verdict, '--note', note], DECIDE_TIMEOUT_MS));
   });
 
   for (const verb of ['accept', 'renew']) {

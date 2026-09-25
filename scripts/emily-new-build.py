@@ -53,6 +53,12 @@ def daily_cap(today=None):
         pass
     return DAILY_DRAFT_CAP, False
 
+# What one build is booked at against the task queue's spend caps: the
+# artwork plus Emily's run. An estimate, not a measurement - the real cost is
+# on OpenRouter's bill. gm.py reads it too, to decide whether today's AI
+# allowance has room before it sends a build.
+COST_ESTIMATE = 0.25
+
 # Distinct from a failure, so scout-review can say how to override the cap
 # for the one idea that hit it, rather than repeat a flag the Deck cannot pass.
 CAP_REACHED = 3
@@ -194,7 +200,7 @@ def main():
                     help="JSON from the approved idea: the measured phrase, "
                          "supply, price band and the market's own tags")
     ap.add_argument("--priority", type=int, default=0)
-    ap.add_argument("--cost-estimate", type=float, default=0.25)
+    ap.add_argument("--cost-estimate", type=float, default=COST_ESTIMATE)
     ap.add_argument("--force", action="store_true",
                     help="bypass the daily draft cap (an explicit go-ahead)")
     a = ap.parse_args()
