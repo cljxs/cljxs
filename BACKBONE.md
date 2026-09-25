@@ -58,6 +58,11 @@ Literal routes (`/tasks/stats`, `/tasks/limits`) are registered before
 
     { "single_task_cost_max": 5.00, "daily_total_spend_cap": 10.00, "daily_new_tasks_cap": 50 }
 
+`monthly_budget` (dollars, everything - droplet and AI) is not a task cap:
+`scripts/budget.py` reads OpenRouter's own month-to-date count against it,
+and the Town Hall on the village square shows the result. The provider-side
+hard stop is a monthly credit limit on the OpenRouter key itself.
+
 `POST /tasks` returns **429** if the new task's `cost_estimate` exceeds
 `single_task_cost_max`, or if today's committed spend or task count would
 break a daily cap. A task's contribution to the daily total is its

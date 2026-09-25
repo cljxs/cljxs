@@ -96,6 +96,7 @@
   .build .bs{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
   .pill{font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;border-radius:5px;
     padding:2px 5px;border:1px solid var(--line);color:var(--mute)}
+  .ktags{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
   .pill.ok{border-color:rgba(52,211,153,.45);color:var(--up)}
   .pill.warn{border-color:rgba(245,158,11,.45);color:#f59e0b}
   #lb{position:fixed;inset:0;z-index:25;display:none;align-items:center;justify-content:center;
@@ -337,6 +338,15 @@ const PLOTS = [
 // agent added later cannot be given the same ground.
 const PROPS_PLOT = { x: 31.0, y: 15.6 };
 const PROPS_DOOR = 'Player Props';
+
+// The town square's notice board doubles as the Town Hall: the month's budget
+// and the knowledge the owner accepts. A door with no agent behind it, like
+// the props hall.
+const HALL_DOOR = 'Town Hall';
+
+// Doors whose panels read nothing from /api/dashboard. The six-second pull
+// must not rebuild them - it would wipe a half-typed search or a reason box.
+const OWN_REFRESH = new Set([PROPS_DOOR, HALL_DOOR]);
 
 // The pond, one x-span per row. A rectangle of water in a field looks like a
 // swimming pool; the point of listing rows is that the edge can wander.
@@ -1066,6 +1076,7 @@ function create() {
 
   // ---- one house per agent, auto-discovered ----
   doors = [];
+  doors.push({ name: HALL_DOOR, x: board.x, y: board.y + 14 });
   const agents = DATA.agents || [];
   const HW = 128, HH = 116;
   const statusColor = { active: 0x34d399, idle: 0x22d3ee, stale: 0xfbbf24, waiting: 0x8791a8 };
@@ -1288,6 +1299,7 @@ function openPanel(name) {
   // The hall is a door without an agent behind it. Checked before the lookup
   // below, which would otherwise find nothing and silently do nothing.
   if (name === PROPS_DOOR) return openPropsPanel();
+  if (name === HALL_DOOR) return openHallPanel();
   const a = (DATA.agents || []).find(x => x.name === name);
   if (!a) return;
   openAgent = name;
@@ -2121,6 +2133,150 @@ async function loadAceLedger(){
 
 function closeDoc(){ $('doc').classList.remove('on'); }
 
+/* ---------------- the town hall: budget and shared knowledge ---------------- */
+
+let HALL = null;
+let hallTab = 'proposed';
+let hallBusy = false;
+
+function openHallPanel(){
+  openAgent = HALL_DOOR;
+  $('card').innerHTML = `
+    <h2>${esc(HALL_DOOR)}</h2>
+    <div class="sub">the month's budget · what the ecosystem has learned</div>
+    <div id="hallBudget"><div class="muted">reading the month…</div></div>
+    <div class="sect">Knowledge</div>
+    <div id="hallTabs" class="ptabs"></div>
+    <div id="hallBody"><div class="muted">loading…</div></div>
+    <button id="close">Close</button>`;
+  $('card').className = 'wide';
+  $('panel').style.display = 'flex';
+  $('close').onclick = closePanel;
+  // One listener each; ids travel in data attributes, never in onclick strings.
+  $('hallTabs').onclick = e => {
+    const b = e.target.closest('[data-tab]');
+    if (b) { hallTab = b.dataset.tab; drawHall(); }
+  };
+  $('hallBody').onclick = e => {
+    const b = e.target.closest('[data-k]');
+    if (b) actOnKnowledge(b.dataset.k, b.dataset.verb);
+  };
+  loadHall();
+}
+
+async function loadHall(){
+  try {
+    const r = await fetch('/api/townhall', { cache: 'no-store' });
+    HALL = await r.json();
+  } catch (e) {
+    HALL = null;
+  }
+  if (openAgent === HALL_DOOR) drawHall();
+}
+
+const usd = v => (v === null || v === undefined) ? '—' : '$' + Number(v).toFixed(2);
+
+function drawBudget(b){
+  if (!b || b.state === 'unreadable' || b.state === 'unknown') {
+    return `<div class="verdict">Budget unreadable${b && b.error ? ' — ' + esc(b.error) : ''}.
+      On the droplet: <b>python3 scripts/budget.py</b></div>`;
+  }
+  const cls = b.state === 'ok' ? 'up' : (b.state === 'over' ? 'down' : '');
+  return `<div class="grid">
+      <div class="stat"><div class="l">AI spent (${esc(b.month)})</div>
+        <div class="v num">${usd(b.ai_spent)}</div>
+        <div class="muted">on pace for ${usd(b.projected_ai)}</div></div>
+      <div class="stat"><div class="l">AI left of ${usd(b.ai_allowance)}</div>
+        <div class="v num ${cls}">${usd(b.ai_left)}</div>
+        <div class="muted">${usd(b.per_day_left)} a day, rest of month</div></div>
+      <div class="stat"><div class="l">Total this month</div>
+        <div class="v num">${usd(b.total_spent)}</div>
+        <div class="muted">of ${usd(b.budget)} · fixed ${usd(b.fixed_total)}</div></div>
+      <div class="stat"><div class="l">Verdict</div>
+        <div class="v ${cls}" style="font-size:15px">${esc(b.state)}</div>
+        <div class="muted">hard stop: ${esc(b.hard_stop || '—')}</div></div>
+    </div>`;
+}
+
+function drawHall(){
+  if (openAgent !== HALL_DOOR) return;
+  if (!HALL) {
+    $('hallBudget').innerHTML = '';
+    $('hallBody').innerHTML = '<div class="verdict">Cannot reach /api/townhall.</div>';
+    return;
+  }
+  $('hallBudget').innerHTML = drawBudget(HALL.budget);
+
+  const k = HALL.knowledge || {};
+  const all = k.entries || [];
+  const due = new Set(k.due || []);
+  const counts = { proposed: 0, accepted: 0, retired: 0 };
+  all.forEach(e => { counts[e.status] = (counts[e.status] || 0) + 1; });
+  $('hallTabs').innerHTML = ['proposed', 'accepted', 'retired'].map(t =>
+    `<button class="ptab${t === hallTab ? ' on' : ''}" data-tab="${t}">${t}
+       <span class="ptn">${counts[t] || 0}</span></button>`).join('');
+
+  if (k.error) {
+    $('hallBody').innerHTML = `<div class="verdict">${esc(k.error)}</div>`;
+    return;
+  }
+  const rows = all.filter(e => e.status === hallTab);
+  if (!rows.length) {
+    const hint = hallTab === 'proposed'
+      ? 'Nothing waiting. The starting entries go in with <b>python3 scripts/knowledge.py seed</b>.'
+      : 'None yet.';
+    $('hallBody').innerHTML = `<div class="muted">${hint}</div>`;
+    return;
+  }
+  $('hallBody').innerHTML = rows.map(e => {
+    const late = due.has(e.id);
+    const acts = e.status === 'proposed'
+      ? `<button class="yes" data-k="${e.id}" data-verb="accept">Accept</button>
+         <button class="no" data-k="${e.id}" data-verb="retire">Retire</button>`
+      : e.status === 'accepted'
+      ? `<button class="yes" data-k="${e.id}" data-verb="renew">Still true</button>
+         <button class="no" data-k="${e.id}" data-verb="retire">Retire</button>`
+      : '';
+    return `<div class="idea">
+      <div class="t">#${e.id} ${esc(e.title)}</div>
+      <div class="ktags">
+        <span class="pill">${esc(e.dept)}</span><span class="pill">${esc(e.kind)}</span>
+        <span class="pill${e.confidence === 'measured' ? ' ok' : ''}">${esc(e.confidence)}</span>
+        <span class="pill">from ${esc(e.source)}</span>
+        ${late ? '<span class="pill warn">past review</span>' : ''}
+      </div>
+      <div class="d">${esc(e.body)}</div>
+      ${e.evidence ? `<div class="w">evidence: ${esc(e.evidence)}</div>` : ''}
+      ${e.why_retired ? `<div class="w">retired: ${esc(e.why_retired)}</div>` : ''}
+      ${acts ? `<div class="acts">${acts}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+async function actOnKnowledge(id, verb){
+  if (hallBusy) return;
+  const body = {};
+  if (verb === 'retire') {
+    body.why = (window.prompt('Why retire it? Kept with the entry so nobody re-learns it.') || '').trim();
+    if (!body.why) return;
+  }
+  hallBusy = true;
+  document.querySelectorAll('#hallBody .acts button').forEach(b => b.disabled = true);
+  try {
+    const r = await fetch(`/api/knowledge/${encodeURIComponent(id)}/${verb}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!r.ok || j.ok === false) alert((j.error || 'That did not work').slice(0, 300));
+  } catch (e) {
+    alert('Could not reach the API: ' + e.message);
+  } finally {
+    hallBusy = false;
+    loadHall();
+  }
+}
+
 function closePanel() { closeLb(); openAgent = null; $('panel').style.display = 'none'; }
 $('panel').addEventListener('click', e => { if (e.target.id === 'panel') closePanel(); });
 
@@ -2177,7 +2333,7 @@ async function pull(first) {
     // reads nothing from /api/dashboard, and rebuilding it every six seconds
     // wiped the search box mid-word and blanked a running forecast's status.
     // It refreshes itself while a run is going.
-    if (openAgent && openAgent !== PROPS_DOOR) openPanel(openAgent);
+    if (openAgent && !OWN_REFRESH.has(openAgent)) openPanel(openAgent);
   } catch (e) {
     $('chip').textContent = 'offline';
     if (first) $('boot').textContent = 'Cannot reach /api/dashboard — is mission-control-api running?';

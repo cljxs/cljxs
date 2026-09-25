@@ -235,6 +235,20 @@ def openrouter_key():
     return ""
 
 
+def key_status(key, timeout=20):
+    """OpenRouter's own account of this key: balance, cap and usage.
+
+    One reader for both callers - this file's credit check and budget.py's
+    monthly total - so they cannot disagree about which field is which.
+    Raises on any network or format failure; the callers decide what that
+    means for them.
+    """
+    req = urllib.request.Request("https://openrouter.ai/api/v1/key",
+                                 headers={"Authorization": f"Bearer {key}"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read()).get("data") or {}
+
+
 def check_credit():
     """OpenRouter's key endpoint reports the balance and runs no inference.
 
@@ -247,10 +261,7 @@ def check_credit():
         print("credit     no OPENROUTER_API_KEY found - skipped")
         return
     try:
-        req = urllib.request.Request("https://openrouter.ai/api/v1/key",
-                                     headers={"Authorization": f"Bearer {key}"})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            d = json.loads(r.read()).get("data") or {}
+        d = key_status(key)
     except Exception as exc:
         warn("-", f"could not read the OpenRouter balance ({exc})")
         print("credit     unreadable")

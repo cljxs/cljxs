@@ -11639,7 +11639,9 @@ class ThePropsHallIsNotRebuiltUnderYourFingers(unittest.TestCase):
     def test_the_six_second_pull_leaves_the_hall_alone(self):
         src = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
         pull = src.split("async function pull(", 1)[1].split("\nfunction ", 1)[0]
-        self.assertIn("openAgent !== PROPS_DOOR", pull)
+        self.assertIn("!OWN_REFRESH.has(openAgent)", pull)
+        own = re.search(r"const OWN_REFRESH = new Set\(\[([^\]]*)\]\)", src).group(1)
+        self.assertIn("PROPS_DOOR", own)
 
     def test_game_buttons_carry_data_not_code(self):
         # esc() does not escape quotes, so a fixture inside an inline onclick
@@ -12780,3 +12782,330 @@ class EveryListingGetsAPinAndABoard(unittest.TestCase):
                                   "description": "d" * 900})
         self.assertEqual(r["tags"], ["a", "b"])
         self.assertEqual(len(r["description"]), 600)
+
+
+class TheBudgetIsTheMonthsRealBill(unittest.TestCase):
+    """budget.py: OpenRouter's own monthly count against the owner's $25.
+
+    The owner set the ceiling at $25 a month all-in until the ecosystem earns.
+    Each test is a way that number could be read wrong and nobody notice until
+    the card statement.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.b = load("budget", "budget.py")
+
+    SEPT = datetime(2026, 9, 25, 12, tzinfo=timezone.utc)
+
+    def test_the_allowance_is_what_is_left_after_the_fixed_bills(self):
+        # Comparing AI spend against the whole $25 would let AI alone spend
+        # $25 while the droplet quietly takes the total to $37.
+        a = self.b.assess({"usage_monthly": 12.5}, 25.0, fixed={"droplet": 12.0}, now=self.SEPT)
+        self.assertEqual(a["ai_allowance"], 13.0)
+        self.assertEqual(a["ai_left"], 0.5)
+        self.assertEqual(a["total_spent"], 24.5)
+        a = self.b.assess({"usage_monthly": 13.2}, 25.0, fixed={"droplet": 12.0}, now=self.SEPT)
+        self.assertEqual(a["state"], "over")
+
+    def test_a_fast_start_to_the_month_is_a_warning(self):
+        # $5 by the 10th of a 30-day month is $15 by the 30th: over a $13
+        # allowance, though only $5 has gone.
+        a = self.b.assess({"usage_monthly": 5.0}, 25.0, fixed={"droplet": 12.0},
+                          now=datetime(2026, 9, 10, tzinfo=timezone.utc))
+        self.assertEqual(a["projected_ai"], 15.0)
+        self.assertEqual(a["state"], "on pace to go over")
+        a = self.b.assess({"usage_monthly": 3.0}, 25.0, fixed={"droplet": 12.0},
+                          now=datetime(2026, 9, 10, tzinfo=timezone.utc))
+        self.assertEqual(a["state"], "ok")
+
+    def test_the_pace_uses_the_real_length_of_the_month(self):
+        a = self.b.assess({"usage_monthly": 1.4}, 25.0, fixed={},
+                          now=datetime(2026, 2, 14, tzinfo=timezone.utc))
+        self.assertEqual(a["days"], 28)
+        self.assertEqual(a["projected_ai"], 2.8)
+
+    def test_a_missing_count_is_unknown_not_zero(self):
+        # Reading a missing usage_monthly as $0 would report a fresh month in
+        # the middle of a runaway loop.
+        for data in ({}, {"usage_monthly": None}, {"usage_monthly": "3.10"}):
+            a = self.b.assess(data, 25.0, now=self.SEPT)
+            self.assertEqual(a["state"], "unknown", data)
+            self.assertIsNone(a["ai_left"])
+
+    def test_only_a_monthly_cap_counts_as_the_hard_stop(self):
+        hs = self.b.hard_stop
+        self.assertIn("none", hs(None, None, 13.0))
+        self.assertIn("lifetime", hs(13.0, None, 13.0))
+        self.assertIn("lifetime", hs(13.0, "weekly", 13.0))
+        self.assertIn("above", hs(20.0, "monthly", 13.0))
+        self.assertEqual(hs(13.0, "monthly", 13.0), "$13.00 monthly")
+
+    def test_the_budget_is_read_from_limits_json(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "limits.json"
+            f.write_text(json.dumps({"monthly_budget": 25}))
+            self.assertEqual(self.b.monthly_budget(f), 25.0)
+            for bad in ({}, {"monthly_budget": 0}, {"monthly_budget": "lots"}):
+                f.write_text(json.dumps(bad))
+                self.assertIsNone(self.b.monthly_budget(f), bad)
+        # And the tracked file carries the owner's number, so a fresh
+        # checkout is not silently budgetless.
+        self.assertEqual(self.b.monthly_budget(ROOT / "tasks" / "limits.json"), 25.0)
+
+    def run_main(self, data, argv, key="placeholder-test-token-7c1f"):
+        """main() with OpenRouter replaced by `data`; returns (code, stdout)."""
+        pf = self.b.preflight
+        saved = (pf.openrouter_key, pf.key_status, self.b.monthly_budget, sys.argv)
+        pf.openrouter_key = lambda: key
+        pf.key_status = lambda k: data if not isinstance(data, Exception) else (_ for _ in ()).throw(data)
+        self.b.monthly_budget = lambda path=None: 25.0
+        sys.argv = ["budget.py"] + argv
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                code = self.b.main()
+        finally:
+            pf.openrouter_key, pf.key_status, self.b.monthly_budget, sys.argv = saved
+        return code, out.getvalue()
+
+    def test_check_exits_over_only_when_the_allowance_is_spent(self):
+        self.assertEqual(self.run_main({"usage_monthly": 20.0}, ["check"])[0], self.b.OVER)
+        self.assertEqual(self.run_main({"usage_monthly": 1.0}, ["check"])[0], 0)
+        # Unreadable is its own answer: a network blip must not read as
+        # "over" and silence the GM, nor as "fine".
+        code, out = self.run_main(OSError("offline"), ["check", "--json"])
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(out)["state"], "unreadable")
+
+    def test_the_key_never_reaches_the_output(self):
+        key = "placeholder-test-token-7c1f"
+        for argv in (["--json"], [], ["check"]):
+            _, out = self.run_main({"usage_monthly": 2.0, "limit": 13, "limit_reset": "monthly",
+                                    "label": "ecosystem"}, argv, key=key)
+            self.assertNotIn(key, out, argv)
+            self.assertNotIn("7c1f", out, argv)
+
+    def test_preflight_and_budget_share_one_key_reader(self):
+        src = (SCRIPTS / "budget.py").read_text()
+        self.assertIn("preflight.key_status(", src)
+        self.assertNotIn("openrouter.ai/api/v1/key", src)
+
+
+class KnowledgeIsProposedAndOnlyTheOwnerMakesItTrue(unittest.TestCase):
+    """knowledge.py: the shared store every agent is briefed from.
+
+    The propose-only month in code: anyone may add, what they add waits, and
+    agents are briefed from accepted entries alone.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.k = load("knowledge", "knowledge.py")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.con = self.k.connect(Path(self.tmp.name) / "k.db")
+
+    def tearDown(self):
+        self.con.close()
+        self.tmp.cleanup()
+
+    def add(self, **kw):
+        base = dict(dept="etsy", kind="lesson", title="t", body="b",
+                    evidence="", confidence="observed", source="scout")
+        base.update(kw)
+        return self.k.add(self.con, **base)
+
+    def test_what_an_agent_adds_is_not_what_an_agent_is_told(self):
+        i = self.add(title="Proposed only")
+        self.assertEqual(self.k.get(self.con, i)["status"], "proposed")
+        self.assertNotIn("Proposed only", self.k.brief(self.con, "etsy"))
+        self.k.accept(self.con, i)
+        self.assertIn("Proposed only", self.k.brief(self.con, "etsy"))
+
+    def test_measured_needs_evidence(self):
+        with self.assertRaises(self.k.Refused):
+            self.add(confidence="measured")
+        self.add(confidence="measured", evidence="knockout.py --check")
+
+    def test_confidence_is_a_word_not_a_percentage(self):
+        for bad in ("87%", "high", ""):
+            with self.assertRaises(self.k.Refused, msg=bad):
+                self.add(confidence=bad, title=f"c {bad}")
+
+    def test_unknown_departments_and_kinds_are_refused(self):
+        with self.assertRaises(self.k.Refused):
+            self.add(dept="shoes")
+        with self.assertRaises(self.k.Refused):
+            self.add(kind="vibe")
+
+    def test_entries_stay_short(self):
+        with self.assertRaises(self.k.Refused):
+            self.add(title="x" * (self.k.TITLE_MAX + 1))
+        with self.assertRaises(self.k.Refused):
+            self.add(body="x" * (self.k.BODY_MAX + 1))
+        self.add(title="x" * self.k.TITLE_MAX, body="x" * self.k.BODY_MAX)
+
+    def test_one_open_entry_per_title_per_department(self):
+        i = self.add(title="Totes sell in autumn")
+        with self.assertRaises(self.k.Refused):
+            self.add(title="  totes SELL in   autumn ")
+        self.add(title="Totes sell in autumn", dept="trading")
+        self.k.retire(self.con, i, "wrong")
+        self.add(title="Totes sell in autumn")
+
+    def test_retiring_needs_a_reason_and_keeps_the_entry(self):
+        i = self.add()
+        with self.assertRaises(self.k.Refused):
+            self.k.retire(self.con, i, "   ")
+        self.k.retire(self.con, i, "superseded by #9")
+        e = self.k.get(self.con, i)
+        self.assertEqual((e["status"], e["why_retired"]), ("retired", "superseded by #9"))
+
+    def test_review_dates_come_due_and_renew(self):
+        t0 = datetime(2026, 9, 25, tzinfo=timezone.utc)
+        i = self.add(kind="fact")
+        self.k.accept(self.con, i, now=t0)
+        self.assertEqual(self.k.due(self.con, now=t0 + timedelta(days=29)), [])
+        self.assertEqual([e["id"] for e in self.k.due(self.con, now=t0 + timedelta(days=31))], [i])
+        self.assertIn("past review", self.k.brief(self.con, "etsy", now=t0 + timedelta(days=31)))
+        self.k.renew(self.con, i, now=t0 + timedelta(days=31))
+        self.assertEqual(self.k.due(self.con, now=t0 + timedelta(days=45)), [])
+        with self.assertRaises(self.k.Refused):
+            self.k.renew(self.con, self.add(title="still proposed"))
+
+    def test_accepting_twice_is_refused(self):
+        i = self.add()
+        self.k.accept(self.con, i)
+        with self.assertRaises(self.k.Refused):
+            self.k.accept(self.con, i)
+
+    def test_a_brief_is_its_department_plus_all_decisions_first(self):
+        ids = [self.add(title="etsy lesson"),
+               self.add(title="shared rule", dept="all", kind="decision"),
+               self.add(title="trading only", dept="trading")]
+        for i in ids:
+            self.k.accept(self.con, i)
+        text = self.k.brief(self.con, "etsy")
+        self.assertNotIn("trading only", text)
+        self.assertLess(text.index("shared rule"), text.index("etsy lesson"))
+
+    def test_a_brief_is_capped_and_says_what_it_left_out(self):
+        for n in range(12):
+            self.k.accept(self.con, self.add(title=f"entry {n}", body="x" * 400))
+        text = self.k.brief(self.con, "etsy", max_chars=1500)
+        self.assertLessEqual(len(text.rsplit("\n", 1)[0]), 1500)
+        self.assertIn("did not fit", text)
+
+    def test_seeding_twice_adds_nothing_and_every_seed_is_proposed(self):
+        added, _ = self.k.seed(self.con)
+        self.assertEqual(added, len(self.k.SEEDS))
+        self.assertEqual(self.k.seed(self.con), (0, len(self.k.SEEDS)))
+        self.assertEqual({e["status"] for e in self.k.entries(self.con)}, {"proposed"})
+
+    def test_every_working_agent_has_a_department(self):
+        # An agent with no department is briefed from nothing but `all`.
+        placed = {a for members in self.k.DEPARTMENTS.values() for a in members}
+        for d in sorted((ROOT / "agents").iterdir()):
+            if not (d / f"_{d.name}-agents-header.md").is_file() or (d / "RETIRED").exists():
+                continue
+            self.assertIn(d.name, placed, f"{d.name} is in no department")
+
+    def test_the_cli_exits_2_with_the_reason(self):
+        env = dict(os.environ, KNOWLEDGE_DB=str(Path(self.tmp.name) / "cli.db"))
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knowledge.py"), "add",
+                            "--dept", "etsy", "--kind", "lesson", "--title", "x",
+                            "--body", "y", "--confidence", "measured", "--source", "scout"],
+                           capture_output=True, text=True, env=env, timeout=30)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("measured needs --evidence", r.stderr)
+
+
+class TheTownHallRunsTheScriptsItShows(unittest.TestCase):
+    """townhall.js: the Deck's budget and knowledge routes.
+
+    Driven through the real module with stub scripts, so nothing reaches
+    OpenRouter and the store's rules are the stub's answer, not the page's.
+    """
+
+    API = ROOT / "mission-control-api"
+    NODE = shutil.which("node")
+    DEPS = (API / "node_modules" / "better-sqlite3").is_dir()
+
+    KSTUB = (
+        "import json, sys\n"
+        "open(sys.argv[0] + '.calls', 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "if sys.argv[1] == 'list':\n"
+        "    print(json.dumps({'entries': [{'id': 1, 'status': 'proposed'}], 'due': []}))\n"
+        "elif sys.argv[2] == '7':\n"
+        "    print('refused: #7 is accepted, not proposed', file=sys.stderr); sys.exit(2)\n"
+        "else:\n"
+        "    print(sys.argv[1] + 'ed #' + sys.argv[2])\n"
+    )
+    BSTUB = "import json\nprint(json.dumps({'state': 'unreadable', 'error': 'no key'}))\nraise SystemExit(1)\n"
+
+    def setUp(self):
+        if not (self.NODE and self.DEPS):
+            self.skipTest("node or the Deck's node_modules are not installed")
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        (root / "scripts").mkdir()
+        (root / "scripts" / "knowledge.py").write_text(self.KSTUB)
+        (root / "scripts" / "budget.py").write_text(self.BSTUB)
+        self.root = root
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def calls(self):
+        f = self.root / "scripts" / "knowledge.py.calls"
+        return [json.loads(l) for l in f.read_text().splitlines()] if f.exists() else []
+
+    def drive(self, steps):
+        js = (
+            f"const hall = require({json.dumps(str(self.API / 'townhall.js'))});"
+            "const routes = {};"
+            "const app = {get:(p,f)=>routes['GET '+p]=f, post:(p,f)=>routes['POST '+p]=f};"
+            "hall.register(app);"
+            "function call(m, p, params, body){ return new Promise(ok => {"
+            "  const res = {code:200, status(c){this.code=c;return this;},"
+            "               json(b){ok({status:this.code, body:JSON.parse(JSON.stringify(b))});}};"
+            "  Promise.resolve(routes[m+' '+p]({params:params||{}, body:body||{}}, res)); }); }"
+            "(async () => { const out = {};" + steps +
+            " process.stdout.write(JSON.stringify(out)); })();"
+        )
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
+        r = subprocess.run([self.NODE, "-e", js], capture_output=True, text=True,
+                           env=env, cwd=str(self.API), timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def test_an_unreadable_budget_still_arrives_as_json(self):
+        # budget.py exits 1 when OpenRouter is unreachable; the page must
+        # still get its answer to say so, not a blank panel.
+        out = self.drive("out.t = await call('GET', '/api/townhall');")
+        self.assertEqual(out["t"]["body"]["budget"], {"state": "unreadable", "error": "no key"},
+                         "the script's own reason, not a fallback's")
+        self.assertEqual(out["t"]["body"]["knowledge"]["entries"][0]["id"], 1)
+
+    def test_a_refusal_comes_back_with_the_scripts_reason(self):
+        out = self.drive("out.r = await call('POST', '/api/knowledge/:id/accept', {id: '7'});")
+        self.assertEqual(out["r"]["status"], 400)
+        self.assertEqual(out["r"]["body"]["error"], "#7 is accepted, not proposed")
+
+    def test_ids_are_digits_and_retiring_needs_a_reason(self):
+        out = self.drive(
+            "out.a = await call('POST', '/api/knowledge/:id/accept', {id: '1; rm -rf /'});"
+            "out.b = await call('POST', '/api/knowledge/:id/retire', {id: '3'}, {why: '  '});"
+            "out.c = await call('POST', '/api/knowledge/:id/retire', {id: '3'}, {why: 'wrong'});")
+        self.assertEqual(out["a"]["status"], 400)
+        self.assertEqual(out["b"]["status"], 400)
+        self.assertEqual(out["c"]["status"], 200)
+        self.assertEqual(self.calls(), [["retire", "3", "--why", "wrong"]],
+                         "only the valid request may reach the script")
+
+    def test_the_hall_panel_is_not_rebuilt_by_the_pull(self):
+        src = (self.API / "public" / "village.html").read_text()
+        own = re.search(r"const OWN_REFRESH = new Set\(\[([^\]]*)\]\)", src).group(1)
+        self.assertIn("HALL_DOOR", own)
