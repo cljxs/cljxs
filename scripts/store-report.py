@@ -6,6 +6,7 @@ store-report.py — how the shop's own listings are doing, from Etsy.
     store-report.py fetch                        snapshot every active listing today
     store-report.py show                         the report: today against the last snapshot
     store-report.py pins                         a Pinterest pin for every listing, and its board
+    store-report.py audit                        what to fix in each listing's title, tags and description
 
 Nothing in the system looked at the store itself. Scout measures other
 people's listings and Emily makes new ones; which of OURS get looked at, and
@@ -206,6 +207,7 @@ def summary(latest, previous=None):
         "rows": rows,
         "quiet": [r["title"] for r in quiet],
         "most_saved": sorted(saved, key=lambda r: -r["favs"])[:3],
+        "audit": audit_line(audit(latest)),
     }
 
 
@@ -241,10 +243,167 @@ def lines(s):
     if s["most_saved"]:
         out.append("Most favourited: " + "; ".join(f"{short(r['title'], 36)} ({r['favs']})"
                                                      for r in s["most_saved"]))
+    if s.get("audit"):
+        out.append(s["audit"])
     if s["quiet"]:
         out.append(f"No views after {QUIET_AFTER_DAYS}+ days - title, first photo or price "
                    f"worth a look: " + "; ".join(short(t, 36) for t in s["quiet"]))
     return out
+
+
+# ------------------------------------------------------------------ the audit
+#
+# What each listing's own words do for Etsy search, checked the same way every
+# time. Two kinds of rule, and each says which it is:
+#
+#   LIMIT   Etsy's own limits: 13 tags, 20 characters a tag, 140 a title.
+#   ADVICE  From sellers and tool makers who measured it (researched
+#           2026-09-25): Etsy shows roughly the first 40 characters of a
+#           title in search; over 70% of purchases come from searches of three
+#           or more words; the opening of the description is the snippet
+#           Google shows. Advice is a reason to look, not a verdict.
+#
+# The audit reads the saved snapshot, so it costs nothing and calls nobody.
+# Fixing is the owner's: nothing here can edit a listing on Etsy.
+
+TAG_SLOTS = 13            # LIMIT
+TAG_MAX = 20              # LIMIT, characters
+TITLE_MAX = 140           # LIMIT, characters
+TITLE_SEEN = 40           # ADVICE: what a search result shows of a title
+TITLE_SHORT = 60          # ADVICE: a title this short leaves search phrases unused
+ONE_WORD_TAGS_MAX = 3     # ADVICE: shoppers buy on long phrases
+DESCRIPTION_MIN_WORDS = 50
+DESCRIPTION_OPENING = 160  # ADVICE: characters Google shows as the snippet
+
+_STOP = {"a", "an", "and", "the", "for", "of", "to", "in", "on", "with", "by", "or",
+         "your", "my", "our", "is", "it", "this", "that", "at", "from", "as", "be"}
+
+
+def _words(text):
+    return re.findall(r"[a-z0-9']+", str(text or "").lower())
+
+
+def _keywords(text):
+    return {w for w in _words(text) if w not in _STOP and len(w) > 1}
+
+
+def _stem(word):
+    """Plural folded to singular, crudely: tote/totes, gift/gifts, bag/bags.
+    Enough to catch two tags that are one search."""
+    return word[:-1] if len(word) > 3 and word.endswith("s") and not word.endswith("ss") else word
+
+
+def _tag_key(tag):
+    return " ".join(sorted(_stem(w) for w in _words(tag)))
+
+
+def audit_listing(r):
+    """[(kind, message)] for one snapshot row, worst first. Empty is clean."""
+    title = str(r.get("title") or "")
+    tags = [str(t).strip() for t in (r.get("tags") or []) if str(t).strip()]
+    desc = str(r.get("description") or "")
+    out = []
+
+    # tags
+    if len(tags) < TAG_SLOTS:
+        out.append(("LIMIT", f"uses {len(tags)} of {TAG_SLOTS} tags - every empty slot is a "
+                             f"search this listing cannot be found for"))
+    for t in tags:
+        if len(t) > TAG_MAX:
+            out.append(("LIMIT", f"tag {t!r} is {len(t)} characters; Etsy's limit is {TAG_MAX}"))
+    seen = {}
+    for t in tags:
+        k = _tag_key(t)
+        if k in seen:
+            same = "the same tag twice" if t.lower() == seen[k].lower() else "one search, two slots"
+            out.append(("ADVICE", f"{seen[k]!r} and {t!r} are {same} - replace one"))
+        else:
+            seen[k] = t
+    single = [t for t in tags if len(_words(t)) == 1]
+    if len(single) > ONE_WORD_TAGS_MAX:
+        out.append(("ADVICE", f"{len(single)} one-word tags ({', '.join(single)}) - shoppers "
+                              f"buy on phrases of three or more words"))
+    title_words = {_stem(w) for w in _keywords(title)}
+    stray = [t for t in tags if not ({_stem(w) for w in _keywords(t)} & title_words)]
+    if stray:
+        out.append(("ADVICE", f"{len(stray)} tag(s) share no word with the title "
+                              f"({', '.join(stray[:4])}{'...' if len(stray) > 4 else ''}) - "
+                              f"title and tags work best saying the same thing"))
+
+    # title
+    if len(title) > TITLE_MAX:
+        out.append(("LIMIT", f"title is {len(title)} characters; Etsy's limit is {TITLE_MAX}"))
+    if len(title) < TITLE_SHORT:
+        out.append(("ADVICE", f"title uses {len(title)} of {TITLE_MAX} characters - room for "
+                              f"the phrases a shopper would type"))
+    seen_part = title[:TITLE_SEEN].lower()
+    if tags and not any(t.lower() in seen_part for t in tags):
+        out.append(("ADVICE", f"none of the tags appears in the first {TITLE_SEEN} characters "
+                              f"of the title, which is what search shows"))
+    counts = {}
+    for w in _keywords(title):
+        counts[w] = sum(1 for x in _words(title) if x == w)
+    repeated = sorted(w for w, n in counts.items() if n >= 3)
+    if repeated:
+        out.append(("ADVICE", f"title repeats {', '.join(repeated)} - once is enough for search"))
+    shouting = [w for w in re.findall(r"[A-Za-z]{4,}", title) if w.isupper()]
+    if len(shouting) >= 2:
+        out.append(("ADVICE", f"title shouts ({' '.join(shouting[:4])}) - reads as spam"))
+
+    # description
+    if len(desc) < 600 and len(_words(desc)) < DESCRIPTION_MIN_WORDS:
+        out.append(("ADVICE", f"description is {len(_words(desc))} words - thin for a shopper "
+                              f"deciding, and for Google"))
+    if desc and not ({_stem(w) for w in _keywords(desc[:DESCRIPTION_OPENING])} & title_words):
+        out.append(("ADVICE", "the description's opening shares no word with the title - "
+                              "it is the snippet Google shows"))
+    return sorted(out, key=lambda x: x[0] != "LIMIT")
+
+
+def audit(latest):
+    """Every listing in a snapshot with what to fix, most to fix first."""
+    rows = []
+    for r in (latest or {}).get("listings") or []:
+        rows.append({"listing_id": r.get("listing_id"), "title": r.get("title") or "?",
+                     "views": r.get("views"), "favs": r.get("favs"), "url": r.get("url"),
+                     "issues": audit_listing(r)})
+    rows.sort(key=lambda x: (-len(x["issues"]), x["views"] if isinstance(x["views"], int) else 0))
+    return rows
+
+
+def audit_line(rows):
+    """One line for the briefing: how many listings have something to fix."""
+    if not rows:
+        return None
+    n = sum(1 for r in rows if r["issues"])
+    if not n:
+        return "Listing audit: every listing's title, tags and description pass."
+    return (f"Listing audit: {n} of {len(rows)} listings have title or tag fixes "
+            f"(store-report.py audit).")
+
+
+def cmd_audit(args):
+    snaps = snapshots()
+    if not snaps:
+        print("No store snapshot yet: store-report.py fetch", file=sys.stderr)
+        return 2
+    rows = audit(snaps[-1])
+    if "--json" in args:
+        print(json.dumps({"day": snaps[-1].get("day"), "listings": rows}, indent=1))
+        return 0
+    print(f"Listing audit, from the {snaps[-1].get('day')} snapshot. LIMIT is Etsy's rule; "
+          f"ADVICE is what sellers measured.\n")
+    for r in rows:
+        views = "?" if r["views"] is None else r["views"]
+        favs = "?" if r["favs"] is None else r["favs"]
+        print(f"{short(r['title'], 70)}   ({views} views, {favs} fav)")
+        if r["listing_id"]:
+            print(f"  listing {r['listing_id']}")
+        for kind, msg in r["issues"] or [("OK", "nothing to fix")]:
+            print(f"  {kind:<6} {msg}")
+        print()
+    print(audit_line(rows))
+    return 0
 
 
 # ------------------------------------------------------------------ pinterest
@@ -345,7 +504,7 @@ def cmd_show(_args):
 def main():
     cmd, args = (sys.argv[1] if len(sys.argv) > 1 else ""), sys.argv[2:]
     fn = {"setup": cmd_setup, "fetch": cmd_fetch, "show": cmd_show,
-          "pins": cmd_pins}.get(cmd)
+          "pins": cmd_pins, "audit": cmd_audit}.get(cmd)
     if not fn:
         print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
         return 2

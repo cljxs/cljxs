@@ -13660,3 +13660,254 @@ class ApprovedProposalsAreSentToTheRightAgent(GMHarness, unittest.TestCase):
         ms = int(re.search(r"DECIDE_TIMEOUT_MS = (\d+)", js).group(1))
         self.assertGreater(ms, self.gm.SEND_TIMEOUT * 1000)
         self.assertIn("DECIDE_TIMEOUT_MS));", js)
+
+
+class TheListingAuditNamesWhatToFix(unittest.TestCase):
+    """store-report.py audit: each listing's title, tags and description
+    against Etsy's limits and what sellers measured (researched 2026-09-25).
+
+    The shop had 13 views and 0 favourites across its listings; the first
+    lever the research found free was the listings' own words.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.sr = load("store_report_audit", "store-report.py")
+
+    GOOD = {"listing_id": 1,
+            "title": "Botanical Library Tote Bag, Book Lover Gift, Vintage Floral Canvas Tote for Readers",
+            "views": 9, "favs": 1,
+            "tags": ["library tote bag", "book lover gift", "botanical tote", "gift for reader",
+                     "librarian gift", "vintage floral tote", "canvas book bag", "bookish tote bag",
+                     "reading gift", "floral canvas tote", "teacher tote bag", "book club gift",
+                     "market tote bag"],
+            "description": "This botanical library tote bag is a book lover gift for readers. " + "word " * 60}
+
+    def issues(self, **kw):
+        return self.sr.audit_listing(dict(self.GOOD, **kw))
+
+    def said(self, **kw):
+        return " | ".join(m for _, m in self.issues(**kw))
+
+    def test_a_well_made_listing_passes(self):
+        self.assertEqual(self.issues(), [])
+
+    def test_empty_tag_slots_are_etsys_limit(self):
+        kinds = dict((m, k) for k, m in self.issues(tags=self.GOOD["tags"][:6]))
+        msg = next(m for m in kinds if "6 of 13 tags" in m)
+        self.assertEqual(kinds[msg], "LIMIT")
+
+    def test_a_plural_or_repeat_wastes_a_slot(self):
+        tags = self.GOOD["tags"][:11] + ["library tote bags", "Book Lover Gift"]
+        said = self.said(tags=tags)
+        self.assertIn("'library tote bag' and 'library tote bags' are one search, two slots", said)
+        self.assertIn("'book lover gift' and 'Book Lover Gift' are the same tag twice", said)
+        stem = self.sr._stem
+        self.assertEqual((stem("bags"), stem("gifts"), stem("glass"), stem("bus")),
+                         ("bag", "gift", "glass", "bus"), "ss and short words are not plurals")
+
+    def test_one_word_tags_over_three_are_flagged(self):
+        three = self.GOOD["tags"][:10] + ["tote", "library", "floral"]
+        self.assertNotIn("one-word tags", self.said(tags=three))
+        four = self.GOOD["tags"][:9] + ["tote", "library", "floral", "vintage"]
+        self.assertIn("4 one-word tags", self.said(tags=four))
+
+    def test_a_tag_unrelated_to_the_title_is_named(self):
+        tags = self.GOOD["tags"][:12] + ["halloween decor"]
+        self.assertIn("share no word with the title (halloween decor)", self.said(tags=tags))
+
+    def test_a_short_title_or_one_without_a_tag_up_front(self):
+        self.assertIn("title uses 21 of 140", self.said(title="Organizer Insert Tote"))
+        buried = "A Lovely Present For Anyone Who Enjoys It - library tote bag"
+        self.assertIn("first 40 characters", self.said(title=buried))
+
+    def test_repeats_and_shouting(self):
+        said = self.said(title="Tote Bag Tote Bag Tote Bag, LIBRARY GIFT, Book Lover Gift For Readers")
+        self.assertIn("title repeats bag, tote", said)
+        self.assertIn("title shouts (LIBRARY GIFT)", said)
+
+    def test_a_thin_description_or_an_unrelated_opening(self):
+        self.assertIn("description is 8 words",
+                      self.said(description="Made for me by my production partner, Printify."))
+        opening = "Made for me by my production partner. " + "word " * 80
+        self.assertIn("opening shares no word with the title", self.said(description=opening))
+
+    def test_worst_listing_first_and_one_line_for_the_briefing(self):
+        weak = dict(self.GOOD, listing_id=2, title="Organizer Insert Tote", tags=["tote"])
+        rows = self.sr.audit({"listings": [self.GOOD, weak]})
+        self.assertEqual(rows[0]["listing_id"], 2)
+        self.assertEqual(self.sr.audit_line(rows),
+                         "Listing audit: 1 of 2 listings have title or tag fixes (store-report.py audit).")
+        s = self.sr.summary({"day": "2026-09-25", "listings": [self.GOOD, weak]})
+        self.assertIn(self.sr.audit_line(rows), self.sr.lines(s),
+                      "the briefing's store section carries it, so the GM sees it")
+
+    def test_etsys_own_limits(self):
+        self.assertEqual((self.sr.TAG_SLOTS, self.sr.TAG_MAX, self.sr.TITLE_MAX), (13, 20, 140))
+
+
+class ListingVideosAreMadeWithinEtsysLimits(unittest.TestCase):
+    """listing-video.py: a slow zoom over each of a listing's photos, checked
+    against Etsy's limits (5-15 s, 100 MB, 500 px, no sound) before it is
+    handed over."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.lv = load("listing_video", "listing-video.py")
+
+    def ff(self):
+        if not all(self.lv.ffmpeg()):
+            self.skipTest("ffmpeg is not installed here")
+
+    def still(self, d, name, size="800x600", color="teal"):
+        p = Path(d) / name
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+                        f"color=c={color}:s={size}", "-frames:v", "1", str(p)], check=True)
+        return p
+
+    def test_the_timing_adds_up_to_the_length_asked(self):
+        for n in (1, 2, 3, 4):
+            for seconds in (5, 10, 15):
+                each, fade, offsets = self.lv.plan(n, seconds)
+                self.assertAlmostEqual(n * each - (n - 1) * fade, seconds, places=2)
+                self.assertEqual(len(offsets), n - 1)
+        self.assertEqual(self.lv.plan(1, 10), (10.0, 0.0, []))
+        with self.assertRaises(ValueError):
+            self.lv.plan(0, 10)
+
+    def test_the_command_is_a_list_with_no_sound(self):
+        cmd = self.lv.command(["a.png", "b.png", "c.png"], "out.mp4", 10)
+        self.assertIsInstance(cmd, list)
+        self.assertIn("-an", cmd)
+        self.assertEqual(cmd.count("-i"), 3)
+        graph = cmd[cmd.index("-filter_complex") + 1]
+        self.assertEqual(graph.count("xfade="), 2)
+        self.assertEqual(cmd[cmd.index("-t") + 1], "10")
+
+    def test_a_real_video_is_square_silent_and_the_right_length(self):
+        self.ff()
+        with tempfile.TemporaryDirectory() as d:
+            imgs = [self.still(d, "a.png"), self.still(d, "b.png", "600x900", "orange"),
+                    self.still(d, "c.png", "1200x1200", "navy")]
+            out = Path(d) / "v.mp4"
+            ok, msg = self.lv.make(imgs, out, 10)
+            self.assertTrue(ok, msg)
+            secs, w, h, audio = self.lv.probe(out)
+            self.assertAlmostEqual(secs, 10, delta=0.2)
+            self.assertEqual((w, h, audio), (1080, 1080, False))
+            self.assertEqual(self.lv.problems(out), [])
+            self.assertFalse((Path(d) / "v.part.mp4").exists(), "no half-written file is left")
+
+    def test_etsys_limits_are_checked_on_the_file(self):
+        self.ff()
+        with tempfile.TemporaryDirectory() as d:
+            long_loud = Path(d) / "bad.mp4"
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+                            "color=c=red:s=320x320:d=20", "-f", "lavfi", "-i", "sine=d=20",
+                            "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(long_loud)],
+                           check=True)
+            said = " | ".join(self.lv.problems(long_loud))
+            for want in ("20.0s long", "320x320", "sound track"):
+                self.assertIn(want, said)
+
+    def test_a_video_etsy_would_refuse_is_not_handed_over(self):
+        self.ff()
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "v.mp4"
+            with unittest.mock.patch.object(self.lv, "problems", return_value=["20.0s long"]):
+                ok, msg = self.lv.make([self.still(d, "a.png")], out, 6)
+            self.assertFalse(ok)
+            self.assertIn("not usable on Etsy: 20.0s long", msg)
+            self.assertEqual(sorted(p.name for p in Path(d).iterdir()), ["a.png"],
+                             "neither the video nor a half-written file is left")
+
+    def test_lengths_outside_etsys_are_refused_before_any_work(self):
+        self.ff()
+        for seconds in (4, 16):
+            ok, msg = self.lv.make(["x.png"], "/nonexistent/v.mp4", seconds)
+            self.assertFalse(ok)
+            self.assertIn("5 to 15", msg)
+
+    def test_without_ffmpeg_it_says_how_to_get_it(self):
+        with unittest.mock.patch.object(self.lv, "ffmpeg", return_value=(None, None)):
+            ok, msg = self.lv.make(["a.png"], "v.mp4", 10)
+        self.assertFalse(ok)
+        self.assertIn("apt install -y ffmpeg", msg)
+
+    def test_photos_come_in_etsys_order_largest_size(self):
+        class EP:
+            def call(self, path, key):
+                assert path == "/listings/42/images", path
+                return {"results": [{"rank": 2, "url_fullxfull": "https://i/2.jpg"},
+                                    {"rank": 1, "url_fullxfull": "https://i/1.jpg", "url_570xN": "https://i/s.jpg"},
+                                    {"rank": 3, "url_570xN": "https://i/3.jpg"}]}, {}, None
+        self.assertEqual(self.lv.listing_photos("42", "k", EP()),
+                         ["https://i/1.jpg", "https://i/2.jpg", "https://i/3.jpg"])
+
+    def test_only_https_photos_are_fetched(self):
+        with tempfile.TemporaryDirectory() as d, \
+             unittest.mock.patch.object(urllib.request, "urlopen") as op:
+            self.assertEqual(self.lv.download(["file:///etc/passwd", "http://x/a.jpg"], d), [])
+            op.assert_not_called()
+
+
+class TheDeckOffersEachVideoForDownload(unittest.TestCase):
+    """emily.js: the videos listing-video.py made, and a route Safari can play."""
+
+    API = ROOT / "mission-control-api"
+    NODE = shutil.which("node")
+
+    def listed(self, root):
+        if not (self.NODE and (self.API / "node_modules" / "better-sqlite3").is_dir()):
+            self.skipTest("node or the Deck's node_modules are not installed")
+        js = (f"const m=require({json.dumps(str(self.API / 'emily.js'))});"
+              "process.stdout.write(JSON.stringify(m.listVideos()))")
+        r = subprocess.run([self.NODE, "-e", js], capture_output=True, text=True,
+                           env=dict(os.environ, ECOSYSTEM_ROOT=str(root)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def test_videos_are_listed_with_their_titles(self):
+        with tempfile.TemporaryDirectory() as d:
+            v = Path(d) / "agents" / "emily" / "shop" / "videos"
+            v.mkdir(parents=True)
+            (v / "4412345678.mp4").write_bytes(b"x" * 10)
+            (v / "99.mp4").write_bytes(b"y")
+            (v / "notes.mp4").write_bytes(b"z")
+            (v / "index.json").write_text(json.dumps({"4412345678": {"title": "Library Tote", "seconds": 10}}))
+            rows = {r["listing_id"]: r for r in self.listed(d)}
+        self.assertEqual(set(rows), {"4412345678", "99"}, "only <listing id>.mp4 files")
+        self.assertEqual((rows["4412345678"]["title"], rows["4412345678"]["bytes"]), ("Library Tote", 10))
+        self.assertEqual(rows["99"]["title"], "", "a file with no index entry is still listed")
+
+    def test_the_route_answers_ranges_so_safari_will_play_it(self):
+        # Safari will not play a video from a server that ignores Range; it
+        # asks for bytes 0-1 first and gives up on a 200.
+        if not (self.NODE and (self.API / "node_modules" / "express").is_dir()):
+            self.skipTest("node or the Deck's node_modules are not installed")
+        with tempfile.TemporaryDirectory() as d:
+            v = Path(d) / "agents" / "emily" / "shop" / "videos"
+            v.mkdir(parents=True)
+            (v / "123.mp4").write_bytes(bytes(range(256)) * 4)
+            js = (
+                f"const express=require({json.dumps(str(self.API / 'node_modules' / 'express'))});"
+                f"const emily=require({json.dumps(str(self.API / 'emily.js'))});"
+                "const http=require('http');const app=express();emily.register(app,null);"
+                "const srv=app.listen(0,'127.0.0.1',async()=>{const port=srv.address().port;"
+                "const get=(p,h)=>new Promise(ok=>http.get({host:'127.0.0.1',port,path:p,headers:h||{}},"
+                "r=>{let n=0;r.on('data',c=>n+=c.length);r.on('end',()=>ok([r.statusCode,n,"
+                "r.headers['content-type']||'',r.headers['content-disposition']||'']));}));"
+                "const out={range:await get('/api/emily/shop/video/123',{Range:'bytes=0-1'}),"
+                "dl:await get('/api/emily/shop/video/123?dl=1'),"
+                "bad:await get('/api/emily/shop/video/..%2F..%2Fsecret'),"
+                "none:await get('/api/emily/shop/video/456')};"
+                "process.stdout.write(JSON.stringify(out));srv.close();});")
+            r = subprocess.run([self.NODE, "-e", js], capture_output=True, text=True, timeout=60,
+                               env=dict(os.environ, ECOSYSTEM_ROOT=d))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["range"][:3], [206, 2, "video/mp4"])
+        self.assertEqual(out["dl"][0], 200)
+        self.assertIn('filename="listing-123.mp4"', out["dl"][3])
+        self.assertEqual(out["bad"][0], 400)
+        self.assertEqual(out["none"][0], 404)

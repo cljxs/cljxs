@@ -118,3 +118,6 @@ agents/emily/state/store/
 
 # The GM's mornings - one JSON file per Eastern day, live state.
 tasks/gm/
+
+# Shop-level art and listing videos - made on the droplet, uploaded to Etsy by hand.
+agents/emily/shop/

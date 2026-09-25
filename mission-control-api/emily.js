@@ -36,7 +36,13 @@ const TYPES = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
+  '.mp4': 'video/mp4',
 };
+
+// Listing videos, written by listing-video.py as videos/<listing id>.mp4 with
+// an index.json it owns. An Etsy listing id is digits and nothing else.
+const VIDEOS = path.join(SHOP, 'videos');
+const LISTING_RE = /^\d{1,15}$/;
 
 function readJson(p) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
@@ -238,6 +244,27 @@ function runBuildScript(args) {
   });
 }
 
+// Every listing video on disk, newest first, titled from listing-video.py's
+// index. A file with no index entry is still listed - it exists - just
+// without a title.
+function listVideos() {
+  let names = [];
+  try { names = fs.readdirSync(VIDEOS); } catch { return []; }
+  const index = readJson(path.join(VIDEOS, 'index.json')) || {};
+  const out = [];
+  for (const name of names) {
+    const m = /^(\d{1,15})\.mp4$/.exec(name);
+    if (!m) continue;
+    let st;
+    try { st = fs.statSync(path.join(VIDEOS, name)); } catch { continue; }
+    if (!st.isFile()) continue;
+    const meta = index[m[1]] || {};
+    out.push({ listing_id: m[1], title: meta.title || '', seconds: meta.seconds ?? null,
+               bytes: st.size, updated_at: new Date(st.mtimeMs).toISOString() });
+  }
+  return out.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+}
+
 function register(app, db) {
   DB = db || null;
 
@@ -247,7 +274,23 @@ function register(app, db) {
     let st = null;
     try { st = fs.statSync(path.join(SHOP, 'banner.png')); } catch { /* not drawn */ }
     res.json({ banner: st && st.isFile()
-      ? { bytes: st.size, updated_at: new Date(st.mtimeMs).toISOString() } : null });
+      ? { bytes: st.size, updated_at: new Date(st.mtimeMs).toISOString() } : null,
+      videos: listVideos() });
+  });
+
+  // One listing video. sendFile answers range requests, which Safari needs
+  // before it will play a video at all; ?dl=1 asks the browser to save it.
+  app.get('/api/emily/shop/video/:listing', (req, res) => {
+    const id = req.params.listing;
+    if (!LISTING_RE.test(id || '')) return res.status(400).json({ error: 'bad listing id' });
+    const full = path.join(VIDEOS, `${id}.mp4`);
+    let st;
+    try { st = fs.statSync(full); } catch {
+      return res.status(404).json({ error: `no video yet - run scripts/listing-video.py ${id}` });
+    }
+    if (!st.isFile()) return res.status(404).json({ error: 'not found' });
+    if (req.query.dl === '1') return res.download(full, `listing-${id}.mp4`);
+    res.sendFile(full, { headers: { 'Cache-Control': req.query.v ? 'max-age=31536000, immutable' : 'no-cache' } });
   });
 
   // Archive a build. The script decides whether it may go: a build with a
@@ -360,4 +403,4 @@ function register(app, db) {
   });
 }
 
-module.exports = { register, listBuilds, describe, statusOf, statusWords };
+module.exports = { register, listBuilds, describe, statusOf, statusWords, listVideos, LISTING_RE };

@@ -1609,18 +1609,42 @@ async function loadEmilyShop() {
   let d;
   try { d = await (await fetch('/api/emily/shop', { cache: 'no-store' })).json(); }
   catch (e) { return; }
+  let banner;
   if (!d.banner) {
-    host.innerHTML = `<h2 style="font-size:15px;margin:18px 0 8px">Shop banner</h2>
+    banner = `<h2 style="font-size:15px;margin:18px 0 8px">Shop banner</h2>
       <div class="muted">Not drawn yet. On the droplet:
       <code>python3 scripts/emily-banner.py</code></div>`;
-    return;
+  } else {
+    const src = '/api/emily/shop/banner.png?v=' + encodeURIComponent(d.banner.updated_at);
+    banner = `<h2 style="font-size:15px;margin:18px 0 8px">Shop banner</h2>
+      <a href="${src}" target="_blank"><img src="${src}" alt="shop banner"
+        style="width:100%;border-radius:10px;border:1px solid var(--line);display:block"></a>
+      <div class="muted" style="margin-top:6px">Tap it to open full size, press and hold to save,
+        then Etsy &rsaquo; Shop Manager &rsaquo; Edit shop &rsaquo; Banner.</div>`;
   }
-  const src = '/api/emily/shop/banner.png?v=' + encodeURIComponent(d.banner.updated_at);
-  host.innerHTML = `<h2 style="font-size:15px;margin:18px 0 8px">Shop banner</h2>
-    <a href="${src}" target="_blank"><img src="${src}" alt="shop banner"
-      style="width:100%;border-radius:10px;border:1px solid var(--line);display:block"></a>
-    <div class="muted" style="margin-top:6px">Tap it to open full size, press and hold to save,
-      then Etsy &rsaquo; Shop Manager &rsaquo; Edit shop &rsaquo; Banner.</div>`;
+  host.innerHTML = banner + drawVideos(d.videos || []);
+}
+
+// Listing videos made by listing-video.py from each listing's own photos.
+// Play checks it; Download saves it to Files, and Etsy's app uploads from there.
+function drawVideos(videos) {
+  const head = '<h2 style="font-size:15px;margin:18px 0 8px">Listing videos</h2>';
+  if (!videos.length) {
+    return head + `<div class="muted">None made yet. On the droplet:
+      <code>python3 scripts/listing-video.py all</code></div>`;
+  }
+  return head + videos.map(v => {
+    const src = `/api/emily/shop/video/${encodeURIComponent(v.listing_id)}?v=${encodeURIComponent(v.updated_at)}`;
+    const mb = (v.bytes / 1e6).toFixed(1);
+    return `<div class="idea">
+      <div class="t">${esc(v.title || 'listing ' + v.listing_id)}</div>
+      <div class="muted">listing ${esc(v.listing_id)} · ${v.seconds ? esc(v.seconds) + 's · ' : ''}${mb} MB</div>
+      <video src="${src}" controls muted playsinline preload="metadata"
+        style="width:100%;max-width:360px;border-radius:10px;border:1px solid var(--line);margin-top:8px;display:block"></video>
+      <div class="acts" style="max-width:360px"><a class="yes" style="text-align:center;padding:9px;border-radius:10px;border:1px solid rgba(52,211,153,.45);color:var(--up);text-decoration:none;flex:1;font-size:12.5px;font-weight:600"
+        href="/api/emily/shop/video/${encodeURIComponent(v.listing_id)}?dl=1" download="listing-${esc(v.listing_id)}.mp4">Download</a></div>
+    </div>`;
+  }).join('') + `<div class="muted" style="margin-top:8px">On Etsy: Edit listing &rsaquo; Photos and video &rsaquo; add the downloaded file.</div>`;
 }
 
 async function loadEmilyBuilds() {
