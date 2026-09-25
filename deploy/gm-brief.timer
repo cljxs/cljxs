@@ -1,0 +1,14 @@
+[Unit]
+Description=Wake the GM each morning, after Fury's briefing
+
+[Timer]
+# 08:50 CENTRAL (the user's clock). Fury writes the briefing the GM reads at
+# 08:30 with up to three minutes of random delay, after a store fetch; twenty
+# minutes is room for all of it. Named gm-brief, not gm-cycle: *-cycle timers
+# are read as agents by cost-estimate.py and health-check.py, and the GM is a
+# script, not an agent.
+OnCalendar=*-*-* 08:50 America/Chicago
+Persistent=false
+
+[Install]
+WantedBy=timers.target

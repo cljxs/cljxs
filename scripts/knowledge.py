@@ -81,6 +81,9 @@ KINDS = {
 # means it should be true and nobody has checked.
 CONFIDENCE = ("measured", "observed", "believed")
 
+# brief()'s department for a reader of every department at once - the GM.
+EVERY = "*"
+
 STATUSES = ("proposed", "accepted", "retired")
 
 TITLE_MAX = 90
@@ -269,16 +272,17 @@ def due(con, now=None):
 def brief(con, dept, max_chars=BRIEF_MAX_CHARS, now=None):
     """The accepted entries an agent in `dept` is handed, as prompt text.
 
-    Its own department plus `all`. Decisions first - they are the ones an
-    agent must not argue with - then playbooks, lessons, facts, questions.
-    An entry past review is still shown, marked, because it was accepted and
-    nobody has said otherwise; hiding it would lose it silently.
+    Its own department plus `all`; EVERY for the GM, which sees them all.
+    Decisions first - they are the ones an agent must not argue with - then
+    playbooks, lessons, facts, questions. An entry past review is still
+    shown, marked, because it was accepted and nobody has said otherwise;
+    hiding it would lose it silently.
     """
-    if dept not in DEPARTMENTS:
+    if dept != EVERY and dept not in DEPARTMENTS:
         raise Refused(f"unknown department {dept!r}")
     order = {k: i for i, k in enumerate(("decision", "playbook", "lesson", "fact", "question"))}
     rows = [e for e in entries(con, status="accepted")
-            if e["dept"] in (dept, "all")]
+            if dept == EVERY or e["dept"] in (dept, "all")]
     rows.sort(key=lambda e: (order[e["kind"]], e["id"]))
     stale_before = stamp(now or utc_now())
 
@@ -287,7 +291,8 @@ def brief(con, dept, max_chars=BRIEF_MAX_CHARS, now=None):
         tag = f"{e['kind']}, {e['confidence']}"
         if e["review_by"] and e["review_by"] < stale_before:
             tag += ", past review"
-        line = f"- #{e['id']} [{tag}] {e['title']}: {e['body']}"
+        where = f"{e['dept']} " if dept == EVERY else ""
+        line = f"- #{e['id']} [{where}{tag}] {e['title']}: {e['body']}"
         if e["evidence"]:
             line += f" (evidence: {e['evidence']})"
         if used + len(line) + 1 > max_chars:
@@ -296,8 +301,9 @@ def brief(con, dept, max_chars=BRIEF_MAX_CHARS, now=None):
         out.append(line)
         used += len(line) + 1
     if dropped:
+        where = "" if dept == EVERY else f" --dept {dept}"
         out.append(f"- ({dropped} more accepted entries did not fit; "
-                   f"python3 scripts/knowledge.py list --dept {dept})")
+                   f"python3 scripts/knowledge.py list --status accepted{where})")
     return "\n".join(out)
 
 

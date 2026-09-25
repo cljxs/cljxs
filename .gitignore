@@ -115,3 +115,6 @@ agents/timmy/
 
 # The store report - daily snapshots of the shop's own listings, live data.
 agents/emily/state/store/
+
+# The GM's mornings - one JSON file per Eastern day, live state.
+tasks/gm/

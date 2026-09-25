@@ -12986,6 +12986,14 @@ class KnowledgeIsProposedAndOnlyTheOwnerMakesItTrue(unittest.TestCase):
         self.assertNotIn("trading only", text)
         self.assertLess(text.index("shared rule"), text.index("etsy lesson"))
 
+    def test_the_gms_brief_is_every_department_labelled(self):
+        for dept in ("etsy", "trading", "all"):
+            self.k.accept(self.con, self.add(title=f"{dept} entry", dept=dept))
+        text = self.k.brief(self.con, self.k.EVERY)
+        for dept in ("etsy", "trading", "all"):
+            self.assertIn(f"[{dept} lesson, observed] {dept} entry", text)
+        self.assertNotIn("trading entry", self.k.brief(self.con, "etsy"))
+
     def test_a_brief_is_capped_and_says_what_it_left_out(self):
         for n in range(12):
             self.k.accept(self.con, self.add(title=f"entry {n}", body="x" * 400))
@@ -13104,3 +13112,269 @@ class TheTownHallRunsTheScriptsItShows(unittest.TestCase):
         src = (self.API / "public" / "village.html").read_text()
         own = re.search(r"const OWN_REFRESH = new Set\(\[([^\]]*)\]\)", src).group(1)
         self.assertIn("HALL_DOOR", own)
+
+
+class TheGMProposesOnlyWhatTheFactsSupport(unittest.TestCase):
+    """gm.py: one model call a morning, checked by code before anyone sees it.
+
+    Propose-only for the first month (the owner's decision, 2026-09-25). The
+    GM reads facts code compiled, and code refuses any proposal that leans on
+    a fact it was not given or a number that is in none of the facts it cites.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.gm = load("gm", "gm.py")
+        cls.fury = load("fury_collect", "fury-collect.py")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        t = Path(self.tmp.name)
+        self.days, self.reports = t / "days", t / "reports"
+        self.reports.mkdir()
+        self.con = self.gm.knowledge.connect(t / "k.db")
+        self.now = datetime(2026, 9, 26, 13, 50, tzinfo=timezone.utc)   # 08:50 Central
+
+    def tearDown(self):
+        self.con.close()
+        self.tmp.cleanup()
+
+    OK_BUDGET = {"state": "ok", "cap": 1.0, "ai_today": 0.49, "ai_left_today": 0.51,
+                 "ai_month": 12.49, "hard_stop": "$1.00 daily"}
+
+    FACTS = ["Needs you: 3 tasks pending in the queue",
+             "The money: Belfort $10,095.12 (+0.95%)",
+             "Budget: $0.49 of AI spent today of the $1.00 daily cap, $0.51 left."]
+
+    def prop(self, **kw):
+        p = {"title": "Clear the queue", "dept": "ops", "who": "owner",
+             "action": "Look at the pending tasks", "why": "3 tasks are pending", "facts": ["F1"]}
+        p.update(kw)
+        return p
+
+    def briefing(self):
+        """A briefing written by Fury's own code, so the parser is tested
+        against the format Fury really writes."""
+        report = {"generated_utc": "2026-09-26 13:31:02",
+                  "agents": {"emily": {"last_memory_line": "- built 3 totes; library tote failed"}},
+                  "failures": [], "queue": {"pending": 3}}
+        text = self.fury.build_briefing(report, "2026-09-26")
+        f = self.reports / "2026-09-26.md"
+        f.write_text(text)
+        written = self.now.timestamp() - 20 * 60        # Fury's 08:30 run
+        os.utime(f, (written, written))
+        return f
+
+    def run_gm(self, reply=None, budget=None, call=None, **kw):
+        calls = []
+
+        def fake(msgs, key, slug):
+            calls.append(msgs)
+            if isinstance(reply, Exception):
+                raise reply
+            return (reply if isinstance(reply, str) else json.dumps(reply or {})), \
+                {"cost": 0.0123, "prompt_tokens": 900, "completion_tokens": 400}
+        code, doc = self.gm.run(now=kw.pop("now", self.now), days=self.days, con=self.con,
+                                read_budget=(budget if callable(budget) else (lambda: budget or self.OK_BUDGET)),
+                                call=call or fake, key="placeholder", reports=self.reports, **kw)
+        return code, doc, calls
+
+    # --- the checks on a reply -------------------------------------------
+
+    def test_a_proposal_must_cite_facts_it_was_given(self):
+        ok, why = self.gm.check_proposal(self.prop(), self.FACTS)
+        self.assertIsNotNone(ok, why)
+        for cited in ([], ["F4"], ["F0"], ["F1", "F9"], ["1"], "F1"):
+            ok, why = self.gm.check_proposal(self.prop(facts=cited), self.FACTS)
+            self.assertIsNone(ok, cited)
+
+    def test_a_number_in_the_why_must_be_in_the_cited_facts(self):
+        # 4 is in no fact: the model counted, or invented.
+        ok, why = self.gm.check_proposal(self.prop(why="4 tasks are pending"), self.FACTS)
+        self.assertIsNone(ok)
+        self.assertIn("4", why)
+        # 0.95 is a real fact, but not one this proposal cites.
+        ok, _ = self.gm.check_proposal(self.prop(why="Belfort is up 0.95%"), self.FACTS)
+        self.assertIsNone(ok)
+        ok, _ = self.gm.check_proposal(self.prop(why="Belfort is up 0.95%", facts=["F2"]), self.FACTS)
+        self.assertIsNotNone(ok)
+
+    def test_numbers_are_compared_as_values_and_references_are_not_claims(self):
+        n = self.gm.numbers
+        self.assertEqual(n("$1 cap"), n("$1.00 cap"))
+        self.assertEqual(n("$10,095.12"), {10095.12})
+        self.assertEqual(n("per F3 and knowledge #9"), set())
+        ok, _ = self.gm.check_proposal(
+            self.prop(why="Only $0.51 of the $1 cap is left (F3, see #9)", facts=["F3"]), self.FACTS)
+        self.assertIsNotNone(ok)
+
+    def test_departments_and_people_must_be_real(self):
+        self.assertIsNone(self.gm.check_proposal(self.prop(dept="marketing"), self.FACTS)[0])
+        self.assertIsNone(self.gm.check_proposal(self.prop(who="timmy"), self.FACTS)[0])
+        self.assertIsNotNone(self.gm.check_proposal(self.prop(who="Emily", dept="etsy"), self.FACTS)[0])
+
+    def test_at_most_five_proposals_and_the_rest_are_dropped_with_a_reason(self):
+        doc = {"summary": "s", "proposals": [self.prop(title=f"p{i}") for i in range(7)]}
+        _, kept, dropped, _ = self.gm.check_reply(doc, self.FACTS)
+        self.assertEqual([p["n"] for p in kept], [1, 2, 3, 4, 5])
+        self.assertEqual(len(dropped), 2)
+        self.assertIn("limit", dropped[0]["reason"])
+
+    def test_a_dropped_proposal_does_not_use_up_a_place(self):
+        doc = {"proposals": [self.prop(facts=[])] + [self.prop(title=f"p{i}") for i in range(5)]}
+        _, kept, dropped, _ = self.gm.check_reply(doc, self.FACTS)
+        self.assertEqual([p["n"] for p in kept], [1, 2, 3, 4, 5],
+                         "numbered as the owner sees them, not by the model's order")
+        self.assertEqual(dropped[0]["reason"], "cites no facts")
+
+    def test_a_fenced_reply_is_read_and_prose_is_refused(self):
+        self.assertEqual(self.gm.parse_reply('```json\n{"summary": "x"}\n```'), {"summary": "x"})
+        for bad in ("", "I think you should...", "[1, 2]"):
+            with self.assertRaises(ValueError):
+                self.gm.parse_reply(bad)
+
+    # --- the morning -----------------------------------------------------
+
+    def test_fury_briefing_becomes_facts_with_their_sections(self):
+        self.briefing()
+        facts = self.gm.fury_facts(self.reports, now=self.now)
+        self.assertIn("Needs you: 3 tasks pending in the queue", facts)
+        self.assertTrue(any(f.startswith("What happened: Emily") for f in facts), facts)
+        self.assertFalse(any("**" in f for f in facts))
+
+    def test_yesterdays_briefing_is_not_this_mornings(self):
+        f = self.briefing()
+        old = self.now.timestamp() - 20 * 3600
+        os.utime(f, (old, old))
+        facts = self.gm.fury_facts(self.reports, now=self.now)
+        self.assertEqual(len(facts), 1)
+        self.assertIn("there is none for this morning", facts[0])
+
+    def test_it_stays_asleep_when_the_budget_says_so(self):
+        def boom(*a):
+            raise AssertionError("the model must not be called")
+        for b in ({"state": "over", "ai_left_today": 0.0},
+                  # budget.py's verdict is the word that counts, whatever
+                  # else the numbers seem to say.
+                  dict(self.OK_BUDGET, state="over"),
+                  {"state": "unknown", "ai_left_today": None},
+                  dict(self.OK_BUDGET, ai_left_today=0.05)):
+            code, doc, _ = self.run_gm(budget=b, call=boom, force=True)
+            self.assertEqual((code, doc["status"]), (0, "skipped"), b)
+        def unreadable():
+            raise OSError("offline")
+        code, doc, _ = self.run_gm(budget=unreadable, call=boom, force=True)
+        self.assertEqual(doc["status"], "skipped")
+        self.assertIn("unknown budget", doc["reason"])
+        self.assertEqual(self.gm.read_day(self.gm.day_path("2026-09-26", self.days))["status"],
+                         "skipped", "a skipped morning is written down, not silent")
+
+    def test_one_call_a_day_unless_forced(self):
+        self.briefing()
+        reply = {"summary": "quiet", "proposals": [self.prop()]}
+        _, doc, calls = self.run_gm(reply)
+        self.assertEqual((doc["status"], len(calls)), ("ran", 1))
+        _, _, calls = self.run_gm(reply)
+        self.assertEqual(len(calls), 0, "a second run the same day must not pay again")
+        _, _, calls = self.run_gm(reply, force=True)
+        self.assertEqual(len(calls), 1)
+
+    def test_the_day_is_eastern(self):
+        # 01:30 UTC on the 27th is still the evening of the 26th in Eastern.
+        _, doc, _ = self.run_gm({"summary": "x"}, now=datetime(2026, 9, 27, 1, 30, tzinfo=timezone.utc))
+        self.assertEqual(doc["day"], "2026-09-26")
+
+    def test_a_failed_call_or_a_bad_reply_fails_loudly(self):
+        code, doc, _ = self.run_gm(OSError("timed out"))
+        self.assertEqual((code, doc["status"]), (1, "failed"))
+        code, doc, _ = self.run_gm("Here are my thoughts...", force=True)
+        self.assertEqual((code, doc["status"]), (1, "failed"))
+        self.assertEqual(doc["reply_head"], "Here are my thoughts...")
+
+    def test_what_it_ran_on_and_what_it_cost_are_kept(self):
+        self.briefing()
+        _, doc, calls = self.run_gm({"summary": "s", "proposals": [self.prop()]})
+        self.assertEqual(doc["cost_usd"], 0.0123)
+        self.assertEqual(doc["proposals"][0]["facts"], ["F1"])
+        user = calls[0][1]["content"]
+        for i, f in enumerate(doc["facts"], 1):
+            self.assertIn(f"F{i} {f}", user)
+
+    def test_the_cap_in_the_prompt_is_the_budgets_cap(self):
+        _, _, calls = self.run_gm({"summary": "s"}, budget=dict(self.OK_BUDGET, cap=2.5))
+        self.assertIn("$2.50 a day", calls[0][0]["content"])
+
+    def test_its_knowledge_is_proposed_never_accepted(self):
+        ks = [{"dept": "etsy", "kind": "lesson", "title": "Library totes time out",
+               "body": "b", "confidence": "observed"},
+              {"dept": "etsy", "kind": "lesson", "title": "Measured, no evidence",
+               "body": "b", "confidence": "measured"},
+              {"dept": "shoes", "kind": "lesson", "title": "x", "body": "b"},
+              {"dept": "etsy", "kind": "fact", "title": "fourth", "body": "b"}]
+        _, doc, _ = self.run_gm({"summary": "s", "knowledge": ks})
+        results = [k["result"] for k in doc["knowledge"]]
+        self.assertTrue(results[0].startswith("proposed #"))
+        self.assertTrue(results[1].startswith("refused:"))
+        self.assertTrue(results[2].startswith("refused:"))
+        self.assertIn("limit", results[3])
+        rows = self.gm.knowledge.entries(self.con)
+        self.assertEqual([(r["status"], r["source"]) for r in rows], [("proposed", "gm")])
+
+    def test_the_owners_decisions_are_tomorrows_facts(self):
+        self.briefing()
+        _, doc, _ = self.run_gm({"summary": "s", "proposals": [self.prop(), self.prop(title="Other")]})
+        self.gm.decide(doc["day"], 1, "decline", "not while totes-only", days=self.days)
+        with self.assertRaises(self.gm.knowledge.Refused):
+            self.gm.decide(doc["day"], 9, "approve", days=self.days)
+        with self.assertRaises(self.gm.knowledge.Refused):
+            self.gm.decide(doc["day"], 1, "maybe", days=self.days)
+        tomorrow = self.now + timedelta(days=1)
+        _, _, calls = self.run_gm({"summary": "s"}, now=tomorrow)
+        user = calls[0][1]["content"]
+        self.assertIn('declined "Clear the queue". Note: not while totes-only', user)
+        self.assertIn('has not decided on "Other"', user)
+
+    def test_the_model_is_one_openrouter_really_lists(self):
+        listed = {m["id"] for m in json.loads((FIXTURES / "openrouter-models.json").read_text())["data"]}
+        self.assertIn(self.gm.DEFAULT_MODEL, listed)
+
+    def test_the_timer_is_not_mistaken_for_an_agent(self):
+        # *-cycle.timer is how cost-estimate and health-check find agents.
+        self.assertTrue((ROOT / "deploy" / "gm-brief.timer").is_file())
+        self.assertFalse(list((ROOT / "deploy").glob("gm-cycle.*")))
+        svc = (ROOT / "deploy" / "gm-brief.service").read_text()
+        self.assertIn("scripts/gm.py run", svc)
+
+
+class TheTownHallRecordsTheOwnersAnswer(TheTownHallRunsTheScriptsItShows):
+    """townhall.js's GM route: validated, then handed to gm.py decide."""
+
+    GSTUB = (
+        "import json, sys\n"
+        "open(sys.argv[0] + '.calls', 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "print(json.dumps({'status': 'ran', 'day': '2026-09-26'}) if sys.argv[1] == 'show' else 'ok')\n"
+    )
+
+    def setUp(self):
+        super().setUp()
+        (self.root / "scripts" / "gm.py").write_text(self.GSTUB)
+
+    def gm_calls(self):
+        f = self.root / "scripts" / "gm.py.calls"
+        return [json.loads(l) for l in f.read_text().splitlines()] if f.exists() else []
+
+    def test_the_hall_carries_the_gms_morning(self):
+        out = self.drive("out.t = await call('GET', '/api/townhall');")
+        self.assertEqual(out["t"]["body"]["gm"]["status"], "ran")
+
+    def test_only_a_well_formed_answer_reaches_gm_py(self):
+        out = self.drive(
+            "out.a = await call('POST', '/api/gm/:day/:n/:verdict', {day: '2026-09-26; ls', n: '1', verdict: 'approve'});"
+            "out.b = await call('POST', '/api/gm/:day/:n/:verdict', {day: '2026-09-26', n: 'x', verdict: 'approve'});"
+            "out.c = await call('POST', '/api/gm/:day/:n/:verdict', {day: '2026-09-26', n: '1', verdict: 'assign'});"
+            "out.d = await call('POST', '/api/gm/:day/:n/:verdict', {day: '2026-09-26', n: '2', verdict: 'decline'}, {note: 'not now'});")
+        for k in "abc":
+            self.assertEqual(out[k]["status"], 400, k)
+        self.assertEqual(out["d"]["status"], 200)
+        self.assertEqual([c for c in self.gm_calls() if c[0] == "decide"],
+                         [["decide", "2026-09-26", "2", "decline", "--note", "not now"]])

@@ -2143,8 +2143,10 @@ function openHallPanel(){
   openAgent = HALL_DOOR;
   $('card').innerHTML = `
     <h2>${esc(HALL_DOOR)}</h2>
-    <div class="sub">today's AI budget · what the ecosystem has learned</div>
-    <div id="hallBudget"><div class="muted">reading the month…</div></div>
+    <div class="sub">today's AI budget · the GM's proposals · what the ecosystem has learned</div>
+    <div id="hallBudget"><div class="muted">reading the budget…</div></div>
+    <div class="sect">This morning's GM</div>
+    <div id="hallGm"><div class="muted">loading…</div></div>
     <div class="sect">Knowledge</div>
     <div id="hallTabs" class="ptabs"></div>
     <div id="hallBody"><div class="muted">loading…</div></div>
@@ -2160,6 +2162,10 @@ function openHallPanel(){
   $('hallBody').onclick = e => {
     const b = e.target.closest('[data-k]');
     if (b) actOnKnowledge(b.dataset.k, b.dataset.verb);
+  };
+  $('hallGm').onclick = e => {
+    const b = e.target.closest('[data-gm]');
+    if (b) actOnProposal(b.dataset.day, b.dataset.gm, b.dataset.verb);
   };
   loadHall();
 }
@@ -2199,14 +2205,89 @@ function drawBudget(b){
     </div>`;
 }
 
+function drawGm(g){
+  if (!g || g.status === 'none') {
+    return `<div class="muted">The GM has not run yet. It runs each morning after Fury's
+      briefing; to run it now: <b>python3 scripts/gm.py run</b></div>`;
+  }
+  if (g.status === 'unreadable') {
+    return `<div class="verdict">The GM's morning could not be read${g.reason ? ' — ' + esc(g.reason) : ''}.</div>`;
+  }
+  const head = `<div class="muted">${esc(g.day)} · ${esc(g.status)}` +
+    (g.cost_usd !== null && g.cost_usd !== undefined ? ` · cost $${Number(g.cost_usd).toFixed(4)}` : '') +
+    `</div>`;
+  if (g.status !== 'ran') {
+    return head + `<div class="verdict">${esc(g.reason || 'no reason recorded')}</div>`;
+  }
+  const facts = g.facts || [];
+  const cards = (g.proposals || []).map(p => {
+    const d = p.decision;
+    const state = !d ? '' : d.verdict === 'approve'
+      ? '<span class="pill ok">approved</span>' : '<span class="pill warn">declined</span>';
+    const rests = (p.facts || []).map(f => {
+      const i = Number(String(f).slice(1)) - 1;
+      return `<div class="w">${esc(f)}: ${esc(facts[i] || '?')}</div>`;
+    }).join('');
+    const btns = `<div class="acts">
+        <button class="yes" data-gm="${p.n}" data-day="${esc(g.day)}" data-verb="approve">Approve</button>
+        <button class="no" data-gm="${p.n}" data-day="${esc(g.day)}" data-verb="decline">Decline</button></div>`;
+    return `<div class="idea">
+      <div class="t">${p.n}. ${esc(p.title)}</div>
+      <div class="ktags"><span class="pill">${esc(p.dept)}</span><span class="pill">${esc(p.who)}</span>${state}</div>
+      <div class="d"><b>Do:</b> ${esc(p.action)}</div>
+      <div class="d"><b>Why:</b> ${esc(p.why)}</div>
+      ${rests}
+      ${d && d.note ? `<div class="w">your note: ${esc(d.note)}</div>` : ''}
+      ${btns}
+    </div>`;
+  }).join('');
+  const dropped = (g.dropped || []).length
+    ? `<div class="muted" style="margin-top:8px">Dropped by the checks:</div>` +
+      g.dropped.map(x => `<div class="muted">${esc(x.title)} — ${esc(x.reason)}</div>`).join('')
+    : '';
+  const know = (g.knowledge || []).length
+    ? `<div class="muted" style="margin-top:8px">Knowledge it suggested (see Proposed below):</div>` +
+      g.knowledge.map(x => `<div class="muted">${esc(x.title)} — ${esc(x.result)}</div>`).join('')
+    : '';
+  return head + (g.summary ? `<div class="quote">${esc(g.summary)}</div>` : '') +
+    (cards || '<div class="muted">No proposals this morning.</div>') + dropped + know;
+}
+
+async function actOnProposal(day, n, verdict){
+  if (hallBusy) return;
+  const ask = verdict === 'approve'
+    ? 'Note for the GM (optional) - what you will do, or any condition:'
+    : 'Why not? The GM reads this tomorrow so it does not propose it again.';
+  const note = window.prompt(ask, '');
+  if (note === null) return;
+  if (verdict === 'decline' && !note.trim()) return;
+  hallBusy = true;
+  document.querySelectorAll('#hallGm .acts button').forEach(b => b.disabled = true);
+  try {
+    const r = await fetch(`/api/gm/${encodeURIComponent(day)}/${encodeURIComponent(n)}/${verdict}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note: note.trim() }),
+    });
+    const j = await r.json();
+    if (!r.ok || j.ok === false) alert((j.error || 'That did not work').slice(0, 300));
+  } catch (e) {
+    alert('Could not reach the API: ' + e.message);
+  } finally {
+    hallBusy = false;
+    loadHall();
+  }
+}
+
 function drawHall(){
   if (openAgent !== HALL_DOOR) return;
   if (!HALL) {
     $('hallBudget').innerHTML = '';
+    $('hallGm').innerHTML = '';
     $('hallBody').innerHTML = '<div class="verdict">Cannot reach /api/townhall.</div>';
     return;
   }
   $('hallBudget').innerHTML = drawBudget(HALL.budget);
+  $('hallGm').innerHTML = drawGm(HALL.gm);
 
   const k = HALL.knowledge || {};
   const all = k.entries || [];
