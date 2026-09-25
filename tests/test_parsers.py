@@ -13304,7 +13304,29 @@ class TheGMProposesOnlyWhatTheFactsSupport(unittest.TestCase):
         _, _, calls = self.run_gm({"summary": "s"}, budget=dict(self.OK_BUDGET, cap=2.5))
         self.assertIn("$2.50 a day", calls[0][0]["content"])
 
-    def test_its_knowledge_is_proposed_never_accepted(self):
+    def test_it_proposes_no_knowledge_for_now(self):
+        # Its first real morning suggested three "facts" that were stale by
+        # the next day. Until it reads more than one day, it files nothing.
+        self.assertEqual(self.gm.MAX_KNOWLEDGE, 0)
+        _, doc, calls = self.run_gm({"summary": "s", "knowledge": [
+            {"dept": "etsy", "kind": "fact", "title": "Three scout ideas are pending review",
+             "body": "b", "confidence": "observed"}]})
+        self.assertNotIn('"knowledge"', calls[0][0]["content"], "it is not asked for any")
+        self.assertEqual(doc["knowledge"][0]["result"],
+                         "not filed: the GM does not propose knowledge yet")
+        self.assertEqual(self.gm.knowledge.entries(self.con), [])
+
+    def test_text_cut_at_the_limit_says_it_was_cut(self):
+        long = "word " * 120
+        cut = self.gm._text(long, self.gm.TEXT_MAX)
+        self.assertEqual(len(cut), self.gm.TEXT_MAX)
+        self.assertTrue(cut.endswith("\u2026"))
+        self.assertEqual(self.gm._text("short  text", self.gm.TEXT_MAX), "short text")
+
+    def test_when_knowledge_is_turned_on_it_is_proposed_never_accepted(self):
+        saved = self.gm.MAX_KNOWLEDGE
+        self.gm.MAX_KNOWLEDGE = 3
+        self.addCleanup(setattr, self.gm, "MAX_KNOWLEDGE", saved)
         ks = [{"dept": "etsy", "kind": "lesson", "title": "Library totes time out",
                "body": "b", "confidence": "observed"},
               {"dept": "etsy", "kind": "lesson", "title": "Measured, no evidence",

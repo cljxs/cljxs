@@ -30,6 +30,7 @@ number nobody gave it:
   * a number in a proposal's `why` must appear in the facts it cites
   * departments and people must be real ones
   * at most MAX_PROPOSALS proposals and MAX_KNOWLEDGE knowledge suggestions
+    (zero for now - see MAX_KNOWLEDGE)
 
 Dropped proposals are kept with the reason, so the Town Hall shows what the
 model tried and why it was refused rather than hiding it. Knowledge the GM
@@ -86,9 +87,15 @@ REASONING = {"effort": "low"}
 MIN_LEFT = 0.10
 
 MAX_PROPOSALS = 5
-MAX_KNOWLEDGE = 3
+# Knowledge the GM may propose each morning. Zero since its first real run
+# (2026-09-25): all three of its suggestions restated that morning's facts -
+# "3 Scout ideas are pending", "the daily budget is not exhausted" - which are
+# stale the next day. One morning's snapshot cannot show what is still true
+# next week. Raise this when the GM reads more than one day at a time.
+MAX_KNOWLEDGE = 0
 TITLE_MAX = 90
 TEXT_MAX = 400
+ASK_MAX = 300        # what the prompt asks for; TEXT_MAX is where code cuts
 SUMMARY_MAX = 700
 
 # Fury writes its briefing at 08:30 Central. Older than this and it is
@@ -210,6 +217,14 @@ def people():
 
 def messages(facts, rules, day, cap):
     cap_words = f"${cap:.2f} a day" if cap is not None else "a daily cap"
+    if MAX_KNOWLEDGE:
+        knowledge_rule = (f"12. \"knowledge\": at most {MAX_KNOWLEDGE} things learned from these "
+                          f"facts that will\n    still be true next week. confidence is measured, "
+                          f"observed or believed;\n    measured needs evidence someone can re-check.\n")
+        knowledge_shape = (',\n  "knowledge": [{"dept": "...", "kind": "lesson|playbook|question", '
+                           '"title": "...", "body": "...", "evidence": "...", "confidence": "observed"}]')
+    else:
+        knowledge_rule, knowledge_shape = "", ""
     system = f"""You are the GM of a small business run by one owner and a few AI agents.
 Each morning you read the facts below and propose what should happen today.
 
@@ -222,23 +237,25 @@ Rules - code checks the first three and drops any proposal that breaks them:
 3. "dept" and "who" must come from the team list. "who" may also be "owner".
 4. At most {MAX_PROPOSALS} proposals, most valuable first. Fewer strong proposals
    beat many weak ones; none is a fine answer on a quiet day.
-5. Prefer actions that cost nothing. All AI spend is capped at {cap_words}.
-6. Accepted knowledge marked "decision" is the owner's call. Do not propose
+5. A proposal is ONE concrete step a named person can take today that moves a
+   sale closer or fixes something that is broken. Not a new process, report,
+   scoring scheme, checklist or review of other proposals.
+6. Say nothing about the AI budget. It is capped at {cap_words} and code enforces it.
+7. Accepted knowledge marked "decision" is the owner's call. Do not propose
    reversing one unless a fact shows it is causing harm - then cite that fact.
-7. Learn from the owner's decisions on the last proposals. Do not re-propose
-   something declined unless a fact has changed.
-8. "knowledge": at most {MAX_KNOWLEDGE} things learned from these facts that will
-   still be true next week. confidence is measured, observed or believed;
-   measured needs evidence someone can re-check.
-
+8. Apply a lesson or playbook only to what it names. A rule about all-over
+   prints applies to all-over products, not to every tote. If no fact says what
+   kind of product something is, do not assume.
+9. Only the owner can publish or edit a listing on Etsy. Agents cannot.
+10. Learn from the owner's decisions on the last proposals. Do not re-propose
+    something declined unless a fact has changed.
+11. Keep "action" and "why" under {ASK_MAX} characters each.
+{knowledge_rule}
 Reply with one JSON object and nothing else:
 {{"summary": "two or three sentences on the state of things",
   "proposals": [{{"title": "...", "dept": "...", "who": "...",
                  "action": "what to do, concretely", "why": "...",
-                 "facts": ["F1"]}}],
-  "knowledge": [{{"dept": "...", "kind": "fact|lesson|decision|playbook|question",
-                 "title": "...", "body": "...", "evidence": "...",
-                 "confidence": "observed"}}]}}"""
+                 "facts": ["F1"]}}]{knowledge_shape}}}"""
     numbered = "\n".join(f"F{i} {f}" for i, f in enumerate(facts, 1))
     user = (f"Today is {day} (Eastern).\n\nFACTS\n{numbered}\n\n"
             f"ACCEPTED KNOWLEDGE\n{rules or '(none accepted yet)'}\n\nTEAM\n{roster()}\n")
@@ -294,7 +311,10 @@ def numbers(text):
 
 
 def _text(v, limit):
-    return " ".join(str(v or "").split())[:limit]
+    """Whitespace squeezed, and cut at `limit` with a visible mark - a cut
+    that ends mid-word with nothing to show for it reads as the whole text."""
+    t = " ".join(str(v or "").split())
+    return t if len(t) <= limit else t[:limit - 1].rstrip() + "\u2026"
 
 
 def check_proposal(p, facts):
@@ -366,7 +386,9 @@ def file_knowledge(con, suggestions):
             continue
         title = _text(k.get("title"), 200) or "(untitled)"
         if i >= MAX_KNOWLEDGE:
-            out.append({"title": title, "result": f"not filed: over the limit of {MAX_KNOWLEDGE}"})
+            why = (f"over the limit of {MAX_KNOWLEDGE}" if MAX_KNOWLEDGE
+                   else "the GM does not propose knowledge yet")
+            out.append({"title": title, "result": f"not filed: {why}"})
             continue
         try:
             new_id = knowledge.add(con, k.get("dept"), k.get("kind"), k.get("title"),
