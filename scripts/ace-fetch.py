@@ -363,6 +363,16 @@ def build_context(sport, path, event):
 
 # ------------------------------------------------------------ shadow ledger
 
+def ace_clv():
+    """ace-clv.py, which owns the price history the closing-line grade reads."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ace_clv",
+                                                  Path(__file__).resolve().parent / "ace-clv.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def ace_focus():
     """Today's focus from ace-focus.py, or None. Read there, so the fetcher and
     ace-judge.py agree on whether today is a focus day."""
@@ -530,6 +540,7 @@ def main():
     log(f"in season: {season or '(none)'}")
 
     slate, failures, deep_written = [], [], 0
+    written = []            # every context this run, for the closing-line history
 
     for sport in season:
         path = SPORTS[sport]["path"]
@@ -570,6 +581,7 @@ def main():
                 ctx = build_context(sport, path, e)
                 (CTX / f"{sport}-{e['id']}.json").write_text(json.dumps(ctx, indent=1) + "\n")
                 deep_written += 1
+                written.append(ctx)
             except Exception as exc:
                 failures.append({"sport": sport, "event": e["id"], "error": str(exc)[:140]})
                 log(f"{sport} {e.get('shortName')}: context FAILED — {exc}")
@@ -580,6 +592,15 @@ def main():
     if not slate and failures:
         log("nothing fetched — leaving previous data files untouched")
         return 1
+
+    # Each game's price, kept until it starts: the last one kept is the close
+    # Ace's verdicts are graded against. A failure here must not cost the
+    # slate, so it is said and the run goes on.
+    try:
+        tracked = ace_clv().record_lines(written)
+        log(f"closing-line history: {len(tracked)} games tracked")
+    except Exception as exc:
+        log(f"closing-line history NOT updated - {exc}")
 
     # Eastern, not UTC. A 23:30 ET wake happens on the next UTC day, and
     # using that date filed a report under tomorrow's name.

@@ -191,6 +191,21 @@ def parse_numbers(spec, total):
     return uniq, None
 
 
+def log_for_clv(rows):
+    """Every verdict goes to ace-clv.py's journal too: the ledger is replaced
+    each cycle, and the estimate is only gradeable after its game closes."""
+    import importlib.util
+    try:
+        spec = importlib.util.spec_from_file_location("ace_clv", Path(__file__).resolve().parent / "ace-clv.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        # Ace's own state folder (AGENT, which the tests point elsewhere),
+        # under ace-clv.py's file name - one name, one owner.
+        mod.log_judgements(rows, path=AGENT / "state" / mod.JOURNAL.name)
+    except Exception as exc:
+        print(f"  (not logged for closing-line grading: {exc})", file=sys.stderr)
+
+
 def focus_today():
     """Today's focus from ace-focus.py, or None - read there so this and the
     fetcher agree on whether today is a focus day."""
@@ -310,6 +325,7 @@ def record(a, status):
         led["candidates"] = [r for r in led.get("candidates", []) if key(r) != key(row)]
         led["candidates"].append(row)
         done.append(row)
+    filled = []
     if focus and len(done) == 1 and a.my_pct is not None:
         src = other_side(rows, rows[nums[0] - 1])
         judged = {key(r) for r in led["candidates"]}
@@ -321,9 +337,11 @@ def record(a, status):
             twin["why_not"] = [f"other side of {done[0]['selection']}: {a.why}"]
             twin["status"] = "passed"
             led["candidates"].append(twin)
+            filled.append(twin)
             print(f"  and PASSED the other side, {twin['selection']}, at "
                   f"{twin['my_pct']:.1f}% (edge {twin.get('edge_pts', 0):+.1f} pts)")
     save(led)
+    log_for_clv(done + filled)
 
     if len(done) == 1:
         r = done[0]

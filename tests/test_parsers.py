@@ -14111,6 +14111,11 @@ class AceFocusDayJudgesEveryGameItShows(unittest.TestCase):
         self.assertEqual((rows["IOWA ML"]["my_pct"], rows["IOWA ML"]["edge_pts"]), (38.0, 3.7))
         self.assertEqual((rows["MICH ML"]["my_pct"], rows["MICH ML"]["edge_pts"]), (62.0, -3.7))
         self.assertIn("other side of IOWA ML", rows["MICH ML"]["why_not"][0])
+        journal = led.parent / "judgements.jsonl"
+        logged = [json.loads(l) for l in journal.read_text().splitlines()]
+        self.assertEqual({(j["selection"], j["my_pct"]) for j in logged},
+                         {("IOWA ML", 38.0), ("MICH ML", 62.0)},
+                         "both sides reach the closing-line journal, in Ace's own folder")
 
     def test_a_side_already_judged_is_not_overwritten(self):
         led = self.judging()
@@ -14129,3 +14134,139 @@ class AceFocusDayJudgesEveryGameItShows(unittest.TestCase):
     def test_ace_is_told(self):
         head = (ROOT / "agents" / "ace" / "_ace-agents-header.md").read_text()
         self.assertIn("A focus day is different", head)
+
+
+class AceIsGradedOnTheClosingLine(unittest.TestCase):
+    """ace-clv.py: bets graded by closing line value, estimates by whether the
+    market moved toward them (researched 2026-09-26: CLV is the most reliable
+    early sign of a real edge; wins and losses take thousands of bets)."""
+
+    def setUp(self):
+        self.clv = load("ace_clv_t", "ace-clv.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+        self.lines, self.journal = self.d / "lines.json", self.d / "judgements.jsonl"
+        self.start = datetime(2026, 9, 26, 19, 30, tzinfo=timezone.utc)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def ctx(self, home_pct, ml_home=-218, ml_away=180):
+        return {"sport": "cfb", "short": "IOWA @ MICH", "start_utc": "2026-09-26T19:30Z",
+                "home": {"abbr": "MICH"}, "away": {"abbr": "IOWA"},
+                "odds": {"moneyline_home": ml_home, "moneyline_away": ml_away,
+                         "novig_home_pct": home_pct, "novig_away_pct": round(100 - home_pct, 1)}}
+
+    def at(self, hours_before):
+        return self.start - timedelta(hours=hours_before)
+
+    def test_the_last_price_before_kickoff_is_kept_and_never_after(self):
+        self.clv.record_lines([self.ctx(65.7)], self.at(6), self.lines)
+        self.clv.record_lines([self.ctx(63.9, -200, 165)], self.at(0.4), self.lines)
+        self.clv.record_lines([self.ctx(50.0, -100, 100)], self.start + timedelta(minutes=5), self.lines)
+        e = json.loads(self.lines.read_text())["cfb|IOWA @ MICH|2026-09-26T19:30Z"]
+        self.assertEqual(e["first"]["novig_home_pct"], 65.7)
+        self.assertEqual(e["last"]["novig_home_pct"], 63.9, "a started game is never updated")
+        self.assertEqual((e["home"], e["away"], e["observations"]), ("MICH", "IOWA", 2))
+
+    def test_unpriced_games_are_not_tracked_and_old_ones_are_dropped(self):
+        c = self.ctx(65.7)
+        c["odds"]["novig_home_pct"] = None
+        self.clv.record_lines([c], self.at(6), self.lines)
+        self.assertEqual(json.loads(self.lines.read_text()), {})
+        self.clv.record_lines([self.ctx(65.7)], self.at(6), self.lines)
+        later = self.start + timedelta(days=self.clv.KEEP_DAYS + 1)
+        self.clv.record_lines([], later, self.lines)
+        self.assertEqual(json.loads(self.lines.read_text()), {})
+
+    def entry(self, close_home_pct, close_at_hours_before=0.4):
+        self.clv.record_lines([self.ctx(65.7)], self.at(6), self.lines)
+        self.clv.record_lines([self.ctx(close_home_pct, -200, 165)],
+                              self.at(close_at_hours_before), self.lines)
+        return json.loads(self.lines.read_text())["cfb|IOWA @ MICH|2026-09-26T19:30Z"]
+
+    def judged(self, **kw):
+        j = {"judged_utc": self.at(4).strftime("%Y-%m-%dT%H:%M:%SZ"),
+             "key": "cfb|IOWA @ MICH|2026-09-26T19:30Z", "selection": "IOWA ML",
+             "match": "IOWA @ MICH", "status": "passed", "price": 180, "novig_pct": 34.3,
+             "my_pct": 38.0, "stake": None}
+        j.update(kw)
+        return j
+
+    def test_a_bet_is_valued_at_the_closing_chance(self):
+        # Took Iowa at +180 (decimal 2.8); Iowa closed at 36.1%: 0.361 x 2.8 - 1 = +1.08%.
+        g = self.clv.grade(self.judged(status="bet", stake=150), self.entry(63.9), self.start)
+        self.assertEqual(g["clv_pct"], 1.1)
+        self.assertEqual(g["close_pct"], 36.1)
+        g = self.clv.grade(self.judged(status="bet", stake=150), self.entry(70.0), self.start)
+        self.assertLess(g["clv_pct"], 0, "the market moved against the bet")
+
+    def test_an_estimate_is_graded_by_which_way_the_line_went(self):
+        toward = self.clv.grade(self.judged(my_pct=38.0), self.entry(63.9), self.start)
+        self.assertEqual((toward["moved"], toward["toward"]), (1.8, 1.8))
+        against = self.clv.grade(self.judged(my_pct=30.0), self.entry(63.9), self.start)
+        self.assertEqual(against["toward"], -1.8)
+        self.assertIsNone(self.clv.grade(self.judged(my_pct=None), self.entry(63.9), self.start)["toward"])
+
+    def test_a_close_seen_before_the_verdict_grades_nothing(self):
+        g = self.clv.grade(self.judged(judged_utc=self.at(0.2).strftime("%Y-%m-%dT%H:%M:%SZ")),
+                           self.entry(63.9, close_at_hours_before=0.4), self.start)
+        self.assertFalse(g["later_price"])
+        self.assertIsNone(g["toward"])
+
+    def test_nothing_is_graded_before_kickoff(self):
+        self.assertIsNone(self.clv.grade(self.judged(), self.entry(63.9), self.at(0.1)))
+
+    def test_prices_and_sides(self):
+        self.assertAlmostEqual(self.clv.decimal_odds(180), 2.8)
+        self.assertAlmostEqual(self.clv.decimal_odds(-200), 1.5)
+        self.assertIsNone(self.clv.decimal_odds(50))
+        e = {"home": "MICH", "away": "IOWA"}
+        self.assertEqual((self.clv.side_of("IOWA ML", e), self.clv.side_of("MICH ML", e),
+                          self.clv.side_of("OSU ML", e)), ("away", "home", None))
+
+    def test_the_latest_verdict_on_a_side_is_the_one_graded(self):
+        self.clv.log_judgements([dict(selection="IOWA ML", match="IOWA @ MICH", sport="cfb",
+                                      starts_utc="2026-09-26T19:30Z", status="passed",
+                                      price=180, novig_pct=34.3, my_pct=30.0)],
+                                self.at(5), self.journal)
+        self.clv.log_judgements([dict(selection="IOWA ML", match="IOWA @ MICH", sport="cfb",
+                                      starts_utc="2026-09-26T19:30Z", status="passed",
+                                      price=180, novig_pct=34.3, my_pct=38.0)],
+                                self.at(4), self.journal)
+        self.entry(63.9)
+        r = self.clv.report(self.start, self.lines, self.journal)
+        self.assertEqual(len(r["graded"]), 1)
+        self.assertEqual(r["graded"][0]["my_pct"], 38.0)
+        self.assertEqual((r["estimates"], r["estimates_toward"]), (1, 1))
+
+    def test_the_fetchers_game_and_the_judges_row_join(self):
+        # The whole report rests on this join. A slate row goes through the
+        # fetcher's build_ledger and ace-judge's CARRY copy, exactly as in a
+        # cycle; the price history is keyed from the context file. If either
+        # side renames a field, nothing is ever graded - silently.
+        fetch = load("ace_fetch_clv", "ace-fetch.py")
+        judge = load("ace_judge_clv", "ace-judge.py")
+        ctxdir = self.d / "context"
+        ctxdir.mkdir()
+        start = datetime.now(timezone.utc) + timedelta(hours=3)
+        c = self.ctx(65.7)
+        c["start_utc"] = start.strftime("%Y-%m-%dT%H:%MZ")
+        c["status"], c["injuries"] = "STATUS_SCHEDULED", []
+        (ctxdir / "cfb-1.json").write_text(json.dumps(c))
+        row = next(r for r in fetch.build_ledger("2026-09-26", ctxdir, "afternoon")["candidates"]
+                   if r["selection"] == "IOWA ML")
+        copied = {k: row.get(k) for k in judge.CARRY}
+        copied.update(status="passed", my_pct=38.0)
+        self.clv.log_judgements([copied], datetime.now(timezone.utc), self.journal)
+        self.clv.record_lines([c], datetime.now(timezone.utc), self.lines)
+        r = self.clv.report(start + timedelta(minutes=1), self.lines, self.journal)
+        self.assertEqual(len(r["graded"]), 1, "the verdict and the price history did not join")
+        self.assertEqual(r["graded"][0]["selection"], "IOWA ML")
+
+    def test_every_verdict_is_logged_including_the_filled_in_side(self):
+        src = (SCRIPTS / "ace-judge.py").read_text()
+        self.assertIn("log_for_clv(done + filled)", src)
+        self.assertIn('AGENT / "state" / mod.JOURNAL.name', src)
+        fetch = (SCRIPTS / "ace-fetch.py").read_text()
+        self.assertIn("ace_clv().record_lines(written)", fetch)

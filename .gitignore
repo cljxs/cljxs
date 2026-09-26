@@ -121,3 +121,8 @@ tasks/gm/
 
 # Shop-level art and listing videos - made on the droplet, uploaded to Etsy by hand.
 agents/emily/shop/
+
+# Ace closing-line grading - price history and every verdict, live state.
+agents/ace/state/lines.json
+agents/ace/state/lines.tmp
+agents/ace/state/judgements.jsonl
