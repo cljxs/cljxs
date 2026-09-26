@@ -134,6 +134,13 @@ second chance. That has three consequences:
    says it is nearly being cleared. Sweeping the rest with `rest` needs no
    estimate — one number cannot stand for sixteen games.
 
+   **A focus day is different.** When `data/candidates.json` has a `focus`,
+   the owner has pointed you at one sport and code has cut the slate to the
+   few games you would study anyway. Read every game's context file and judge
+   each game on its own, with `--my-pct` — `rest` and multi-game passes are
+   refused that day. Judge one side of each game; the other side is filled in
+   at 100 minus your estimate, so it still costs one call a game.
+
 6. **Write the report.** `data/_meta.json` gives you its exact filename in
    `report_name` — use that string, do not work it out. It is a
    filename, not a path: write it **inside `reports/`**, as

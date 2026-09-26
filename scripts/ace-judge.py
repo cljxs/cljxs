@@ -191,6 +191,25 @@ def parse_numbers(spec, total):
     return uniq, None
 
 
+def focus_today():
+    """Today's focus from ace-focus.py, or None - read there so this and the
+    fetcher agree on whether today is a focus day."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ace_focus", Path(__file__).resolve().parent / "ace-focus.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.today()
+
+
+def other_side(rows, row):
+    """The other team's row in the same game, or None. A moneyline game is two
+    rows, and their no-vig chances add to 100."""
+    for r in rows:
+        if r.get("match") == row.get("match") and r.get("selection") != row.get("selection"):
+            return r
+    return None
+
+
 def key(r):
     return f"{str(r.get('selection') or '').lower()}|{str(r.get('match') or '').lower()}"
 
@@ -225,6 +244,20 @@ def record(a, status):
     if not a.why:
         print("--why is required. The reason IS the row - a verdict with no reason "
               "tells the user nothing about why you passed.", file=sys.stderr)
+        return 1
+    # A FOCUS DAY (ace-focus.py): the slate is only as big as what gets
+    # studied, so every game is judged on its own, with an estimate. One
+    # estimate covers both sides of a game - the other team's row is filled in
+    # below at 100 minus it - so this costs one call a game, as sweeping did.
+    focus = focus_today()
+    if focus and len(nums) > 1:
+        print(f"focus day ({focus['sport']}, {focus['games']} games): judge one game at a "
+              f"time with its own --my-pct. The other side of each game is filled in "
+              f"for you.", file=sys.stderr)
+        return 1
+    if focus and a.my_pct is None:
+        print("focus day: every game needs your --my-pct - that estimate is the "
+              "whole point of a slate this small.", file=sys.stderr)
         return 1
     # A pass naming one or two games is a game Ace actually looked at, and an
     # estimate for it is the only evidence that ever accumulates about whether
@@ -277,6 +310,19 @@ def record(a, status):
         led["candidates"] = [r for r in led.get("candidates", []) if key(r) != key(row)]
         led["candidates"].append(row)
         done.append(row)
+    if focus and len(done) == 1 and a.my_pct is not None:
+        src = other_side(rows, rows[nums[0] - 1])
+        judged = {key(r) for r in led["candidates"]}
+        if src and key(src) not in judged:
+            twin = {k: src.get(k) for k in CARRY}
+            twin["my_pct"] = round(100.0 - float(a.my_pct), 1)
+            if src.get("novig_pct") is not None:
+                twin["edge_pts"] = round(twin["my_pct"] - float(src["novig_pct"]), 1)
+            twin["why_not"] = [f"other side of {done[0]['selection']}: {a.why}"]
+            twin["status"] = "passed"
+            led["candidates"].append(twin)
+            print(f"  and PASSED the other side, {twin['selection']}, at "
+                  f"{twin['my_pct']:.1f}% (edge {twin.get('edge_pts', 0):+.1f} pts)")
     save(led)
 
     if len(done) == 1:
@@ -354,6 +400,12 @@ def cmd_rest(a):
     bar on the no-vig line" is; "read the context file" is not. Games you never
     actually looked at are better left out: the board marks those `unjudged` on
     its own, which tells the user what was skipped."""
+    focus = focus_today()
+    if focus:
+        print(f"focus day ({focus['sport']}, {focus['games']} games): no sweeping - "
+              f"judge each game with its own --my-pct. `ace-judge.py list` shows "
+              f"which are left.", file=sys.stderr)
+        return 1
     _, rows = load_candidates()
     led = load_ledger()
     have = {key(r) for r in led.get("candidates", [])}

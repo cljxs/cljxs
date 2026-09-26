@@ -363,7 +363,18 @@ def build_context(sport, path, event):
 
 # ------------------------------------------------------------ shadow ledger
 
-def build_ledger(day, ctx_dir, slot):
+def ace_focus():
+    """Today's focus from ace-focus.py, or None. Read there, so the fetcher and
+    ace-judge.py agree on whether today is a focus day."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ace_focus",
+                                                  Path(__file__).resolve().parent / "ace-focus.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.today()
+
+
+def build_ledger(day, ctx_dir, slot, focus=None):
     """Every game that could still be bet, with the mechanical verdict already
     filled in.
 
@@ -416,14 +427,24 @@ def build_ledger(day, ctx_dir, slot):
     # college football could be configured, fetched, priced - and never once
     # reach the slate. Each sport gets its next game in turn, soonest first
     # within a sport, until the window is full.
-    by_sport = {}
-    for g, _ in playable:
-        by_sport.setdefault(g[2].get("sport") or "?", []).append(g)
-    chosen, order = [], sorted(by_sport)
-    while len(chosen) < MAX_GAMES and any(by_sport.values()):
-        for sport in order:
-            if by_sport.get(sport) and len(chosen) < MAX_GAMES:
-                chosen.append(by_sport[sport].pop(0))
+    #
+    # A FOCUS DAY (ace-focus.py) replaces all of that: one sport, and only as
+    # many games as Ace studies in a cycle, so none is swept unread. Which few
+    # is decided here, not by him: games with fresh injury news first - the
+    # one kind of information the line may not have priced yet - then soonest.
+    if focus:
+        mine = [g for g, _ in playable if (g[2].get("sport") or "") == focus["sport"]]
+        mine.sort(key=lambda g: (not fresh_injuries(g[2], now), g[0], g[1]))
+        chosen = mine[:focus["games"]]
+    else:
+        by_sport = {}
+        for g, _ in playable:
+            by_sport.setdefault(g[2].get("sport") or "?", []).append(g)
+        chosen, order = [], sorted(by_sport)
+        while len(chosen) < MAX_GAMES and any(by_sport.values()):
+            for sport in order:
+                if by_sport.get(sport) and len(chosen) < MAX_GAMES:
+                    chosen.append(by_sport[sport].pop(0))
     dropped = max(0, len(playable) - len(chosen))
     games = sorted(chosen, key=lambda g: (g[0], g[1]))
 
@@ -476,6 +497,11 @@ def build_ledger(day, ctx_dir, slot):
         # UTC clock and filed a 23:31 ET run as "2026-09-16-afternoon.md".
         "slot": slot,
         "verdict": None,
+        # Said on the board Ace reads, so a four-game slate is not mistaken
+        # for a quiet day - and the rule that comes with it travels with it.
+        "focus": dict(focus, rule="focus day: every game gets its own estimate - "
+                                  "ace-judge.py refuses `rest` and multi-row passes")
+                 if focus else None,
         "source": "ace-fetch.py - mechanical fields only, awaiting Ace's estimates",
         "window_hours": BET_WINDOW_HOURS,
         "games_shown": len(games),
@@ -497,7 +523,10 @@ def build_ledger(day, ctx_dir, slot):
 def main():
     CTX.mkdir(parents=True, exist_ok=True)
     started = datetime.now(timezone.utc)
-    season = in_season(started)
+    focus = ace_focus()
+    season = [focus["sport"]] if focus else in_season(started)
+    if focus:
+        log(f"FOCUS today: {focus['sport']} only, {focus['games']} games (ace-focus.py)")
     log(f"in season: {season or '(none)'}")
 
     slate, failures, deep_written = [], [], 0
@@ -557,7 +586,7 @@ def main():
     now_et = et_time.eastern_now()
     (DATA / "candidates.json").write_text(
         json.dumps(build_ledger(et_time.day(now_et), CTX,
-                                et_time.slot("ace", now_et)), indent=1) + "\n")
+                                et_time.slot("ace", now_et), focus), indent=1) + "\n")
 
     (DATA / "slate.json").write_text(json.dumps({
         "asof_utc": started.strftime("%Y-%m-%d %H:%M:%S"),

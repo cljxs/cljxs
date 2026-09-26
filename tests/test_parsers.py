@@ -13966,3 +13966,166 @@ class AceShowsTheEdgeOnEveryJudgedGame(unittest.TestCase):
                 self.aj.cmd_show(None)
         self.assertIn("day 2026-09-20  slot afternoon", out.getvalue())
         self.assertIn("Ace 46.0%  edge +2.1 pts", out.getvalue())
+
+
+class AceFocusDayJudgesEveryGameItShows(unittest.TestCase):
+    """ace-focus.py: one sport and a slate Ace can finish, for one day.
+
+    2026-09-26: the owner wanted college football. Ace's eight-game slate held
+    four baseball games and four college ones; he studied three baseball games
+    and swept all four college games unread. A focus day cuts the slate to
+    the sport and the few games he studies, picks them by fresh news, and
+    ace-judge.py refuses the sweep.
+    """
+
+    def setUp(self):
+        self.focus = load("ace_focus_t", "ace-focus.py")
+        self.fetch = load("ace_fetch_focus", "ace-fetch.py")
+        self.judge = load("ace_judge_focus", "ace-judge.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+        self.ctx = self.d / "context"
+        self.ctx.mkdir()
+        self.FOCUS = {"sport": "cfb", "games": 2, "day": "2026-09-26"}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    # --- the setting ------------------------------------------------------
+
+    def test_a_focus_is_for_its_own_eastern_day_only(self):
+        f = self.d / "focus.json"
+        f.write_text(json.dumps({"day": "2026-09-26", "sport": "cfb", "games": 4}))
+        self.assertEqual(self.focus.today("2026-09-26", f), {"sport": "cfb", "games": 4, "day": "2026-09-26"})
+        self.assertIsNone(self.focus.today("2026-09-27", f), "it stops at midnight Eastern by itself")
+        for bad in ({"day": "2026-09-26", "sport": "cfb", "games": 0},
+                    {"day": "2026-09-26", "sport": "", "games": 4},
+                    {"day": "2026-09-26", "sport": "cfb", "games": "lots"}):
+            f.write_text(json.dumps(bad))
+            self.assertIsNone(self.focus.today("2026-09-26", f), bad)
+
+    def test_set_and_clear(self):
+        f = self.d / "focus.json"
+        with unittest.mock.patch.object(self.focus, "FOCUS", f), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.focus.main(["today", "cfb"]), 0)
+            self.assertEqual(json.loads(f.read_text())["games"], self.focus.GAMES)
+            self.assertEqual(self.focus.main(["today", "curling"]), 2)
+            self.assertEqual(self.focus.main(["today", "cfb", "--games", "9"]), 2)
+            self.assertEqual(self.focus.main(["clear"]), 0)
+        self.assertFalse(f.exists())
+
+    # --- the slate --------------------------------------------------------
+
+    def game(self, sport, name, hours_out, news_hours_ago=None):
+        start = datetime.now(timezone.utc) + timedelta(hours=hours_out)
+        inj = []
+        if news_hours_ago is not None:
+            when = datetime.now(timezone.utc) - timedelta(hours=news_hours_ago)
+            inj = [{"team": "HOM", "player": "QB1", "position": "QB", "status": "Out",
+                    "date": when.strftime("%Y-%m-%dT%H:%MZ")}]
+        (self.ctx / f"{sport}-{name}.json").write_text(json.dumps({
+            "sport": sport, "short": name, "match": name,
+            "start_utc": start.strftime("%Y-%m-%dT%H:%MZ"), "status": "STATUS_SCHEDULED",
+            "home": {"abbr": name[:3] + "H"}, "away": {"abbr": name[:3] + "A"},
+            "odds": {"moneyline_home": -150, "moneyline_away": 130,
+                     "novig_home_pct": 58.0, "novig_away_pct": 42.0},
+            "injuries": inj}))
+
+    def test_a_focus_slate_is_one_sport_news_first_and_no_bigger_than_asked(self):
+        # Baseball starts soonest, and two quiet college games start before the
+        # one with news - so each rule, not the clock, decides who is picked.
+        self.game("mlb", "TOR", 0.5)
+        self.game("mlb", "MIA", 0.7)
+        self.game("cfb", "SOON", 1)
+        self.game("cfb", "MID", 3)
+        self.game("cfb", "NEWS", 6, news_hours_ago=2)
+        doc = self.fetch.build_ledger("2026-09-26", self.ctx, "afternoon", self.FOCUS)
+        matches = []
+        for r in doc["candidates"]:
+            if r["match"] not in matches:
+                matches.append(r["match"])
+        self.assertEqual(set(matches), {"NEWS", "SOON"}, "the news game beats a sooner quiet one")
+        self.assertEqual({r["sport"] for r in doc["candidates"]}, {"cfb"})
+        self.assertEqual(doc["focus"]["sport"], "cfb")
+        self.assertIn("refuses `rest`", doc["focus"]["rule"])
+
+    def test_without_a_focus_the_slate_is_what_it_was(self):
+        self.game("mlb", "TOR", 1)
+        self.game("cfb", "SOON", 1)
+        doc = self.fetch.build_ledger("2026-09-26", self.ctx, "afternoon")
+        self.assertIsNone(doc["focus"])
+        self.assertEqual({r["sport"] for r in doc["candidates"]}, {"mlb", "cfb"})
+
+    # --- judging ----------------------------------------------------------
+
+    def judging(self, focus=True):
+        agent = self.d / "ace"
+        (agent / "data").mkdir(parents=True)
+        (agent / "state").mkdir(parents=True)
+        rows = [{"selection": "IOWA ML", "match": "IOWA @ MICH", "sport": "cfb", "price": 180,
+                 "novig_pct": 34.3, "starts_utc": "2026-09-26T19:30Z"},
+                {"selection": "MICH ML", "match": "IOWA @ MICH", "sport": "cfb", "price": -218,
+                 "novig_pct": 65.7, "starts_utc": "2026-09-26T19:30Z"},
+                {"selection": "TCU ML", "match": "TCU @ UCF", "sport": "cfb", "price": -170,
+                 "novig_pct": 60.4, "starts_utc": "2026-09-26T23:00Z"},
+                {"selection": "UCF ML", "match": "TCU @ UCF", "sport": "cfb", "price": 142,
+                 "novig_pct": 39.6, "starts_utc": "2026-09-26T23:00Z"}]
+        (agent / "data" / "candidates.json").write_text(json.dumps({"candidates": rows}))
+        for name, val in (("AGENT", agent), ("CANDIDATES", agent / "data" / "candidates.json"),
+                          ("LEDGER", agent / "state" / "ledger.json")):
+            p = unittest.mock.patch.object(self.judge, name, val)
+            p.start()
+            self.addCleanup(p.stop)
+        p = unittest.mock.patch.object(self.judge, "focus_today",
+                                       return_value=self.FOCUS if focus else None)
+        p.start()
+        self.addCleanup(p.stop)
+        return agent / "state" / "ledger.json"
+
+    def act(self, fn, **kw):
+        a = types.SimpleNamespace(**dict({"number": "1", "my_pct": None, "why": "x", "stake": None}, **kw))
+        err, out = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+            code = fn(a) if fn is self.judge.cmd_rest else fn(a, "passed")
+        return code, out.getvalue() + err.getvalue()
+
+    def test_no_sweep_and_no_batch_on_a_focus_day(self):
+        self.judging()
+        code, said = self.act(self.judge.cmd_rest, why="did not clear 8")
+        self.assertEqual(code, 1)
+        self.assertIn("no sweeping", said)
+        code, said = self.act(self.judge.record, number="1-4", my_pct=40.0)
+        self.assertEqual(code, 1)
+        self.assertIn("one game at a time", said)
+        code, said = self.act(self.judge.record, number="1")
+        self.assertEqual(code, 1)
+        self.assertIn("needs your --my-pct", said)
+
+    def test_one_estimate_covers_both_sides_of_the_game(self):
+        led = self.judging()
+        code, said = self.act(self.judge.record, number="1", my_pct=38.0, why="QB back")
+        self.assertEqual(code, 0, said)
+        rows = {r["selection"]: r for r in json.loads(led.read_text())["candidates"]}
+        self.assertEqual(set(rows), {"IOWA ML", "MICH ML"}, "only this game's two sides")
+        self.assertEqual((rows["IOWA ML"]["my_pct"], rows["IOWA ML"]["edge_pts"]), (38.0, 3.7))
+        self.assertEqual((rows["MICH ML"]["my_pct"], rows["MICH ML"]["edge_pts"]), (62.0, -3.7))
+        self.assertIn("other side of IOWA ML", rows["MICH ML"]["why_not"][0])
+
+    def test_a_side_already_judged_is_not_overwritten(self):
+        led = self.judging()
+        self.act(self.judge.record, number="2", my_pct=70.0, why="first")
+        self.act(self.judge.record, number="1", my_pct=25.0, why="second")
+        rows = {r["selection"]: r for r in json.loads(led.read_text())["candidates"]}
+        self.assertEqual(rows["MICH ML"]["my_pct"], 70.0)
+        self.assertEqual(rows["IOWA ML"]["my_pct"], 25.0)
+
+    def test_on_a_normal_day_nothing_changes(self):
+        led = self.judging(focus=False)
+        code, _ = self.act(self.judge.cmd_rest, why="did not clear 8")
+        self.assertEqual(code, 0)
+        self.assertEqual(len(json.loads(led.read_text())["candidates"]), 4)
+
+    def test_ace_is_told(self):
+        head = (ROOT / "agents" / "ace" / "_ace-agents-header.md").read_text()
+        self.assertIn("A focus day is different", head)
