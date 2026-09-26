@@ -1,0 +1,17 @@
+{
+  "mode": "paper",
+  "note": "Simulated money. No sportsbook is connected to this file.",
+  "currency": "USD",
+  "starting_bankroll": 10000.0,
+  "bankroll": 10000.0,
+  "unit_pct": 1.5,
+  "max_stake_pct": 3.0,
+  "stop_loss_pct": 15.0,
+  "stop_loss_floor": 8500.0,
+  "max_open_bets": 2,
+  "open_bets": [],
+  "settled_bets": [],
+  "cycle_count": 0,
+  "created_utc": "2026-09-14 13:10:48",
+  "last_cycle_utc": null
+}

@@ -1,0 +1,17 @@
+[Unit]
+Description=Run the Timmy fetcher every 15 minutes, plus a keep-alive off-hours
+
+[Timer]
+Unit=timmy-fetch.service
+# Every 15 minutes across the trading day, so every cycle reads recent prices.
+OnCalendar=Mon..Fri 08..17:00/15 America/New_York
+# And every 6 hours the rest of the time. This is not for the prices - the
+# market is shut. It is so the data file never ages past Timmy's 24h bail-out
+# over a weekend. Without it, every Monday cycle would correctly refuse to run
+# on 65-hour-old data and Timmy would look broken when it was not.
+OnCalendar=*-*-* 00/6:05 America/New_York
+Persistent=true
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

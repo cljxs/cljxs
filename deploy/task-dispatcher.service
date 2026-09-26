@@ -1,0 +1,23 @@
+[Unit]
+Description=Agent task dispatcher
+Documentation=https://github.com/cljxs/cljxs
+After=network-online.target mission-control-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+# HOME lets the `openclaw` CLI find its config and talk to the gateway.
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=POLL_SECONDS=2
+Environment=TASK_TIMEOUT=600
+WorkingDirectory=/root/ecosystem
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/task-dispatcher.py
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
