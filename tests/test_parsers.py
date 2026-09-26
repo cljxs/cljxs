@@ -161,6 +161,22 @@ class ProviderErrors(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertIn("OUT OF CREDIT", r.stdout)
 
+    def test_the_daily_cap_on_the_key_is_named_as_the_cap(self):
+        # 2026-09-26: Belfort's Friday close run exited 1 on the first day of
+        # the owner's $1/day OpenRouter cap. OpenRouter's refusal wording, as
+        # reported by other OpenRouter users, was matched by nothing here, so
+        # a spent budget would read as an agent that skipped its work.
+        for line in ('{"error":{"message":"Key limit exceeded (daily limit). Manage it using '
+                     'https://openrouter.ai/settings/keys","code":403}}',
+                     "403 Key limit exceeded. Manage it using https://openrouter.ai/keys",
+                     "OpenRouter 403: API key budget limit exceeded (monthly limit)"):
+            with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as f:
+                f.write(line + "\n")
+            r = self.run_checker(f.name)
+            self.assertEqual(r.returncode, 2, line)
+            self.assertIn("DAILY SPENDING CAP REACHED", r.stdout, line)
+            self.assertIn("7pm Central", r.stdout)
+
     def test_a_missing_log_is_not_evidence_of_anything(self):
         r = self.run_checker(FIXTURES / "does-not-exist.log", must_exist=False)
         self.assertEqual(r.returncode, 0)

@@ -27,6 +27,19 @@ from pathlib import Path
 # rejected - which would have had someone re-entering a working credential.
 # Numbers that size are everywhere in this log; only "status 401" is evidence.
 SIGNS = [
+    # First, because it is the most specific. The owner capped the key at $1 a
+    # day on OpenRouter (2026-09-25); once that is spent every call answers
+    # "403 Key limit exceeded (daily limit)" until the cap resets at midnight
+    # UTC. Unmatched, the run fell through to the verifier and read as an
+    # agent that forgot its deliverables.
+    (r"key limit exceeded|budget limit exceeded|spending limit exceeded",
+     "DAILY SPENDING CAP REACHED", "this is the budget, not the agent",
+     "OpenRouter refused the request because the key's spending cap is spent.\n"
+     "  It resets at midnight UTC - 7pm Central - and the next wake after that\n"
+     "  will run. Today's spend so far:  python3 scripts/budget.py\n"
+     "  Nothing is wrong with this agent. If this keeps happening before the\n"
+     "  agents' last wakes of the day, the daily cap is too tight for the\n"
+     "  schedule - raise it on the key, or run fewer things by hand."),
     (r"billing error|insufficient balance|run out of credits|quota exceeded|"
      r"insufficient_quota|payment required|"
      r"(?:status|code|http)\D{0,8}402\b",
