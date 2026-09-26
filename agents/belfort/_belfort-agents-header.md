@@ -67,6 +67,9 @@ and do not write that file by hand even to "fix" it.
    `report_name` — use that string, do not work it out. It is a
    filename, not a path: write it **inside `reports/`**, as
    `reports/<report_name>`. A report left in the top folder is not found.
+   The wake message names the same file. Every wake writes its **own new
+   report** - the close never edits the morning's `-open.md`; a close run
+   that did was failed, trades and all.
    **At least 60 words**; the verifier rejects anything shorter, however
    quiet the session was.
 

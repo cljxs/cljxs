@@ -193,3 +193,16 @@ def expected_report(agent_dir, agent_name, now=None, started=None):
     except Exception:
         pass
     return None, None
+
+
+if __name__ == "__main__":
+    # `python3 et_time.py report-name belfort` - the report this wake must
+    # write, for the cycle scripts to put in the wake message. The verifier
+    # asks report_name() the same question, so the name the agent is handed
+    # and the name it is checked against come from one function.
+    import sys
+    if len(sys.argv) == 3 and sys.argv[1] == "report-name" and sys.argv[2] in SLOTS:
+        print(report_name(sys.argv[2]))
+        sys.exit(0)
+    print(f"usage: et_time.py report-name <{'|'.join(SLOTS)}>", file=sys.stderr)
+    sys.exit(2)

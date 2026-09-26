@@ -65,8 +65,14 @@ printf '%s\n' "$CYCLES_BEFORE" > "$AGENT/state/.cycle-before"
 # So the message says what a cycle is. No delegating, no starting - doing.
 LOG="$(mktemp)"
 trap 'rm -f "$LOG"' EXIT
+# The report's exact name, from the function the verifier checks against -
+# Belfort's close run once edited the morning's report instead of writing its
+# own, and Ace has two slots a day as well.
+REPORT="$(python3 "$ROOT/scripts/et_time.py" report-name ace)"
 openclaw agent --agent ace \
   --message "Scheduled cycle. Do the whole cycle yourself, now, in this session.
+This wake's report is a NEW file: reports/$REPORT - write it there, and do
+not edit an earlier report, even one from today.
 
 Do NOT spawn a session, delegate to a subagent, open a dashboard or post a
 progress card. There is nobody watching this run and nothing will pick up work

@@ -52,8 +52,13 @@ printf '%s\n' "$CYCLES_BEFORE" > "$AGENT/state/.cycle-before"
 
 LOG="$(mktemp)"
 trap 'rm -f "$LOG"' EXIT
+# The report's exact name goes in the wake message. On 2026-09-25 the close
+# run was handed "2026-09-25-close.md" in _meta.json, edited the morning's
+# open report instead, and was failed for it - its trades were fine. The name
+# comes from et_time.py, the same function the verifier checks against.
+REPORT="$(python3 "$ROOT/scripts/et_time.py" report-name belfort)"
 openclaw agent --agent belfort \
-  --message "scheduled cycle" \
+  --message "Scheduled cycle. This wake's report is a NEW file: reports/$REPORT - write it there. Do not edit an earlier report, even one from today." \
   --session-id "wake-belfort-$STARTED" \
   --timeout 600 --json 2>&1 | tee "$LOG"
 # The agent's own exit code is deliberately not checked here. It exits 0 for

@@ -14286,3 +14286,30 @@ class AceIsGradedOnTheClosingLine(unittest.TestCase):
         self.assertIn('AGENT / "state" / mod.JOURNAL.name', src)
         fetch = (SCRIPTS / "ace-fetch.py").read_text()
         self.assertIn("ace_clv().record_lines(written)", fetch)
+
+
+class TheWakeMessageNamesTheReport(unittest.TestCase):
+    """2026-09-25: Belfort's close run was handed "2026-09-25-close.md" in
+    _meta.json, edited the morning's open report instead and was failed for
+    it. The exact name now goes in the wake message, from the same function
+    the verifier checks against."""
+
+    def test_the_command_prints_what_the_verifier_expects(self):
+        for agent in ("belfort", "ace"):
+            r = subprocess.run([sys.executable, str(SCRIPTS / "et_time.py"), "report-name", agent],
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.stdout.strip(), et_time.report_name(agent))
+        r = subprocess.run([sys.executable, str(SCRIPTS / "et_time.py"), "report-name", "emily"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2, "an agent without slots has no such name")
+
+    def test_both_cycles_put_it_in_the_message(self):
+        for agent in ("belfort", "ace"):
+            src = (SCRIPTS / f"{agent}-cycle.sh").read_text()
+            self.assertIn(f'REPORT="$(python3 "$ROOT/scripts/et_time.py" report-name {agent})"', src)
+            message = src.split("--message", 1)[1].split("--session-id", 1)[0]
+            self.assertIn("reports/$REPORT", message)
+            self.assertIn("NEW file", message)
+            self.assertLess(src.index('REPORT="$('), src.index("openclaw agent"),
+                            "the name is worked out before the agent is woken")
