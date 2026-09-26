@@ -404,8 +404,27 @@ def cmd_verdict(a):
     return 0
 
 
+def ledger_on_disk():
+    """The ledger file as it stands, whichever cycle wrote it.
+
+    load_ledger() answers "what may this cycle write to", and a ledger from an
+    earlier slot is empty to it on purpose. `show` answers "what did Ace
+    decide", and must not report an empty ledger over a file full of rows -
+    it did, from 20:00 ET onwards, for the afternoon's games.
+    """
+    try:
+        doc = json.loads(LEDGER.read_text())
+    except Exception:
+        return {"candidates": []}
+    if isinstance(doc, list):
+        return {"candidates": doc}
+    if not isinstance(doc, dict) or not isinstance(doc.get("candidates"), list):
+        return {"candidates": []}
+    return doc
+
+
 def cmd_show(a):
-    led = load_ledger()
+    led = ledger_on_disk()
     rows = led.get("candidates", [])
     print(f"{LEDGER}")
     print(f"  day {led.get('day')}  slot {led.get('slot')}")
@@ -414,8 +433,29 @@ def cmd_show(a):
     for r in rows:
         print(f"  [{r.get('status')}] {r.get('selection')} / {r.get('match')} "
               f"- {'; '.join(r.get('why_not') or [])}")
-    print(f"  {len(rows)} rows")
+        print(f"      {edge_line(r)}")
+    with_edge = sum(1 for r in rows if r.get("edge_pts") is not None)
+    print(f"  {len(rows)} rows, {with_edge} with Ace's own estimate "
+          f"(the rest were passed in a sweep, with no number of their own)")
     return 0
+
+
+def _pct(v):
+    return "?" if v is None else f"{float(v):.1f}%"
+
+
+def edge_line(r):
+    """The numbers behind one verdict: the price, the market's no-vig chance,
+    Ace's own estimate and the gap between them - the edge the 8-point bar is
+    measured on. A row passed in a sweep has no estimate, and says so rather
+    than showing a gap nobody worked out."""
+    head = f"price {r.get('price')}  market {_pct(r.get('novig_pct'))}"
+    if r.get("my_pct") is None:
+        return head + "  Ace: no estimate (swept)"
+    edge = r.get("edge_pts")
+    return (head + f"  Ace {_pct(r.get('my_pct'))}  edge "
+            + ("?" if edge is None else f"{float(edge):+.1f} pts")
+            + (f"  stake {r['stake']:g}" if r.get("stake") is not None else ""))
 
 
 def main():

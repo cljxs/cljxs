@@ -13911,3 +13911,58 @@ class TheDeckOffersEachVideoForDownload(unittest.TestCase):
         self.assertIn('filename="listing-123.mp4"', out["dl"][3])
         self.assertEqual(out["bad"][0], 400)
         self.assertEqual(out["none"][0], 404)
+
+
+class AceShowsTheEdgeOnEveryJudgedGame(unittest.TestCase):
+    """ace-judge.py show: the numbers behind each verdict, not just the reason.
+
+    The owner asked (2026-09-26) for the edge on every game Ace judged. The
+    ledger always stored price, no-vig chance, Ace's estimate and the edge;
+    `show` printed only the reason.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.aj = load("ace_judge_show", "ace-judge.py")
+
+    def test_a_judged_row_shows_price_market_estimate_and_edge(self):
+        line = self.aj.edge_line({"price": -180, "novig_pct": 62.4, "my_pct": 71.0,
+                                  "edge_pts": 8.6, "stake": 150.0})
+        self.assertEqual(line, "price -180  market 62.4%  Ace 71.0%  edge +8.6 pts  stake 150")
+        self.assertIn("edge -3.0 pts", self.aj.edge_line({"price": 110, "novig_pct": 50.0,
+                                                          "my_pct": 47.0, "edge_pts": -3.0}))
+
+    def test_a_swept_row_says_it_has_no_estimate_rather_than_an_edge(self):
+        line = self.aj.edge_line({"price": -250, "novig_pct": 69.8, "my_pct": None})
+        self.assertEqual(line, "price -250  market 69.8%  Ace: no estimate (swept)")
+        self.assertNotIn("edge", line)
+
+    def test_show_prints_it_under_every_row(self):
+        with tempfile.TemporaryDirectory() as d:
+            led = Path(d) / "ledger.json"
+            led.write_text(json.dumps({"day": "2026-09-26", "candidates": [
+                {"selection": "Oregon", "match": "UCLA @ Oregon", "price": -180, "novig_pct": 62.4,
+                 "my_pct": 71.0, "edge_pts": 8.6, "status": "bet", "stake": 150, "why_not": ["x"]},
+                {"selection": "Texas", "match": "Texas @ Ole Miss", "price": -250,
+                 "novig_pct": 69.8, "my_pct": None, "status": "passed", "why_not": ["y"]}]}))
+            out = io.StringIO()
+            with unittest.mock.patch.object(self.aj, "LEDGER", led), contextlib.redirect_stdout(out):
+                self.aj.cmd_show(None)
+        text = out.getvalue()
+        self.assertIn("Ace 71.0%  edge +8.6 pts", text)
+        self.assertIn("Ace: no estimate (swept)", text)
+        self.assertIn("2 rows, 1 with Ace's own estimate", text)
+
+    def test_show_reads_an_earlier_cycles_ledger_instead_of_calling_it_empty(self):
+        # load_ledger() starts a fresh ledger for a new slot - right for
+        # writing, wrong for showing what Ace decided this afternoon.
+        with tempfile.TemporaryDirectory() as d:
+            led = Path(d) / "ledger.json"
+            led.write_text(json.dumps({"day": "2026-09-20", "slot": "afternoon", "candidates": [
+                {"selection": "Iowa", "match": "Iowa @ Wisconsin", "price": 120, "novig_pct": 43.9,
+                 "my_pct": 46.0, "edge_pts": 2.1, "status": "passed", "why_not": ["gap"]}]}))
+            out = io.StringIO()
+            with unittest.mock.patch.object(self.aj, "LEDGER", led), contextlib.redirect_stdout(out):
+                self.aj.cmd_show(None)
+        self.assertIn("day 2026-09-20  slot afternoon", out.getvalue())
+        self.assertIn("Ace 46.0%  edge +2.1 pts", out.getvalue())
