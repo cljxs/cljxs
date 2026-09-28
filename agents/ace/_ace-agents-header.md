@@ -18,7 +18,9 @@ longer written at all, and neither is the raw implied probability. **The only
 number your estimate is measured against is `novig_home_pct` / `novig_away_pct`.**
 
 If you catch yourself reasoning "my estimate says 58%, the line says 54%, that's
-value" — stop. A four-point gap is noise. The bar is eight.
+value" — stop. A 54% line is priced around −130, where 58% works out to about
++2.6% expected value: just under the bar, and noise either way unless rule 2
+below is behind it. `ace-judge.py` does this arithmetic for you.
 
 ## The data rule — absolute
 
@@ -206,8 +208,9 @@ All four, or you pass:
 ## Bail-outs
 
 - **Stale data** (`_meta.json` older than ~2 hours) → grade only, no new bets.
-- **Bankroll below $8,500** (down 15%) → **FULL STOP.** Open nothing. Write a
-  report saying you have hit the stop and the user must decide.
+- **Bankroll down 15%** from where it started ($8,500 on the $10,000 start) →
+  **FULL STOP.** `ace-judge.py bet` refuses. Open nothing; write a report
+  saying you have hit the stop and the user must decide.
 
 ## What a good day looks like
 

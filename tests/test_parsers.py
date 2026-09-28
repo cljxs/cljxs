@@ -14399,3 +14399,72 @@ class AceBetsOnExpectedValueWithQuarterKellyStakes(unittest.TestCase):
         self.assertIn("c.clears_bar ? 'up'", page)
         self.assertIn("clears_bar: c.clears_bar === true",
                       (ROOT / "mission-control-api" / "ace.js").read_text())
+
+
+class AceBankrollHoldsDataNotRules(unittest.TestCase):
+    """2026-09-28: bankroll.json carried unit_pct 1.5, max_stake_pct,
+    max_open_bets 2 and a stop-loss - five settings no code read, two
+    contradicting what code enforced (quarter-Kelly, max 4 open). The 15% stop
+    was a sentence in the header nothing checked. The rules are constants in
+    ace-judge.py now; `bet` enforces the stop and `mark` strips the old keys."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.m = load("ace_judge_bank", "ace-judge.py")
+        agent = Path(self.tmp.name) / "ace"
+        (agent / "state").mkdir(parents=True)
+        (agent / "data").mkdir(parents=True)
+        for name, val in (("AGENT", agent), ("CANDIDATES", agent / "data" / "candidates.json"),
+                          ("LEDGER", agent / "state" / "ledger.json")):
+            setattr(self.m, name, val)
+        self.m.CANDIDATES.write_text(json.dumps({"candidates": [
+            {"selection": "DOG ML", "match": "DOG @ FAV", "price": 150, "novig_pct": 42.0, "sport": "nfl"}]}))
+        self.bank = agent / "state" / "bankroll.json"
+
+    def bet(self, bankroll):
+        self.bank.write_text(json.dumps({"starting_bankroll": 10000.0, "bankroll": bankroll}))
+        a = types.SimpleNamespace(number="1", my_pct=45.0, stake=None, why="x")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            code = self.m.record(a, "bet")
+        return code, out.getvalue()
+
+    def test_the_seed_holds_no_rules(self):
+        seed = json.loads((ROOT / "agents" / "ace" / "state" / "bankroll.seed.json").read_text())
+        for k in self.m.RETIRED_BANKROLL_KEYS:
+            self.assertNotIn(k, seed)
+        self.assertEqual(seed["starting_bankroll"], seed["bankroll"], "the stop measures from here")
+
+    def test_bet_refuses_at_the_stop(self):
+        code, said = self.bet(8500.0)
+        self.assertEqual(code, 1)
+        self.assertIn("FULL STOP: the bankroll is $8,500.00, at or below the $8,500.00 stop", said)
+        self.assertFalse(self.m.LEDGER.exists(), "nothing recorded")
+
+    def test_bet_is_allowed_just_above_it(self):
+        code, said = self.bet(8500.01)
+        self.assertEqual(code, 0, said)
+
+    def test_mark_strips_the_retired_keys_and_keeps_the_rest(self):
+        self.bank.write_text(json.dumps({"bankroll": 9800.0, "starting_bankroll": 10000.0,
+                                         "unit_pct": 1.5, "max_open_bets": 2, "stop_loss_floor": 8500.0,
+                                         "open_bets": [{"id": 1}], "cycle_count": 4}))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.m.cmd_mark(types.SimpleNamespace()), 0)
+        b = json.loads(self.bank.read_text())
+        for k in self.m.RETIRED_BANKROLL_KEYS:
+            self.assertNotIn(k, b)
+        self.assertEqual((b["bankroll"], b["open_bets"], b["cycle_count"]), (9800.0, [{"id": 1}], 5))
+        self.assertIn("removed settings nothing read: unit_pct, max_open_bets, stop_loss_floor",
+                      out.getvalue())
+
+    def test_the_header_quotes_the_code(self):
+        head = (ROOT / "agents" / "ace" / "_ace-agents-header.md").read_text()
+        self.assertIn(f"**Bankroll down {self.m.STOP_LOSS_PCT:g}%**", head)
+        floor = 10000 * (1 - self.m.STOP_LOSS_PCT / 100)
+        self.assertIn(f"(${floor:,.0f} on the $10,000 start)", head)
+        self.assertNotIn("The bar is eight", head)
+        # The worked example in the header is the code's own arithmetic.
+        self.assertIn(f"about\n{self.m.ev_pct(58.0, -130):+.1f}% expected value", head)

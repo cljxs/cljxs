@@ -276,7 +276,7 @@ def record(a, status):
         return 1
     # A pass naming one or two games is a game Ace actually looked at, and an
     # estimate for it is the only evidence that ever accumulates about whether
-    # the 8-point bar is set right. Without it every passed row carries
+    # the expected-value bar is set right. Without it every passed row carries
     # edge_pts: null, which is what a week of "no bets" looks like from the
     # outside: unanswerable. A sweep of the whole board is exempt - one number
     # cannot be an estimate for sixteen different games, and pretending it is
@@ -324,6 +324,12 @@ def record(a, status):
         bank = current_bankroll()
         if not bank:
             print("cannot size the bet: state/bankroll.json has no bankroll.", file=sys.stderr)
+            return 1
+        floor = stop_floor()
+        if floor is not None and bank <= floor:
+            print(f"FULL STOP: the bankroll is ${bank:,.2f}, at or below the ${floor:,.2f} "
+                  f"stop ({STOP_LOSS_PCT:g}% under where it started). Open nothing - say so "
+                  f"in the report; the owner decides.", file=sys.stderr)
             return 1
         bet_stake, bet_frac = kelly_stake(a.my_pct, src.get("price"), bank)
 
@@ -415,6 +421,26 @@ MAX_OPEN_BETS = 4
 EV_MIN_PCT = 3.0
 KELLY_FRACTION = 0.25
 STAKE_CAP_PCT = 3.0
+
+# THE STOP. Down this far from where the bankroll started, `bet` refuses and
+# the owner decides. It sat in bankroll.json as stop_loss_pct and
+# stop_loss_floor beside unit_pct, max_stake_pct and max_open_bets - five
+# settings no code read, two of them (1.5% flat, max 2 open) contradicting
+# the rules actually enforced. A number in a data file looks like a setting
+# and is not one; `mark` removes them from the live file.
+STOP_LOSS_PCT = 15.0
+RETIRED_BANKROLL_KEYS = ("unit_pct", "max_stake_pct", "max_open_bets",
+                         "stop_loss_pct", "stop_loss_floor")
+
+
+def stop_floor():
+    """The bankroll at which betting stops: starting_bankroll less
+    STOP_LOSS_PCT. None if bankroll.json has no starting figure."""
+    try:
+        start = json.loads((AGENT / "state" / "bankroll.json").read_text()).get("starting_bankroll")
+        return round(float(start) * (1 - STOP_LOSS_PCT / 100), 2) if start else None
+    except Exception:
+        return None
 
 
 def _clv():
@@ -547,7 +573,13 @@ def cmd_mark(a):
 
     b["cycle_count"] = int(b.get("cycle_count") or 0) + 1
     b["last_cycle_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    retired = [k for k in RETIRED_BANKROLL_KEYS if k in b]
+    for k in retired:
+        del b[k]
     bank.write_text(json.dumps(b, indent=1) + "\n")
+    if retired:
+        print(f"removed settings nothing read: {', '.join(retired)} - the rules live in "
+              f"ace-judge.py now")
 
     open_n = len(b.get("open_bets") or [])
     print(f"cycle {b['cycle_count']} recorded. bankroll ${float(b.get('bankroll') or 0):,.2f}, "
