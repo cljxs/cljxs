@@ -13,11 +13,11 @@ and the exact-string matching that makes it fragile is invisible to whoever is
 doing the copying. So the copying happens here:
 
     ace-judge.py list                       what is on the board, numbered
-    ace-judge.py pass 3 --my-pct 58.0 --why "gap 2.1 pts, need 8+"
+    ace-judge.py pass 3 --my-pct 58.0 --why "EV -1.2%, the bar is +3%"
     ace-judge.py pass 1-6,9 --why "no edge on the no-vig line"   one call, seven rows
-    ace-judge.py rest --why "did not clear 8 points"             sweeps the remainder
-    ace-judge.py bet  7 --my-pct 71.0 --stake 150 --why "SP scratched an hour ago"
-    ace-judge.py verdict "No picks - 6 judged, nothing cleared 8 points."
+    ace-judge.py rest --why "nothing cleared the EV bar"            sweeps the remainder
+    ace-judge.py bet  7 --my-pct 71.0 --why "SP scratched an hour ago"   (stake is computed)
+    ace-judge.py verdict "No picks - 6 judged, nothing cleared the EV bar."
     ace-judge.py mark                       close the cycle (bumps cycle_count)
     ace-judge.py show
 
@@ -291,23 +291,41 @@ def record(a, status):
               file=sys.stderr)
         return 1
 
+    bet_stake = bet_frac = bet_ev = None
     if status == "bet":
         if len(nums) > 1:
-            print("bet one at a time. A stake is a decision per game, and the flat "
-                  "1.5% rule means they are not interchangeable.", file=sys.stderr)
+            print("bet one at a time. A stake is sized per game, from that game's "
+                  "estimate and price.", file=sys.stderr)
             return 1
-        if a.stake is None:
-            print("a bet needs --stake.", file=sys.stderr)
+        if a.stake is not None:
+            print(f"drop --stake: the stake is computed now - quarter-Kelly from your "
+                  f"estimate and the price, capped at {STAKE_CAP_PCT:g}% of the bankroll.",
+                  file=sys.stderr)
             return 1
-        # The entire bar is the gap between your estimate and the no-vig line.
-        # A bet with no estimate is a claim of 8+ points with nothing on record
-        # to check it against - and it is the one row where that matters most,
-        # because it is the one that moves money.
+        # The bar is expected value at your estimate, so a bet without one
+        # claims to clear it with nothing on record to check - and it is the
+        # one row where that matters most, because it is the one that moves money.
         if a.my_pct is None:
-            print("a bet needs --my-pct. The bar is 8 points between your "
-                  "estimate and the no-vig line, and without the estimate "
-                  "there is no way to show it was cleared.", file=sys.stderr)
+            print(f"a bet needs --my-pct. The bar is +{EV_MIN_PCT:g}% expected value at "
+                  f"your estimate, and without the estimate there is no way to show it "
+                  f"was cleared.", file=sys.stderr)
             return 1
+        src = rows[nums[0] - 1]
+        bet_ev = ev_pct(a.my_pct, src.get("price"))
+        if bet_ev is None:
+            print("this row has no usable price, so its expected value cannot be "
+                  "worked out - it cannot be bet.", file=sys.stderr)
+            return 1
+        if bet_ev < EV_MIN_PCT:
+            print(f"refused: at {a.my_pct:g}% and a price of {src.get('price')}, the expected "
+                  f"value is {bet_ev:+.1f}% - under the +{EV_MIN_PCT:g}% bar. Pass it with "
+                  f"this estimate instead.", file=sys.stderr)
+            return 1
+        bank = current_bankroll()
+        if not bank:
+            print("cannot size the bet: state/bankroll.json has no bankroll.", file=sys.stderr)
+            return 1
+        bet_stake, bet_frac = kelly_stake(a.my_pct, src.get("price"), bank)
 
     led = load_ledger()
     done = []
@@ -318,10 +336,15 @@ def record(a, status):
         novig = src.get("novig_pct")
         if a.my_pct is not None and novig is not None:
             row["edge_pts"] = round(float(a.my_pct) - float(novig), 1)
+        ev = ev_pct(a.my_pct, src.get("price"))
+        if ev is not None:
+            row["ev_pct"] = ev
+            row["clears_bar"] = ev >= EV_MIN_PCT
         row["why_not"] = [a.why]
         row["status"] = status
         if status == "bet":
-            row["stake"] = float(a.stake)
+            row["stake"] = bet_stake
+            row["stake_pct"] = bet_frac
         led["candidates"] = [r for r in led.get("candidates", []) if key(r) != key(row)]
         led["candidates"].append(row)
         done.append(row)
@@ -334,6 +357,9 @@ def record(a, status):
             twin["my_pct"] = round(100.0 - float(a.my_pct), 1)
             if src.get("novig_pct") is not None:
                 twin["edge_pts"] = round(twin["my_pct"] - float(src["novig_pct"]), 1)
+            tev = ev_pct(twin["my_pct"], src.get("price"))
+            if tev is not None:
+                twin["ev_pct"], twin["clears_bar"] = tev, tev >= EV_MIN_PCT
             twin["why_not"] = [f"other side of {done[0]['selection']}: {a.why}"]
             twin["status"] = "passed"
             led["candidates"].append(twin)
@@ -346,6 +372,10 @@ def record(a, status):
     if len(done) == 1:
         r = done[0]
         edge = f", edge {r['edge_pts']:+.1f} pts" if r.get("edge_pts") is not None else ""
+        if r.get("ev_pct") is not None:
+            edge += f", EV {r['ev_pct']:+.1f}%"
+        if status == "bet":
+            edge += f", stake ${r['stake']:,.2f} ({r['stake_pct']:g}% of bankroll, quarter-Kelly)"
         print(f"{status.upper()}: {r['selection']} ({r['match']}) at {r['price']}"
               f"{edge} - {a.why}")
     else:
@@ -366,6 +396,65 @@ def cmd_pass(a):
 # ace-verify.py imports this rather than restating it, and a test fails the
 # build if the header stops quoting the same number.
 MAX_OPEN_BETS = 4
+
+# THE BAR AND THE STAKE (2026-09-28). They replace "8 percentage points over
+# the no-vig line" and "1.5% of bankroll, flat", which lived only as
+# sentences in Ace's header - arithmetic a model was trusted to do.
+#
+# The bar is EXPECTED VALUE at the price actually offered, by Ace's own
+# estimate: my_pct x decimal_odds - 1. It prices the vig in, and it is the
+# same number the closing-line grade uses. +3% is the careful end of the
+# +2-3% the research suggested, because Ace's estimates are a model's.
+#
+# The stake is QUARTER-KELLY - a quarter of the fraction of bankroll the
+# Kelly formula gives for that estimate at that price - which is how
+# professionals size bets while allowing for their own estimates being wrong.
+# It is capped at the hard cap the header always had: a confident estimate at
+# plus money can make even quarter-Kelly ask for a tenth of the bankroll.
+# Code computes both; Ace supplies only his estimate and his reason.
+EV_MIN_PCT = 3.0
+KELLY_FRACTION = 0.25
+STAKE_CAP_PCT = 3.0
+
+
+def _clv():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ace_clv", Path(__file__).resolve().parent / "ace-clv.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def ev_pct(my_pct, price):
+    """Expected return per $1 staked, in percent, at Ace's estimate. None if
+    either number is missing or the price is not a price."""
+    d = _clv().decimal_odds(price)
+    if d is None or my_pct is None:
+        return None
+    # + 0.0 turns the -0.0 that break-even rounds to into 0.0, which would
+    # otherwise print as "-0.0%" beside a bar it exactly misses.
+    return round((float(my_pct) / 100 * d - 1) * 100, 1) + 0.0
+
+
+def kelly_stake(my_pct, price, bankroll):
+    """(stake in dollars, percent of bankroll) - quarter-Kelly, capped."""
+    d = _clv().decimal_odds(price)
+    if d is None or my_pct is None or not bankroll:
+        return 0.0, 0.0
+    b, p = d - 1, float(my_pct) / 100
+    full = (b * p - (1 - p)) / b
+    if full <= 0:
+        return 0.0, 0.0
+    frac = min(KELLY_FRACTION * full, STAKE_CAP_PCT / 100)
+    return round(float(bankroll) * frac, 2), round(frac * 100, 2)
+
+
+def current_bankroll():
+    try:
+        v = json.loads((AGENT / "state" / "bankroll.json").read_text()).get("bankroll")
+        return float(v) if v is not None else None
+    except Exception:
+        return None
 
 # Passing this many games or fewer by name means Ace studied them, so it must
 # say what it estimated. Above this it is sweeping the board with one shared
@@ -523,8 +612,11 @@ def edge_line(r):
     if r.get("my_pct") is None:
         return head + "  Ace: no estimate (swept)"
     edge = r.get("edge_pts")
+    ev = r.get("ev_pct")
     return (head + f"  Ace {_pct(r.get('my_pct'))}  edge "
             + ("?" if edge is None else f"{float(edge):+.1f} pts")
+            + ("" if ev is None else f"  EV {float(ev):+.1f}%"
+               + (" (clears the bar)" if r.get("clears_bar") else ""))
             + (f"  stake {r['stake']:g}" if r.get("stake") is not None else ""))
 
 

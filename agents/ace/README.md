@@ -46,8 +46,9 @@ deep fetches per sport. Everything numeric is computed in plain Python:
 - the book's **vig**
 - **vig-free** probabilities, which sum to 100%
 
-The no-vig number is the one Ace's estimate must beat by 8+ points, and it is
-the only probability the context file carries. The raw implied figures and
+The no-vig number is the market's own view of each side, and it is the only
+probability the context file carries. (The bet bar itself is expected value at
+the offered price, computed by ace-judge.py since 2026-09-28.) The raw implied figures and
 ESPN's own model projection are both computed or fetched and then deliberately
 dropped: every report Ace wrote built itself on the model-versus-line
 comparison, which is the one thing its instructions said could never justify a

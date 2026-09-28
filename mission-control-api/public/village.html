@@ -2113,7 +2113,7 @@ async function loadAceLedger(){
   } else {
     out += `<div class="board"><table><thead><tr>
         <th>Selection</th><th class="num">Price</th><th class="num">No-vig</th>
-        <th class="num">Mine</th><th class="num">Edge</th><th>Why not a pick</th><th>Status</th>
+        <th class="num">Mine</th><th class="num">Edge</th><th class="num">EV</th><th>Why not a pick</th><th>Status</th>
       </tr></thead><tbody>` + d.candidates.map(c => `<tr>
         <td><div class="sel">${esc(c.selection)}</div>${
           c.match ? `<div class="mt">${esc(c.match)}</div>` : ''}${
@@ -2121,8 +2121,8 @@ async function loadAceLedger(){
         <td class="num">${priceTxt(c.price)}</td>
         <td class="num">${c.novig_pct === null ? '—' : c.novig_pct.toFixed(1) + '%'}</td>
         <td class="num">${c.my_pct === null ? '—' : c.my_pct.toFixed(1) + '%'}</td>
-        <td class="num ${c.edge_pts === null ? '' : (c.edge_pts >= 8 ? 'up' : '')}">${
-          c.edge_pts === null ? '—' : pctTxt2(c.edge_pts).replace('%','')}</td>
+        <td class="num">${c.edge_pts === null ? '—' : pctTxt2(c.edge_pts).replace('%','')}</td>
+        <td class="num ${c.clears_bar ? 'up' : ''}">${c.ev_pct === null ? '—' : pctTxt2(c.ev_pct)}</td>
         <td class="why">${c.why_not.length ? esc(c.why_not.join(', ')) : '—'}</td>
         <td><span class="tagp ${esc(c.status)}">${esc(c.status)}</span></td>
       </tr>`).join('') + `</tbody></table></div>`;

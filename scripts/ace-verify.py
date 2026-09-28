@@ -170,7 +170,7 @@ def check_ledger(problems, notes, started):
         return
 
     # An estimate is the only evidence that ever accumulates about whether the
-    # 8-point bar is set right. Without it a passed row says Ace passed and
+    # EV bar is set right. Without it a passed row says Ace passed and
     # nothing about how close it was, and a month of those answers nothing.
     # This is a problem rather than a note on purpose: a rule that only warns
     # is the rule that was there before.

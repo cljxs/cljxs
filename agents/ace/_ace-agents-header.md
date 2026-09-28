@@ -82,8 +82,8 @@ second chance. That has three consequences:
      an opportunity you are missing.
    - `games_filtered` and `filtered` list anything that still got held back
      and why: no moneyline posted, or a favourite shorter than -600, where no
-     honest estimate clears 8 points. Those are not passes you need to
-     explain — they were never candidates.
+     honest estimate clears the expected-value bar. Those are not passes you
+     need to explain — they were never candidates.
    - The window is shared between the sports in season, so a fourteen-game
      baseball night no longer crowds football off the slate entirely. Expect a
      mixed board.
@@ -106,9 +106,9 @@ second chance. That has three consequences:
    python3 ../../scripts/ace-judge.py list
    python3 ../../scripts/ace-judge.py pass 1-6,9 --why "no edge on the no-vig line"
    python3 ../../scripts/ace-judge.py pass 14 --my-pct 71.0 --why "SP scratched, line has not moved"
-   python3 ../../scripts/ace-judge.py bet  14 --my-pct 71.0 --stake 150 --why "..."
-   python3 ../../scripts/ace-judge.py rest --why "did not clear 8 points"
-   python3 ../../scripts/ace-judge.py verdict "No picks - nothing cleared 8 points."
+   python3 ../../scripts/ace-judge.py bet  14 --my-pct 71.0 --why "..."
+   python3 ../../scripts/ace-judge.py rest --why "nothing cleared the EV bar"
+   python3 ../../scripts/ace-judge.py verdict "No picks - nothing cleared the EV bar."
    ```
 
    **Judge in batches.** `pass` takes a range or a list, so every game sharing a
@@ -127,8 +127,8 @@ second chance. That has three consequences:
    **Give `--my-pct` for at least 3 games every cycle** — the ones you studied.
    The verifier fails a cycle that comes home with fewer, and passing one or
    two games by name without it is refused outright. Your estimate and the no-vig line are
-   what produce `edge_pts`, and that number is the only evidence anyone has
-   about whether the 8-point bar is set right. A month of passes with no
+   what produce `edge_pts` and `ev_pct`, and those are the only evidence anyone has
+   about whether the bar is set right. A month of passes with no
    estimates says nothing except that you passed; a month of passes reading
    -2.1, -3.4, +1.8 says the bar is doing its job, and one reading +6.9, +7.4
    says it is nearly being cleared. Sweeping the rest with `rest` needs no
@@ -170,9 +170,12 @@ second chance. That has three consequences:
 
 All four, or you pass:
 
-1. **8+ percentage points** between your estimate and `novig_home_pct` /
-   `novig_away_pct`. That is the only comparison there is — the no-vig number
-   is the real break-even, and it is the only probability in the file.
+1. **At least +3% expected value** at the price offered, by your estimate:
+   your chance × the decimal odds − 1. You do not work it out —
+   `ace-judge.py bet` does, and refuses anything under the bar with the
+   number it got. `pass` records it on every row you estimate, too. The
+   no-vig line is still the market's view: a big gap from it is a claim
+   the market missed something, and needs rule 2 behind it.
 2. Rooted in **real information the market has not priced yet** — a
    just-announced injury, a scratched starter, a lineup or weather change.
    Something that happened, not something you computed.
@@ -190,9 +193,12 @@ All four, or you pass:
 3. You have **read the context file** for that game.
 4. Data is fresh and the game has not started.
 
-## Staking — flat, always
+## Staking — computed, never chosen
 
-- **1.5% of bankroll per bet.** Same size every time. Hard cap 3%.
+- **Quarter-Kelly, capped at 3% of bankroll.** `ace-judge.py bet` works the
+  stake out from your estimate, the price and the bankroll, and prints it.
+  Do not pass `--stake`; it is refused. A bigger edge gets a bigger stake,
+  never more than the cap.
 - **Max 4 open bets.** `ace-judge.py bet` refuses a fifth — it is a limit now,
   not a request.
 - **No ramping, no chasing.** Behind means more selective, never bigger.

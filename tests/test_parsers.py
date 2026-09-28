@@ -3706,12 +3706,13 @@ class AWeekOfPassesShouldSayHowClose(unittest.TestCase):
         self.assertEqual(self.judge(",".join(str(n) for n in range(1, upto + 2))), 0)
 
     def test_a_bet_needs_an_estimate_of_its_own(self):
-        # The bar IS the gap between the estimate and the no-vig line, so a
-        # bet without one claims 8+ points with nothing on record to check.
+        # The bar is expected value at the estimate, so a bet without one
+        # claims to clear it with nothing on record to check.
+        (self.m.AGENT / "state" / "bankroll.json").write_text(json.dumps({"bankroll": 10000.0}))
         class A:
             pass
         a = A()
-        a.number, a.why, a.my_pct, a.stake = "1", "SP scratched", None, 150.0
+        a.number, a.why, a.my_pct, a.stake = "1", "SP scratched", None, None
         self.assertEqual(self.m.record(a, "bet"), 1)
         a.my_pct = 71.0
         self.assertEqual(self.m.record(a, "bet"), 0)
@@ -3727,7 +3728,7 @@ class AWeekOfPassesShouldSayHowClose(unittest.TestCase):
         class A:
             pass
         a = A()
-        a.number, a.why, a.my_pct, a.stake = "1", "SP scratched", None, 150.0
+        a.number, a.why, a.my_pct, a.stake = "1", "SP scratched", None, None
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             self.m.record(a, "bet")
@@ -14313,3 +14314,88 @@ class TheWakeMessageNamesTheReport(unittest.TestCase):
             self.assertIn("NEW file", message)
             self.assertLess(src.index('REPORT="$('), src.index("openclaw agent"),
                             "the name is worked out before the agent is woken")
+
+
+class AceBetsOnExpectedValueWithQuarterKellyStakes(unittest.TestCase):
+    """2026-09-28: "8 points over the no-vig line" and "1.5% of bankroll, flat"
+    were sentences in Ace's header, arithmetic a model was trusted to do.
+    Code now computes the expected value at the offered price and refuses a
+    bet under +3%, and sizes the stake at quarter-Kelly capped at 3%."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.m = load("ace_judge_ev", "ace-judge.py")
+        agent = Path(self.tmp.name) / "ace"
+        (agent / "state").mkdir(parents=True)
+        (agent / "data").mkdir(parents=True)
+        for name, val in (("AGENT", agent), ("CANDIDATES", agent / "data" / "candidates.json"),
+                          ("LEDGER", agent / "state" / "ledger.json")):
+            setattr(self.m, name, val)
+        self.m.CANDIDATES.write_text(json.dumps({"candidates": [
+            {"selection": "FAV ML", "match": "DOG @ FAV", "price": -150, "novig_pct": 58.0, "sport": "nfl"},
+            {"selection": "DOG ML", "match": "DOG @ FAV", "price": 150, "novig_pct": 42.0, "sport": "nfl"}]}))
+        (agent / "state" / "bankroll.json").write_text(json.dumps({"bankroll": 10000.0}))
+        self.addCleanup(self.tmp.cleanup)
+
+    def act(self, status, number="1", my_pct=None, stake=None, why="x"):
+        a = types.SimpleNamespace(number=number, my_pct=my_pct, stake=stake, why=why)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            code = self.m.record(a, status)
+        return code, out.getvalue()
+
+    def rows(self):
+        return {r["selection"]: r for r in json.loads(self.m.LEDGER.read_text())["candidates"]}
+
+    def test_expected_value_at_the_offered_price(self):
+        self.assertEqual(self.m.ev_pct(71.0, -150), 18.3)       # 0.71 x 1.667 - 1
+        self.assertEqual(self.m.ev_pct(40.0, 150), 0.0)         # 0.40 x 2.5 - 1
+        self.assertEqual(self.m.ev_pct(58.0, -150), -3.3)
+        self.assertIsNone(self.m.ev_pct(None, -150))
+        self.assertIsNone(self.m.ev_pct(50.0, None))
+
+    def test_quarter_kelly_and_its_cap(self):
+        # p=0.45 at +150: full Kelly (1.5 x .45 - .55) / 1.5 = 8.33%; a quarter is 2.08%.
+        self.assertEqual(self.m.kelly_stake(45.0, 150, 10000), (208.33, 2.08))
+        # p=0.70 at +150: a quarter of 50% is 12.5% - capped at 3%.
+        self.assertEqual(self.m.kelly_stake(70.0, 150, 10000), (300.0, 3.0))
+        self.assertEqual(self.m.kelly_stake(40.0, 150, 10000), (0.0, 0.0), "no edge, no stake")
+
+    def test_a_bet_under_the_bar_is_refused_with_its_number(self):
+        code, said = self.act("bet", my_pct=60.0)               # 0.60 x 1.667 - 1 = 0.0%
+        self.assertEqual(code, 1)
+        self.assertIn("+0.0% - under the +3% bar", said)
+        self.assertFalse(self.m.LEDGER.exists(), "nothing recorded")
+
+    def test_a_chosen_stake_is_refused(self):
+        code, said = self.act("bet", my_pct=71.0, stake=150)
+        self.assertEqual(code, 1)
+        self.assertIn("the stake is computed now", said)
+
+    def test_a_bet_over_the_bar_is_sized_by_code(self):
+        code, said = self.act("bet", number="2", my_pct=45.0)   # +12.5% at +150
+        self.assertEqual(code, 0, said)
+        row = self.rows()["DOG ML"]
+        self.assertEqual((row["ev_pct"], row["clears_bar"]), (12.5, True))
+        self.assertEqual((row["stake"], row["stake_pct"]), (208.33, 2.08))
+        self.assertIn("stake $208.33 (2.08% of bankroll, quarter-Kelly)", said)
+
+    def test_every_estimated_pass_carries_its_ev(self):
+        self.act("passed", my_pct=59.0)
+        row = self.rows()["FAV ML"]
+        self.assertEqual((row["ev_pct"], row["clears_bar"]), (-1.7, False))
+
+    def test_the_header_quotes_the_code(self):
+        head = (ROOT / "agents" / "ace" / "_ace-agents-header.md").read_text()
+        self.assertIn(f"At least +{self.m.EV_MIN_PCT:g}% expected value", head)
+        self.assertIn(f"capped at {self.m.STAKE_CAP_PCT:g}% of bankroll", head)
+        self.assertIn("Quarter-Kelly", head)
+        for gone in ("8+ percentage points", "1.5% of bankroll per bet", "--stake 150"):
+            self.assertNotIn(gone, head)
+
+    def test_the_deck_highlights_by_the_flag_code_wrote(self):
+        page = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        self.assertNotIn("edge_pts >= 8", page)
+        self.assertIn("c.clears_bar ? 'up'", page)
+        self.assertIn("clears_bar: c.clears_bar === true",
+                      (ROOT / "mission-control-api" / "ace.js").read_text())

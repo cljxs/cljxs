@@ -62,7 +62,7 @@ SPORTS = {
 }
 
 # A candidate has to be a bet Ace's own rule could take. At -2800 the no-vig
-# line is about 96%, so clearing the 8-point bar means believing something no
+# line is about 96%, so clearing the EV bar means believing something no
 # injury report supports; the row can only ever be passed. Before this, the
 # slate was the eight games starting soonest whatever their price, so one CFB
 # Saturday could fill the whole window with blowouts and crowd out the NFL
@@ -177,7 +177,7 @@ def pick_for_context(scheduled, now=None):
 
     Inside the betting window, closest game first. A game outside the window
     cannot be bet on information that does not exist yet, and a 45-point
-    favourite cannot clear an 8-point bar, so neither is worth a call while a
+    favourite cannot clear the EV bar, so neither is worth a call while a
     three-point game is waiting for one. Games with no spread published are
     kept, last: unknown is not the same as lopsided.
     """

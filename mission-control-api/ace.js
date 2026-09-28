@@ -50,6 +50,11 @@ function normalise(c, i) {
     novig_pct: num(c.novig_pct) ?? num(c.novig),
     my_pct: num(c.my_pct) ?? num(c.estimate),
     edge_pts: num(c.edge_pts) ?? num(c.edge),
+    // Expected value at Ace's estimate, and whether it clears the bar - both
+    // written by ace-judge.py, which owns the bar, so this page never holds a
+    // copy of the threshold.
+    ev_pct: num(c.ev_pct),
+    clears_bar: c.clears_bar === true,
     why_not: (Array.isArray(why) ? why : [why]).filter(Boolean).map(w => String(w).slice(0, 160)),
     status: c.status ?? (Array.isArray(why) && why.length ? 'passed' : 'unjudged'),
     stake: num(c.stake),
@@ -107,6 +112,8 @@ function build() {
       ...prev,
       my_pct: n.my_pct ?? prev.my_pct,
       edge_pts: n.edge_pts ?? prev.edge_pts,
+      ev_pct: n.ev_pct ?? prev.ev_pct,
+      clears_bar: n.clears_bar || prev.clears_bar,
       stake: n.stake ?? prev.stake,
       result: n.result ?? prev.result,
       status: n.status === 'unjudged' ? prev.status : n.status,
