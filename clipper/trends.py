@@ -6,9 +6,11 @@ Three questions, answered from YouTube's official Data API with a free key:
    to the channels on them, ranked by how fast their charting videos are
    gaining views. Only creators above `spot_min_subscribers` count - the brief
    is the top influencers, not everyone who charted once.
-2. WHICH of their moments are being clipped? For the top creators, the
-   most-viewed Shorts mentioning them from the last few days, with views per
-   hour. Those are other people's clips, and they are evidence of demand.
+2. WHICH of their moments are being clipped? Only for creators Clip has
+   permission for (a source linked to their channel): the most-viewed
+   Shorts mentioning them from the last few days, with views per hour.
+   Other trending creators are listed as leads and never searched - a
+   moment Clip may not cut is not worth quota.
 3. IS THAT MOMENT IN FOOTAGE CLIP MAY USE? A trending clip's title and
    description are matched against the transcripts of videos Clip has
    ingested from that creator. A match is a moment Clip can cut ITSELF, from
@@ -328,12 +330,37 @@ def run(conn, paths, cfg, yt=None, now=None):
                 (c["channel_id"], c["title"], c.get("handle"), c["subscribers"], c.get("total_views"),
                  c["heat"], c["trending_videos"], stamp[:10], stamp))
 
-    # Search the creators Clip can act on first: a trending moment in
-    # footage Clip may cut is worth more than one it can only report.
+    # PERMISSION FIRST. Searches - 100 units each - go only to creators Clip
+    # may cut, whether or not they are on today's charts: a trending moment
+    # from anyone else can never become a clip here, so looking for one only
+    # spends quota. Everyone else on the charts is listed as a lead (the
+    # charts cost 1 unit a category), to go and get permission for.
     allowed = permitted_channels(conn)
-    order = sorted(creators, key=lambda c: (c["channel_id"] not in allowed, -c["heat"]))
+    charted = {c["channel_id"]: c for c in creators}
+    off_chart = [cid for cid in allowed if cid not in charted]
+    extra = channel_stats(yt, off_chart) if off_chart else {}
+    targets = [charted.get(cid) or {"channel_id": cid,
+                                    "title": ((extra.get(cid) or {}).get("snippet") or {}).get("title")
+                                    or allowed[cid]["name"]}
+               for cid in allowed]
+    targets.sort(key=lambda c: -(c.get("heat") or 0))
+    with conn:
+        for c in targets:
+            if c["channel_id"] in charted:
+                continue
+            st = (extra.get(c["channel_id"]) or {}).get("statistics") or {}
+            conn.execute(
+                "INSERT INTO creators (channel_id, title, subscribers, total_views, heat, trending_videos, "
+                "last_seen, updated_at) VALUES (?, ?, ?, ?, 0, 0, ?, ?) ON CONFLICT(channel_id) DO UPDATE "
+                "SET title=excluded.title, subscribers=excluded.subscribers, heat=0, trending_videos=0, "
+                "last_seen=excluded.last_seen, updated_at=excluded.updated_at",
+                (c["channel_id"], c["title"], as_int(st.get("subscriberCount")),
+                 as_int(st.get("viewCount")), stamp[:10], stamp))
+    if not allowed:
+        note.append("no permitted creators to research - link a source to its channel with "
+                    "`python3 -m clipper source channel NAME --channel UC...`")
     n_clips = n_matched = 0
-    for c in order[:int(cfg["spot_search_creators"])]:
+    for c in targets[:int(cfg["spot_search_creators"])]:
         try:
             found = clips_about(yt, c, cfg, now)
         except QuotaSpent as e:

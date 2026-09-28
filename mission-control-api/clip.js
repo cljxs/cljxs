@@ -25,6 +25,14 @@ const ID_RE = /^\d{1,9}$/;
 // A remake renders a clip: about a minute of CPU per 30 s on the droplet.
 const REMAKE_TIMEOUT_MS = 300000;
 const SPOT_TIMEOUT_MS = 180000;
+const APPROVE_TIMEOUT_MS = 600000;
+const TEXT_MAX = 2200;                  // TikTok's caption limit; nothing a person types is longer
+const PLATFORMS = ['youtube', 'tiktok'];
+
+function reply(res, r) {
+  res.status(r.code === 0 ? 200 : 400)
+    .json({ ok: r.code === 0, message: (r.code === 0 ? r.stdout : r.stderr || r.stdout).trim().slice(-800) });
+}
 
 function python() {
   return fs.existsSync(VENV_PY) ? VENV_PY : 'python3';
@@ -70,6 +78,47 @@ function register(app) {
     const r = await clipper(['spot'], SPOT_TIMEOUT_MS);
     res.status(r.code === 0 ? 200 : 500)
       .json({ ok: r.code === 0, message: (r.code === 0 ? r.stdout : r.stderr || r.stdout).trim().slice(-600) });
+  });
+
+  // Approving posts. An upload of a ~15 MB clip is seconds; the limit is
+  // generous because a slow network must not report failure for a post
+  // that then arrives anyway.
+  app.post('/api/clip/approve/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    const note = String((req.body && req.body.note) || '').slice(0, TEXT_MAX);
+    const r = await clipper(['approve', req.params.id, ...(note ? ['--note', note] : [])], APPROVE_TIMEOUT_MS);
+    reply(res, r);
+  });
+
+  app.post('/api/clip/reject/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    const why = String((req.body && req.body.why) || '').trim().slice(0, TEXT_MAX);
+    if (!why) return res.status(400).json({ ok: false, error: 'say why - it is what Clip learns from' });
+    reply(res, await clipper(['reject', req.params.id, '--why', why]));
+  });
+
+  // The owner's own words for a post. Only fields sent are changed.
+  app.post('/api/clip/edit/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    const b = req.body || {};
+    const args = ['edit', req.params.id];
+    for (const k of ['title', 'caption', 'tags']) {
+      if (typeof b[k] === 'string') args.push('--' + k, b[k].slice(0, TEXT_MAX));
+    }
+    reply(res, await clipper(args));
+  });
+
+  app.post('/api/clip/redraft/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    reply(res, await clipper(['copy', req.params.id, '--redo'], 90000));
+  });
+
+  app.post('/api/clip/posted/:id/:platform', async (req, res) => {
+    const { id, platform } = req.params;
+    if (!ID_RE.test(id || '') || !PLATFORMS.includes(platform)) {
+      return res.status(400).json({ ok: false, error: 'bad id or platform' });
+    }
+    reply(res, await clipper(['posted', id, platform]));
   });
 
   // Clip's own cut of a trending moment, from permitted footage. clipper

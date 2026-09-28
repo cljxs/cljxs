@@ -249,9 +249,11 @@ questions from YouTube's official Data API with a free key:
    `spot_min_subscribers` (default 500,000) count, because the brief is the
    top influencers. They are ranked by **heat**: the summed views per hour of
    their charting videos.
-2. *Which of their moments are being clipped?* For the top creators
-   (permitted ones first), the most-viewed Shorts mentioning them in the last
-   72 hours, with views per hour.
+2. *Which of their moments are being clipped?* **Only for creators Clip
+   has permission for** (a source linked to their channel), charting or not:
+   the most-viewed Shorts mentioning them in the last 72 hours, with views
+   per hour. Other trending creators are listed as leads and are never
+   searched, because a moment Clip may not cut isn't worth 100 quota units.
 3. *Is that moment in footage Clip may use?* The trending clip's title and
    description are matched against the transcripts of that creator's
    ingested videos. The match weights rare words, and ignores the creator's
@@ -693,6 +695,17 @@ the timers. **Start both API audits now**, because they take weeks.
 terminal needed.
 
 ### Phase 4 — publishing
+
+*Started early (2026-09-28):* **Approve & post** on each clip card. Each
+clip's words are drafted at render (`postcopy.py`): a model draft that code
+checks (no invented numbers, platform limits, the source's required tags
+and credit always added), or the first sentence when no model is
+available. YouTube posting goes through the Data API (`youtube.py`), signed
+in once with Google's device-code flow from the iPad; uploads stay private
+until the project's audit passes, and the page shows what YouTube applied.
+TikTok is manual (Download, Copy caption, Mark posted) until a TikTok app
+is approved. Permission is re-checked at posting time; `reviews` keeps
+every verdict and reason; `publications` is UNIQUE per clip and platform.
 
 Build assisted publishing (download + copy buttons) first, then the YouTube
 upload (private until the audit) and TikTok inbox drafts, then direct and

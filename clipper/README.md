@@ -101,6 +101,74 @@ cd /root/ecosystem && python3 -m clipper spot && python3 -m clipper trends
 A run uses about 800 of the free 10,000 daily YouTube units, and it stops
 itself at 3,000.
 
+## Approving and posting
+
+Every clip gets its words when it is rendered: a title, a caption and
+hashtags, drafted by a model from the clip's own transcript. Code refuses
+a title with a number the clip never says, cuts everything to each
+platform's limits, and adds your source's required tags and credit line to
+every post. With no model available (no key, or today's $1 spent), the draft
+is the clip's first sentence.
+
+In Clip's studio each clip card shows those words, with four buttons:
+- **Approve & post** posts it to YouTube, and sets up TikTok for you to post.
+- **Edit text** lets you write the words yourself (they're never
+  overwritten).
+- **New draft** asks the model for another.
+- **Reject** asks why, and keeps the reason so Clip can learn from it.
+
+A campaign's rules (required tags, and a credit line such as "Clip from
+@creator") are set once per source:
+
+```
+cd /root/ecosystem && python3 -m clipper source rules mysource --tags "#clipping #creatorname" --credit "Clip from @creatorname"
+```
+
+**TikTok** has no automatic posting yet: that needs an approved TikTok
+developer app, which needs a website and a review. Until then an approved
+clip shows **Download**, **Copy caption** and **Mark posted**. Marking it
+posted means it's never offered again.
+
+## Posting to YouTube (one-time setup)
+
+Use the same Google Cloud project as Spotter's key.
+
+1. **APIs & Services → OAuth consent screen.**
+   - Choose *External*, name the app `Clip`, and use your own email.
+   - Then choose **Publish app** to move it to *In production*. While it
+     stays in *Testing*, Google ends the sign-in every 7 days.
+   - Google will say the app is unverified. That's expected for an app only
+     you use.
+2. **APIs & Services → Credentials → Create credentials → OAuth client
+   ID.** For *Application type* pick **TVs and Limited Input devices**,
+   then choose Create.
+3. Put the two values on the droplet, one at a time:
+
+```
+cd /root/ecosystem && python3 scripts/set-credential.py clip YOUTUBE_CLIENT_ID
+```
+```
+cd /root/ecosystem && python3 scripts/set-credential.py clip YOUTUBE_CLIENT_SECRET
+```
+
+4. Sign in. The command prints a code; enter it at google.com/device on the
+   iPad and pick your channel:
+
+```
+cd /root/ecosystem && python3 -m clipper youtube-login
+```
+
+Anything approved before you signed in is waiting. Send it with
+`python3 -m clipper publish`.
+
+**Private until audited.** YouTube keeps uploads from a new Google Cloud
+project *private* until the project passes YouTube's API compliance audit,
+whatever Clip asks for. The studio shows the privacy YouTube actually
+applied. To make approved clips go out public, apply for the audit (the
+"YouTube API Services - Audit and Quota Extension" form in Google's
+YouTube API documentation). It takes weeks. Until it passes, a private
+upload can't be switched to public.
+
 ## Commands
 
 | Command | Does |

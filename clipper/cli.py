@@ -2,12 +2,22 @@
 
     source add NAME --rights KIND --evidence "..." [--url U] [--attribution "..."] [--channel UC...]
     source channel NAME --channel UC...   link a source to the creator's YouTube channel
+    source rules NAME [--tags "#a #b"] [--credit "Clip from @creator"]   what every post must carry
     source list
     ingest SOURCE FILE_OR_HTTPS_URL [--title "..."] [--move]
     run [--video ID]            transcribe, find moments, render - whatever is pending
     retry VIDEO_ID              put a failed video back where it failed
     status                      videos, stages, errors, today's spend
     clips [VIDEO_ID]            finished clips with score and reason
+
+  Approving and posting:
+    copy CLIP [--redo]          the title, caption and tags a clip will post with
+    edit CLIP [--title T] [--caption C] [--tags "a b c"]
+    approve CLIP                approve and post it (YouTube now, TikTok by hand until approved)
+    reject CLIP --why "..."
+    publish                     post anything approved and still waiting
+    posted CLIP tiktok [--url U]   you posted it by hand
+    youtube-login               sign Clip in to your YouTube channel (a code for the iPad)
 
   Spotter, the research assistant:
     spot                        research now: trending creators, their clipped moments
@@ -19,7 +29,7 @@ import argparse
 import json
 import sys
 
-from clipper import config, db, ingest, pipeline, report, rights, trends
+from clipper import config, db, ingest, pipeline, postcopy, publish, report, rights, trends, youtube
 
 
 def open_all():
@@ -34,6 +44,18 @@ def cmd_source(a):
         row = ingest.add_source(conn, cfg, a.name, a.rights, a.evidence or "", a.url, a.attribution,
                                 a.channel)
         print(f"source {row['name']} added ({row['rights']}: {rights.RIGHTS[row['rights']]})")
+        return 0
+    if a.action == "rules":
+        with conn:
+            n = conn.execute("UPDATE sources SET post_tags = COALESCE(?, post_tags), "
+                             "credit = COALESCE(?, credit) WHERE name = ?",
+                             (" ".join("#" + t for t in postcopy.tags_of(a.tags)) if a.tags is not None else None,
+                              a.credit, a.name)).rowcount
+        if not n:
+            raise ValueError(f"no source named {a.name!r}")
+        s = conn.execute("SELECT * FROM sources WHERE name = ?", (a.name,)).fetchone()
+        print(f"every post from {a.name} carries: tags {s['post_tags'] or '(none)'}; "
+              f"credit {s['credit'] or '(none)'}")
         return 0
     if a.action == "channel":
         ingest.set_channel(conn, a.name, a.channel)
@@ -163,6 +185,70 @@ def cmd_trends(a):
     return 0
 
 
+def show_copy(conn, clip_id):
+    row = conn.execute("SELECT * FROM post_copy WHERE clip_id = ?", (clip_id,)).fetchone()
+    clip = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
+    src = publish._source(conn, clip)
+    words = postcopy.compose(row, src)
+    print(f"clip {clip_id} ({row['generator']})\n  TITLE    {words['youtube']['title']}\n"
+          f"  YOUTUBE  {words['youtube']['description']}\n  TIKTOK   {words['tiktok']}")
+
+
+def cmd_copy(a):
+    cfg, paths, conn = open_all()
+    publish._clip(conn, a.clip)
+    postcopy.write(conn, cfg, a.clip, redo=a.redo)
+    show_copy(conn, a.clip)
+    return 0
+
+
+def cmd_edit(a):
+    cfg, paths, conn = open_all()
+    postcopy.write(conn, cfg, a.clip)
+    postcopy.edit(conn, a.clip, a.title, a.caption, a.tags)
+    show_copy(conn, a.clip)
+    return 0
+
+
+def print_results(results):
+    for platform, status, detail in results:
+        print(f"  {platform}: {status} - {detail}")
+
+
+def cmd_approve(a):
+    cfg, paths, conn = open_all()
+    results = publish.approve(conn, cfg, a.clip, a.note)
+    print(f"clip {a.clip} approved.")
+    print_results(results)
+    return 0
+
+
+def cmd_reject(a):
+    cfg, paths, conn = open_all()
+    publish.reject(conn, a.clip, a.why)
+    print(f"clip {a.clip} rejected - reason kept for learning.")
+    return 0
+
+
+def cmd_publish(a):
+    cfg, paths, conn = open_all()
+    results = publish.publish(conn, cfg)
+    print_results(results) if results else print("nothing waiting to post")
+    return 0
+
+
+def cmd_posted(a):
+    cfg, paths, conn = open_all()
+    publish.mark_posted(conn, a.clip, a.platform, a.url)
+    print(f"clip {a.clip} marked posted on {a.platform}.")
+    return 0
+
+
+def cmd_login(a):
+    youtube.login()
+    return 0
+
+
 def cmd_deck(a):
     cfg, paths, conn = open_all()
     print(json.dumps(report.snapshot(conn, paths, cfg)))
@@ -182,13 +268,15 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("source")
-    s.add_argument("action", choices=["add", "channel", "list"])
+    s.add_argument("action", choices=["add", "channel", "rules", "list"])
     s.add_argument("name", nargs="?")
     s.add_argument("--rights", choices=sorted(rights.RIGHTS))
     s.add_argument("--evidence")
     s.add_argument("--url")
     s.add_argument("--attribution")
     s.add_argument("--channel", help="the creator's YouTube channel id (UC...)")
+    s.add_argument("--tags", help="tags every post from this source must carry")
+    s.add_argument("--credit", help="a line every post from this source must carry")
     s.set_defaults(fn=cmd_source)
 
     i = sub.add_parser("ingest")
@@ -210,6 +298,31 @@ def main(argv=None):
     sub.add_parser("spot").set_defaults(fn=cmd_spot)
     sub.add_parser("trends").set_defaults(fn=cmd_trends)
     sub.add_parser("deck", help="JSON for the Command Deck").set_defaults(fn=cmd_deck)
+    x = sub.add_parser("copy")
+    x.add_argument("clip", type=int)
+    x.add_argument("--redo", action="store_true")
+    x.set_defaults(fn=cmd_copy)
+    x = sub.add_parser("edit")
+    x.add_argument("clip", type=int)
+    x.add_argument("--title")
+    x.add_argument("--caption")
+    x.add_argument("--tags")
+    x.set_defaults(fn=cmd_edit)
+    x = sub.add_parser("approve")
+    x.add_argument("clip", type=int)
+    x.add_argument("--note")
+    x.set_defaults(fn=cmd_approve)
+    x = sub.add_parser("reject")
+    x.add_argument("clip", type=int)
+    x.add_argument("--why", required=True)
+    x.set_defaults(fn=cmd_reject)
+    sub.add_parser("publish").set_defaults(fn=cmd_publish)
+    x = sub.add_parser("posted")
+    x.add_argument("clip", type=int)
+    x.add_argument("platform", choices=["tiktok", "youtube"])
+    x.add_argument("--url")
+    x.set_defaults(fn=cmd_posted)
+    sub.add_parser("youtube-login").set_defaults(fn=cmd_login)
     m = sub.add_parser("remake")
     m.add_argument("trend", type=int)
     m.set_defaults(fn=cmd_remake)
@@ -220,6 +333,8 @@ def main(argv=None):
     a = p.parse_args(argv)
     if a.cmd == "source" and a.action == "add" and not (a.name and a.rights):
         p.error("source add needs NAME and --rights (and --evidence)")
+    if a.cmd == "source" and a.action == "rules" and not a.name:
+        p.error("source rules needs NAME")
     if a.cmd == "source" and a.action == "channel" and not (a.name and a.channel):
         p.error("source channel needs NAME and --channel UC...")
     try:

@@ -134,6 +134,43 @@ MIGRATIONS = [
       note TEXT
     );
     """,
+    # 3 - approving and posting. The words that go out with a clip, the owner's
+    # verdict on it (a label for learning, and faster than views), and one row
+    # per clip per platform: UNIQUE is the duplicate-post guard.
+    """
+    ALTER TABLE sources ADD COLUMN post_tags TEXT;   -- tags a campaign requires, e.g. "#clipping #creator"
+    ALTER TABLE sources ADD COLUMN credit TEXT;      -- a line every post must carry, e.g. "Clip from @creator"
+    CREATE TABLE post_copy (
+      clip_id INTEGER PRIMARY KEY REFERENCES clips(id),
+      title TEXT NOT NULL,
+      caption TEXT NOT NULL,
+      hashtags TEXT NOT NULL,           -- JSON list, without '#'
+      generator TEXT NOT NULL,          -- "llm:<model>", "template", or "owner" once edited
+      cost_usd REAL NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE reviews (
+      id INTEGER PRIMARY KEY,
+      clip_id INTEGER NOT NULL REFERENCES clips(id),
+      verdict TEXT NOT NULL,            -- approve, reject
+      reason TEXT,
+      ts TEXT NOT NULL
+    );
+    CREATE TABLE publications (
+      id INTEGER PRIMARY KEY,
+      clip_id INTEGER NOT NULL REFERENCES clips(id),
+      platform TEXT NOT NULL,           -- youtube, tiktok
+      status TEXT NOT NULL,             -- queued, posted, manual, needs_setup, failed
+      remote_id TEXT,
+      url TEXT,
+      privacy TEXT,
+      detail TEXT,                      -- the last thing that happened, in words
+      attempts INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      posted_at TEXT,
+      UNIQUE (clip_id, platform)
+    );
+    """,
 ]
 
 

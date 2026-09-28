@@ -7,7 +7,7 @@ rule for "can Clip act on this trending moment?" exists once.
 
 import json
 
-from clipper import db, trends
+from clipper import db, postcopy, trends, youtube
 
 
 def trend_state(t, allowed):
@@ -19,6 +19,18 @@ def trend_state(t, allowed):
     if t["creator_id"] in allowed:
         return "not_in_footage", "creator is permitted, moment not in footage ingested yet"
     return "no_permission", "no permission for this creator yet"
+
+
+def post_words(conn, clip):
+    """What would go out with this clip, exactly as publish sends it."""
+    row = conn.execute("SELECT * FROM post_copy WHERE clip_id = ?", (clip["id"],)).fetchone()
+    if not row:
+        return None
+    src = conn.execute("SELECT s.* FROM sources s JOIN videos v ON v.source_id = s.id WHERE v.id = ?",
+                       (clip["video_id"],)).fetchone()
+    words = postcopy.compose(row, src)
+    return {"title": row["title"], "caption": row["caption"], "hashtags": json.loads(row["hashtags"]),
+            "generator": row["generator"], "youtube": words["youtube"], "tiktok": words["tiktok"]}
 
 
 def snapshot(conn, paths, cfg):
@@ -36,7 +48,11 @@ def snapshot(conn, paths, cfg):
                       "start": c["start"], "end": c["end"], "score": c["score"],
                       "status": c["status"], "reasons": m.get("reasons") or [],
                       "text": (m.get("text") or "")[:300], "source": m.get("source"),
-                      "video_title": m.get("video_title"), "created_at": c["created_at"]})
+                      "video_title": m.get("video_title"), "created_at": c["created_at"],
+                      "post": post_words(conn, c),
+                      "publications": [dict(p) for p in conn.execute(
+                          "SELECT platform, status, url, privacy, detail, posted_at FROM publications "
+                          "WHERE clip_id = ? ORDER BY platform DESC", (c["id"],))]})
     creators, trending = [], []
     if last:
         for c in conn.execute("SELECT * FROM creators WHERE last_seen = ? ORDER BY heat DESC LIMIT 15",
@@ -56,6 +72,9 @@ def snapshot(conn, paths, cfg):
         "sources": [{"name": s["name"], "rights": s["rights"], "channel_id": s["channel_id"],
                      "active": bool(s["active"])} for s in conn.execute("SELECT * FROM sources ORDER BY id")],
         "spend_today": db.spent_today(conn), "daily_budget": cfg["daily_budget_usd"],
+        "platforms": cfg["platforms"],
+        "youtube_ready": all(youtube.creds().get(k) for k in
+                             ("YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REFRESH_TOKEN")),
         "spotter": {"last_run": dict(last) if last else None, "units_today": trends.units_today(conn),
                     "units_cap": cfg["spot_daily_units"], "has_key": bool(trends.api_key()),
                     "min_subscribers": cfg["spot_min_subscribers"],

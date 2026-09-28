@@ -68,6 +68,15 @@ DEFAULTS = {
     "spot_daily_units": 3000,        # of the free 10,000/day; the rest is left for uploads later
     "spot_min_match": 0.5,           # share of a trending clip's words found in the footage
 
+    # --- posting ------------------------------------------------------------
+    "platforms": ["youtube", "tiktok"],
+    # Asked for; YouTube itself keeps uploads private until the Google Cloud
+    # project passes its API audit, and says so in the upload's reply.
+    "youtube_privacy": "public",
+    "youtube_category": "24",        # Entertainment
+    "max_daily_uploads": 6,          # per platform
+    "copy_model": "openai/gpt-5-mini",
+
     # --- money --------------------------------------------------------------
     # Phase 1 spends nothing: transcription is local. The ledger and the cap
     # exist now so the first paid provider cannot be added without them.

@@ -13,7 +13,7 @@ import json
 import traceback
 from pathlib import Path
 
-from clipper import captions, db, media, moments, render, score, transcribe
+from clipper import captions, db, media, moments, postcopy, render, score, transcribe
 
 MAX_ATTEMPTS = 3
 
@@ -100,6 +100,14 @@ def stage_render(conn, paths, cfg, video):
                           db.as_json(meta), db.now()))
         db.event(conn, "render", f"clip {rank}: {c['start']:.1f}-{c['end']:.1f}s, score {c['score']}",
                  video_id=video["id"])
+        # Its title, caption and tags, drafted now so they can be read before
+        # approving. Never fails the render: postcopy falls back to a plain
+        # draft on its own, and anything else is a warning, not a lost clip.
+        try:
+            clip_id = conn.execute("SELECT id FROM clips WHERE candidate_id = ?", (c["id"],)).fetchone()[0]
+            postcopy.write(conn, cfg, clip_id)
+        except Exception as exc:
+            db.event(conn, "copy", f"no draft for clip {rank}: {exc}", level="warn", video_id=video["id"])
     write_summary(conn, out_dir, video)
     return "done"
 

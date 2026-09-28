@@ -5414,6 +5414,25 @@ class ClipHasAStudio(unittest.TestCase):
         server = (ROOT / "mission-control-api" / "server.js").read_text()
         self.assertIn("clipRoutes.register(app);", server)
 
+    def test_approving_happens_on_the_card_through_data_attributes(self):
+        # One listener, ids in data attributes - never ids spliced into
+        # onclick strings, the rule every other panel here follows.
+        for kind in ("approve", "reject", "edit", "redraft", "copytiktok", "posted"):
+            self.assertIn(f'data-clip="{kind}"', self.html)
+        self.assertIn("$('clipClips').onclick", self.html)
+        panel = self.html.split("function drawPost(", 1)[1].split("async function clipAct(", 1)[0]
+        self.assertNotIn("onclick=", panel)
+        js = (ROOT / "mission-control-api" / "clip.js").read_text()
+        for route in ("approve", "reject", "edit", "redraft", "posted"):
+            self.assertIn(f"app.post('/api/clip/{route}/", js)
+
+    def test_copying_a_caption_works_without_https(self):
+        # The Deck is plain http over Tailscale, where navigator.clipboard
+        # does not exist - relying on it would make the button do nothing.
+        body = self.html.split("function copyText(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("execCommand('copy')", body)
+        self.assertNotIn("navigator.clipboard", body)
+
     def test_the_panel_loads_on_open_and_is_not_redrawn_by_the_village_loop(self):
         pull = self.html.split("async function pull(", 1)[1].split("\n}", 1)[0]
         self.assertNotIn("drawClip", pull)

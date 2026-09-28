@@ -273,6 +273,10 @@
          padding-top:8px;border-top:1px solid var(--line);line-height:1.5}
   .clipgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
   #clipSpot a, #clipClips a{color:#7dd3fc}
+  /* Four buttons do not fit across a 150px card: a 2x2 grid keeps each one
+     inside its own card instead of spilling into the next (seen in a screenshot). */
+  .acts.clipacts{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .acts.clipacts button{width:100%;padding:8px 4px}
 </style>
 </head>
 <body>
@@ -2321,6 +2325,12 @@ function openClipPanel(){
     const b = e.target.closest('[data-clip]');
     if (b) clipAct(b.dataset.clip, b.dataset.id);
   };
+  $('clipClips').onclick = e => {
+    const b = e.target.closest('[data-clip]');
+    if (!b) return;
+    e.preventDefault();
+    clipCard(b.dataset.clip, b.dataset.id, b.dataset.platform);
+  };
   loadClip();
 }
 
@@ -2352,6 +2362,12 @@ function drawClip(){
         <div class="muted">of ${sp.units_cap ?? '—'} today · free</div></div>
     </div>`;
 
+  if ((c.platforms || []).includes('youtube') && !c.youtube_ready) {
+    $('clipStats').innerHTML += `<div class="verdict">Approved clips can't reach YouTube yet: Clip isn't signed in
+      to your channel. One-time setup is in <b>clipper/README.md</b> ("Posting to YouTube"), ending with
+      <b>python3 -m clipper youtube-login</b>. Approving still works — the post waits and goes out after you
+      sign in (<b>python3 -m clipper publish</b>).</div>`;
+  }
   const clips = c.clips || [];
   $('clipClips').innerHTML = clips.length ? `<div class="clipgrid">` + clips.map(k => `
       <div class="idea">
@@ -2360,10 +2376,8 @@ function drawClip(){
         <div class="t">CLIP #${k.rank} · ${Math.round(k.score)}/100</div>
         <div class="ktags"><span class="pill">${esc(k.source)}</span>
           <span class="pill">${clock(k.start)}–${clock(k.end)}</span></div>
-        <div class="w">${esc(k.video_title || '')}</div>
         <div class="d">${esc((k.reasons || []).join(' · '))}</div>
-        <div class="muted">“${esc(k.text.slice(0, 140))}${k.text.length > 140 ? '…' : ''}”</div>
-        <div class="muted"><a href="/api/clip/file/${k.video_id}/${k.rank}?dl=1">Download</a></div>
+        ${drawPost(k)}
       </div>`).join('') + `</div>`
     : `<div class="muted">No clips yet. Give Clip a video you have the rights to:
        <b>python3 -m clipper ingest &lt;source&gt; &lt;file&gt;</b>, then <b>run</b>.</div>`;
@@ -2416,6 +2430,94 @@ function drawClip(){
       <div class="w">#${v.id} <b>${esc(v.title)}</b> · ${esc(v.source)} · ${esc(v.stage)} · ${v.clips} clip(s)
         ${v.error ? `<div class="muted" style="color:#f59e0b">${esc(v.error.slice(0, 200))}</div>` : ''}</div>`).join('')
     : '<div class="muted">Nothing processed yet.</div>';
+}
+
+// The words a clip posts with, and - once approved - where each post went.
+function drawPost(k){
+  const p = k.post;
+  const words = !p ? '<div class="muted">No title or caption yet.</div>' : `
+    <div class="w"><b>${esc(p.title)}</b></div>
+    ${p.caption !== p.title ? `<div class="muted">${esc(p.caption)}</div>` : ''}
+    <div class="ktags">${(p.hashtags || []).map(t => `<span class="pill">#${esc(t)}</span>`).join('')}</div>
+    <div class="muted" style="font-size:11px">${p.generator === 'owner' ? 'your words'
+      : p.generator === 'template' ? 'plain draft (no model used)' : 'drafted by ' + esc(p.generator.slice(4))}</div>`;
+  const dl = `<a href="/api/clip/file/${k.video_id}/${k.rank}?dl=1">Download</a>`;
+  if (k.status === 'rejected') return words + `<div class="ktags"><span class="pill">rejected</span></div>`;
+  if (k.status === 'rendered') {
+    return words + `<div class="acts clipacts">
+        <button class="yes" data-clip="approve" data-id="${k.id}">Approve &amp; post</button>
+        <button data-clip="edit" data-id="${k.id}">Edit text</button>
+        <button data-clip="redraft" data-id="${k.id}">New draft</button>
+        <button class="no" data-clip="reject" data-id="${k.id}">Reject</button></div>
+      <div class="muted">${dl}</div>`;
+  }
+  const pubs = (k.publications || []).map(u => {
+    const name = u.platform === 'youtube' ? 'YouTube' : 'TikTok';
+    if (u.status === 'posted') {
+      return `<div class="w" style="color:var(--up)">${name}: posted${u.privacy ? ' (' + esc(u.privacy) + ')' : ''}
+        ${u.url ? `· <a href="${esc(u.url)}" target="_blank" rel="noopener">open</a>` : ''}</div>`;
+    }
+    if (u.status === 'manual') {
+      return `<div class="w">${name}: ready for you — ${dl} ·
+        <a href="#" data-clip="copytiktok" data-id="${k.id}">Copy caption</a> ·
+        <a href="#" data-clip="posted" data-id="${k.id}" data-platform="${u.platform}">Mark posted</a></div>`;
+    }
+    return `<div class="w" style="color:#f59e0b">${name}: ${esc(u.status.replace('_', ' '))} — ${esc(u.detail || '')}</div>`;
+  }).join('');
+  return words + pubs;
+}
+
+// Clipboard: navigator.clipboard exists only on https, and the Deck is plain
+// http over Tailscale - so the old select-and-copy path is the one that runs.
+function copyText(text){
+  const t = document.createElement('textarea');
+  t.value = text; t.setAttribute('readonly', ''); t.style.position = 'fixed'; t.style.opacity = '0';
+  document.body.appendChild(t); t.select(); t.setSelectionRange(0, text.length);
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  t.remove();
+  if (!ok) window.prompt('Copy this caption:', text);
+  else alert('Caption copied - paste it into TikTok.');
+}
+
+async function clipPost(url, body){
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                               body: JSON.stringify(body || {}) });
+  const j = await r.json();
+  alert((j.message || j.error || (r.ok ? 'Done.' : 'That did not work.')).slice(0, 600));
+}
+
+async function clipCard(kind, id, platform){
+  if (clipBusy) return;
+  const k = ((CLIP && CLIP.clips) || []).find(c => String(c.id) === String(id));
+  if (kind === 'copytiktok') { if (k && k.post) copyText(k.post.tiktok); return; }
+  let body = null;
+  if (kind === 'approve') {
+    const where = ((CLIP && CLIP.platforms) || []).join(' and ');
+    if (!confirm(`Approve and post this clip to ${where}? It goes out with the title, caption and tags shown.`)) return;
+  } else if (kind === 'reject') {
+    const why = window.prompt('Why not? Clip learns from the reason.', '');
+    if (!why || !why.trim()) return;
+    body = { why: why.trim() };
+  } else if (kind === 'edit') {
+    if (!k || !k.post) return;
+    const title = window.prompt('Title', k.post.title);
+    if (title === null) return;
+    const caption = window.prompt('Caption', k.post.caption);
+    if (caption === null) return;
+    const tags = window.prompt('Hashtags (spaces between)', (k.post.hashtags || []).join(' '));
+    if (tags === null) return;
+    body = { title, caption, tags };
+  } else if (kind === 'posted') {
+    if (!confirm('Mark this clip as posted on TikTok? It will not be offered again.')) return;
+  }
+  clipBusy = true;
+  document.querySelectorAll('#clipClips button').forEach(b => b.disabled = true);
+  const url = kind === 'posted' ? `/api/clip/posted/${encodeURIComponent(id)}/${encodeURIComponent(platform)}`
+            : `/api/clip/${kind}/${encodeURIComponent(id)}`;
+  try { await clipPost(url, body); }
+  catch (e) { alert('Could not reach the API: ' + e.message); }
+  finally { clipBusy = false; loadClip(); }
 }
 
 async function clipAct(kind, id){

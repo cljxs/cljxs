@@ -248,7 +248,10 @@ class EndToEnd(unittest.TestCase):
         # Small and fast so CI can afford it: 60 s of video, one clip, ultrafast.
         (self.home / "config.json").write_text(json.dumps({
             "transcriber": "file", "max_clips_per_video": 1, "min_score": 0,
-            "x264_preset": "ultrafast", "max_clip_seconds": 30}))
+            "x264_preset": "ultrafast", "max_clip_seconds": 30,
+            # On the droplet the OpenRouter key is real: a test must never
+            # spend it. Drafting by model is tested with a stand-in call.
+            "copy_model": None}))
         self.video = Path(self.tmp.name) / "talk.mp4"
         subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error",
                         "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30",
@@ -462,14 +465,43 @@ class SpotterRun(EndToEnd):
         r, calls = self.spot()
         self.assertEqual(r["creators"], 2)
         searched = [q["q"] for ep, q in calls if ep == "search"]
-        self.assertEqual(searched[0], "Tao Reads", "the permitted creator is searched first")
+        self.assertEqual(searched, ["Tao Reads"],
+                         "only the permitted creator is searched - the others are leads")
         self.assertEqual(r["matched"], 1)
         snap = report.snapshot(self.conn, self.paths, self.cfg)["spotter"]
         states = {t["creator"]: t["state"] for t in snap["trending"]}
-        self.assertEqual(states, {"Tao Reads": "matched", "Mega Streamer": "no_permission"})
+        self.assertEqual(states, {"Tao Reads": "matched"})
+        leads = {c["title"]: c["permitted"] for c in snap["creators"]}
+        self.assertEqual(leads, {"Tao Reads": True, "Mega Streamer": False})
         units = sum(trends.UNITS[ep] for ep, _ in calls)
         self.assertEqual(trends.units_today(self.conn), units, "every call is on the ledger")
         self.assertEqual(r["units"], units)
+
+    def test_with_no_permitted_creator_nothing_is_searched(self):
+        self.cli("source", "add", "pd", "--rights", "public-domain", "--evidence", "x")
+        self.conn = db.connect(self.home / "clipper.db")
+        self.cfg, self.paths = config.load(), config.paths()
+        r, calls = self.spot()
+        self.assertFalse(any(ep == "search" for ep, _ in calls), "no quota spent on leads")
+        self.assertIn("no permitted creators", " ".join(r["note"]))
+        self.assertEqual(r["creators"], 2, "the leads are still listed")
+
+    def test_a_permitted_creator_off_the_charts_is_still_researched(self):
+        self.cli("source", "add", "quiet", "--rights", "permission", "--evidence", "x",
+                 "--channel", "UC" + "q" * 22)
+        self.conn = db.connect(self.home / "clipper.db")
+        self.cfg, self.paths = config.load(), config.paths()
+        fetch, calls = fake_youtube()
+        real = fetch
+
+        def with_quiet(url):
+            if "/v3/channels" in url and "UC" + "q" * 22 in url:
+                return {"items": [{"id": "UC" + "q" * 22, "snippet": {"title": "Quiet Creator"},
+                                   "statistics": {"subscriberCount": "90000"}}]}
+            return real(url)
+        yt = trends.YouTube(self.conn, self.cfg, key="k", fetch=with_quiet)
+        trends.run(self.conn, self.paths, self.cfg, yt=yt, now=NOW)
+        self.assertEqual([q["q"] for ep, q in calls if ep == "search"], ["Quiet Creator"])
 
     def test_the_unit_cap_stops_before_the_call(self):
         self.ready()
@@ -490,7 +522,13 @@ class SpotterRun(EndToEnd):
         self.spot()
         first = self.home / "clips" / "1" / "01.mp4"
         before = first.stat().st_mtime_ns
-        bad = self.conn.execute("SELECT id FROM trending_clips WHERE creator_id = ?", (BIG,)).fetchone()[0]
+        # A trending clip of a creator with no permission (as an older,
+        # search-everyone Spotter would have stored) is still refused.
+        with self.conn:
+            bad = self.conn.execute(
+                "INSERT INTO trending_clips (yt_id, creator_id, title, seen_at) VALUES "
+                "('old', ?, 'He suddenly came to a grove of blossoming peach trees', ?)",
+                (BIG, db.now())).lastrowid
         code, said = self.cli("remake", str(bad))
         self.assertEqual(code, 2)
         self.assertIn("not found in any footage Clip has permission for", said)
@@ -531,3 +569,241 @@ class ClipCredentials(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not a channel id"):
             ingest.check_channel("@taoreads")
         ingest.check_channel(TAO)
+
+
+# ---------------------------------------------------------------- posting
+
+from clipper import postcopy, publish, youtube  # noqa: E402
+
+CLIP_TEXT = "Once, while following a stream, he forgot how far he had gone. It lined both banks for 300 paces."
+
+
+class PostCopyRules(unittest.TestCase):
+    def test_a_title_may_not_invent_a_number(self):
+        with self.assertRaisesRegex(ValueError, "says 5"):
+            postcopy.check_draft({"title": "5 reasons he got lost", "caption": "x"}, CLIP_TEXT)
+        t, c, tags = postcopy.check_draft({"title": "300 paces of peach blossom", "caption": "x",
+                                           "hashtags": ["#Peach Blossom", "story", "🌸", "story", "a",
+                                                        "one", "two", "three", "four"]}, CLIP_TEXT)
+        self.assertEqual(t, "300 paces of peach blossom")
+        self.assertEqual(tags, ["PeachBlossom", "story", "one", "two", "three"],
+                         "cleaned, deduplicated, single letters and emoji dropped, five at most")
+
+    def test_long_text_is_cut_at_a_word(self):
+        t = postcopy.cut("word " * 40, 30)
+        self.assertLessEqual(len(t), 30)
+        self.assertTrue(t.endswith("word…"))
+
+    def test_the_plain_draft_is_the_first_sentence(self):
+        self.assertEqual(postcopy.template(CLIP_TEXT)[0],
+                         "Once, while following a stream, he forgot how far he had gone.")
+
+    def test_every_post_carries_the_sources_tags_and_credit(self):
+        row = {"title": "T", "caption": "C", "hashtags": json.dumps(["story", "Clipping"])}
+        src = {"post_tags": "#clipping #TaoReads", "credit": "Clip from @taoreads",
+               "attribution": "CC BY Tao"}
+        w = postcopy.compose(row, src)
+        self.assertEqual(w["tags"], ["clipping", "TaoReads", "story"], "required first, no repeats")
+        for text in (w["youtube"]["description"], w["tiktok"]):
+            self.assertIn("Clip from @taoreads", text)
+            self.assertIn("CC BY Tao", text)
+            self.assertIn("#clipping #TaoReads #story", text)
+        self.assertIn("#Shorts", w["youtube"]["description"])
+        self.assertEqual(w["youtube"]["tags"], ["clipping", "TaoReads", "story"])
+
+    def test_platform_limits(self):
+        row = {"title": "T", "caption": "C" * 300, "hashtags": json.dumps(["t" + str(i) * 20 for i in range(40)])}
+        src = {"post_tags": None, "credit": "x" * 3000, "attribution": None}
+        w = postcopy.compose(row, src)
+        self.assertLessEqual(len(w["tiktok"]), postcopy.TIKTOK_MAX)
+        self.assertLessEqual(sum(len(t) + 1 for t in w["youtube"]["tags"]), postcopy.YT_TAGS_MAX)
+
+
+class Posting(EndToEnd):
+    """Approve -> the words -> each platform, on a real rendered clip."""
+
+    test_permitted_video_in_captioned_short_out = None
+    test_a_failing_stage_is_retried_then_parked_then_retryable = None
+
+    def ready(self):
+        self.cli("source", "add", "tao", "--rights", "permission", "--evidence", "campaign page")
+        self.cli("source", "rules", "tao", "--tags", "#clipping #TaoReads", "--credit", "Clip from @taoreads")
+        self.cli("ingest", "tao", str(self.video))
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        self.conn = db.connect(self.home / "clipper.db")
+        self.cfg = config.load()
+        self.clip = self.conn.execute("SELECT * FROM clips").fetchone()
+        self.sent = []
+
+    def upload(self, path, meta, privacy, category):
+        self.sent.append((path, meta, privacy, category))
+        return {"id": "abc123", "url": "https://youtube.com/shorts/abc123", "privacy": "private"}
+
+    def pubs(self):
+        return {r["platform"]: r for r in self.conn.execute(
+            "SELECT * FROM publications WHERE clip_id = ?", (self.clip["id"],))}
+
+    def test_the_render_drafts_its_words_without_a_model_in_tests(self):
+        self.ready()
+        row = self.conn.execute("SELECT * FROM post_copy WHERE clip_id = ?", (self.clip["id"],)).fetchone()
+        self.assertEqual(row["generator"], "template", "copy_model is null here: no key is ever spent")
+
+    def test_a_model_draft_is_checked_and_costed(self):
+        self.ready()
+        cfg = dict(self.cfg, copy_model="openai/gpt-5-mini")
+        good = lambda text, src, key, slug: ({"title": "He forgot how far he had gone", "caption": "A stream, a grove.",
+                                              "hashtags": ["story", "#peach"]}, 0.0012)
+        row = postcopy.write(self.conn, cfg, self.clip["id"], redo=True, call=good, key="k", left=0.5)
+        self.assertEqual(row["generator"], "llm:openai/gpt-5-mini")
+        self.assertEqual(json.loads(row["hashtags"]), ["story", "peach"])
+        self.assertAlmostEqual(db.spent_today(self.conn), 0.0012)
+
+        liar = lambda *a: ({"title": "7 secrets of the grove", "caption": "x"}, 0.001)
+        row = postcopy.write(self.conn, cfg, self.clip["id"], redo=True, call=liar, key="k", left=0.5)
+        self.assertEqual(row["generator"], "template", "an invented number falls back, never posts")
+
+        # A stand-in that raises would prove nothing: write() catches every
+        # error and falls back. It records instead, and the list must stay empty.
+        calls = []
+        never = lambda *a: calls.append(a) or ({"title": "x", "caption": "x"}, 0.0)
+        row = postcopy.write(self.conn, cfg, self.clip["id"], redo=True, call=never, key="k", left=0.01)
+        self.assertEqual((row["generator"], calls), ("template", []), "shared allowance spent: no call")
+        row = postcopy.write(self.conn, dict(cfg, copy_model=None), self.clip["id"], redo=True,
+                             call=never, key="k", left=0.5)
+        self.assertEqual((row["generator"], calls), ("template", []), "switched off: no call, even with a key")
+
+    def test_your_edit_is_never_overwritten(self):
+        self.ready()
+        postcopy.edit(self.conn, self.clip["id"], title="My title", hashtags="#mine")
+        row = postcopy.write(self.conn, self.cfg, self.clip["id"])
+        self.assertEqual((row["title"], row["generator"], json.loads(row["hashtags"])),
+                         ("My title", "owner", ["mine"]))
+
+    def test_approve_posts_with_the_composed_words(self):
+        self.ready()
+        results = publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
+        self.assertEqual(len(self.sent), 1)
+        path, meta, privacy, category = self.sent[0]
+        self.assertEqual(path, self.clip["path"])
+        self.assertIn("Clip from @taoreads", meta["description"])
+        self.assertEqual(meta["tags"][:2], ["clipping", "TaoReads"])
+        self.assertEqual((privacy, category), ("public", "24"))
+        p = self.pubs()
+        self.assertEqual((p["youtube"]["status"], p["youtube"]["url"]), ("posted", "https://youtube.com/shorts/abc123"))
+        self.assertIn("private until the Google Cloud project passes", p["youtube"]["detail"],
+                      "asked public, YouTube kept it private: the page must say so")
+        self.assertEqual(p["tiktok"]["status"], "manual")
+        clip = lambda: self.conn.execute("SELECT status FROM clips WHERE id = ?", (self.clip["id"],)).fetchone()[0]
+        self.assertEqual(clip(), "approved", "TikTok is still waiting for you, so not 'posted'")
+        publish.mark_posted(self.conn, self.clip["id"], "tiktok")
+        self.assertEqual(clip(), "posted")
+        self.assertEqual(self.conn.execute("SELECT verdict FROM reviews").fetchone()[0], "approve")
+        with self.assertRaisesRegex(ValueError, "already"):
+            publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
+        self.assertEqual(len(self.sent), 1, "never posted twice")
+
+    def test_not_signed_in_waits_then_goes_out(self):
+        self.ready()
+        def not_yet(*a):
+            raise youtube.NotSetUp("YouTube is not set up")
+        publish.approve(self.conn, self.cfg, self.clip["id"], upload=not_yet)
+        self.assertEqual(self.pubs()["youtube"]["status"], "needs_setup")
+        publish.publish(self.conn, self.cfg, upload=self.upload)
+        self.assertEqual(self.pubs()["youtube"]["status"], "posted")
+
+    def test_the_daily_cap_holds_a_post_for_tomorrow(self):
+        self.ready()
+        publish.approve(self.conn, dict(self.cfg, max_daily_uploads=0), self.clip["id"], upload=self.upload)
+        self.assertEqual(self.pubs()["youtube"]["status"], "queued")
+        self.assertEqual(self.sent, [])
+
+    def test_permission_withdrawn_blocks_the_post(self):
+        self.ready()
+        with self.conn:
+            self.conn.execute("UPDATE sources SET active = 0")
+        with self.assertRaisesRegex(ValueError, "permission withdrawn"):
+            publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
+        self.assertEqual(self.sent, [])
+
+    def test_reject_needs_a_reason_and_keeps_it(self):
+        self.ready()
+        with self.assertRaisesRegex(ValueError, "say why"):
+            publish.reject(self.conn, self.clip["id"], " ")
+        publish.reject(self.conn, self.clip["id"], "starts mid-joke")
+        self.assertEqual(self.conn.execute("SELECT verdict, reason FROM reviews").fetchone()[:],
+                         ("reject", "starts mid-joke"))
+        with self.assertRaisesRegex(ValueError, "rejected"):
+            publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
+
+
+class YouTubeSignInAndUpload(unittest.TestCase):
+    """Against Google's documented request/reply shapes - no Google account
+    was available to capture real ones. The first youtube-login is the check."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.old = os.environ.get("CLIPPER_HOME")
+        os.environ["CLIPPER_HOME"] = self.tmp.name
+        self.addCleanup(lambda: os.environ.pop("CLIPPER_HOME", None) if self.old is None
+                        else os.environ.__setitem__("CLIPPER_HOME", self.old))
+        (Path(self.tmp.name) / "credentials.env").write_text(
+            "YOUTUBE_CLIENT_ID=cid.apps.googleusercontent.com\nYOUTUBE_CLIENT_SECRET=sec\n")
+
+    def test_the_device_flow_waits_slows_down_and_saves_the_token(self):
+        replies = iter([(200, {"device_code": "dc", "user_code": "ABCD-EFGH", "interval": 5,
+                               "expires_in": 1800, "verification_url": "https://www.google.com/device"}),
+                        (428, {"error": "authorization_pending"}),
+                        (428, {"error": "slow_down"}),
+                        (200, {"access_token": "at", "refresh_token": "rt-123"})])
+        posted, slept, said = [], [], []
+        ok = youtube.login(post=lambda url, f: (posted.append((url, f)), next(replies))[1],
+                           sleep=slept.append, say=said.append)
+        self.assertTrue(ok)
+        self.assertEqual(posted[0][1]["scope"], "https://www.googleapis.com/auth/youtube")
+        self.assertEqual(posted[1][1]["grant_type"], "urn:ietf:params:oauth:grant-type:device_code")
+        self.assertEqual(slept, [5, 5, 10], "slow_down adds five seconds")
+        self.assertIn("ABCD-EFGH", said[0])
+        self.assertEqual(youtube.creds()["YOUTUBE_REFRESH_TOKEN"], "rt-123")
+        self.assertEqual(oct((Path(self.tmp.name) / "credentials.env").stat().st_mode & 0o777), "0o600")
+        self.assertEqual(youtube.creds()["YOUTUBE_CLIENT_SECRET"], "sec", "other keys kept")
+
+    def test_declining_says_so(self):
+        replies = iter([(200, {"device_code": "dc", "user_code": "X", "interval": 1}),
+                        (403, {"error": "access_denied"})])
+        with self.assertRaisesRegex(RuntimeError, "declined"):
+            youtube.login(post=lambda u, f: next(replies), sleep=lambda s: None, say=lambda s: None)
+
+    def test_a_revoked_sign_in_asks_for_a_new_one(self):
+        with open(Path(self.tmp.name) / "credentials.env", "a") as f:
+            f.write("YOUTUBE_REFRESH_TOKEN=old\n")
+        with self.assertRaisesRegex(youtube.NotSetUp, "youtube-login"):
+            youtube.access_token(post=lambda u, f: (400, {"error": "invalid_grant"}))
+
+    def test_upload_is_the_resumable_two_step(self):
+        video = Path(self.tmp.name) / "c.mp4"
+        video.write_bytes(b"x" * 1234)
+        seen = []
+
+        def send(req, timeout):
+            seen.append(req)
+            if req.get_method() == "POST":
+                return 200, {"Location": "https://upload.example/session1"}, b""
+            return 200, {}, json.dumps({"id": "vid9", "status": {"privacyStatus": "private"}}).encode()
+        out = youtube.upload(video, {"title": "T", "description": "D", "tags": ["a"]}, "public", "24",
+                             token="tok", send=send)
+        self.assertEqual(out, {"id": "vid9", "url": "https://youtube.com/shorts/vid9", "privacy": "private"})
+        first = json.loads(seen[0].data)
+        self.assertEqual(first["snippet"]["title"], "T")
+        self.assertEqual(first["status"]["privacyStatus"], "public")
+        self.assertEqual(seen[0].get_header("X-upload-content-length"), "1234")
+        self.assertEqual(seen[1].full_url, "https://upload.example/session1")
+
+    def test_a_refused_upload_is_an_error_with_googles_words(self):
+        video = Path(self.tmp.name) / "c.mp4"
+        video.write_bytes(b"x")
+        refuse = lambda req, t: (403, {}, json.dumps({"error": {"message": "quotaExceeded"}}).encode())
+        with self.assertRaisesRegex(RuntimeError, "quotaExceeded"):
+            youtube.upload(video, {"title": "T", "description": "D", "tags": []}, "public", "24",
+                           token="tok", send=refuse)
