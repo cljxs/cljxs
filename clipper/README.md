@@ -133,15 +133,17 @@ posted means it's never offered again.
 
 Use the same Google Cloud project as Spotter's key.
 
-1. **APIs & Services → OAuth consent screen.**
-   - Choose *External*, name the app `Clip`, and use your own email.
-   - Then choose **Publish app** to move it to *In production*. While it
-     stays in *Testing*, Google ends the sign-in every 7 days.
-   - Google will say the app is unverified. That's expected for an app only
-     you use.
-2. **APIs & Services → Credentials → Create credentials → OAuth client
-   ID.** For *Application type* pick **TVs and Limited Input devices**,
-   then choose Create.
+1. **Menu → Google Auth Platform.**
+   - **Branding** (or *Get started*): the app name is `Clip`, and both
+     emails are yours.
+   - **Audience**: choose *External*, then **Publish app** so it reads *In
+     production*. While it stays in *Testing*, Google ends the sign-in every
+     7 days.
+2. **Google Auth Platform → Clients → Create client.** For *Application
+   type* pick **TVs and Limited Input devices**, name it `Clip`, then choose
+   Create. **The client secret is shown only this once** (Google's rule since
+   2025), so set it on the droplet before closing that screen. If it's
+   lost, add a new secret to the same client.
 3. Put the two values on the droplet, one at a time:
 
 ```
