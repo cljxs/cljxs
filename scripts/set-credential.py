@@ -69,6 +69,13 @@ SHAPES = {
 # clipboard at a time, while the clipboard also holds the command they had to
 # paste to get here. So stop asking. Two prompts, one value each, and the
 # colon is put in by code that cannot forget it.
+# Agents whose files do not live under agents/. Clip keeps everything in
+# clipper/var/ (CLIPPER_HOME), because a folder under agents/ is read as an
+# openclaw agent by the dispatcher, preflight and the Deck.
+ELSEWHERE = {
+    "clip": lambda: Path(os.environ.get("CLIPPER_HOME", ROOT / "clipper" / "var")) / "credentials.env",
+}
+
 PARTS = {
     "ETSY_API_KEY": ("keystring", "shared secret"),
 }
@@ -148,7 +155,9 @@ def main():
         return 2
     agent, name = sys.argv[1], sys.argv[2]
     path = ROOT / "agents" / agent / "state" / "credentials.env"
-    if not (ROOT / "agents" / agent).is_dir():
+    if agent in ELSEWHERE:
+        path = ELSEWHERE[agent]()
+    elif not (ROOT / "agents" / agent).is_dir():
         have = sorted(p.name for p in (ROOT / "agents").iterdir() if p.is_dir()) \
             if (ROOT / "agents").is_dir() else []
         print(f"no agent called '{agent}'. There is: {', '.join(have) or 'none'}",

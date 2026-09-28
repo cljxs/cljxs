@@ -1,6 +1,9 @@
-# Clipper — system design
+# Clip — system design
 
-Clipper's job, stated as if it were an employee:
+The agent is called **Clip** (the code lives in `clipper/`). Its research
+assistant is **Spotter**. Both live in Clip's studio in the pixel village.
+
+Clip's job, stated as if it were an employee:
 
 > Find the best moments in my approved video sources, turn them into
 > high-quality short videos, publish them, measure the results, and get
@@ -237,6 +240,41 @@ captions burned in, `NN.json` metadata, `NN.ass` captions.
 (with the fix) / reject (with the reason), recorded per version.
 
 **Publisher** (Ph. 4), **Analyst** (Ph. 5), **Learner** (Ph. 5) — §13–15.
+
+**Spotter, the research assistant** (built 2026-09-28) — answers three
+questions from YouTube's official Data API with a free key:
+
+1. *Who is hot?* The most-popular charts per category (Gaming, Entertainment,
+   Comedy, People & Blogs, Sports), collapsed to channels. Only channels over
+   `spot_min_subscribers` (default 500,000) count, because the brief is the
+   top influencers. They are ranked by **heat**: the summed views per hour of
+   their charting videos.
+2. *Which of their moments are being clipped?* For the top creators
+   (permitted ones first), the most-viewed Shorts mentioning them in the last
+   72 hours, with views per hour.
+3. *Is that moment in footage Clip may use?* The trending clip's title and
+   description are matched against the transcripts of that creator's
+   ingested videos. The match weights rare words, and ignores the creator's
+   own name, since that appears in every clip about them.
+
+A match can be **remade**: Clip cuts its own version of the same moment
+**from the permitted source**, with its own crop, captions and score, and
+records which trending clip inspired it. That record becomes a feature for
+learning later. Spotter never downloads, reposts or reuses the trending
+clip itself: that clip belongs to whoever made it, and reposting it is what
+platforms remove accounts for.
+
+Creators with no permitted source are still shown, as leads to get
+permission for, which usually means joining their clipping campaign. TikTok
+has no trending API open to ordinary developers (its Research API is for
+academic researchers), so research is YouTube-only. Quota: charts and
+channel lookups cost 1 unit, a search 100. Every call is recorded in the
+cost ledger, and a run stops before `spot_daily_units` (default 3,000 of
+the free 10,000/day).
+
+Tables (migration 2): `creators`, `trending_clips` (with the match and
+`remade_clip_id`), `spot_runs`, and `sources.channel_id`, which links a
+permitted source to the creator's channel.
 
 ---
 
@@ -637,6 +675,13 @@ black segment, a cropped-off face, silence and a duplicate. Model spend is
 under $0.03 per source hour, read from the `costs` table.
 
 ### Phase 3 — dashboard and approval
+
+*Started early (2026-09-28):* Clip's studio in the village shows the clips
+(playable on the iPad), Spotter's research with **Research now** and
+**Remake from my footage** buttons, and the queue. It is served by
+`mission-control-api/clip.js`, which only runs `python3 -m clipper deck`, so
+the page holds no rules of its own. Still to build in this phase: approve,
+reject and edit, the settings panel, and the timers.
 
 Build the Deck's Clipper page (queue, clip cards with preview, score,
 timestamps, reasons, predicted potential, Approve / Reject + reason / Edit /

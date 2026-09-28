@@ -89,6 +89,51 @@ MIGRATIONS = [
       note TEXT
     );
     """,
+    # 2 - Spotter, Clip's research assistant: who is trending, which of their
+    # moments are being clipped right now, and whether one of those moments
+    # is in footage Clip is allowed to cut.
+    """
+    ALTER TABLE sources ADD COLUMN channel_id TEXT;   -- the creator's YouTube channel, if any
+    CREATE TABLE creators (
+      channel_id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      handle TEXT,
+      subscribers INTEGER,
+      total_views INTEGER,
+      heat REAL NOT NULL DEFAULT 0,     -- views per hour across their videos on the trending charts
+      trending_videos INTEGER NOT NULL DEFAULT 0,
+      last_seen TEXT NOT NULL,          -- last day they were on a trending chart
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE trending_clips (
+      id INTEGER PRIMARY KEY,
+      yt_id TEXT NOT NULL UNIQUE,
+      creator_id TEXT,                  -- whose moment it is
+      uploader TEXT,                    -- who posted this clip
+      uploader_id TEXT,
+      title TEXT NOT NULL,
+      description TEXT,
+      published_at TEXT,
+      views INTEGER,
+      views_per_hour REAL,
+      seen_at TEXT NOT NULL,
+      match_video_id INTEGER,           -- the same moment in footage Clip may use
+      match_start REAL,
+      match_end REAL,
+      match_score REAL,
+      match_text TEXT,
+      remade_clip_id INTEGER
+    );
+    CREATE TABLE spot_runs (
+      id INTEGER PRIMARY KEY,
+      ts TEXT NOT NULL,
+      units INTEGER NOT NULL,
+      creators INTEGER NOT NULL,
+      clips INTEGER NOT NULL,
+      matched INTEGER NOT NULL,
+      note TEXT
+    );
+    """,
 ]
 
 

@@ -271,6 +271,8 @@
   .vcell.none .big{color:var(--down);font-size:12.5px}
   .vfoot{font-size:10px;color:var(--mute);letter-spacing:.03em;margin-top:10px;
          padding-top:8px;border-top:1px solid var(--line);line-height:1.5}
+  .clipgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+  #clipSpot a, #clipClips a{color:#7dd3fc}
 </style>
 </head>
 <body>
@@ -343,6 +345,13 @@ const PROPS_DOOR = 'Player Props';
 // and the knowledge the owner accepts. A door with no agent behind it, like
 // the props hall.
 const HALL_DOOR = 'Town Hall';
+
+// Clip's studio: the clipping agent and Spotter, its research assistant. Its
+// own plot, like the props hall, kept out of PLOTS so the next agent cannot
+// be given the same ground - and 4.5 tiles wide rather than 5, so it clears
+// the gardens of the houses either side of it.
+const CLIP_PLOT = { x: 18.7, y: 4.2 };
+const CLIP_DOOR = 'Clip';
 
 // The pond, one x-span per row. A rectangle of water in a field looks like a
 // swimming pool; the point of listing rows is that the edge can wander.
@@ -778,6 +787,87 @@ function makeTextures(s) {
     gg.generateTexture('sportshall', SW, SH); gg.destroy();
   }
 
+  {                                                      // Clip's studio
+    const SW = 144, SH = 124;
+    const gg = s.add.graphics();
+    gg.fillStyle(0x000000, .2); gg.fillEllipse(SW / 2, SH - 4, SW - 4, 12);
+
+    // The 9:16 screen on the roof, playing a short: cyan-to-pink like the
+    // apps it posts to, a play button, and a caption line with one word lit
+    // up - the thing this building makes, as its sign.
+    const vw = 22, vh = 40, vx = SW / 2 - vw / 2;
+    px(gg, vx - 3, 0, vw + 6, vh + 4, 0x0d0f14);
+    const band = [0x23d5e6, 0x3fbde8, 0x5aa6ea, 0x768eec, 0x9276ee, 0xae5ff0, 0xca47d0, 0xe63fa8, 0xff3d7f, 0xff3d7f];
+    band.forEach((c, k) => px(gg, vx, 2 + k * 4, vw, 4, c));
+    for (let r = 0; r < 11; r++) px(gg, vx + 8, 11 + r, r < 6 ? r + 1 : 11 - r, 1, 0xffffff);
+    px(gg, vx + 2, 33, 7, 3, 0xffffff); px(gg, vx + 10, 33, 9, 3, 0xffe14d);
+    px(gg, vx - 3, 0, vw + 6, 2, 0x2a2e3a);
+    px(gg, vx + 3, vh + 4, 3, 2, 0x3b4052); px(gg, vx + vw - 6, vh + 4, 3, 2, 0x3b4052);
+
+    px(gg, 0, 44, SW, 5, 0x3b4052); px(gg, 0, 44, SW, 1, 0x596079);          // flat roof edge
+    // film-strip fascia with sprocket holes
+    px(gg, 2, 49, SW - 4, 12, 0x111318);
+    for (let fx = 6; fx < SW - 8; fx += 8) { px(gg, fx, 51, 4, 3, 0xe9e6dc); px(gg, fx, 56, 4, 3, 0xe9e6dc); }
+    // walls: a dark soundstage, panelled, with a neon trim under the strip
+    px(gg, 6, 61, SW - 12, 53, 0x2d3140);
+    for (let wx = 27; wx < SW - 8; wx += 22) px(gg, wx, 63, 2, 51, 0x242734);
+    px(gg, 6, 61, 9, 53, 0xffffff, .05);
+    px(gg, SW - 15, 61, 9, 53, 0x000000, .18);
+    px(gg, 6, 61, SW - 12, 2, 0xff3d7f); px(gg, 6, 63, SW - 12, 1, 0x23d5e6);
+
+    // editing-suite windows: a timeline on each screen, with a playhead
+    [12, SW - 48].forEach(wx => {
+      px(gg, wx - 2, 70, 40, 22, 0x1c1f28);
+      px(gg, wx, 72, 36, 18, 0x151826);
+      px(gg, wx + 3, 75, 18, 3, 0xff3d7f); px(gg, wx + 23, 75, 9, 3, 0xff3d7f);
+      px(gg, wx + 6, 80, 24, 3, 0x23d5e6);
+      px(gg, wx + 2, 85, 11, 3, 0xffe14d); px(gg, wx + 15, 85, 16, 3, 0xffe14d);
+      px(gg, wx + 20, 73, 1, 16, 0xffffff);
+      px(gg, wx - 3, 92, 42, 3, 0x3b4052);
+    });
+
+    // REC light, top left
+    px(gg, 11, 66, 4, 4, 0xff3344);
+    px(gg, 17, 67, 2, 3, 0xe9e6dc); px(gg, 20, 67, 2, 3, 0xe9e6dc); px(gg, 23, 67, 2, 3, 0xe9e6dc);
+
+    // clapperboard over the door
+    px(gg, SW / 2 - 14, 66, 28, 5, 0xe9e6dc);
+    for (let k = 0; k < 5; k++) px(gg, SW / 2 - 12 + k * 6, 66, 3, 5, 0x15171c);
+    px(gg, SW / 2 - 14, 71, 28, 11, 0x15171c);
+    px(gg, SW / 2 - 12, 75, 24, 1, 0xe9e6dc); px(gg, SW / 2 - 12, 78, 15, 1, 0xe9e6dc);
+
+    // glass doors, lit from inside
+    const dw = 36, dx0 = SW / 2 - dw / 2, dy0 = 86;
+    px(gg, dx0 - 3, dy0 - 3, dw + 6, SH - dy0 - 6, 0xa6acb8);
+    px(gg, dx0, dy0, dw, SH - dy0 - 9, 0x1c1f28);
+    px(gg, dx0 + 2, dy0 + 2, 15, SH - dy0 - 13, 0x4a6f8f);
+    px(gg, dx0 + 19, dy0 + 2, 15, SH - dy0 - 13, 0x4a6f8f);
+    px(gg, dx0 + 4, dy0 + 4, 2, 16, 0xffffff, .35); px(gg, dx0 + 21, dy0 + 4, 2, 16, 0xffffff, .35);
+    px(gg, SW / 2 - 4, dy0 + 14, 2, 6, 0xd1d5db); px(gg, SW / 2 + 2, dy0 + 14, 2, 6, 0xd1d5db);
+
+    // concrete apron and step
+    px(gg, 4, 114, SW - 8, 10, 0x9aa0aa); px(gg, 4, 114, SW - 8, 2, 0xb8bdc6);
+    px(gg, dx0 - 6, SH - 6, dw + 12, 5, 0xc6ccd6);
+    gg.generateTexture('clipstudio', SW, SH); gg.destroy();
+
+    const tc = s.add.graphics();                         // camera on a tripod
+    tc.fillStyle(0x000000, .18); tc.fillEllipse(13, 44, 22, 4);
+    for (let k = 0; k < 20; k++) { px(tc, 12 - k * .45, 24 + k, 2, 1, 0x3b4052); px(tc, 12 + k * .45, 24 + k, 2, 1, 0x3b4052); }
+    px(tc, 12, 24, 2, 20, 0x596079);
+    px(tc, 3, 10, 18, 13, 0x2b2f3a); px(tc, 3, 10, 18, 2, 0x4a5064);
+    px(tc, 21, 12, 5, 8, 0x111318); px(tc, 22, 13, 2, 3, 0x6ee7f0);
+    px(tc, 6, 6, 8, 4, 0x2b2f3a);
+    px(tc, 5, 13, 3, 3, 0xff3344);
+    tc.generateTexture('tripodcam', 26, 46); tc.destroy();
+
+    const rl = s.add.graphics();                         // ring light
+    rl.fillStyle(0x000000, .18); rl.fillEllipse(12, 48, 18, 4);
+    px(rl, 11, 22, 2, 25, 0x3b4052); px(rl, 5, 46, 14, 3, 0x2b2f3a);
+    rl.lineStyle(4, 0xfff6d6, 1); rl.strokeCircle(12, 12, 9);
+    rl.lineStyle(1, 0xffffff, .8); rl.strokeCircle(12, 12, 7);
+    rl.generateTexture('ringlight', 24, 50); rl.destroy();
+  }
+
   {                                                      // goalpost
     const gp = s.add.graphics();
     gp.fillStyle(0x000000, .18); gp.fillEllipse(20, 52, 22, 5);
@@ -941,6 +1031,14 @@ function create() {
     else              for (let y = ROAD_Y + 1; y <= dy; y++) { if (!WET[y][dx]) PAVED[y][dx] = true; }
   }
 
+  // ...and one for Clip's studio, whose door is at the middle of a 4.5-tile front.
+  {
+    const dx = Math.round(CLIP_PLOT.x + 2.25);
+    const dy = Math.round(CLIP_PLOT.y + 3.9);
+    if (dy <= ROAD_Y) for (let y = dy; y <= ROAD_Y; y++) { if (!WET[y][dx]) PAVED[y][dx] = true; }
+    else              for (let y = ROAD_Y + 1; y <= dy; y++) { if (!WET[y][dx]) PAVED[y][dx] = true; }
+  }
+
   const at = (grid, x, y) => (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) ? false : grid[y][x];
 
   for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) {
@@ -1029,7 +1127,7 @@ function create() {
   // "nudged" is a thing someone remembers to do and a test is not.
   [[1,3],[4,1],[9,2],[20,2],[25,1],[34,1],[0,9],[36,4],
    [2,16],[8,17],[17,21],[15,18],[22,20],[24,21],[29,15],[37,18],[24,15],[18,2],
-   [7,11],[21,9],[13,16],[10,15]]
+   [7,11],[13,16],[10,15]]
     .forEach(([tx,ty], i) => place(`tree${i % 3}`, tx, ty, 40, true, .78));
 
   // [32,21] stood exactly in front of the props hall's name plate, which then
@@ -1148,6 +1246,41 @@ function create() {
     doors.push({ name: PROPS_DOOR, x: bx + SW / 2, y: by + SH });
   }
 
+  // ---- Clip's studio ----
+  {
+    const SW = 144, SH = 124;
+    const bx = CLIP_PLOT.x * T, by = CLIP_PLOT.y * T;
+    this.add.image(bx, by, 'clipstudio').setOrigin(0, 0).setDepth(by + SH);
+    blocker(bx + SW / 2, by + SH - 26, SW - 12, 52);
+    this.add.image(bx + 20, by + SH + 16, 'tripodcam').setOrigin(.5, 1).setDepth(by + SH + 16);
+    this.add.image(bx + SW - 20, by + SH + 16, 'ringlight').setOrigin(.5, 1).setDepth(by + SH + 16);
+
+    const plateW = Math.max(96, CLIP_DOOR.length * 10 + 22);
+    this.add.rectangle(bx + SW / 2, by + SH + 18, 6, 14, 0x7a5230).setDepth(by + SH + 24);
+    this.add.rectangle(bx + SW / 2, by + SH + 8, plateW, 20, 0xd9c9a3)
+      .setStrokeStyle(2, 0x8a7a5c).setDepth(by + SH + 25);
+    this.add.text(bx + SW / 2, by + SH + 8, CLIP_DOOR.toUpperCase(), {
+      fontFamily: 'ui-monospace,Menlo,monospace', fontSize: '12px', color: '#2b3a2e',
+    }).setOrigin(.5).setDepth(by + SH + 26);
+    doors.push({ name: CLIP_DOOR, x: bx + SW / 2, y: by + SH });
+
+    // Clip, and Spotter its research assistant, each with a name over their
+    // head - two people outside one door would otherwise be anyone.
+    [['Clip', 0xffb3d1, -34], ['Spotter', 0x9fe8f0, 38]].forEach(([who, tint, off]) => {
+      const hx = bx + SW / 2 + off, hy = by + SH + 60;   // below the sign, so the tags never cover it
+      const npc = this.physics.add.sprite(hx, hy, 'hero-down-0');
+      npc.setTint(tint);
+      npc.body.setSize(14, 12).setOffset(5, 16);
+      this.physics.add.collider(npc, solids);
+      const label = this.add.text(hx, hy - 22, who, {
+        fontFamily: 'ui-monospace,Menlo,monospace', fontSize: '9px', color: '#ffffff',
+        backgroundColor: '#00000088', padding: { x: 3, y: 1 },
+      }).setOrigin(.5, 1);
+      npcs.push({ s: npc, homeX: hx, homeY: hy, tx: hx, ty: hy,
+                  wait: 400 + Math.floor(rnd() * 1400), moving: false, label });
+    });
+  }
+
   if (!agents.length) {
     this.add.text(W/2, 7*T, 'No agents yet —\nadd one and a house appears here.', {
       fontFamily: 'ui-sans-serif,system-ui', fontSize: '17px', color: '#ffffff',
@@ -1253,6 +1386,7 @@ function update() {
       n.moving = true;
     }
     n.s.setDepth(n.s.y);
+    if (n.label) n.label.setPosition(n.s.x, n.s.y - 14).setDepth(n.s.y + 1);
   }
 
   // ---- town square ledger ----
@@ -1296,6 +1430,7 @@ function openPanel(name) {
   // below, which would otherwise find nothing and silently do nothing.
   if (name === PROPS_DOOR) return openPropsPanel();
   if (name === HALL_DOOR) return openHallPanel();
+  if (name === CLIP_DOOR) return openClipPanel();
   const a = (DATA.agents || []).find(x => x.name === name);
   if (!a) return;
   openAgent = name;
@@ -2152,6 +2287,155 @@ async function loadAceLedger(){
 }
 
 function closeDoc(){ $('doc').classList.remove('on'); }
+
+/* ---------------- Clip's studio: clips, and Spotter's research ---------------- */
+
+let CLIP = null;
+let clipBusy = false;
+const clock = sec => {
+  const t = Math.max(0, Math.floor(sec || 0)), h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s2 = t % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s2).padStart(2, '0');
+};
+const big = n => (n === null || n === undefined) ? '—'
+  : n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'K' : String(Math.round(n));
+
+function openClipPanel(){
+  openAgent = CLIP_DOOR;
+  $('card').innerHTML = `
+    <h2>Clip</h2>
+    <div class="sub">the clipping studio · Clip cuts permitted videos into captioned shorts ·
+      Spotter, the research assistant, finds who and what is trending</div>
+    <div id="clipStats"><div class="muted">loading…</div></div>
+    <div class="sect">Clips</div>
+    <div id="clipClips"></div>
+    <div class="sect">Spotter — trending now</div>
+    <div id="clipSpot"></div>
+    <div class="sect">In the studio</div>
+    <div id="clipQueue"></div>
+    <button id="close">Close</button>`;
+  $('card').className = 'wide';
+  $('panel').style.display = 'flex';
+  $('close').onclick = closePanel;
+  // One listener; ids travel in data attributes, never in onclick strings.
+  $('clipSpot').onclick = e => {
+    const b = e.target.closest('[data-clip]');
+    if (b) clipAct(b.dataset.clip, b.dataset.id);
+  };
+  loadClip();
+}
+
+async function loadClip(){
+  try { CLIP = await (await fetch('/api/clip', { cache: 'no-store' })).json(); }
+  catch (e) { CLIP = { installed: false, error: e.message }; }
+  if (openAgent === CLIP_DOOR) drawClip();
+}
+
+function drawClip(){
+  if (openAgent !== CLIP_DOOR) return;
+  const c = CLIP || {};
+  if (!c.installed) {
+    $('clipStats').innerHTML = `<div class="verdict">Clip is not set up on this machine yet${c.error ? ' — ' + esc(c.error) : ''}.
+      Install it with the commands in <b>clipper/README.md</b>.</div>`;
+    ['clipClips', 'clipSpot', 'clipQueue'].forEach(id => $(id).innerHTML = '');
+    return;
+  }
+  const sp = c.spotter || {};
+  const ready = (c.clips || []).filter(k => k.status === 'rendered').length;
+  $('clipStats').innerHTML = `<div class="grid">
+      <div class="stat"><div class="l">Videos</div><div class="v num">${(c.videos || []).length}</div>
+        <div class="muted">${(c.videos || []).filter(v => v.stage === 'done').length} done</div></div>
+      <div class="stat"><div class="l">Clips ready</div><div class="v num">${ready}</div>
+        <div class="muted">waiting for you</div></div>
+      <div class="stat"><div class="l">Spent today</div><div class="v num">${usd(c.spend_today)}</div>
+        <div class="muted">of ${usd(c.daily_budget)}</div></div>
+      <div class="stat"><div class="l">YouTube units</div><div class="v num">${sp.units_today ?? 0}</div>
+        <div class="muted">of ${sp.units_cap ?? '—'} today · free</div></div>
+    </div>`;
+
+  const clips = c.clips || [];
+  $('clipClips').innerHTML = clips.length ? `<div class="clipgrid">` + clips.map(k => `
+      <div class="idea">
+        <video controls playsinline preload="metadata" src="/api/clip/file/${k.video_id}/${k.rank}#t=1"
+               style="width:100%;aspect-ratio:9/16;background:#000;border-radius:6px"></video>
+        <div class="t">CLIP #${k.rank} · ${Math.round(k.score)}/100</div>
+        <div class="ktags"><span class="pill">${esc(k.source)}</span>
+          <span class="pill">${clock(k.start)}–${clock(k.end)}</span></div>
+        <div class="w">${esc(k.video_title || '')}</div>
+        <div class="d">${esc((k.reasons || []).join(' · '))}</div>
+        <div class="muted">“${esc(k.text.slice(0, 140))}${k.text.length > 140 ? '…' : ''}”</div>
+        <div class="muted"><a href="/api/clip/file/${k.video_id}/${k.rank}?dl=1">Download</a></div>
+      </div>`).join('') + `</div>`
+    : `<div class="muted">No clips yet. Give Clip a video you have the rights to:
+       <b>python3 -m clipper ingest &lt;source&gt; &lt;file&gt;</b>, then <b>run</b>.</div>`;
+
+  let spot = '';
+  if (!sp.has_key) {
+    spot += `<div class="verdict">Spotter needs a free YouTube Data API key. Google Cloud console →
+      enable “YouTube Data API v3” → Credentials → Create API key. Then on the droplet:
+      <b>python3 scripts/set-credential.py clip YOUTUBE_API_KEY</b></div>`;
+  }
+  const last = sp.last_run;
+  spot += `<div class="acts"><button class="yes" data-clip="spot" ${sp.has_key ? '' : 'disabled'}>Research now</button>
+    <span class="muted">${last ? 'last research ' + esc(last.ts) + ' UTC · ' + last.units + ' units' : 'not run yet'}</span></div>`;
+  const creators = sp.creators || [];
+  if (creators.length) {
+    spot += `<div class="muted" style="margin:6px 0">Trending creators over ${big(sp.min_subscribers)} subscribers,
+      by how fast their charting videos are gaining views:</div>` + creators.map(k => `
+      <div class="w"><b>${esc(k.title)}</b> · ${big(k.subscribers)} subs · ${big(k.heat)} views/h
+        · ${k.trending_videos} on the charts
+        ${k.permitted ? '<span class="pill ok">permission</span>' : '<span class="pill">no permission yet</span>'}</div>`).join('');
+    if (creators.some(k => !k.permitted)) {
+      spot += `<div class="muted" style="margin-top:4px">Many big creators pay clippers through clipping campaigns —
+        joining one is how you get permission. Then: <b>python3 -m clipper source add &lt;name&gt; --rights permission
+        --evidence "&lt;campaign link&gt;" --channel &lt;UC… id&gt;</b></div>`;
+    }
+  }
+  const trending = sp.trending || [];
+  if (trending.length) {
+    spot += `<div class="muted" style="margin:10px 0 6px">Their moments being clipped right now — other people's
+      clips, shown as evidence of demand and never reposted:</div>` + trending.map(t => {
+      const pill = { matched: 'ok', remade: 'ok' }[t.state] || '';
+      const act = t.state === 'matched'
+        ? `<div class="acts"><button class="yes" data-clip="remake" data-id="${t.id}">Remake from my footage
+             (${clock(t.match_start)})</button></div>` : '';
+      return `<div class="idea">
+        <div class="t"><a href="https://www.youtube.com/shorts/${encodeURIComponent(t.yt_id)}" target="_blank"
+             rel="noopener">${esc(t.title)}</a></div>
+        <div class="ktags"><span class="pill">${esc(t.creator || '?')}</span>
+          <span class="pill">${big(t.views_per_hour)} views/h</span><span class="pill">${big(t.views)} views</span>
+          <span class="pill ${pill}">${esc(t.state_words)}</span></div>
+        <div class="muted">clipped by ${esc(t.uploader || '?')}</div>${act}</div>`;
+    }).join('');
+  } else if (last) {
+    spot += `<div class="muted">No trending clips found in the last research.</div>`;
+  }
+  $('clipSpot').innerHTML = spot;
+
+  const vids = c.videos || [];
+  $('clipQueue').innerHTML = vids.length ? vids.map(v => `
+      <div class="w">#${v.id} <b>${esc(v.title)}</b> · ${esc(v.source)} · ${esc(v.stage)} · ${v.clips} clip(s)
+        ${v.error ? `<div class="muted" style="color:#f59e0b">${esc(v.error.slice(0, 200))}</div>` : ''}</div>`).join('')
+    : '<div class="muted">Nothing processed yet.</div>';
+}
+
+async function clipAct(kind, id){
+  if (clipBusy) return;
+  if (kind === 'remake' && !confirm("Cut Clip's own version of this moment from your permitted footage? "
+      + 'Rendering takes a minute or two.')) return;
+  clipBusy = true;
+  document.querySelectorAll('#clipSpot button').forEach(b => b.disabled = true);
+  try {
+    const url = kind === 'spot' ? '/api/clip/spot' : `/api/clip/remake/${encodeURIComponent(id)}`;
+    const r = await fetch(url, { method: 'POST' });
+    const j = await r.json();
+    alert((j.message || j.error || (r.ok ? 'Done.' : 'That did not work.')).slice(0, 500));
+  } catch (e) {
+    alert('Could not reach the API: ' + e.message);
+  } finally {
+    clipBusy = false;
+    loadClip();
+  }
+}
 
 /* ---------------- the town hall: budget and shared knowledge ---------------- */
 

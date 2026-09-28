@@ -1,0 +1,85 @@
+'use strict';
+
+// Clip's studio: the clips Clip has cut, and what Spotter, its research
+// assistant, found trending.
+//
+// No rules here. Everything comes from `python3 -m clipper deck`, the same
+// code the command line uses, so the page and the terminal cannot disagree
+// about whether a creator is permitted or a moment is in your footage. The
+// two buttons run the clipper commands with an argument array, never a shell
+// string, behind the same trust boundary as every write route here.
+
+const { execFile } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const { ROOT } = require('./db');
+
+const HOME = process.env.CLIPPER_HOME
+  ? path.resolve(process.env.CLIPPER_HOME)
+  : path.join(ROOT, 'clipper', 'var');
+const CLIPS = path.join(HOME, 'clips');
+// The venv's python if it exists (it has faster-whisper), else the system
+// one - `deck`, `spot` and `remake` need nothing beyond the standard library.
+const VENV_PY = path.join(ROOT, 'clipper', '.venv', 'bin', 'python');
+const ID_RE = /^\d{1,9}$/;
+// A remake renders a clip: about a minute of CPU per 30 s on the droplet.
+const REMAKE_TIMEOUT_MS = 300000;
+const SPOT_TIMEOUT_MS = 180000;
+
+function python() {
+  return fs.existsSync(VENV_PY) ? VENV_PY : 'python3';
+}
+
+function clipper(args, timeout = 30000) {
+  return new Promise(resolve => {
+    execFile(python(), ['-m', 'clipper', ...args], {
+      cwd: ROOT, timeout, maxBuffer: 8 * 1024 * 1024,
+      env: Object.assign({}, process.env, { CLIPPER_HOME: HOME }),
+    }, (err, stdout, stderr) => resolve({
+      code: err ? (typeof err.code === 'number' ? err.code : 1) : 0,
+      stdout: String(stdout || ''), stderr: String(stderr || ''),
+    }));
+  });
+}
+
+function register(app) {
+  app.get('/api/clip', async (req, res) => {
+    const r = await clipper(['deck']);
+    if (r.code !== 0) {
+      return res.json({ installed: false, error: (r.stderr || r.stdout).trim().slice(-400) });
+    }
+    try { res.json(Object.assign({ installed: true }, JSON.parse(r.stdout))); }
+    catch (e) { res.json({ installed: false, error: 'clipper deck printed something that is not JSON' }); }
+  });
+
+  // One finished clip. sendFile answers range requests, which Safari needs
+  // before it will play a video at all (learned on Emily's listing videos).
+  app.get('/api/clip/file/:video/:rank', (req, res) => {
+    const { video, rank } = req.params;
+    if (!ID_RE.test(video) || !ID_RE.test(rank)) return res.status(400).json({ error: 'bad id' });
+    const full = path.join(CLIPS, video, `${String(rank).padStart(2, '0')}.mp4`);
+    let st;
+    try { st = fs.statSync(full); } catch { return res.status(404).json({ error: 'no such clip' }); }
+    if (!st.isFile()) return res.status(404).json({ error: 'not found' });
+    if (req.query.dl === '1') return res.download(full, `clip-${video}-${rank}.mp4`);
+    res.sendFile(full, { headers: { 'Cache-Control': 'no-cache' } });
+  });
+
+  // Spotter's research, now. Costs YouTube quota units, not money.
+  app.post('/api/clip/spot', async (req, res) => {
+    const r = await clipper(['spot'], SPOT_TIMEOUT_MS);
+    res.status(r.code === 0 ? 200 : 500)
+      .json({ ok: r.code === 0, message: (r.code === 0 ? r.stdout : r.stderr || r.stdout).trim().slice(-600) });
+  });
+
+  // Clip's own cut of a trending moment, from permitted footage. clipper
+  // refuses anything not matched in a permitted source.
+  app.post('/api/clip/remake/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    const r = await clipper(['remake', req.params.id], REMAKE_TIMEOUT_MS);
+    res.status(r.code === 0 ? 200 : 400)
+      .json({ ok: r.code === 0, message: (r.code === 0 ? r.stdout : r.stderr || r.stdout).trim().slice(-600) });
+  });
+}
+
+module.exports = { register, HOME, CLIPS };

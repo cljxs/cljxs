@@ -16,15 +16,34 @@ from pathlib import Path
 from clipper import db, media, rights
 
 
-def add_source(conn, cfg, name, rights_kind, evidence, url=None, attribution=None):
+def add_source(conn, cfg, name, rights_kind, evidence, url=None, attribution=None,
+               channel_id=None):
     why = rights.check(rights_kind, evidence, attribution, cfg["allow_noncommercial"])
     if why:
         raise ValueError(why)
+    check_channel(channel_id)
     with conn:
-        conn.execute("INSERT INTO sources (name, url, rights, evidence, attribution, created_at) "
-                     "VALUES (?, ?, ?, ?, ?, ?)",
-                     (name, url, rights_kind, evidence.strip(), attribution, db.now()))
+        conn.execute("INSERT INTO sources (name, url, rights, evidence, attribution, channel_id, "
+                     "created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     (name, url, rights_kind, evidence.strip(), attribution, channel_id, db.now()))
     return conn.execute("SELECT * FROM sources WHERE name = ?", (name,)).fetchone()
+
+
+def check_channel(channel_id):
+    """A YouTube channel id is UC + 22 characters. A handle (@name) or a URL
+    in its place would never match a trending creator, silently."""
+    import re
+    if channel_id is not None and not re.fullmatch(r"UC[A-Za-z0-9_-]{22}", channel_id):
+        raise ValueError(f"{channel_id!r} is not a channel id - it looks like UC followed by "
+                         f"22 letters/digits, and is on the channel's About page under Share")
+
+
+def set_channel(conn, name, channel_id):
+    check_channel(channel_id)
+    with conn:
+        n = conn.execute("UPDATE sources SET channel_id = ? WHERE name = ?", (channel_id, name)).rowcount
+    if not n:
+        raise ValueError(f"no source named {name!r}")
 
 
 def sha256(path, block=1 << 20):

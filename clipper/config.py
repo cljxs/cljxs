@@ -56,6 +56,18 @@ DEFAULTS = {
     # non-commercial Creative Commons licence is refused unless this is on.
     "allow_noncommercial": False,
 
+    # --- Spotter, the research assistant ------------------------------------
+    # YouTube category ids: 20 Gaming, 24 Entertainment, 23 Comedy,
+    # 22 People & Blogs, 17 Sports. A category with no chart in the region is
+    # skipped, not an error.
+    "spot_region": "US",
+    "spot_categories": ["20", "24", "23", "22", "17"],
+    "spot_min_subscribers": 500000,  # "top influencers": smaller channels are not ranked
+    "spot_search_creators": 8,       # 100 quota units each
+    "spot_lookback_hours": 72,
+    "spot_daily_units": 3000,        # of the free 10,000/day; the rest is left for uploads later
+    "spot_min_match": 0.5,           # share of a trending clip's words found in the footage
+
     # --- money --------------------------------------------------------------
     # Phase 1 spends nothing: transcription is local. The ledger and the cap
     # exist now so the first paid provider cannot be added without them.

@@ -5,6 +5,7 @@ reading). The end-to-end test needs ffmpeg and skips without it.
 """
 
 import contextlib
+import importlib.util
 import io
 import json
 import os
@@ -326,3 +327,207 @@ class EndToEnd(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------- Spotter
+
+from datetime import datetime, timezone  # noqa: E402
+import urllib.parse  # noqa: E402
+
+from clipper import report, trends  # noqa: E402
+
+NOW = datetime(2026, 9, 28, 12, 0, tzinfo=timezone.utc)
+TAO = "UC" + "a" * 22          # the creator Clip has permission for
+BIG = "UC" + "b" * 22          # a bigger creator Clip has no permission for
+TINY = "UC" + "c" * 22         # charting, but under the subscriber floor
+
+
+def fake_youtube(search_title="He suddenly came to a grove of blossoming peach trees"):
+    """The Data API's documented response shapes - counts are strings, a
+    chart can be missing for a category. NOT captured from the live API (no
+    key on this machine); the first real `spot` on the droplet is the check."""
+    calls = []
+
+    def fetch(url):
+        ep = url.split("/v3/", 1)[1].split("?", 1)[0]
+        q = dict(urllib.parse.parse_qsl(url.split("?", 1)[1]))
+        calls.append((ep, q))
+        vid = lambda i, ch, title, views, t: {"id": i, "snippet": {
+            "channelId": ch, "channelTitle": {TAO: "Tao Reads", BIG: "Mega Streamer",
+                                              TINY: "Small One"}.get(ch, "ClipGuy"),
+            "title": title, "description": "", "publishedAt": t}, "statistics": {"viewCount": views}}
+        if ep == "videos" and q.get("chart"):
+            if q["videoCategoryId"] == "17":
+                return {"error": {"code": 404, "message": "chart not found",
+                                  "errors": [{"reason": "videoChartNotFound"}]}}
+            return {"items": [vid("t1", TAO, "a", "240000", "2026-09-28T00:00:00Z"),
+                              vid("t2", BIG, "b", "1200000", "2026-09-28T06:00:00Z"),
+                              vid("t3", TINY, "c", "999999", "2026-09-28T11:00:00Z")]}
+        if ep == "channels":
+            stats = {TAO: "2000000", BIG: "30000000", TINY: "40000"}
+            return {"items": [{"id": i, "snippet": {"customUrl": "@x"},
+                               "statistics": {"subscriberCount": stats[i], "viewCount": "1"}}
+                              for i in q["id"].split(",")]}
+        if ep == "search":
+            name = q["q"]
+            return {"items": [{"id": {"kind": "youtube#video", "videoId": "s-" + name[:3]}}]}
+        if ep == "videos" and q.get("id"):
+            title = search_title if q["id"] == "s-Tao" else "insane moment on stream"
+            return {"items": [vid(q["id"], "UC" + "z" * 22, title, "50000", "2026-09-28T02:00:00Z")]}
+        raise AssertionError(url)
+    return fetch, calls
+
+
+class SpotterPure(unittest.TestCase):
+    def test_counts_arrive_as_strings_and_hidden_ones_are_none(self):
+        self.assertEqual(trends.as_int("1234"), 1234)
+        self.assertIsNone(trends.as_int(None))
+
+    def test_views_per_hour(self):
+        self.assertEqual(trends.views_per_hour(1200, "2026-09-28T00:00:00Z", NOW), 100.0)
+        self.assertEqual(trends.views_per_hour(50, "2026-09-28T11:59:00Z", NOW), 50.0,
+                         "under an hour old counts as one hour, not a huge rate")
+
+    def test_creators_are_ranked_by_heat_above_the_floor(self):
+        v = lambda ch, views, t: {"snippet": {"channelId": ch, "channelTitle": ch, "publishedAt": t},
+                                  "statistics": {"viewCount": views}}
+        chans = {TAO: {"statistics": {"subscriberCount": "2000000"}},
+                 BIG: {"statistics": {"subscriberCount": "30000000"}},
+                 TINY: {"statistics": {"subscriberCount": "40000"}},
+                 "UChidden": {"statistics": {"hiddenSubscriberCount": True, "subscriberCount": "9000000"}}}
+        ranked = trends.rank_creators(
+            [v(TAO, "240000", "2026-09-28T00:00:00Z"), v(TAO, "240000", "2026-09-28T00:00:00Z"),
+             v(BIG, "120000", "2026-09-28T00:00:00Z"), v(TINY, "9999999", "2026-09-28T11:00:00Z"),
+             v("UChidden", "9999999", "2026-09-28T11:00:00Z")], chans, NOW, 500000)
+        self.assertEqual([c["channel_id"] for c in ranked], [TAO, BIG],
+                         "two fast videos beat one; small and hidden-count channels are left out")
+        self.assertEqual(ranked[0]["heat"], 40000.0)
+        self.assertEqual(ranked[0]["trending_videos"], 2)
+
+
+class SpotterMatching(unittest.TestCase):
+    """Against the real LibriVox transcript."""
+
+    def setUp(self):
+        self.sents = moments.sentences(WORDS, 0.8)
+
+    def test_a_trending_title_finds_its_moment(self):
+        sc, i, j = trends.match("He came to a grove of blossoming peach trees 🌸 #shorts", self.sents)
+        self.assertGreaterEqual(sc, 0.5)
+        self.assertIn("grove of blossoming peach trees", " ".join(s["text"] for s in self.sents[i:j + 1]))
+
+    def test_an_unrelated_title_does_not(self):
+        sc, i, j = trends.match("insane clutch play on stream, chat goes wild", self.sents)
+        self.assertLess(sc, 0.5)
+
+    def test_the_creators_own_name_is_not_evidence(self):
+        # Their name is in every clip title about them; matching on it would
+        # "find" any moment where anyone says it.
+        sc, *_ = trends.match("LibriVox recording", self.sents, drop={"librivox", "recording"})
+        self.assertEqual(sc, 0.0)
+
+    def test_widen_keeps_the_moment_and_the_bounds(self):
+        sc, i, j = trends.match("grove of blossoming peach trees", self.sents)
+        a, b = trends.widen(self.sents, i, j, 20, 35, 60)
+        self.assertLessEqual(a, i)
+        self.assertGreaterEqual(b, j)
+        dur = self.sents[b]["end"] - self.sents[a]["start"]
+        self.assertTrue(20 <= dur <= 60, dur)
+
+
+class SpotterRun(EndToEnd):
+    """Research, a match in permitted footage, and a remake, through the CLI
+    and the Deck snapshot. Inherits EndToEnd's 60 s video and settings."""
+
+    test_permitted_video_in_captioned_short_out = None
+    test_a_failing_stage_is_retried_then_parked_then_retryable = None
+
+    def ready(self):
+        self.cli("source", "add", "tao", "--rights", "permission", "--evidence", "campaign page",
+                 "--channel", TAO)
+        self.cli("ingest", "tao", str(self.video))
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        self.conn = db.connect(self.home / "clipper.db")
+        self.cfg = config.load()
+        self.paths = config.paths()
+
+    def spot(self, **kw):
+        fetch, calls = fake_youtube(**kw)
+        yt = trends.YouTube(self.conn, self.cfg, key="k", fetch=fetch)
+        return trends.run(self.conn, self.paths, self.cfg, yt=yt, now=NOW), calls
+
+    def test_research_matches_a_trending_moment_in_permitted_footage(self):
+        self.ready()
+        r, calls = self.spot()
+        self.assertEqual(r["creators"], 2)
+        searched = [q["q"] for ep, q in calls if ep == "search"]
+        self.assertEqual(searched[0], "Tao Reads", "the permitted creator is searched first")
+        self.assertEqual(r["matched"], 1)
+        snap = report.snapshot(self.conn, self.paths, self.cfg)["spotter"]
+        states = {t["creator"]: t["state"] for t in snap["trending"]}
+        self.assertEqual(states, {"Tao Reads": "matched", "Mega Streamer": "no_permission"})
+        units = sum(trends.UNITS[ep] for ep, _ in calls)
+        self.assertEqual(trends.units_today(self.conn), units, "every call is on the ledger")
+        self.assertEqual(r["units"], units)
+
+    def test_the_unit_cap_stops_before_the_call(self):
+        self.ready()
+        self.cfg["spot_daily_units"] = 105      # 5 charts + 1 channel lookup = 6; a 100-unit search would make 106
+        r, calls = self.spot()
+        self.assertFalse(any(ep == "search" for ep, _ in calls))
+        self.assertIn("units today", " ".join(r["note"]))
+
+    def test_a_bad_key_is_an_error_not_an_empty_result(self):
+        self.ready()
+        yt = trends.YouTube(self.conn, self.cfg, key="k", fetch=lambda url: {"error": {
+            "code": 400, "message": "API key not valid", "errors": [{"reason": "keyInvalid"}]}})
+        with self.assertRaises(trends.ApiError):
+            trends.run(self.conn, self.paths, self.cfg, yt=yt, now=NOW)
+
+    def test_remake_cuts_our_own_version_and_never_overwrites_a_clip(self):
+        self.ready()
+        self.spot()
+        first = self.home / "clips" / "1" / "01.mp4"
+        before = first.stat().st_mtime_ns
+        bad = self.conn.execute("SELECT id FROM trending_clips WHERE creator_id = ?", (BIG,)).fetchone()[0]
+        code, said = self.cli("remake", str(bad))
+        self.assertEqual(code, 2)
+        self.assertIn("not found in any footage Clip has permission for", said)
+
+        tid = self.conn.execute("SELECT id FROM trending_clips WHERE creator_id = ?", (TAO,)).fetchone()[0]
+        code, said = self.cli("remake", str(tid))
+        self.assertEqual(code, 0, said)
+        clip = self.conn.execute("SELECT * FROM clips ORDER BY id DESC LIMIT 1").fetchone()
+        self.assertEqual(clip["rank"], 2, "the next free number, not a number already on disk")
+        self.assertEqual(first.stat().st_mtime_ns, before, "clip 01 untouched")
+        meta = json.loads(clip["meta"])
+        self.assertTrue(meta["reasons"][0].startswith("same moment as a trending clip"))
+        self.assertIn("grove", meta["text"])
+        self.assertEqual(media.probe(clip["path"])["height"], 1920)
+        self.assertIn("already remade", self.cli("remake", str(tid))[1])
+
+
+class ClipCredentials(unittest.TestCase):
+    def test_set_credential_writes_clips_key_beside_its_data(self):
+        spec = importlib.util.spec_from_file_location("set_credential_clip", ROOT / "scripts" / "set-credential.py")
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        with tempfile.TemporaryDirectory() as d:
+            old = os.environ.get("CLIPPER_HOME")
+            os.environ["CLIPPER_HOME"] = d
+            try:
+                self.assertEqual(m.ELSEWHERE["clip"](), Path(d) / "credentials.env")
+                m.write(m.ELSEWHERE["clip"](), "YOUTUBE_API_KEY", "abc123")
+                self.assertEqual(trends.api_key(), "abc123")
+            finally:
+                if old is None:
+                    os.environ.pop("CLIPPER_HOME", None)
+                else:
+                    os.environ["CLIPPER_HOME"] = old
+
+    def test_a_handle_is_not_a_channel_id(self):
+        from clipper import ingest
+        with self.assertRaisesRegex(ValueError, "not a channel id"):
+            ingest.check_channel("@taoreads")
+        ingest.check_channel(TAO)

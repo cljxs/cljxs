@@ -1,4 +1,8 @@
-# Clipper — Phase 1
+# Clip — Phase 1, plus Spotter
+
+The agent is **Clip**; its code is the `clipper` package. Its research
+assistant is **Spotter**. Both live in Clip's studio in the village, north of
+the town square between Emily and Fury.
 
 Permitted long video in, captioned 9:16 shorts out, saved on the droplet.
 The whole plan, including why it is built this way, is in
@@ -55,6 +59,47 @@ cd /root/ecosystem && clipper/.venv/bin/python -m clipper ingest mychannel /root
 Your own YouTube uploads can be downloaded from YouTube Studio (open the
 video's menu, then Download). Clipper does not download from YouTube itself,
 because YouTube's terms forbid it (DESIGN.md §17).
+
+## Spotter, the research assistant
+
+Spotter finds the top creators who are trending, the moments of theirs that
+other people's clips are getting views on right now, and whether that
+moment is in footage Clip is allowed to cut. It never reposts anyone's clip.
+It tells Clip which moment to cut from your permitted source.
+
+**1. A free YouTube API key (once).** In the Google Cloud console, create a
+project, open APIs & Services → Library, and enable **YouTube Data API
+v3**. Then go to Credentials → Create credentials → API key. Put it on the
+droplet (it is never shown):
+
+```
+cd /root/ecosystem && python3 scripts/set-credential.py clip YOUTUBE_API_KEY
+```
+
+**2. Link permitted sources to the creator's channel.** Spotter can only
+remake moments from creators whose source has a channel ID. The ID starts
+with `UC`; find it on the channel page under About → Share → Copy channel
+ID.
+
+```
+cd /root/ecosystem && python3 -m clipper source channel mysource --channel UCxxxxxxxxxxxxxxxxxxxxxx
+```
+
+**3. Research.** Use **Research now** in Clip's studio, or run:
+
+```
+cd /root/ecosystem && python3 -m clipper spot && python3 -m clipper trends
+```
+
+`trends` marks each trending clip with what Clip can do about it:
+- **in your footage**: `python3 -m clipper remake <id>` (or the button)
+  cuts Clip's own version;
+- **not in the footage ingested yet**: ingest that stream or video first;
+- **no permission**: a lead, and usually the creator runs a clipping
+  campaign you can join.
+
+A run uses about 800 of the free 10,000 daily YouTube units, and it stops
+itself at 3,000.
 
 ## Commands
 

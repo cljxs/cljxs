@@ -1,19 +1,25 @@
 """python3 -m clipper <command>
 
-    source add NAME --rights KIND --evidence "..." [--url U] [--attribution "..."]
+    source add NAME --rights KIND --evidence "..." [--url U] [--attribution "..."] [--channel UC...]
+    source channel NAME --channel UC...   link a source to the creator's YouTube channel
     source list
     ingest SOURCE FILE_OR_HTTPS_URL [--title "..."] [--move]
     run [--video ID]            transcribe, find moments, render - whatever is pending
     retry VIDEO_ID              put a failed video back where it failed
     status                      videos, stages, errors, today's spend
     clips [VIDEO_ID]            finished clips with score and reason
+
+  Spotter, the research assistant:
+    spot                        research now: trending creators, their clipped moments
+    trends                      what the last research found
+    remake TREND_ID             cut Clip's own version of a trending moment from permitted footage
 """
 
 import argparse
 import json
 import sys
 
-from clipper import config, db, ingest, pipeline, rights
+from clipper import config, db, ingest, pipeline, report, rights, trends
 
 
 def open_all():
@@ -25,8 +31,14 @@ def open_all():
 def cmd_source(a):
     cfg, paths, conn = open_all()
     if a.action == "add":
-        row = ingest.add_source(conn, cfg, a.name, a.rights, a.evidence or "", a.url, a.attribution)
+        row = ingest.add_source(conn, cfg, a.name, a.rights, a.evidence or "", a.url, a.attribution,
+                                a.channel)
         print(f"source {row['name']} added ({row['rights']}: {rights.RIGHTS[row['rights']]})")
+        return 0
+    if a.action == "channel":
+        ingest.set_channel(conn, a.name, a.channel)
+        print(f"source {a.name} linked to channel {a.channel} - Spotter now treats that creator "
+              f"as one Clip may cut")
         return 0
     for s in conn.execute("SELECT * FROM sources ORDER BY id"):
         flag = "" if s["active"] else "  [inactive]"
@@ -116,17 +128,67 @@ def cmd_clips(a):
     return 0
 
 
+def cmd_spot(a):
+    cfg, paths, conn = open_all()
+    r = trends.run(conn, paths, cfg)
+    print(f"Spotter: {r['creators']} trending creators over "
+          f"{int(cfg['spot_min_subscribers']):,} subscribers, {r['clips']} trending clips of them, "
+          f"{r['matched']} found in footage Clip may cut. {r['units']} YouTube units used.")
+    for n in r["note"]:
+        print(f"  note: {n}")
+    print("See them: python3 -m clipper trends   (or Clip's studio in the village)")
+    return 0
+
+
+def cmd_trends(a):
+    cfg, paths, conn = open_all()
+    snap = report.snapshot(conn, paths, cfg)["spotter"]
+    last = snap["last_run"]
+    if not last:
+        print("Spotter has not run yet: python3 -m clipper spot")
+        return 0
+    print(f"Last research: {last['ts']} UTC - {last['units']} units\n\nTRENDING CREATORS")
+    for c in snap["creators"]:
+        ok = "permission" if c["permitted"] else "no permission yet"
+        print(f"  {c['title'][:28]:<28} {c['subscribers'] or 0:>12,} subs  "
+              f"{c['heat']:>10,.0f} views/h  {ok}")
+    print("\nTRENDING CLIPS OF THEM (other people's - never reposted)")
+    for t in snap["trending"]:
+        state = t["state_words"]
+        if t["state"] == "matched":
+            state = (f"IN YOUR FOOTAGE (video {t['match_video_id']} at "
+                     f"{pipeline.clock(t['match_start'])}) -> python3 -m clipper remake {t['id']}")
+        print(f"  #{t['id']:<4} {t['views_per_hour'] or 0:>9,.0f}/h  {t['creator'] or '?'}: "
+              f"{t['title'][:60]}\n         {state}")
+    return 0
+
+
+def cmd_deck(a):
+    cfg, paths, conn = open_all()
+    print(json.dumps(report.snapshot(conn, paths, cfg)))
+    return 0
+
+
+def cmd_remake(a):
+    cfg, paths, conn = open_all()
+    clip = trends.remake(conn, paths, cfg, a.trend)
+    print(f"remade: clip {clip['id']} ({pipeline.clock(clip['start'])}-{pipeline.clock(clip['end'])}, "
+          f"score {clip['score']:.0f}) -> {clip['path']}")
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="clipper", description="Permitted long videos in, captioned shorts out.")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("source")
-    s.add_argument("action", choices=["add", "list"])
+    s.add_argument("action", choices=["add", "channel", "list"])
     s.add_argument("name", nargs="?")
     s.add_argument("--rights", choices=sorted(rights.RIGHTS))
     s.add_argument("--evidence")
     s.add_argument("--url")
     s.add_argument("--attribution")
+    s.add_argument("--channel", help="the creator's YouTube channel id (UC...)")
     s.set_defaults(fn=cmd_source)
 
     i = sub.add_parser("ingest")
@@ -145,6 +207,12 @@ def main(argv=None):
     t.set_defaults(fn=cmd_retry)
 
     sub.add_parser("status").set_defaults(fn=cmd_status)
+    sub.add_parser("spot").set_defaults(fn=cmd_spot)
+    sub.add_parser("trends").set_defaults(fn=cmd_trends)
+    sub.add_parser("deck", help="JSON for the Command Deck").set_defaults(fn=cmd_deck)
+    m = sub.add_parser("remake")
+    m.add_argument("trend", type=int)
+    m.set_defaults(fn=cmd_remake)
     c = sub.add_parser("clips")
     c.add_argument("video", type=int, nargs="?")
     c.set_defaults(fn=cmd_clips)
@@ -152,6 +220,8 @@ def main(argv=None):
     a = p.parse_args(argv)
     if a.cmd == "source" and a.action == "add" and not (a.name and a.rights):
         p.error("source add needs NAME and --rights (and --evidence)")
+    if a.cmd == "source" and a.action == "channel" and not (a.name and a.channel):
+        p.error("source channel needs NAME and --channel UC...")
     try:
         return a.fn(a)
     except (ValueError, FileNotFoundError, RuntimeError) as exc:

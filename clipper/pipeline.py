@@ -72,9 +72,14 @@ def stage_render(conn, paths, cfg, video):
     picked = conn.execute("SELECT * FROM candidates WHERE video_id = ? AND selected = 1 "
                           "ORDER BY score DESC", (video["id"],)).fetchall()
     out_dir = paths["clips"] / str(video["id"])
-    for rank, c in enumerate(picked, start=1):
+    for c in picked:
         if conn.execute("SELECT 1 FROM clips WHERE candidate_id = ?", (c["id"],)).fetchone():
             continue
+        # The next free number, not the position in this list: a clip added
+        # later (a remake of a trending moment) would otherwise be handed a
+        # number already on disk and overwrite that clip's file.
+        rank = conn.execute("SELECT COALESCE(MAX(rank), 0) + 1 FROM clips WHERE video_id = ?",
+                            (video["id"],)).fetchone()[0]
         out = out_dir / f"{rank:02d}.mp4"
         ass = captions.build(words, c["start"], c["end"], cfg["caption_style"],
                              cfg["caption_uppercase"], cfg["caption_max_words"],

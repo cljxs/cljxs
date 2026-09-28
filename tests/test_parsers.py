@@ -5370,6 +5370,56 @@ class ThePropsHallIsItsOwnBuilding(unittest.TestCase):
                          r"PROPS_PLOT\.x \+ 2\.5[\s\S]{0,400}PAVED\[y\]\[dx\] = true")
 
 
+class ClipHasAStudio(unittest.TestCase):
+    """2026-09-28: Clip, the clipping agent, and Spotter, its research
+    assistant, got a building. Like the props hall it is not in PLOTS, so
+    the checks that keep the hall off the house plots are made for it too -
+    otherwise the next agent is built on top of it the day it is added."""
+
+    def setUp(self):
+        self.html = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+
+    def studio(self):
+        m = re.search(r"CLIP_PLOT = \{ x: ([\d.]+), y: ([\d.]+) \}", self.html)
+        return float(m.group(1)), float(m.group(2))
+
+    def test_it_stands_on_nobody_elses_ground(self):
+        sx, sy = self.studio()
+        plots = [(float(a), float(b)) for a, b in
+                 re.findall(r"\{ x:\s*([\d.]+),\s*y:\s*([\d.]+),\s*flip", self.html)]
+        self.assertEqual(len(plots), 8)
+        m = re.search(r"PROPS_PLOT = \{ x: ([\d.]+), y: ([\d.]+) \}", self.html)
+        hall = (float(m.group(1)), float(m.group(2)), 5.0)
+        for (px, py, pw) in [(x, y, 4.0) for x, y in plots] + [hall]:
+            apart = (sx + 4.5 <= px or px + pw <= sx or sy + 4.4 <= py or py + 4.3 <= sy)
+            self.assertTrue(apart, f"the studio overlaps the building at {px},{py}")
+
+    def test_it_has_a_path_and_a_door_that_opens_its_panel(self):
+        self.assertRegex(self.html, r"CLIP_PLOT\.x \+ 2\.25[\s\S]{0,400}PAVED\[y\]\[dx\] = true")
+        self.assertIn("doors.push({ name: CLIP_DOOR", self.html)
+        body = self.html.split("function openPanel(", 1)[1]
+        before = body.split("(DATA.agents || []).find", 1)[0]
+        self.assertIn("openClipPanel()", before, "the studio is handled before the agent lookup")
+
+    def test_clip_and_spotter_are_named(self):
+        self.assertIn("[['Clip', ", self.html)
+        self.assertIn("['Spotter', ", self.html)
+        self.assertIn("if (n.label) n.label.setPosition", self.html, "the tags follow them")
+
+    def test_the_api_runs_clipper_without_a_shell_and_holds_no_rules(self):
+        js = (ROOT / "mission-control-api" / "clip.js").read_text()
+        self.assertIn("execFile(python(), ['-m', 'clipper', ...args]", js)
+        self.assertNotIn(".exec(", js)
+        self.assertNotIn("better-sqlite3", js, "state comes from `clipper deck`, not a second reader")
+        server = (ROOT / "mission-control-api" / "server.js").read_text()
+        self.assertIn("clipRoutes.register(app);", server)
+
+    def test_the_panel_loads_on_open_and_is_not_redrawn_by_the_village_loop(self):
+        pull = self.html.split("async function pull(", 1)[1].split("\n}", 1)[0]
+        self.assertNotIn("drawClip", pull)
+        self.assertNotIn("loadClip", pull)
+
+
 class NothingGrowsThroughAWall(unittest.TestCase):
     """Three trees grew through the props hall.
 
@@ -5425,6 +5475,10 @@ class NothingGrowsThroughAWall(unittest.TestCase):
         x, y = float(m.group(1)), float(m.group(2))
         yield ("the props hall", x, y, 160 / T, 124 / T, y * T + 124,
                max(96, len("Player Props") * 10 + 22) / T)
+        m = re.search(r"CLIP_PLOT = \{ x: ([\d.]+), y: ([\d.]+) \}", self.html)
+        x, y = float(m.group(1)), float(m.group(2))
+        yield ("Clip's studio", x, y, 144 / T, 124 / T, y * T + 124,
+               max(96, len("Clip") * 10 + 22) / T)
 
     def collisions(self):
         bad = []
