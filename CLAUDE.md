@@ -13,6 +13,7 @@ things here without breaking them.
     scripts/             everything deterministic, in Python
     deploy/              systemd units, installed by scripts/deploy.sh
     mission-control-api/ the Command Deck (Express, port 3001)
+    clipper/             Clipper: permitted video -> captioned shorts (its own DESIGN.md)
 
 `ECOSYSTEM_ROOT` overrides the root; nothing hardcodes a path.
 

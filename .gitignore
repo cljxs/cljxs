@@ -126,3 +126,7 @@ agents/emily/shop/
 agents/ace/state/lines.json
 agents/ace/state/lines.tmp
 agents/ace/state/judgements.jsonl
+
+# Clipper - runtime data (sources, clips, database, credentials) and its venv.
+clipper/var/
+clipper/.venv/
