@@ -11,6 +11,7 @@ Concurrency is 1 task per agent.
 
 import json
 import os
+import re
 import shutil
 import signal
 import sqlite3
@@ -218,6 +219,52 @@ def spawn_agent(agent, task_id):
     return subprocess.Popen(cmd, **kwargs)
 
 
+# Tools that wait on a person. A queued task has nobody on the other end, so a
+# call to one of these waits until the task's time limit cuts it off. Task #30
+# (2026-09-28) spent its whole ten minutes on a single ask_user call, and the
+# card said only "agent exited with code 0".
+WAITS_ON_A_PERSON = ("ask_user",)
+
+
+# The fields are read by pattern, not json.loads, on purpose: the only sample
+# of this failure ever captured is the tail this dispatcher logs, which starts
+# mid-object, and a parser that needs the whole document could not be tested
+# against it. These match openclaw's pretty-printed keys in the full output
+# and in that tail alike (tests/fixtures/emily-ask-user-timeout.log).
+_STOP = re.compile(r'"stopReason"\s*:\s*"([^"]*)"')
+_LIVENESS = re.compile(r'"livenessState"\s*:\s*"([^"]*)"')
+_SUMMARY = re.compile(r'"toolSummary"\s*:\s*\{(.*?)\}', re.S)
+_TOOLS = re.compile(r'"tools"\s*:\s*\[(.*?)\]', re.S)
+_CALLS = re.compile(r'"calls"\s*:\s*(\d+)')
+
+
+def why_it_stopped(stdout, seconds=None):
+    """A sentence on why a run ended without completing its task, read from
+    openclaw's own summary, or None when it says nothing useful. A run cut
+    off at its time limit exits 0 as well, so the code alone reads as
+    "finished" about a run that was stopped mid-step."""
+    text = stdout or ""
+    summaries = _SUMMARY.findall(text)
+    if not summaries:
+        return None
+    summary = summaries[-1]
+    tools_m = _TOOLS.search(summary)
+    tools = re.findall(r'"([^"]+)"', tools_m.group(1)) if tools_m else []
+    calls_m = _CALLS.search(summary)
+    stops, liveness = _STOP.findall(text), _LIVENESS.findall(text)
+    stop = stops[-1] if stops else None
+    after = f" after {round(seconds / 60)} min" if seconds else ""
+    counted = f", {calls_m.group(1)} tool call(s)" if calls_m else ""
+    waited = [t for t in tools if t in WAITS_ON_A_PERSON]
+    if waited and stop == "toolUse":
+        return (f"stopped to ask a question ({waited[0]}) and waited for an answer - "
+                f"nobody answers a queued task, so it sat until the time limit cut it "
+                f"off{after}{counted}")
+    if stop == "toolUse" or (liveness and liveness[-1] == "paused"):
+        return f"cut off mid-step by the time limit{after}{counted}"
+    return None
+
+
 def reap_finished(conn):
     """Collect finished agent processes and free their slot."""
     for agent in list(running):
@@ -248,6 +295,10 @@ def reap_finished(conn):
         if status == "in_progress":
             # The agent exited without completing its task through the API.
             note = f"agent exited with code {code}"
+            started = entry.get("started")
+            why = why_it_stopped(stdout, time.time() - started if started else None)
+            if why:
+                note = f"{why} (exit code {code})"
             if stderr:
                 note += f": {stderr[:500]}"
             conn.execute(

@@ -30,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 import types
+import sqlite3
 import time
 import urllib.error
 import urllib.request
@@ -14468,3 +14469,78 @@ class AceBankrollHoldsDataNotRules(unittest.TestCase):
         self.assertNotIn("The bar is eight", head)
         # The worked example in the header is the code's own arithmetic.
         self.assertIn(f"about\n{self.m.ev_pct(58.0, -130):+.1f}% expected value", head)
+
+
+class AQueuedRunThatAskedAQuestionSaysSo(unittest.TestCase):
+    """2026-09-28, task #30: Emily's only tool call was ask_user. Nobody
+    answers a queued task, so she waited out the 600-second limit, openclaw
+    exited 0, and the card said "agent exited with code 0" - which reads as
+    a run that finished. The dispatcher now reads openclaw's own summary and
+    says what happened; the wake message and her header say not to ask."""
+
+    def setUp(self):
+        self.d = load("dispatcher_why", "task-dispatcher.py")
+        self.tail = (FIXTURES / "emily-ask-user-timeout.log").read_text()
+
+    def test_the_real_tail_reads_as_a_question_nobody_answered(self):
+        why = self.d.why_it_stopped(self.tail, 615)
+        self.assertEqual(why, "stopped to ask a question (ask_user) and waited for an answer - "
+                              "nobody answers a queued task, so it sat until the time limit "
+                              "cut it off after 10 min, 1 tool call(s)")
+
+    def test_any_other_tool_reads_as_cut_off_mid_step(self):
+        why = self.d.why_it_stopped(self.tail.replace('"ask_user"', '"exec"'), 615)
+        self.assertEqual(why, "cut off mid-step by the time limit after 10 min, 1 tool call(s)")
+
+    def test_either_sign_alone_is_enough(self):
+        # A tool call pending at the end, or openclaw calling the run paused:
+        # each on its own means it was stopped, not finished.
+        tool_use = self.tail.replace('"ask_user"', '"exec"').replace('"paused"', '"working"')
+        self.assertIn("cut off mid-step", self.d.why_it_stopped(tool_use, 615))
+        paused = self.tail.replace('"ask_user"', '"exec"').replace('"toolUse"', '"stop"')
+        self.assertIn("cut off mid-step", self.d.why_it_stopped(paused, 615))
+
+    def test_the_last_stop_reason_is_the_one_that_counts(self):
+        # An earlier turn that ended on a tool call is normal; only how the
+        # run ended matters.
+        earlier = '"stopReason": "toolUse",\n'
+        finished = self.tail.replace('"toolUse"', '"stop"').replace('"paused"', '"working"')
+        self.assertIsNone(self.d.why_it_stopped(earlier + finished, 40))
+
+    def test_a_run_that_finished_its_turn_gets_no_story(self):
+        # Exited 0 at a normal stop without calling `done`: the agent's own
+        # words say why, and inventing a timeout would be wrong.
+        done = self.tail.replace('"toolUse"', '"stop"').replace('"paused"', '"working"')
+        self.assertIsNone(self.d.why_it_stopped(done, 40))
+
+    def test_output_with_no_summary_says_nothing(self):
+        self.assertIsNone(self.d.why_it_stopped("", 600))
+        self.assertIsNone(self.d.why_it_stopped("Request timed out before a response.", 600))
+
+    def test_the_card_gets_it(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(self.d.SCHEMA)
+        conn.execute("INSERT INTO tasks (id, status, assignee) VALUES (30, 'in_progress', 'emily')")
+        tail = self.tail.encode()
+
+        class Proc:
+            returncode = 0
+            def poll(self): return 0
+            def communicate(self, timeout=None): return tail, b""
+
+        self.d.log = lambda msg: None
+        self.d.clear_task_marker = lambda agent: None
+        self.d.running.clear()
+        self.d.running["emily"] = {"proc": Proc(), "task_id": 30, "started": time.time() - 615}
+        self.d.reap_finished(conn)
+        row = conn.execute("SELECT status, result FROM tasks WHERE id = 30").fetchone()
+        self.assertEqual(row["status"], "failed")
+        self.assertTrue(row["result"].startswith("stopped to ask a question (ask_user)"), row["result"])
+        self.assertTrue(row["result"].endswith("(exit code 0)"), row["result"])
+
+    def test_the_agent_is_told_before_it_happens(self):
+        t = load("task_py_ask", "task.py")
+        self.assertIn("Never ask the user anything (no ask_user)", t.wake_message(30))
+        head = (ROOT / "agents" / "emily" / "_emily-agents-header.md").read_text()
+        self.assertIn("**Never ask the user\nanything**", head)

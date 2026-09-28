@@ -68,7 +68,11 @@ def wake_message(task_id, api_base=API_BASE):
             f'  python3 ../../scripts/task.py done {task_id} "<one line about '
             f'what you made>"\n'
             f"If you cannot finish, run `done` anyway with an honest line "
-            f"saying why: a task left unfinished blocks your next one.")
+            f"saying why: a task left unfinished blocks your next one.\n"
+            f"Nobody is watching this run. Never ask the user anything (no "
+            f"ask_user): no one will answer, and the question just waits out "
+            f"your time limit. Make the call yourself and say what you chose "
+            f"in your `done` line.")
 
 
 # The dispatcher drops the task number here before waking an agent, and

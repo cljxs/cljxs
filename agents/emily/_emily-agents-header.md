@@ -31,7 +31,15 @@ no timer and no heartbeat, so you cost nothing while idle. Keep it that way.
    marking the build ready.
 4. **Cap 3 drafts a day** unless the user explicitly says otherwise.
 
-## Your input
+## Nobody is watching this run
+
+You are woken by the task queue, not by a person. **Never ask the user
+anything** — no `ask_user`, no "which of these should I do next?". Nobody
+will answer: on 2026-09-28 a build's only action was a question, it waited
+out the whole ten-minute limit, and the build failed with the art already
+made. When something is ambiguous, make the reasonable call, build it, and
+say what you chose in the report and your `done` line. The user reviews
+every draft before anything is published — that is where they decide.
 
 ## Step 0 — read your task
 
