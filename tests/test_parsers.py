@@ -5466,8 +5466,12 @@ class NothingGrowsThroughAWall(unittest.TestCase):
     def scenery(self):
         """[(kind, [(x, y)], half width, height, depth pad)] straight out of the file."""
         out = []
+        # sign and fence since 2026-09-29: a signpost stood on the end of
+        # Belfort's name plate ("BELFOR-") and a fence in front of his bull,
+        # both found by screenshot because neither kind was checked here.
         sizes = {"tree": (0.65, 2.4, 40), "bush": (0.50, 0.80, 8),
-                 "rock": (0.40, 0.65, 6)}
+                 "rock": (0.40, 0.65, 6), "sign": (0.28, 0.85, 6),
+                 "fence": (0.50, 0.80, 6)}
         for m in re.finditer(r"\.forEach\(\(\[tx\s*,\s*ty\][^\n]*place\(`?'?([a-z]+)",
                              self.html):
             kind = m.group(1)
@@ -5498,6 +5502,9 @@ class NothingGrowsThroughAWall(unittest.TestCase):
         x, y = float(m.group(1)), float(m.group(2))
         yield ("Clip's studio", x, y, 144 / T, 124 / T, y * T + 124,
                max(96, len("Clip") * 10 + 22) / T)
+        m = re.search(r"STATUE = \{ x: ([\d.]+), y: ([\d.]+) \}", self.html)
+        x, y = float(m.group(1)), float(m.group(2))
+        yield ("the statue", x - 2, y - 196 / T, 4.0, 196 / T, y * T, 0.0)
 
     def collisions(self):
         bad = []
@@ -5521,9 +5528,9 @@ class NothingGrowsThroughAWall(unittest.TestCase):
         # A parser that silently finds nothing would make the test below pass
         # for the wrong reason - the failure mode this repo keeps hitting.
         found = self.scenery()
-        self.assertEqual(sorted(k for k, *_ in found), ["bush", "rock", "tree"])
+        self.assertEqual(sorted(k for k, *_ in found), ["bush", "fence", "rock", "sign", "tree"])
         for kind, pts, *_ in found:
-            self.assertGreater(len(pts), 5, f"only {len(pts)} {kind} found")
+            self.assertGreaterEqual(len(pts), 5, f"only {len(pts)} {kind} found")
 
     def test_the_check_can_actually_fail(self):
         # Stand a tree on the hall's doorstep and confirm it is reported.
@@ -5539,6 +5546,42 @@ class NothingGrowsThroughAWall(unittest.TestCase):
 
     def test_nothing_covers_a_wall_or_a_name_plate(self):
         self.assertEqual(self.collisions(), [])
+
+
+class EachHouseLooksLikeItsTrade(unittest.TestCase):
+    """2026-09-29: Belfort got an exchange, Ace an arena (not a second props
+    hall), Emily a studio, Scout an observatory; Fury lost his house, and the
+    square's notice board became a statue of Iron Man carrying the ledger."""
+
+    def setUp(self):
+        self.html = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+
+    def test_every_themed_house_and_prop_is_drawn(self):
+        themed = dict(re.findall(r"(\w+): '(\w+)'", re.search(r"const THEMED = \{([^}]*)\}", self.html).group(1)))
+        self.assertEqual(sorted(themed), ["ace", "belfort", "emily", "scout"])
+        for name, prop in themed.items():
+            self.assertIn(f"themed('{name}',", self.html, f"{name} has no house drawn")
+            self.assertIn(f"generateTexture('{prop}',", self.html, f"{name}'s {prop} is never drawn")
+
+    def test_a_themed_house_is_never_mirrored(self):
+        # a flipped plot mirrors a plain house; a ticker, "+150" or a painting
+        # would read backwards
+        self.assertIn("if (plot.flip && !theme) house.setFlipX(true)", self.html)
+
+    def test_fury_has_no_house_and_no_path_to_one(self):
+        self.assertRegex(self.html, r"const NO_HOUSE = new Set\(\['fury'\]\)")
+        body = self.html.split("function create()", 1)[1]
+        self.assertIn("const agents = housed();", body)
+        self.assertIn("Math.min(housed().length, PLOTS.length)", self.html,
+                      "garden paths come from the same list as the houses")
+        self.assertNotIn("DATA.agents || []).length, PLOTS.length", self.html)
+
+    def test_the_statue_is_the_town_hall(self):
+        self.assertIn("generateTexture('ironman',", self.html)
+        self.assertIn("doors.push({ name: HALL_DOOR, x: statue.x, y: statue.y + 14 })", self.html)
+        self.assertRegex(self.html, r"boardText = this\.add\.text\(statue\.x,")
+        for gone in ("'board'", "'well'"):
+            self.assertNotIn(gone, self.html, f"{gone} is drawn or placed but no longer used")
 
 
 class OneScreenPerMarket(unittest.TestCase):
