@@ -47,12 +47,14 @@ def set_channel(conn, name, channel_id):
         raise ValueError(f"no source named {name!r}")
 
 
-def set_watermark(conn, paths, cfg, name, origin):
+def set_watermark(conn, paths, cfg, name, origin, cut_out=False):
     """Keep a copy of a source's watermark (a file on the droplet or an https
     link) and check it now - that it is a PNG and fits where it must go -
-    rather than at the first render hours later. Returns (w, h, x, y)."""
-    from clipper import render
-    if not conn.execute("SELECT 1 FROM sources WHERE name = ?", (name,)).fetchone():
+    rather than at the first render hours later. cut_out: the file is a mark
+    flattened onto white, made see-through by cutout.py. Returns (w, h, x, y)."""
+    from clipper import cutout, render
+    src = conn.execute("SELECT * FROM sources WHERE name = ?", (name,)).fetchone()
+    if not src:
         raise ValueError(f"no source named {name!r}")
     folder = paths["home"] / "watermarks"
     folder.mkdir(parents=True, exist_ok=True)
@@ -66,14 +68,35 @@ def set_watermark(conn, paths, cfg, name, origin):
             raise FileNotFoundError(origin)
         shutil.copy2(str(path), str(tmp))
     try:
-        box = render.check_watermark(tmp, cfg)
+        if cut_out:
+            flat = tmp.with_name(tmp.stem + ".flat.png")
+            tmp.replace(flat)
+            try:
+                cutout.cut_out_white(flat, tmp)
+            finally:
+                flat.unlink()
+        box = render.check_watermark(tmp, render.source_cfg(cfg, src))
     except Exception:
-        tmp.unlink()
+        tmp.unlink(missing_ok=True)
         raise
     final = folder / f"{safe}.png"
     tmp.replace(final)
     with conn:
         conn.execute("UPDATE sources SET watermark = ? WHERE name = ?", (str(final), name))
+    return box
+
+
+def set_watermark_top(conn, cfg, name, top):
+    """Move a source's watermark, checked against the watermark it has."""
+    from clipper import render
+    src = conn.execute("SELECT * FROM sources WHERE name = ?", (name,)).fetchone()
+    if not src:
+        raise ValueError(f"no source named {name!r}")
+    box = None
+    if src["watermark"]:
+        box = render.check_watermark(src["watermark"], dict(cfg, watermark_top=top))
+    with conn:
+        conn.execute("UPDATE sources SET watermark_top = ? WHERE name = ?", (top, name))
     return box
 
 

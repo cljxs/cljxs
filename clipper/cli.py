@@ -3,11 +3,15 @@
     source add NAME --rights KIND --evidence "..." [--url U] [--attribution "..."] [--channel UC...]
     source channel NAME --channel UC...   link a source to the creator's YouTube channel
     source rules NAME [--tags "#a #b"] [--credit "Clip from @creator"]   what every post must carry
-    source rules NAME --watermark FILE|URL   a campaign's watermark, burned into every clip
+    source rules NAME --hunt "Topic: term, term; Topic2: term"   moments a campaign asks for
+    source rules NAME --spell "Right: wrong, wrong; Right2: wrong"   names Whisper mishears
+    source rules NAME --watermark FILE|URL [--cut-out-white] [--watermark-top PX]
+                                a campaign's watermark, burned into every clip
     source list
     ingest SOURCE FILE_OR_HTTPS_URL [--title "..."] [--move] [--remote]
     run [--video ID]            transcribe, find moments, render - whatever is pending
     retry VIDEO_ID              put a failed video back where it failed
+    refind VIDEO_ID             choose its moments again (a new --hunt); only before any clip exists
     status                      videos, stages, errors, today's spend
     clips [VIDEO_ID]            finished clips with score and reason
 
@@ -30,7 +34,8 @@ import argparse
 import json
 import sys
 
-from clipper import config, db, ingest, pipeline, postcopy, publish, report, rights, trends, youtube
+from clipper import (config, db, ingest, pipeline, postcopy, publish, report, rights, score,
+                     transcribe, trends, youtube)
 
 
 def open_all():
@@ -47,8 +52,34 @@ def cmd_source(a):
         print(f"source {row['name']} added ({row['rights']}: {rights.RIGHTS[row['rights']]})")
         return 0
     if a.action == "rules":
+        if a.spell is not None:
+            rules = transcribe.parse_spellings(a.spell)
+            with conn:
+                n = conn.execute("UPDATE sources SET spellings = ? WHERE name = ?",
+                                 (json.dumps(rules) if rules else None, a.name)).rowcount
+            if not n:
+                raise ValueError(f"no source named {a.name!r}")
+            for wrong, right in rules:
+                print(f"captions say {right!r} where Whisper wrote {' '.join(wrong)!r}")
+        if a.hunt is not None:
+            hunt = score.parse_hunt(a.hunt)
+            with conn:
+                n = conn.execute("UPDATE sources SET hunt = ? WHERE name = ?",
+                                 (json.dumps(hunt) if hunt else None, a.name)).rowcount
+            if not n:
+                raise ValueError(f"no source named {a.name!r}")
+            for t in hunt:
+                print(f"hunting: {t['name']} ({', '.join(t['terms'])})")
+            if hunt:
+                print("a video already searched keeps its picks - `refind VIDEO` searches it again")
+        if a.watermark_top is not None:
+            ingest.set_watermark_top(conn, cfg, a.name, a.watermark_top)
         if a.watermark:
-            w, h, x, y = ingest.set_watermark(conn, paths, cfg, a.name, a.watermark)
+            ingest.set_watermark(conn, paths, cfg, a.name, a.watermark, a.cut_out_white)
+        s = conn.execute("SELECT * FROM sources WHERE name = ?", (a.name,)).fetchone()
+        if s and s["watermark"] and (a.watermark or a.watermark_top is not None):
+            from clipper import render
+            w, h, x, y = render.check_watermark(s["watermark"], render.source_cfg(cfg, s))
             print(f"watermark kept: {w}x{h}, centred at {x},{y} on every clip from {a.name}, "
                   f"start to finish")
         with conn:
@@ -106,6 +137,14 @@ def cmd_run(a):
             bad += 1
             print(f"video {vid} stopped at {v['stage']} (attempt {v['attempts']}): {v['error']}")
     return 1 if bad else 0
+
+
+def cmd_refind(a):
+    cfg, paths, conn = open_all()
+    v = pipeline.refind(conn, a.video)
+    print(f"video {v['id']} back at transcribed: its moments will be chosen again (the "
+          f"transcript is kept). Run: clipper/.venv/bin/python -m clipper run --video {v['id']}")
+    return 0
 
 
 def cmd_retry(a):
@@ -285,6 +324,13 @@ def main(argv=None):
     s.add_argument("--credit", help="a line every post from this source must carry")
     s.add_argument("--watermark", help="a campaign's watermark PNG (file or https link), "
                                        "overlaid unchanged on every clip from this source")
+    s.add_argument("--cut-out-white", action="store_true",
+                   help="the watermark is drawn on a white canvas: make the canvas see-through")
+    s.add_argument("--hunt", help="the moments the campaign wants, in its order: "
+                                  "\"Knicks: knicks, chant; Pat Beverley: beverley, beverly\"")
+    s.add_argument("--spell", help="names Whisper mishears: \"Trae Young: try young; Knicks: nicks\"")
+    s.add_argument("--watermark-top", type=int,
+                   help="how far down the 1920-high frame the watermark's top edge sits")
     s.set_defaults(fn=cmd_source)
 
     i = sub.add_parser("ingest")
@@ -303,6 +349,9 @@ def main(argv=None):
     t = sub.add_parser("retry")
     t.add_argument("video", type=int)
     t.set_defaults(fn=cmd_retry)
+    t = sub.add_parser("refind", help="choose a video's moments again, e.g. after --hunt")
+    t.add_argument("video", type=int)
+    t.set_defaults(fn=cmd_refind)
 
     sub.add_parser("status").set_defaults(fn=cmd_status)
     sub.add_parser("spot").set_defaults(fn=cmd_spot)

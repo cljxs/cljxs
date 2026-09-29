@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 sys.path.insert(0, str(ROOT))
 
-from clipper import captions, cli, config, db, media, moments, pipeline, render, rights, score  # noqa: E402
+from clipper import captions, cli, config, db, media, moments, pipeline, render, rights, score, transcribe  # noqa: E402
 
 WORDS = json.loads((FIXTURES / "clipper-words-librivox.json").read_text())["words"]
 CFG = dict(config.DEFAULTS)
@@ -1158,3 +1158,273 @@ class RemoteFootage(EndToEnd):
     def test_a_too_big_download_says_how_to_leave_it_in_place(self):
         with self.assertRaisesRegex(RuntimeError, "--remote"):
             ingest.need_space(self.home, 10 ** 15, ingest.REMOTE_HINT)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class WatermarkCutOutOfWhite(unittest.TestCase):
+    """The campaign's own pixels, minus the white canvas - not a retyped copy,
+    which its rules forbid, and not a white box over the clip."""
+    FLAT = WatermarkMustBeSeeThrough.FLAT
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.out = Path(self.tmp.name) / "cut.png"
+
+    def rgb(self, path, over, w, h):
+        vf = f"color=c={over}:s={w}x{h},format=rgb24[bg];[bg][0:v]overlay=format=rgb,format=rgb24"
+        r = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-filter_complex", vf,
+                            "-frames:v", "1", "-f", "rawvideo", "-"], capture_output=True, check=True)
+        return r.stdout
+
+    def test_over_white_it_is_the_supplied_file(self):
+        from clipper import cutout
+        w, h, (x0, y0) = cutout.cut_out_white(self.FLAT, self.out)
+        self.assertTrue(render.has_transparency(self.out))
+        mine = self.rgb(self.out, "white", w, h)
+        orig = subprocess.run(["ffmpeg", "-v", "error", "-i", str(self.FLAT), "-vf",
+                               f"crop={w}:{h}:{x0}:{y0},format=rgb24", "-f", "rawvideo", "-"],
+                              capture_output=True, check=True).stdout
+        self.assertEqual(len(mine), len(orig))
+        self.assertLessEqual(max(abs(a - b) for a, b in zip(mine, orig)), 1,
+                             "no pixel of the mark changed: over white it is the original")
+
+    def test_the_letters_are_solid_and_the_canvas_is_gone(self):
+        from clipper import cutout
+        w, h, _ = cutout.cut_out_white(self.FLAT, self.out)
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(self.out), "-f", "rawvideo",
+                              "-pix_fmt", "rgba", "-"], capture_output=True, check=True).stdout
+        alpha = raw[3::4]
+        self.assertGreater(sum(1 for a in alpha if a == 255), 20000,
+                           "the nine glyph parts (about 21,000 pixels) stay fully opaque")
+        for corner in (0, w - 1, (h - 1) * w, h * w - 1):
+            self.assertLessEqual(alpha[corner], cutout.TRIM_ALPHA + 1)
+        self.assertLess((w, h), (1568, 523), "the empty canvas is trimmed")
+        render.watermark_box(w, h, 880, 600)   # fits low-middle, clear of the captions
+
+    def test_a_mark_not_on_white_is_refused(self):
+        from clipper import cutout
+        with self.assertRaisesRegex(ValueError, "not white"):
+            cutout.cut_out_white(half_magenta_png(Path(self.tmp.name) / "m.png"), self.out)
+        blank = Path(self.tmp.name) / "blank.png"
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=white:s=300x100",
+                        "-frames:v", "1", str(blank)], check=True)
+        with self.assertRaisesRegex(ValueError, "no lettering"):
+            cutout.cut_out_white(blank, self.out)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class WatermarkPerSource(EndToEnd):
+    def setUp(self):
+        super().setUp()
+        self.cli("source", "add", "mike", "--rights", "permission", "--evidence", "campaign page")
+
+    def test_the_flattened_campaign_file_through_the_cli(self):
+        flat = str(WatermarkMustBeSeeThrough.FLAT)
+        code, said = self.cli("source", "rules", "mike", "--watermark", flat)
+        self.assertEqual(code, 2)
+        self.assertIn("--cut-out-white", said, "the refusal says what to do")
+        code, said = self.cli("source", "rules", "mike", "--watermark", flat, "--cut-out-white",
+                              "--watermark-top", "880")
+        self.assertEqual(code, 0, said)
+        self.assertIn("watermark kept: 543x162, centred at 268,880", said)
+        self.assertTrue(render.has_transparency(self.home / "watermarks" / "mike.png"))
+        self.assertEqual(sorted(p.name for p in (self.home / "watermarks").iterdir()), ["mike.png"])
+
+    def test_a_position_under_the_captions_is_refused(self):
+        self.cli("source", "rules", "mike", "--watermark", str(WatermarkMustBeSeeThrough.FLAT),
+                 "--cut-out-white")
+        code, said = self.cli("source", "rules", "mike", "--watermark-top", "1100")
+        self.assertEqual(code, 2)
+        self.assertIn("captions", said)
+        top = db.connect(self.home / "clipper.db").execute(
+            "SELECT watermark_top FROM sources").fetchone()[0]
+        self.assertIsNone(top, "a refused position is not kept")
+
+    def test_clips_use_the_sources_own_position(self):
+        png = half_magenta_png(Path(self.tmp.name) / "m.png")
+        self.assertEqual(self.cli("source", "rules", "mike", "--watermark", str(png),
+                                  "--watermark-top", "700")[0], 0)
+        self.cli("ingest", "mike", str(self.video))
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        clip = self.home / "clips" / "1" / "01.mp4"
+        w, h, x, y = render.watermark_box(400, 100, 700, 600)
+        self.assertTrue(close(pixel(clip, 0.5, x + 50, y + 50), MAGENTA), "at 700, not the default 300")
+
+
+# ---------------------------------------------------------------- a campaign's own list
+
+LONG_RUN = json.loads((FIXTURES / "clipper-long-run-timings.json").read_text())["words"]
+
+
+class LongUnpunctuatedRuns(unittest.TestCase):
+    """Whisper wrote 39 of the Trae Young episode's 80 minutes as runs with no
+    full stop and (mostly) no gap between words; one ran 525 s. A window is
+    whole sentences, so none of it could be clipped."""
+
+    def test_the_real_525_second_run_becomes_clippable(self):
+        sents = moments.sentences(LONG_RUN, 0.8)
+        self.assertGreater(len(sents), 17)
+        self.assertLessEqual(max(s["end"] - s["start"] for s in sents), moments.LONGEST)
+        self.assertTrue(all(s["last"] - s["first"] + 1 >= moments.MIN_PIECE_WORDS for s in sents))
+        self.assertEqual([k for s in sents for k in range(s["first"], s["last"] + 1)],
+                         list(range(len(LONG_RUN))), "every word once, in order")
+        wins = moments.windows(sents, 20, 60)
+        covered = {int(t) for i, j in wins for t in range(int(sents[i]["start"]), int(sents[j]["end"]))}
+        self.assertGreater(len(covered), 0.95 * (LONG_RUN[-1]["end"] - LONG_RUN[0]["start"]))
+
+    def test_a_real_point_eight_second_pause_is_a_pause(self):
+        # The run's one 0.8 s gap is 0.79999999999972 in floating point.
+        k = max(range(len(LONG_RUN) - 1), key=lambda k: LONG_RUN[k + 1]["start"] - LONG_RUN[k]["end"])
+        self.assertLess(LONG_RUN[k + 1]["start"] - LONG_RUN[k]["end"], 0.8)
+        sents = moments.sentences(LONG_RUN, 0.8, longest=10 ** 6)     # pauses only
+        self.assertIn(k, [s["last"] for s in sents])
+
+    def test_with_no_gaps_it_splits_near_the_middle(self):
+        # The real runs are 99% zero gaps: a tie must not cut three words off
+        # the front, over and over, into a string of useless fragments.
+        ws = [w(t, t + 1.0, "x") for t in range(0, 80)]
+        pieces = moments.split_long(ws, list(range(80)), 50)
+        self.assertEqual(len(pieces), 2, [len(p) for p in pieces])
+        self.assertLessEqual(abs(len(pieces[0]) - len(pieces[1])), 2, [len(p) for p in pieces])
+
+    def test_splits_at_the_biggest_gap(self):
+        ws = [w(t, t + 0.5, "x") for t in range(0, 40)]
+        ws[25] = w(25.4, 25.9, "x")                      # 0.9 s after word 24, the one gap
+        pieces = moments.split_long(ws, list(range(40)), 30)
+        self.assertEqual(pieces[0][-1], 24)
+
+
+class CampaignTopics(unittest.TestCase):
+    HUNT = "Knicks: knicks, nicks, chant; Pat Beverley: pat bev, beverly; dunk"
+
+    def test_parse_keeps_the_campaigns_order(self):
+        h = score.parse_hunt(self.HUNT)
+        self.assertEqual([t["name"] for t in h], ["Knicks", "Pat Beverley", "dunk"])
+        self.assertEqual(h[1]["terms"], ["pat bev", "beverly"])
+
+    def test_whole_words_with_endings(self):
+        h = score.parse_hunt(self.HUNT + "; AI: ai")
+        self.assertEqual(score.topics("they started chanting at the Knicks' game", h), ["Knicks"])
+        self.assertEqual(score.topics("he was dunking on people", h), ["dunk"])
+        self.assertEqual(score.topics("I said it to Nick's brother", h), [], "nick is not nicks; ai not in said")
+        self.assertEqual(score.topics("the beef with you and pat bev", h), ["Pat Beverley"])
+        self.assertEqual(score.topics("the knicks won", score.parse_hunt("Nick: nicks")), [],
+                         "a term inside a longer word is not a mention")
+
+    def words_saying(self, text, at=0.0, step=1.0):
+        return [w(at + k * step, at + k * step + 0.9, " " + t + ("." if k % 6 == 5 else ""))
+                for k, t in enumerate(text.split())]
+
+    def test_a_mention_at_the_very_end_does_not_count(self):
+        # The real case: the best "Knicks" window ended just after "the nicks",
+        # before the story. 30 words, the topic word last.
+        ws = self.words_saying(" ".join(["talk"] * 29 + ["knicks"]))
+        sents = moments.sentences(ws, 0.8)
+        got = score.score_windows(sents, [(0, len(sents) - 1)], ws, [], CFG, score.parse_hunt(self.HUNT))
+        self.assertEqual(got[0]["topics"], [])
+        ws = self.words_saying(" ".join(["talk"] * 5 + ["knicks"] + ["talk"] * 24))
+        sents = moments.sentences(ws, 0.8)
+        got = score.score_windows(sents, [(0, len(sents) - 1)], ws, [], CFG, score.parse_hunt(self.HUNT))
+        self.assertEqual(got[0]["topics"], ["Knicks"])
+        plain = score.score_windows(sents, [(0, len(sents) - 1)], ws, [], CFG)[0]["score"]
+        self.assertEqual(got[0]["score"], min(100.0, round(plain + score.TOPIC_BONUS, 1)))
+        self.assertIn("on the campaign's list: Knicks", got[0]["reasons"][0])
+
+    def test_a_clip_opening_on_like_is_mid_thought(self):
+        # The real case: "like in the first quarter ... they started chanting"
+        # won over the window that opened on the setup, until "like" counted.
+        for opener, standalone in (("like", 0.25), ("my", 1.0)):
+            ws = self.words_saying(opener + " first playoff series was the knicks and they chanted")
+            sents = moments.sentences(ws, 0.8)
+            f = score.score_windows(sents, [(0, len(sents) - 1)], ws, [], CFG)[0]["features"]
+            self.assertEqual(f["standalone"], standalone, opener)
+
+    def test_every_topic_gets_a_clip_before_the_rest_go_by_score(self):
+        h = score.parse_hunt(self.HUNT)
+        c = lambda s, e, sc, t: {"start": s, "end": e, "score": sc, "topics": t}
+        scored = [c(0, 30, 99, ["Knicks"]), c(40, 70, 98, ["Knicks"]), c(80, 110, 97, ["Knicks"]),
+                  c(120, 150, 60, ["dunk"]), c(160, 190, 90, []), c(125, 155, 95, ["Knicks"])]
+        got = moments.choose(scored, 3, 40, h)
+        self.assertEqual(sorted((x["start"] for x in got)), [0, 40, 120],
+                         "Knicks' best, then dunk's best (not a fourth Knicks), then by score")
+        self.assertEqual([x["start"] for x in moments.choose(scored, 3, 40)], [0, 40, 80],
+                         "without a list: score alone")
+
+
+class Spellings(unittest.TestCase):
+    RULES = transcribe.parse_spellings("Trae Young: try young; Trae: tray; Knicks: nicks; "
+                                       "chanting F Trae Young: chin fluck try young")
+
+    def test_longest_first(self):
+        self.assertEqual(self.RULES[0], [["chin", "fluck", "try", "young"], "chanting F Trae Young"])
+
+    def test_the_real_mishearing_is_fixed_in_step_with_the_audio(self):
+        # From the episode at 67:50: "...and like they started chin fluck try young you know"
+        ws = [w(0.0, 0.3, " they"), w(0.3, 0.6, " started"), w(0.6, 0.9, " chin"),
+              w(0.9, 1.2, " fluck"), w(1.2, 1.5, " try"), w(1.5, 2.0, " young."), w(2.0, 2.3, " you")]
+        got = transcribe.respell(ws, self.RULES)
+        self.assertEqual("".join(x["word"] for x in got), " they started chanting F Trae Young. you")
+        new = got[2:6]
+        self.assertEqual((new[0]["start"], new[-1]["end"]), (0.6, 2.0), "the same span of audio")
+        self.assertTrue(moments.ends_sentence(new[-1]["word"]), "the full stop moves with it")
+
+    def test_only_whole_listed_phrases(self):
+        ws = [w(0, 1, " I'll"), w(1, 2, " try"), w(2, 3, " it,"), w(3, 4, " Tray,"), w(4, 5, " NICKS")]
+        self.assertEqual("".join(x["word"] for x in transcribe.respell(ws, self.RULES)),
+                         " I'll try it, Trae, Knicks")
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class CampaignListEndToEnd(EndToEnd):
+    def setUp(self):
+        super().setUp()
+        self.cli("source", "add", "tao", "--rights", "public-domain", "--evidence", "LibriVox")
+
+    def test_spellings_reach_the_burned_in_captions(self):
+        # "the" is in every clip of the fixture; respelling it proves the
+        # captions and the scored text both come through the spellings.
+        self.assertEqual(self.cli("source", "rules", "tao", "--spell", "Thee: the")[0], 0)
+        self.cli("ingest", "tao", str(self.video))
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        ass = (self.home / "clips" / "1" / "01.ass").read_text()
+        text = json.loads((self.home / "clips" / "1" / "01.json").read_text())["text"]
+        self.assertIn("THEE", ass)
+        self.assertNotRegex(ass, r"[ }]THE[ {]|[ }]THE$")
+        self.assertIn("Thee", text)
+        self.assertNotRegex(text, r"\bthe\b")
+
+    def test_one_clip_per_topic_even_over_the_cap(self):
+        # max_clips_per_video is 1 here; the list names two moments.
+        self.cli("source", "rules", "tao", "--hunt", "Volunteer: volunteer; Fisherman: fisherman")
+        self.cli("ingest", "tao", str(self.video))
+        self.give_words(1)
+        code, said = self.cli("run")
+        self.assertEqual(code, 0, said)
+        self.assertIn("2 clip(s)", said)
+        ev = db.connect(self.home / "clipper.db").execute(
+            "SELECT msg FROM events WHERE stage = 'find'").fetchone()[0]
+        self.assertIn("campaign topics clipped: Fisherman, Volunteer", ev)
+        self.assertNotIn("not found", ev)
+
+    def test_a_list_set_after_searching_is_used_by_refind(self):
+        self.cli("ingest", "tao", str(self.video))
+        self.give_words(1)
+        conn = db.connect(self.home / "clipper.db")
+        pipeline.advance(conn, config.paths(), config.load(), conn.execute("SELECT * FROM videos").fetchone())
+        # (the render made a clip: refind must refuse, it would renumber it)
+        code, said = self.cli("refind", "1")
+        self.assertEqual(code, 2)
+        self.assertIn("renumber", said)
+        with conn:
+            conn.execute("DELETE FROM post_copy")
+            conn.execute("DELETE FROM clips")
+            conn.execute("UPDATE videos SET stage = 'found'")
+        self.assertEqual(self.cli("source", "rules", "tao", "--hunt", "Blossom: blossom, blossoms")[0], 0)
+        self.assertEqual(self.cli("refind", "1")[0], 0)
+        self.assertEqual(conn.execute("SELECT stage FROM videos").fetchone()[0], "transcribed")
+        self.assertEqual(self.cli("run")[0], 0)
+        ev = conn.execute("SELECT msg FROM events WHERE stage = 'find' ORDER BY id DESC").fetchone()[0]
+        self.assertIn("campaign topics clipped: Blossom", ev)

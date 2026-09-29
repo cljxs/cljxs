@@ -177,6 +177,23 @@ MIGRATIONS = [
     """
     ALTER TABLE sources ADD COLUMN watermark TEXT;
     """,
+    # 5 - where a source's watermark sits. Per source because it depends on
+    # the footage: Curious Mike's goes low-middle, on the guest's black shirt,
+    # where white text reads; NULL means config's watermark_top.
+    """
+    ALTER TABLE sources ADD COLUMN watermark_top INTEGER;
+    """,
+    # 6 - the moments a campaign says to hunt for ("Knicks fans and the chants",
+    # "Pat Beverley", ...): JSON [{"name": .., "terms": [..]}], in the
+    # campaign's order of priority. See score.parse_hunt.
+    """
+    ALTER TABLE sources ADD COLUMN hunt TEXT;
+    """,
+    # 7 - how a source's names are spelled when Whisper mishears them ("tray"
+    # for Trae, "nicks" for Knicks): transcribe.parse_spellings as JSON.
+    """
+    ALTER TABLE sources ADD COLUMN spellings TEXT;
+    """,
 ]
 
 

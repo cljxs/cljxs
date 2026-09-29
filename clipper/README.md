@@ -143,8 +143,24 @@ campaigns are judged on. A draft without one gets "Agree or disagree?".
 The watermark must have a transparent background. The image on a
 guidelines web page is often a flattened copy on a white canvas: Curious
 Mike's Notion image is one, and would put a white box over every clip. Clip
-refuses a PNG without transparency, so ask the campaign for the original
-file.
+refuses a PNG without transparency. If the campaign can't supply one,
+`--cut-out-white` keeps its pixels and removes only the white canvas
+(`clipper/cutout.py`). Over white, the result matches the supplied file to
+within one level on every pixel. It is not retyped, which the rules forbid.
+`--watermark-top` sets where it sits for that source. For Curious Mike that
+is 880, on the guest's black shirt, where the white lettering reads.
+
+A campaign's list of moments to hunt for goes in `--hunt`, in the
+campaign's order. Each topic gets its own clip before the rest are chosen
+by score. `--spell` fixes the names Whisper mishears ("tray" for Trae,
+"nicks" for Knicks), in the captions and in the topic search. Both are set
+per source. If a video was already searched before the list was set,
+`refind VIDEO` searches it again (only before it has clips). The find
+event in `status` names any topic it could not find:
+
+```
+cd /root/ecosystem && clipper/.venv/bin/python -m clipper source rules curious-mike --hunt "Knicks: knicks, nicks, chant; Pat Beverley: pat bev, beverley" --spell "Trae Young: try young; Knicks: nicks"
+```
 
 A Dropbox share link can be passed to `ingest` as it is. Clip swaps `dl=0`
 for `dl=1` to get the file rather than the preview page. It refuses folder

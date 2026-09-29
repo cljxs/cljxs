@@ -108,6 +108,12 @@ def has_transparency(path):
     return len(data) > 25 and (data[25] in (4, 6) or b"tRNS" in data)
 
 
+def source_cfg(cfg, src):
+    """cfg with a source's own watermark position, if it has one."""
+    top = src["watermark_top"] if src is not None else None
+    return dict(cfg, watermark_top=top) if top is not None else cfg
+
+
 def check_watermark(path, cfg):
     """(w, h, x, y) for a watermark file, or raise. A PNG only: the campaign's
     white-with-glow mark needs its transparency, and a JPEG would put a
@@ -127,8 +133,8 @@ def check_watermark(path, cfg):
         raise ValueError("the watermark PNG has no picture in it")
     if not has_transparency(path):
         raise ValueError("the watermark PNG has no transparent background, so it would put a "
-                         "solid box over every clip - ask the campaign for the transparent PNG "
-                         "(an image shown on a web page is often a flattened copy)")
+                         "solid box over every clip. Ask the campaign for the transparent PNG, "
+                         "or, if it is a mark on a white canvas, add --cut-out-white")
     return watermark_box(info["width"], info["height"], cfg["watermark_top"],
                          cfg["watermark_max_width"])
 

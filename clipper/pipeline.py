@@ -33,19 +33,31 @@ def stage_transcribe(conn, paths, cfg, video):
     return "transcribed"
 
 
+def words_of(conn, paths, video):
+    """A video's transcript words with its source's spellings applied - the
+    one way every stage reads them, so what was scored is what is captioned."""
+    src = conn.execute("SELECT spellings FROM sources WHERE id = ?", (video["source_id"],)).fetchone()
+    words = json.loads((folder(paths, video) / "transcript.json").read_text())["words"]
+    return transcribe.respell(words, json.loads(src["spellings"]) if src and src["spellings"] else [])
+
+
 def stage_find(conn, paths, cfg, video):
     f = folder(paths, video)
-    words = json.loads((f / "transcript.json").read_text())["words"]
+    words = words_of(conn, paths, video)
     loud_file = f / "loudness.json"
     if loud_file.exists():
         loud = json.loads(loud_file.read_text())
     else:
         loud = media.loudness(f / "audio.wav")
         loud_file.write_text(json.dumps(loud))
+    src = conn.execute("SELECT * FROM sources WHERE id = ?", (video["source_id"],)).fetchone()
+    hunt = json.loads(src["hunt"]) if src["hunt"] else []
     sents = moments.sentences(words, cfg["sentence_pause_seconds"])
     wins = moments.windows(sents, cfg["min_clip_seconds"], cfg["max_clip_seconds"])
-    scored = score.score_windows(sents, wins, words, loud, cfg)
-    chosen = moments.choose(scored, cfg["max_clips_per_video"], cfg["min_score"])
+    scored = score.score_windows(sents, wins, words, loud, cfg, hunt)
+    # At least one clip per topic on the campaign's list: the list is the
+    # moments it says to make, so a smaller cap would silently drop some.
+    chosen = moments.choose(scored, max(cfg["max_clips_per_video"], len(hunt)), cfg["min_score"], hunt)
     picked = {(c["i"], c["j"]) for c in chosen}
     with conn:
         conn.execute("DELETE FROM clips WHERE video_id = ?", (video["id"],))
@@ -59,15 +71,18 @@ def stage_find(conn, paths, cfg, video):
                 (video["id"], start, end, c["text"], c["score"], score.SCORER,
                  db.as_json(c["features"]), db.as_json(c["reasons"]),
                  1 if (c["i"], c["j"]) in picked else 0))
+    covered = sorted({t for c in chosen for t in c["topics"]})
+    missing = [t["name"] for t in hunt if t["name"] not in covered]
     db.event(conn, "find", f"{len(sents)} sentences, {len(scored)} candidate windows, "
-                           f"{len(chosen)} chosen (min score {cfg['min_score']})",
+                           f"{len(chosen)} chosen (min score {cfg['min_score']})"
+                           + (f"; campaign topics clipped: {', '.join(covered) or 'none'}" if hunt else "")
+                           + (f"; not found: {', '.join(missing)}" if missing else ""),
              video_id=video["id"])
     return "found"
 
 
 def stage_render(conn, paths, cfg, video):
-    f = folder(paths, video)
-    words = json.loads((f / "transcript.json").read_text())["words"]
+    words = words_of(conn, paths, video)
     src = conn.execute("SELECT * FROM sources WHERE id = ?", (video["source_id"],)).fetchone()
     picked = conn.execute("SELECT * FROM candidates WHERE video_id = ? AND selected = 1 "
                           "ORDER BY score DESC", (video["id"],)).fetchall()
@@ -84,8 +99,8 @@ def stage_render(conn, paths, cfg, video):
         ass = captions.build(words, c["start"], c["end"], cfg["caption_style"],
                              cfg["caption_uppercase"], cfg["caption_max_words"],
                              cfg["caption_max_chars"])
-        info = render.render(video["media_path"], out, c["start"], c["end"], ass, cfg,
-                             watermark=src["watermark"])
+        info = render.render(video["media_path"], out, c["start"], c["end"], ass,
+                             render.source_cfg(cfg, src), watermark=src["watermark"])
         meta = {"source": src["name"], "rights": src["rights"], "evidence": src["evidence"],
                 "watermark": Path(src["watermark"]).name if src["watermark"] else None,
                 "attribution": src["attribution"], "video_title": video["title"],
@@ -162,6 +177,27 @@ def advance(conn, paths, cfg, video):
             return False
         video = conn.execute("SELECT * FROM videos WHERE id = ?", (video["id"],)).fetchone()
     return video["stage"] == "done"
+
+
+def refind(conn, video_id):
+    """Send a video back to be searched again - after a campaign's list is set,
+    say. Refused once it has clips: finding again deletes and renumbers them,
+    and an approved or posted clip must keep its number and its file."""
+    v = conn.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
+    if not v:
+        raise ValueError(f"no video {video_id}")
+    n = conn.execute("SELECT COUNT(*) FROM clips WHERE video_id = ?", (video_id,)).fetchone()[0]
+    if n:
+        raise ValueError(f"video {video_id} already has {n} clip(s); finding again would renumber "
+                         f"them. Use `remake` for one more moment instead")
+    if not (v["stage"] in ("found", "done") or (v["stage"] == "failed"
+                                                and (v["error"] or "").startswith("found"))):
+        raise ValueError(f"video {video_id} is at {v['stage']} - it has not been searched yet, "
+                         f"`run` will search it with the current list")
+    with conn:
+        conn.execute("UPDATE videos SET stage = 'transcribed', attempts = 0, error = NULL, "
+                     "updated_at = ? WHERE id = ?", (db.now(), video_id))
+    return conn.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
 
 
 class Busy(RuntimeError):

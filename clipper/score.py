@@ -30,7 +30,10 @@ WEIGHTS = {
 # A clip opening on one of these is answering something the viewer never heard.
 DANGLING = {"and", "but", "so", "because", "which", "that", "it", "this", "they", "he",
             "she", "him", "her", "them", "also", "then", "or", "plus", "anyway",
-            "those", "these", "there", "who", "where"}
+            "those", "these", "there", "who", "where",
+            # Seen opening the unpunctuated runs of a real podcast mid-story:
+            # "like in the first quarter ... they started chanting".
+            "like"}
 HOOK_PHRASES = ("you won't believe", "the truth", "nobody", "no one", "never", "secret",
                 "the problem", "the reason", "here's", "here is", "what if", "the worst",
                 "the best", "i was wrong", "stop", "biggest", "mistake", "why ", "how ",
@@ -126,12 +129,63 @@ def reasons(feats, weights=WEIGHTS):
     return out
 
 
-def score_windows(sents, wins, words, loud, cfg):
+# ------------------------------------------------------------------ a campaign's list
+
+# Points added to a window that talks about something on the campaign's list.
+# The list is the rights holder saying which moments perform ("the Knicks clip
+# pulled 4.2% engagement, start there") - better evidence than any feature
+# here - so it outweighs them, but a mumbled, cut-off mention still loses to
+# a clean one, because the rest of the score still counts.
+TOPIC_BONUS = 25.0
+# A mention in a clip's last quarter is a setup with no payoff: on the Trae
+# Young episode the best-scoring "Knicks" window ended eight seconds after
+# "my first playoff series was the nicks", before the chant it was about.
+TOPIC_BY = 0.75
+
+
+def parse_hunt(text):
+    """'Knicks: knicks, chant; Pat Beverley: beverley, beverly; dunk' ->
+    [{"name": "Knicks", "terms": ["knicks", "chant"]}, ...]. Topics are split
+    by ';', terms by ','; a topic without a 'Name:' is named by its first
+    term. Order is kept: it is the campaign's priority."""
+    out = []
+    for part in (text or "").split(";"):
+        name, sep, terms = part.partition(":")
+        terms = [t.strip().lower() for t in (terms if sep else name).split(",") if t.strip()]
+        if terms:
+            out.append({"name": name.strip() if sep else terms[0], "terms": terms})
+    return out
+
+
+def topics(text, hunt):
+    """Names of the topics a piece of transcript mentions. Whole words only,
+    plurals and possessives allowed: 'Knicks' matches "the Knicks'", 'dunk'
+    matches "dunks", 'ai' never matches "said"."""
+    low = text.lower()
+    hit = []
+    for t in hunt or []:
+        for term in t["terms"]:
+            if re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?:'s|s'|s|es|ed|ing|er|')?(?![a-z0-9])", low):
+                hit.append(t["name"])
+                break
+    return hit
+
+
+def score_windows(sents, wins, words, loud, cfg, hunt=None):
     median = statistics.median([v for v in loud if v > -70]) if any(v > -70 for v in loud) else -30.0
     out = []
     for i, j in wins:
         f = features(sents, i, j, words, loud, median, cfg)
+        text = " ".join(s["text"] for s in sents[i:j + 1])
+        score, why = total(f), reasons(f)
+        by = sents[i]["start"] + TOPIC_BY * (sents[j]["end"] - sents[i]["start"])
+        early = "".join(words[k]["word"] for k in range(sents[i]["first"], sents[j]["last"] + 1)
+                        if words[k]["start"] < by) if hunt else ""
+        on_list = topics(early, hunt)
+        if on_list:
+            score = min(100.0, round(score + TOPIC_BONUS, 1))
+            why = [f"on the campaign's list: {', '.join(on_list)}"] + why
         out.append({"i": i, "j": j, "start": sents[i]["start"], "end": sents[j]["end"],
-                    "text": " ".join(s["text"] for s in sents[i:j + 1]),
-                    "score": total(f), "features": f, "reasons": reasons(f)})
+                    "text": text, "score": score, "features": f, "reasons": why,
+                    "topics": on_list})
     return out

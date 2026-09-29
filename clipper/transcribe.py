@@ -47,6 +47,64 @@ def from_file(audio_path, cfg):
 PROVIDERS = {"faster-whisper": faster_whisper, "file": from_file}
 
 
+# ------------------------------------------------------------------ a source's spellings
+
+def _norm(word):
+    return "".join(ch for ch in word.lower() if ch.isalnum() or ch == "'").strip("'")
+
+
+def parse_spellings(text):
+    """'Trae Young: try young, tray young; Knicks: nicks' ->
+    [[["try", "young"], "Trae Young"], [["tray", "young"], "Trae Young"],
+     [["nicks"], "Knicks"]], longest first so "try young" is fixed before a
+    shorter rule could take part of it. Whisper's mishearings of names are
+    per-show, so they are listed per source rather than guessed."""
+    out = []
+    for part in (text or "").split(";"):
+        right, sep, wrongs = part.partition(":")
+        if not sep or not right.strip():
+            continue
+        for w in wrongs.split(","):
+            words = [_norm(x) for x in w.split() if _norm(x)]
+            if words:
+                out.append([words, right.strip()])
+    return sorted(out, key=lambda r: -len(r[0]))
+
+
+def respell(words, rules):
+    """The words with each listed mishearing replaced. Whole words only, so
+    "try young" never touches "try" alone. The new words share the old ones'
+    time span evenly - captions stay in sync - and keep the old last word's
+    trailing punctuation, so sentences still end where they did. The cached
+    transcript itself is never changed; this is applied when it is read."""
+    if not rules:
+        return words
+    norm = [_norm(w["word"]) for w in words]
+    out, i = [], 0
+    while i < len(words):
+        for wrong, right in rules:
+            n = len(wrong)
+            if norm[i:i + n] == wrong:
+                old = words[i:i + n]
+                new = right.split()
+                start, end = old[0]["start"], old[-1]["end"]
+                step = (end - start) / len(new)
+                tail = old[-1]["word"].rstrip()
+                punct = tail[len(tail.rstrip(".,?!;:\"'")):]
+                lead = old[0]["word"][:len(old[0]["word"]) - len(old[0]["word"].lstrip())] or " "
+                for k, t in enumerate(new):
+                    out.append({"start": round(start + k * step, 3),
+                                "end": round(start + (k + 1) * step, 3),
+                                "word": (lead if k == 0 else " ") + t + (punct if k == len(new) - 1 else ""),
+                                "p": min(w.get("p", 1.0) for w in old)})
+                i += n
+                break
+        else:
+            out.append(words[i])
+            i += 1
+    return out
+
+
 def transcribe(audio_path, cache_path, cfg):
     cache_path = Path(cache_path)
     if cache_path.exists():

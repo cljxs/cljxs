@@ -286,11 +286,14 @@ def clips_about(yt, creator, cfg, now):
     return (yt.get("videos", part="snippet,statistics", id=",".join(ids)).get("items") or [])
 
 
-def sentences_for(paths, video_id, cfg):
-    f = paths["media"] / str(video_id) / "transcript.json"
-    if not f.exists():
+def sentences_for(conn, paths, video_id, cfg):
+    """Words and sentences exactly as the pipeline reads them (spellings
+    applied), so a remade clip's cut points and captions agree."""
+    from clipper import pipeline
+    video = conn.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
+    if not video or not (paths["media"] / str(video_id) / "transcript.json").exists():
         return None, None
-    words = json.loads(f.read_text())["words"]
+    words = pipeline.words_of(conn, paths, video)
     return words, moments.sentences(words, cfg["sentence_pause_seconds"])
 
 
@@ -300,7 +303,7 @@ def match_in_footage(conn, paths, cfg, source, text, creator_title):
     best = None
     for v in conn.execute("SELECT id FROM videos WHERE source_id = ? AND stage IN ('found', 'done')",
                           (source["id"],)):
-        words, sents = sentences_for(paths, v["id"], cfg)
+        words, sents = sentences_for(conn, paths, v["id"], cfg)
         if not sents:
             continue
         sc, i, j = match(text, sents, drop)
@@ -425,7 +428,7 @@ def remake(conn, paths, cfg, trend_id):
     src = conn.execute("SELECT * FROM sources WHERE id = ? AND active = 1", (video["source_id"],)).fetchone()
     if not src:
         raise ValueError("that footage's source is no longer active - permission withdrawn?")
-    words, sents = sentences_for(paths, video["id"], cfg)
+    words, sents = sentences_for(conn, paths, video["id"], cfg)
     i = next(k for k, s in enumerate(sents) if s["start"] >= t["match_start"] - 0.01)
     j = max(k for k, s in enumerate(sents) if s["end"] <= t["match_end"] + 0.01)
     span = widen(sents, i, j, cfg["min_clip_seconds"], cfg["target_clip_seconds"], cfg["max_clip_seconds"])
