@@ -64,9 +64,15 @@ def probe(path):
 
 def extract_audio(src, dest):
     """16 kHz mono WAV - what Whisper resamples to anyway, so decoding once
-    here keeps the transcriber's memory down and makes the loudness pass cheap."""
+    here keeps the transcriber's memory down and makes the loudness pass cheap.
+    Written under a temporary name and renamed when complete: the pipeline
+    skips extraction when audio.wav exists, so a run killed halfway (the
+    droplet's kernel did kill one, 2026-09-29) must not leave a short one."""
+    dest = Path(dest)
+    tmp = dest.with_name(dest.stem + ".part" + dest.suffix)
     run(["ffmpeg", "-nostdin", "-y", "-v", "error", *input_args(src),
-         "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(dest)])
+         "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(tmp)])
+    tmp.replace(dest)
     return dest
 
 

@@ -137,10 +137,12 @@ def reasons(feats, weights=WEIGHTS):
 # here - so it outweighs them, but a mumbled, cut-off mention still loses to
 # a clean one, because the rest of the score still counts.
 TOPIC_BONUS = 25.0
-# A mention in a clip's last quarter is a setup with no payoff: on the Trae
-# Young episode the best-scoring "Knicks" window ended eight seconds after
-# "my first playoff series was the nicks", before the chant it was about.
-TOPIC_BY = 0.75
+# A topic must come up in the clip's first half: a clip picked for a topic
+# should be about it, not end on its setup. At 0.75, on the Trae Young
+# episode, the "Knicks" pick ended a few seconds after "my first playoff
+# series was the Knicks" - before the chant it was about - on both the
+# one-piece and the chunked transcript; at 0.5 both keep the chant.
+TOPIC_BY = 0.5
 
 
 def parse_hunt(text):

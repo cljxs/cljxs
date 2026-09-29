@@ -1231,6 +1231,25 @@ class WatermarkPerSource(EndToEnd):
         self.assertTrue(render.has_transparency(self.home / "watermarks" / "mike.png"))
         self.assertEqual(sorted(p.name for p in (self.home / "watermarks").iterdir()), ["mike.png"])
 
+    def test_replacing_a_flattened_watermark_along_with_its_position(self):
+        # The droplet's real order of events: the Notion image was stored by
+        # the first version (before transparency was checked), then replaced
+        # with --cut-out-white and --watermark-top in one command - which was
+        # refused, because the position was checked against the old file.
+        old = self.home / "watermarks" / "mike.png"
+        old.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(WatermarkMustBeSeeThrough.FLAT, old)
+        with db.connect(self.home / "clipper.db") as conn:
+            conn.execute("UPDATE sources SET watermark = ? WHERE name = 'mike'", (str(old),))
+        code, said = self.cli("source", "rules", "mike", "--watermark",
+                              str(WatermarkMustBeSeeThrough.FLAT), "--cut-out-white",
+                              "--watermark-top", "880")
+        self.assertEqual(code, 0, said)
+        self.assertIn("centred at 268,880", said)
+        s = db.connect(self.home / "clipper.db").execute("SELECT * FROM sources").fetchone()
+        self.assertEqual(s["watermark_top"], 880)
+        self.assertTrue(render.has_transparency(s["watermark"]))
+
     def test_a_position_under_the_captions_is_refused(self):
         self.cli("source", "rules", "mike", "--watermark", str(WatermarkMustBeSeeThrough.FLAT),
                  "--cut-out-white")
@@ -1324,6 +1343,10 @@ class CampaignTopics(unittest.TestCase):
         sents = moments.sentences(ws, 0.8)
         got = score.score_windows(sents, [(0, len(sents) - 1)], ws, [], CFG, score.parse_hunt(self.HUNT))
         self.assertEqual(got[0]["topics"], [])
+        ws = self.words_saying(" ".join(["talk"] * 18 + ["knicks"] + ["talk"] * 11))
+        sents = moments.sentences(ws, 0.8)
+        got = score.score_windows(sents, [(0, len(sents) - 1)], ws, [], CFG, score.parse_hunt(self.HUNT))
+        self.assertEqual(got[0]["topics"], [], "60% of the way in: the clip ends on its setup")
         ws = self.words_saying(" ".join(["talk"] * 5 + ["knicks"] + ["talk"] * 24))
         sents = moments.sentences(ws, 0.8)
         got = score.score_windows(sents, [(0, len(sents) - 1)], ws, [], CFG, score.parse_hunt(self.HUNT))
@@ -1398,7 +1421,7 @@ class CampaignListEndToEnd(EndToEnd):
 
     def test_one_clip_per_topic_even_over_the_cap(self):
         # max_clips_per_video is 1 here; the list names two moments.
-        self.cli("source", "rules", "tao", "--hunt", "Volunteer: volunteer; Fisherman: fisherman")
+        self.cli("source", "rules", "tao", "--hunt", "LibriVox: librivox; Fisherman: fisherman")
         self.cli("ingest", "tao", str(self.video))
         self.give_words(1)
         code, said = self.cli("run")
@@ -1406,7 +1429,7 @@ class CampaignListEndToEnd(EndToEnd):
         self.assertIn("2 clip(s)", said)
         ev = db.connect(self.home / "clipper.db").execute(
             "SELECT msg FROM events WHERE stage = 'find'").fetchone()[0]
-        self.assertIn("campaign topics clipped: Fisherman, Volunteer", ev)
+        self.assertIn("campaign topics clipped: Fisherman, LibriVox", ev)
         self.assertNotIn("not found", ev)
 
     def test_a_list_set_after_searching_is_used_by_refind(self):
@@ -1428,3 +1451,32 @@ class CampaignListEndToEnd(EndToEnd):
         self.assertEqual(self.cli("run")[0], 0)
         ev = conn.execute("SELECT msg FROM events WHERE stage = 'find' ORDER BY id DESC").fetchone()[0]
         self.assertIn("campaign topics clipped: Blossom", ev)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class TranscribedInPieces(unittest.TestCase):
+    """The whole 81-minute episode at once peaked at 4.9 GB and the droplet's
+    kernel killed the run. Pieces of whisper_chunk_seconds, cut in quiet."""
+
+    def test_cuts_land_in_the_quiet_and_cover_everything(self):
+        with tempfile.TemporaryDirectory() as d:
+            wav = Path(d) / "a.wav"
+            quiet = [(9.1, 9.5), (20.6, 21.0), (30.2, 30.6)]
+            gate = "*".join(f"(1-between(t,{a},{b}))" for a, b in quiet)
+            subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                            f"aevalsrc='0.5*sin(2*PI*220*t)*{gate}':s=16000:d=35",
+                            "-ac", "1", "-c:a", "pcm_s16le", str(wav)], check=True)
+            b = transcribe.chunks(wav, 10, search=2)
+            self.assertEqual(b[0][0], 0)
+            self.assertEqual(b[-1][1], 35 * 16000)
+            self.assertTrue(all(x[1] == y[0] for x, y in zip(b, b[1:])), "no gap, no overlap")
+            for (_, cut), (a, z) in zip(b, quiet):
+                self.assertTrue(a <= cut / 16000 <= z, f"cut at {cut / 16000:.2f}s, not in {a}-{z}")
+
+    def test_only_the_wav_extract_audio_writes(self):
+        with tempfile.TemporaryDirectory() as d:
+            wav = Path(d) / "s.wav"
+            subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=d=1", "-ac", "2",
+                            "-c:a", "pcm_s16le", str(wav)], check=True)
+            with self.assertRaisesRegex(ValueError, "16-bit mono"):
+                transcribe.chunks(wav, 10)

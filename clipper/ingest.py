@@ -47,7 +47,7 @@ def set_channel(conn, name, channel_id):
         raise ValueError(f"no source named {name!r}")
 
 
-def set_watermark(conn, paths, cfg, name, origin, cut_out=False):
+def set_watermark(conn, paths, cfg, name, origin, cut_out=False, top=None):
     """Keep a copy of a source's watermark (a file on the droplet or an https
     link) and check it now - that it is a PNG and fits where it must go -
     rather than at the first render hours later. cut_out: the file is a mark
@@ -75,14 +75,16 @@ def set_watermark(conn, paths, cfg, name, origin, cut_out=False):
                 cutout.cut_out_white(flat, tmp)
             finally:
                 flat.unlink()
-        box = render.check_watermark(tmp, render.source_cfg(cfg, src))
+        box = render.check_watermark(tmp, dict(cfg, watermark_top=top) if top is not None
+                                     else render.source_cfg(cfg, src))
     except Exception:
         tmp.unlink(missing_ok=True)
         raise
     final = folder / f"{safe}.png"
     tmp.replace(final)
     with conn:
-        conn.execute("UPDATE sources SET watermark = ? WHERE name = ?", (str(final), name))
+        conn.execute("UPDATE sources SET watermark = ?, watermark_top = COALESCE(?, watermark_top) "
+                     "WHERE name = ?", (str(final), top, name))
     return box
 
 

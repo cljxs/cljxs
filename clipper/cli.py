@@ -72,10 +72,14 @@ def cmd_source(a):
                 print(f"hunting: {t['name']} ({', '.join(t['terms'])})")
             if hunt:
                 print("a video already searched keeps its picks - `refind VIDEO` searches it again")
-        if a.watermark_top is not None:
-            ingest.set_watermark_top(conn, cfg, a.name, a.watermark_top)
+        # A new watermark and its position are checked together: checking the
+        # position first, against the watermark it replaces, refused the
+        # droplet's first real run (the old one was the flattened white box).
         if a.watermark:
-            ingest.set_watermark(conn, paths, cfg, a.name, a.watermark, a.cut_out_white)
+            ingest.set_watermark(conn, paths, cfg, a.name, a.watermark, a.cut_out_white,
+                                 a.watermark_top)
+        elif a.watermark_top is not None:
+            ingest.set_watermark_top(conn, cfg, a.name, a.watermark_top)
         s = conn.execute("SELECT * FROM sources WHERE name = ?", (a.name,)).fetchone()
         if s and s["watermark"] and (a.watermark or a.watermark_top is not None):
             from clipper import render

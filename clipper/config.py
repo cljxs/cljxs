@@ -26,6 +26,9 @@ DEFAULTS = {
     "transcriber": "faster-whisper",
     "whisper_model": "base.en",
     "whisper_threads": 1,
+    # Transcribed ten minutes at a time: the whole 81-minute Trae Young
+    # episode at once peaked at 4.9 GB and was killed on the 2 GB droplet.
+    "whisper_chunk_seconds": 600,
     "language": "en",
 
     # --- finding moments ----------------------------------------------------
