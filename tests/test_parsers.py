@@ -5556,12 +5556,40 @@ class EachHouseLooksLikeItsTrade(unittest.TestCase):
     def setUp(self):
         self.html = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
 
+    def themed(self):
+        return {n: (prop, int(h)) for n, prop, h in
+                re.findall(r"(\w+):\s*\{ prop: '(\w+)',\s*h: (\d+)", self.html)}
+
     def test_every_themed_house_and_prop_is_drawn(self):
-        themed = dict(re.findall(r"(\w+): '(\w+)'", re.search(r"const THEMED = \{([^}]*)\}", self.html).group(1)))
+        themed = self.themed()
         self.assertEqual(sorted(themed), ["ace", "belfort", "emily", "scout"])
-        for name, prop in themed.items():
+        for name, (prop, h) in themed.items():
             self.assertIn(f"themed('{name}',", self.html, f"{name} has no house drawn")
             self.assertIn(f"generateTexture('{prop}',", self.html, f"{name}'s {prop} is never drawn")
+            self.assertGreaterEqual(h, 116, f"{name}'s house is shorter than its own door")
+        self.assertGreater(themed["belfort"][1], 2 * 116 - 10, "a Wall Street tower, not a house")
+
+    def test_buildings_stand_on_their_bottom_edge(self):
+        # Different heights, one ground line: placed by the bottom, every door,
+        # path and garden stays put and a taller building rises further.
+        self.assertRegex(self.html, r"this\.add\.image\(bx, by \+ HH, theme \? `house-\$\{a\.name\}`[^;]*\.setOrigin\(0, 1\)")
+        self.assertIn("gg.generateTexture(`house-${name}`, 128, THEMED[name].h)", self.html)
+
+    def test_each_resident_dresses_for_the_house(self):
+        # Belfort in a suit, Ace in a jersey... and every look actually walks:
+        # a look without its animations would stand frozen or, worse, play the
+        # plain villager's walk and change clothes mid-stride.
+        outfits = re.search(r"const OUTFITS = \{(.*?)\n\};", self.html, re.S).group(1)
+        names = re.findall(r"^  (\w+): \{", outfits, re.M)
+        for who in list(self.themed()) + ["clip", "spotter"]:
+            self.assertIn(who, names, f"{who} has no outfit")
+        self.assertIn("hero(`npc-${who}-${f}-${fr}`, f, fr, o)", self.html)
+        self.assertIn("key: walkAnim(`npc-${who}`, f)", self.html)
+        update = self.html.split("function update(", 1)[1]
+        for f in ("side", "up", "down"):
+            self.assertIn(f"n.s.anims.play(walkAnim(n.look, '{f}')", update)
+        self.assertNotIn("n.s.anims.play('walk-", update, "an NPC playing the plain walk")
+        self.assertIn("n.s.setTexture(`${n.look}-down-0`)", update)
 
     def test_a_themed_house_is_never_mirrored(self):
         # a flipped plot mirrors a plain house; a ticker, "+150" or a painting
@@ -5578,6 +5606,8 @@ class EachHouseLooksLikeItsTrade(unittest.TestCase):
 
     def test_the_statue_is_the_town_hall(self):
         self.assertIn("generateTexture('ironman',", self.html)
+        self.assertIn("this.add.text(statue.x, statue.y - 50, 'TOWN HALL'", self.html)
+        self.assertNotIn("boardText.setText(", self.html, "the plaque's name is never overwritten")
         self.assertIn("doors.push({ name: HALL_DOOR, x: statue.x, y: statue.y + 14 })", self.html)
         self.assertRegex(self.html, r"boardText = this\.add\.text\(statue\.x,")
         for gone in ("'board'", "'well'"):

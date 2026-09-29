@@ -345,9 +345,85 @@ const PLOTS = [
 const NO_HOUSE = new Set(['fury']);
 const housed = () => (DATA.agents || []).filter(a => !NO_HOUSE.has(a.name));
 
-// Houses drawn for one agent's trade (makeTextures, "themed houses"), and the
-// thing that stands in each one's garden. Anyone else gets a plain house.
-const THEMED = { belfort: 'bull', ace: 'hoop', emily: 'easel', scout: 'globe' };
+// Houses drawn for one agent's trade (makeTextures, "themed houses"): the
+// thing in each garden, the building's height (they share a 128px frontage
+// and a door; a Wall Street tower just rises further), and where its status
+// lamp sits - the tower's spire tip, the arena's jumbotron. Anyone else gets
+// a plain house and a plain villager.
+const THEMED = {
+  belfort: { prop: 'bull',  h: 240, lamp: [64, 3] },
+  ace:     { prop: 'hoop',  h: 132, lamp: [100, 30] },
+  emily:   { prop: 'easel', h: 144, lamp: [52, 9] },
+  scout:   { prop: 'globe', h: 172, lamp: [64, 5] },
+};
+
+// What each resident wears, so the person outside a house fits it. A base
+// (jacket, trousers, hair, skin) and `more`, drawn over the top for the
+// details - a tie, a number, a beret. Each gets its own walk textures
+// (`npc-<name>-<facing>-<frame>`) and animations; nobody listed here is a
+// plain villager tinted a shirt colour. g, facing, frame, leg x positions.
+const OUTFITS = {
+  belfort: { shirt: 0x1f2a44, back: 0x1a2438, legs: 0x1a2030, hair: 0x1f160e, shoes: 0x0b0d12,
+    more: (g, f) => {                                        // a navy suit, red tie, briefcase
+      if (f === 'down') {
+        px(g, 10, 11, 4, 2, 0xffffff); px(g, 11, 12, 2, 7, 0xc0392b); px(g, 11, 11, 2, 1, 0x8e2a20);
+        px(g, 9, 11, 1, 6, 0x33426a); px(g, 14, 11, 1, 6, 0x33426a); px(g, 15, 13, 2, 1, 0xffffff);
+        px(g, 18, 17, 5, 5, 0x5a3d1c); px(g, 19, 16, 3, 1, 0x3a2a14);
+      } else if (f === 'side') {
+        px(g, 13, 11, 2, 2, 0xffffff); px(g, 14, 12, 1, 6, 0xc0392b);
+        px(g, 15, 17, 6, 5, 0x5a3d1c); px(g, 17, 16, 2, 1, 0x3a2a14);
+      }
+      px(g, 8, 2, 6, 1, 0x4a3a2a);                            // slicked, parted
+    } },
+  ace: { shirt: 0xf28c28, back: 0xe07a1f, legs: 0x1f3a68, hair: 0x2a1a10, shoes: 0xffffff, skin: 0xc9905e,
+    more: (g, f, fr, L) => {                                 // a jersey, #23, headband, sneakers
+      px(g, 6, 11, 12, 1, 0x1f3a68); px(g, 6, 11, 1, 10, 0x1f3a68); px(g, 17, 11, 1, 10, 0x1f3a68);
+      if (f !== 'side') { px(g, 4, 12, 2, 6, 0xc9905e); px(g, 18, 12, 2, 6, 0xc9905e); }
+      else px(g, 10, 12, 3, 6, 0xc9905e);
+      if (f !== 'side') {                                     // 2 and 3, 3x5 each
+        [[0, 0, 3], [2, 1, 1], [0, 2, 3], [0, 3, 1], [0, 4, 3]].forEach(([x, y, w]) => px(g, 8 + x, 13 + y, w, 1, 0xffffff));
+        [[0, 0, 3], [2, 1, 1], [1, 2, 2], [2, 3, 1], [0, 4, 3]].forEach(([x, y, w]) => px(g, 13 + x, 13 + y, w, 1, 0xffffff));
+      }
+      L.forEach(x => px(g, x, 23, 4, 2, 0xc9905e));           // shorts, then legs
+      px(g, 7, 5, 10, 1, 0xffffff);                           // headband
+    } },
+  emily: { shirt: 0xe9dcf5, back: 0xdccbee, legs: 0x3b5b92, hair: 0x8a4b2a,
+    more: (g, f) => {                                        // beret, smock with paint on it, long hair
+      if (f === 'down') { px(g, 6, 5, 2, 9, 0x8a4b2a); px(g, 16, 5, 2, 9, 0x8a4b2a); }
+      else if (f === 'up') px(g, 7, 4, 10, 10, 0x8a4b2a);
+      else px(g, 8, 5, 3, 9, 0x8a4b2a);
+      px(g, 6, 1, 12, 3, 0xb5304a); px(g, 7, 1, 5, 1, 0xd4506a); px(g, 11, 0, 2, 1, 0xb5304a);
+      px(g, 8, 14, 2, 2, 0xff5d8f); px(g, 13, 16, 2, 2, 0x2ec4b6); px(g, 10, 18, 2, 1, 0xffd23f);
+      if (f === 'down') { px(g, 18, 14, 1, 6, 0xb07a3a); px(g, 18, 12, 1, 2, 0xff5d8f); }
+    } },
+  scout: { shirt: 0x5f7a45, back: 0xb89d68, legs: 0x7d6b45, hair: 0x5a3d22, shoes: 0x5a3d1c,
+    more: (g, f) => {                                        // explorer: hat, glasses, vest, notebook
+      px(g, 5, 3, 14, 2, 0xc8a86b); px(g, 8, 0, 8, 4, 0xb8965a); px(g, 8, 3, 8, 1, 0x6b4a2e);
+      if (f === 'down') {
+        px(g, 8, 7, 3, 3, 0x2b2f3a); px(g, 13, 7, 3, 3, 0x2b2f3a); px(g, 11, 8, 2, 1, 0x2b2f3a);
+        px(g, 9, 8, 1, 1, 0xaee3ff); px(g, 14, 8, 1, 1, 0xaee3ff);
+        px(g, 6, 11, 3, 10, 0xb89d68); px(g, 15, 11, 3, 10, 0xb89d68);
+        px(g, 7, 15, 2, 2, 0x8a7448); px(g, 15, 15, 2, 2, 0x8a7448);
+        px(g, 18, 15, 3, 4, 0xf2e6c9); px(g, 18, 15, 3, 1, 0xb5504c);
+      } else if (f === 'side') {
+        px(g, 11, 7, 3, 3, 0x2b2f3a); px(g, 12, 8, 1, 1, 0xaee3ff); px(g, 12, 11, 4, 10, 0xb89d68);
+      }
+    } },
+  clip: { shirt: 0x22252e, back: 0x22252e, legs: 0x4b5563, hair: 0x3a2a1d,
+    more: (g, f) => {                                        // hoodie in the app colours, cap on backwards
+      px(g, 6, 15, 12, 1, 0xff3d7f); px(g, 6, 16, 12, 1, 0x23d5e6);
+      if (f === 'down') { px(g, 10, 12, 1, 3, 0xe5e7eb); px(g, 13, 12, 1, 3, 0xe5e7eb); }
+      px(g, 7, 1, 10, 4, 0x23d5e6);
+      if (f === 'up') px(g, 8, 5, 8, 2, 0x1aa9b8); else if (f === 'side') px(g, 4, 3, 4, 2, 0x1aa9b8);
+    } },
+  spotter: { shirt: 0x2c8f8a, back: 0x257a76, legs: 0x3f4753, hair: 0x6b4a2e,
+    more: (g, f) => {                                        // binoculars round the neck
+      if (f !== 'up') { px(g, 9, 11, 1, 3, 0x1b1e24); px(g, 14, 11, 1, 3, 0x1b1e24);
+                        px(g, 9, 14, 3, 3, 0x1b1e24); px(g, 12, 14, 3, 3, 0x1b1e24); px(g, 10, 15, 1, 1, 0x7fd3ff); }
+    } },
+};
+const look = name => OUTFITS[name] ? `npc-${name}` : 'hero';
+const walkAnim = (lk, f) => lk === 'hero' ? `walk-${f}` : `${lk}-walk-${f}`;
 
 // The town square's statue; its plinth is the Town Hall's door. The base
 // line, in tiles - the statue stands 196px up from it.
@@ -610,12 +686,14 @@ function makeTextures(s) {
   }
 
   /* --- hero, 2-frame walk, three facings --- */
-  const hero = (name, facing, frame) => {
+  const hero = (name, facing, frame, o = {}) => {
     const gg = s.add.graphics();
-    const skin = 0xf2cfa6, shirt = facing === 'up' ? 0x3d5a99 : 0x4b6cb7, hair = 0x3a2a1d;
+    const skin = o.skin || 0xf2cfa6, hair = o.hair || 0x3a2a1d, legs = o.legs || 0x2c3550;
+    const shirt = facing === 'up' ? (o.back || 0x3d5a99) : (o.shirt || 0x4b6cb7);
+    const L = frame === 0 ? [7, 13] : [5, 15];
     px(gg, 4, 25, 16, 3, 0x000000, .18);                 // contact shadow
-    if (frame === 0) { px(gg, 7, 20, 4, 6, 0x2c3550); px(gg, 13, 20, 4, 6, 0x2c3550); }
-    else { px(gg, 5, 20, 4, 6, 0x2c3550); px(gg, 15, 20, 4, 6, 0x2c3550); }
+    L.forEach(x => px(gg, x, 20, 4, 6, legs));
+    if (o.shoes) L.forEach(x => px(gg, x, 25, 4, 1, o.shoes));
     px(gg, 6, 11, 12, 10, shirt);
     px(gg, 6, 11, 3, 10, 0x000000, .12);                 // body shading
     if (facing !== 'up') px(gg, 8, 4, 8, 8, skin); else px(gg, 8, 4, 8, 8, hair);
@@ -623,9 +701,12 @@ function makeTextures(s) {
     px(gg, 7, 2, 10, 1, 0x4a3725);
     if (facing === 'down') { px(gg, 9, 8, 2, 2, 0x22303f); px(gg, 13, 8, 2, 2, 0x22303f); }
     if (facing === 'side') { px(gg, 12, 8, 2, 2, 0x22303f); }
+    if (o.more) o.more(gg, facing, frame, L);
     gg.generateTexture(name, 24, 28); gg.destroy();
   };
   ['down','up','side'].forEach(f => { hero(`hero-${f}-0`, f, 0); hero(`hero-${f}-1`, f, 1); });
+  Object.entries(OUTFITS).forEach(([who, o]) => ['down', 'up', 'side'].forEach(f =>
+    [0, 1].forEach(fr => hero(`npc-${who}-${f}-${fr}`, f, fr, o))));
 
   /* --- buildings: shingled roof, framed windows, stone footing --- */
   const ROOFS = [
@@ -888,116 +969,113 @@ function makeTextures(s) {
   }
 
   /* --- themed houses: one per agent that has a trade to show ---
-   * The same 128x116 footprint and the same door in the middle as the plain
-   * houses, so paths, blockers and door positions need no special cases -
-   * only the building changes. Agents without one here keep a plain house. */
+   * The same 128px frontage and the same door in the middle as the plain
+   * houses, so paths, blockers and door positions need no special cases.
+   * The height is each building's own (THEMED[name].h): they are placed by
+   * their bottom edge, so a skyscraper simply rises further. */
   const themed = (name, draw) => {
     const gg = s.add.graphics();
-    draw(gg, 128, 116, rng(7100 + name.length * 31));
-    gg.generateTexture(`house-${name}`, 128, 116); gg.destroy();
+    draw(gg, 128, THEMED[name].h, rng(7100 + name.length * 31));
+    gg.generateTexture(`house-${name}`, 128, THEMED[name].h); gg.destroy();
   };
+  const UP = 0x34d399, DOWN = 0xf05252;
 
-  // Belfort, the stock trader: an exchange. Columns, a pediment with a gold
-  // coin in it, a live ticker along the beam and charts in the windows.
-  themed('belfort', (g, HW, HH, r) => {
-    const STONE = 0xe9e4d8, STONE2 = 0xd8d2c2, STONE3 = 0xf6f3ec, UP = 0x34d399, DOWN = 0xf05252;
-    px(g, 8, 44, HW - 16, HH - 54, STONE);                         // walls
-    px(g, 8, 44, 8, HH - 54, 0x000000, .10);
-    for (let n = 0; n < 40; n++)
-      px(g, 10 + Math.floor(r() * (HW - 22)), 48 + Math.floor(r() * (HH - 62)), 3 + Math.floor(r() * 4), 1, STONE2, .6);
-    // pediment, in courses like a roof but stone, with a coin in the tympanum
-    for (let k = 0; k < 12; k++) {
-      const half = 8 + k * 4.9, y = 8 + k * 2.4;
-      px(g, 64 - half, y, half * 2, 3, k < 2 ? STONE3 : STONE2);
-      px(g, 64 - half, y + 2, half * 2, 1, 0x000000, .08);
-    }
-    px(g, 0, 34, HW, 3, STONE3);                                   // cornice
-    g.fillStyle(0xb8860b, 1); g.fillCircle(64, 23, 7);
-    g.fillStyle(0xf2c14e, 1); g.fillCircle(64, 23, 5.5);
-    [[60,19,7,2],[60,19,2,4],[60,22,7,2],[65,22,2,4],[60,25,7,2],[63,17,2,11]]
-      .forEach(([a, b, w, h]) => px(g, a, b, w, h, 0x8a6414));     // the $ on it
-    [[6, 0x34d399], [120, 0x34d399]].forEach(([fx, c]) => {         // flags at the corners
-      px(g, fx, 14, 2, 22, 0x6b7280);
-      px(g, fx + (fx < 64 ? 2 : -12), 14, 10, 7, c);
-      px(g, fx + (fx < 64 ? 2 : -12), 14, 10, 2, 0xffffff, .3);
+  // Belfort, the stock trader: a Wall Street tower. Art-deco setbacks and a
+  // spire, a grid of office windows with some lights on, a ticker band
+  // round the podium, and a columned stone entrance under a flag.
+  themed('belfort', (g, HW, TH, r) => {
+    const ST = 0xcfc6b0, ST2 = 0xa89f8a, ST3 = 0xe6dfcd, GOLD = 0xd9a02c, GOLD2 = 0xf2c14e;
+    const GLASS = [0x2e4a66, 0x3d5f80, 0x34546f], LIT = 0xffe08a;
+    const grid = (x0, x1, y0, y1) => {
+      for (let y = y0; y + 6 <= y1; y += 9)
+        for (let x = x0; x + 5 <= x1; x += 8) {
+          px(g, x, y, 5, 6, r() < .22 ? LIT : GLASS[Math.floor(r() * 3)]);
+          px(g, x, y, 5, 1, 0xffffff, .14);
+        }
+    };
+    // spire, with a gold sunburst crown under it
+    px(g, 63, 0, 2, 16, 0x8d949f); px(g, 63, 0, 1, 16, 0xc0c6cf);
+    px(g, 60, 14, 8, 6, GOLD); px(g, 60, 14, 8, 1, GOLD2);
+    [[52, 20, 24, 8], [47, 28, 34, 8], [42, 36, 44, 8]].forEach(([x, y, w, h]) => {
+      px(g, x, y, w, h, ST3); px(g, x, y, w, 2, GOLD); px(g, x, y + h - 1, w, 1, 0x000000, .12);
     });
-    // the beam: a ticker, green ups and red downs scrolling past
-    px(g, 2, 37, HW - 4, 9, STONE2);
-    px(g, 8, 38, HW - 16, 7, 0x0c1116);
-    for (let x = 11, k = 0; x < HW - 12; x += 9, k++) {
+    for (let k = -2; k <= 2; k++) px(g, 64 + k * 4, 22, 1, 5 - Math.abs(k), GOLD2);   // sunburst rays
+    [45, 51, 57, 65, 71, 77, 83].forEach(x => px(g, x, 38, 3, 5, GLASS[1]));
+    // upper tier
+    px(g, 34, 44, 60, 42, ST); px(g, 34, 44, 60, 2, GOLD);
+    grid(37, 92, 48, 84);
+    px(g, 34, 44, 5, 42, 0x000000, .12); px(g, 89, 44, 5, 42, 0xffffff, .10);
+    // main shaft, with stone piers running up between the window bays
+    px(g, 18, 86, 92, 92, ST); px(g, 18, 86, 92, 2, GOLD);
+    grid(21, 108, 90, 174);
+    for (let x = 18; x <= 106; x += 22) px(g, x, 88, 3, 88, ST3);
+    px(g, 18, 86, 6, 92, 0x000000, .14); px(g, 104, 86, 6, 92, 0xffffff, .10);
+    // the ticker, all the way round the podium
+    px(g, 2, 176, HW - 4, 10, 0x0c1116); px(g, 2, 176, HW - 4, 1, 0x3a4250);
+    for (let x = 6; x < HW - 8; x += 8) {
       const up = r() < .6;
-      if (up) { px(g, x + 1, 40, 1, 1, UP); px(g, x, 41, 3, 1, UP); } else { px(g, x, 40, 3, 1, DOWN); px(g, x + 1, 41, 1, 1, DOWN); }
-      px(g, x + 4, 40, 3, 2, up ? UP : DOWN, .7);
+      if (up) { px(g, x + 1, 179, 1, 1, UP); px(g, x, 180, 3, 1, UP); } else { px(g, x, 179, 3, 1, DOWN); px(g, x + 1, 180, 1, 1, DOWN); }
+      px(g, x + 4, 179, 2, 3, up ? UP : DOWN, .75);
     }
-    px(g, 0, 46, HW, 3, 0x000000, .14);
-    // windows between the columns: candlestick charts, trending up
-    [20, 92].forEach(wx => {
-      px(g, wx - 2, 54, 20, 34, 0x9c8a66);
-      px(g, wx, 56, 16, 30, 0x0f1720);
-      let y = 78;
-      for (let c = 0; c < 5; c++) {
-        const up = c !== 2, h = 4 + Math.floor(r() * 5);
-        y = up ? y - 3 : y + 2;
-        px(g, wx + 2 + c * 3, y - 2, 1, h + 4, 0x6b7a8a);          // wick
-        px(g, wx + 1 + c * 3, y, 3, h, up ? UP : DOWN);             // body
-      }
-      px(g, wx + 1, 60, 14, 1, UP, .5);
+    // stone podium: four columns, a flag over the doors, bronze doors
+    px(g, 4, 186, HW - 8, 46, ST3); px(g, 2, 186, HW - 4, 4, ST2);
+    px(g, 4, 190, HW - 8, 1, 0x000000, .15);
+    [10, 28, 90, 108].forEach(cx => {
+      px(g, cx - 2, 192, 14, 3, ST); px(g, cx, 195, 10, 33, 0xf4f1ea);
+      [3, 6].forEach(f => px(g, cx + f, 196, 1, 31, ST2, .7));
+      px(g, cx - 2, 227, 14, 3, ST);
     });
-    // columns: fluted shafts with a capital and a base each
-    [6, 38, 78, 110].forEach(cx => {
-      px(g, cx - 2, 49, 16, 4, STONE3); px(g, cx - 2, 52, 16, 1, 0x000000, .12);
-      px(g, cx, 53, 12, HH - 67, STONE3);
-      [3, 6, 9].forEach(f => px(g, cx + f, 54, 1, HH - 69, STONE2));
-      px(g, cx, 53, 2, HH - 67, 0x000000, .08);
-      px(g, cx - 2, HH - 14, 16, 4, STONE2);
-    });
-    // bronze doors, and a green "up" board over them
-    px(g, 52, 56, 24, 9, 0x0c1116);
-    px(g, 55, 59, 3, 1, UP); px(g, 54, 60, 5, 1, UP); [61, 65, 69].forEach(dx => px(g, dx, 58, 3, 4, UP, .85));
-    px(g, 51, 68, 26, HH - 78, 0x5a3d1c);
-    px(g, 53, 70, 10, HH - 82, 0x8a5e2a); px(g, 65, 70, 10, HH - 82, 0x8a5e2a);
-    px(g, 53, 70, 10, 2, 0xb07a3a); px(g, 65, 70, 10, 2, 0xb07a3a);
-    px(g, 61, 86, 2, 6, 0xf2c14e); px(g, 65, 86, 2, 6, 0xf2c14e);
-    // marble steps
-    px(g, 4, HH - 10, HW - 8, 4, 0xd9dde3); px(g, 4, HH - 10, HW - 8, 1, 0xf3f5f8);
-    px(g, 0, HH - 6, HW, 6, 0xc4c9d1); px(g, 0, HH - 6, HW, 1, 0xe2e5ea);
+    // the flag, NYSE-style, stretched over the entrance
+    px(g, 44, 191, 40, 11, 0xffffff);
+    for (let y = 191; y < 202; y += 2) px(g, 44, y, 40, 1, 0xc0392b);
+    px(g, 44, 191, 16, 6, 0x1f3a68);
+    for (let k = 0; k < 6; k++) px(g, 46 + (k % 3) * 5, 192 + Math.floor(k / 3) * 3, 1, 1, 0xffffff);
+    px(g, 48, 203, 32, 29, 0x5a3d1c);                                    // doorway
+    px(g, 50, 205, 13, 27, 0x8a5e2a); px(g, 65, 205, 13, 27, 0x8a5e2a);
+    px(g, 50, 205, 13, 2, 0xb07a3a); px(g, 65, 205, 13, 2, 0xb07a3a);
+    px(g, 60, 216, 2, 6, GOLD2); px(g, 66, 216, 2, 6, GOLD2);
+    px(g, 0, TH - 8, HW, 4, 0xd9dde3); px(g, 0, TH - 8, HW, 1, 0xf3f5f8);   // steps
+    px(g, 0, TH - 4, HW, 4, 0xc4c9d1);
   });
 
-  // Ace, the sports bettor: an arena. A stadium dome with a jumbotron on it,
-  // basketball windows and odds lit over the door - navy and orange, and
-  // nothing like the brick gym the player props live in.
-  themed('ace', (g, HW, HH, r) => {
-    const NAVY = 0x1f3a68, NAVY2 = 0x2c4f8a, ORANGE = 0xf28c28, BALL = 0xe07a1f;
-    px(g, 6, 44, HW - 12, HH - 54, NAVY);                          // walls
-    for (let x = 10; x < HW - 10; x += 12) px(g, x, 46, 1, HH - 58, NAVY2);
-    px(g, 6, 44, 8, HH - 54, 0x000000, .16);
+  // Ace, the sports bettor: an arena. A stadium dome with a jumbotron and
+  // searchlights, basketball windows, championship banners and marquee
+  // bulbs round the door - navy and orange, nothing like the props gym.
+  themed('ace', (g, HW, TH, r) => {
+    const NAVY = 0x1f3a68, NAVY2 = 0x2c4f8a, ORANGE = 0xf28c28, BALL = 0xe07a1f, o = TH - 116;
+    // searchlight beams, behind everything
+    g.fillStyle(0xfff3b0, .16); g.fillTriangle(22, o + 30, 0, 0, 16, 0); g.fillTriangle(106, o + 30, 112, 0, 128, 0);
+    g.translateCanvas(0, o);                                   // the arena itself is 116 tall
+    px(g, 6, 44, HW - 12, 72 - 10, NAVY);
+    for (let x = 10; x < HW - 10; x += 12) px(g, x, 46, 1, 58, NAVY2);
+    px(g, 6, 44, 8, 62, 0x000000, .16);
     px(g, 6, 52, HW - 12, 4, ORANGE); px(g, 6, 57, HW - 12, 1, 0xffffff, .7);
-    // the dome: courses of roof panels curving down to the eaves, with ribs
-    for (let k = 0; k < 12; k++) {
+    for (let k = 0; k < 12; k++) {                              // the dome
       const t = (k + 1) / 12, half = 62 * Math.sqrt(1 - (1 - t) * (1 - t)), y = 10 + k * 2.8;
       px(g, 64 - half, y, half * 2, 3, k % 2 ? 0xc9d2de : 0xe8edf3);
       px(g, 64 - half, y + 2, half * 2, 1, 0x000000, .10);
     }
     for (let x = 16; x < HW - 10; x += 16) px(g, x, 22, 1, 20, 0x8b97a8, .6);
     px(g, 0, 42, HW, 3, ORANGE); px(g, 0, 45, HW, 2, 0x000000, .25);
-    // jumbotron on top: a ball, and a line of odds in green and red
+    [[14, 34], [110, 34]].forEach(([x, y]) => { px(g, x, y, 6, 5, 0x3b4052); px(g, x + 1, y + 1, 4, 3, 0xfff3b0); });
+    // jumbotron: a ball and "+150", American odds in a 3x5 LED font
     px(g, 40, 0, 48, 20, 0x10141c); px(g, 40, 0, 48, 2, 0x2c3340);
     g.fillStyle(BALL, 1); g.fillCircle(50, 10, 6);
     px(g, 44, 9, 12, 1, 0x3a1d05); px(g, 49, 4, 1, 12, 0x3a1d05);
-    // "+150" - American odds, in a 3x5 LED font at 2px a dot
     const GLYPH = { '+': ['000', '010', '111', '010', '000'], '1': ['010', '110', '010', '010', '111'],
                     '5': ['111', '100', '111', '001', '111'], '0': ['111', '101', '101', '101', '111'] };
     [...'+150'].forEach((ch, k) => GLYPH[ch].forEach((row, ry) => [...row].forEach((on, rx) => {
-      if (on === '1') px(g, 58 + k * 7 + rx * 2, 5 + ry * 2, 2, 2, 0x34d399);
+      if (on === '1') px(g, 58 + k * 7 + rx * 2, 5 + ry * 2, 2, 2, UP);
     })));
     px(g, 62, 20, 4, 4, 0x3b4052);
-    // team flags either side of the dome
-    [[8, NAVY2], [118, ORANGE]].forEach(([fx, c]) => {
-      px(g, fx, 18, 2, 24, 0x9aa3b0);
-      px(g, fx + (fx < 64 ? 2 : -10), 18, 10, 3, c); px(g, fx + (fx < 64 ? 2 : -8), 21, 8, 2, c); px(g, fx + (fx < 64 ? 2 : -6), 23, 6, 2, c);
+    // championship banners at the corners, a star and a year-stripe each
+    [8, 112].forEach(bx2 => {
+      px(g, bx2, 58, 8, 22, ORANGE); px(g, bx2, 58, 8, 2, 0xffd08a);
+      px(g, bx2, 80, 4, 3, ORANGE); px(g, bx2 + 4, 80, 4, 2, ORANGE);
+      px(g, bx2 + 3, 62, 2, 6, 0xffffff); px(g, bx2 + 1, 64, 6, 2, 0xffffff);
+      px(g, bx2 + 1, 72, 6, 1, NAVY); px(g, bx2 + 1, 75, 6, 1, NAVY);
     });
-    // basketball windows
-    [26, 102].forEach(wx => {
+    [30, 98].forEach(wx => {                                    // basketball windows
       g.fillStyle(0x0d1a33, 1); g.fillCircle(wx, 78, 13);
       g.fillStyle(BALL, 1); g.fillCircle(wx, 78, 11);
       g.fillStyle(0xf6a04d, 1); g.fillCircle(wx - 3, 74, 4);
@@ -1006,114 +1084,146 @@ function makeTextures(s) {
       g.beginPath(); g.arc(wx - 13, 78, 9, -0.9, 0.9); g.strokePath();
       g.beginPath(); g.arc(wx + 13, 78, 9, Math.PI - 0.9, Math.PI + 0.9); g.strokePath();
     });
-    // odds lights over a glass entrance
-    px(g, 46, 59, 36, 8, 0x0c1116);
-    for (let x = 48; x < 80; x += 4) px(g, x, 61, 3, 4, r() < .5 ? 0x34d399 : 0xffb454);
-    px(g, 50, 68, 28, HH - 78, ORANGE);
-    px(g, 53, 71, 10, HH - 84, 0x4a6f8f); px(g, 65, 71, 10, HH - 84, 0x4a6f8f);
-    px(g, 55, 73, 2, 14, 0xffffff, .35); px(g, 67, 73, 2, 14, 0xffffff, .35);
-    px(g, 62, 88, 2, 6, 0xe5e7eb); px(g, 64, 88, 2, 6, 0xe5e7eb);
-    // hardwood court apron with its lines
-    px(g, 2, HH - 10, HW - 4, 10, 0xd9a066);
-    for (let x = 4; x < HW - 4; x += 10) px(g, x, HH - 10, 1, 10, 0xc08850, .6);
-    px(g, 2, HH - 10, HW - 4, 1, 0xf5e6c8); px(g, 2, HH - 1, HW - 4, 1, 0x000000, .2);
-    px(g, 44, HH - 10, 1, 10, 0xf5e6c8); px(g, 83, HH - 10, 1, 10, 0xf5e6c8);
+    px(g, 46, 59, 36, 8, 0x0c1116);                             // odds over the door
+    for (let x = 48; x < 80; x += 4) px(g, x, 61, 3, 4, r() < .5 ? UP : 0xffb454);
+    px(g, 47, 68, 34, 40, 0x2a2f38);                            // marquee frame and bulbs
+    for (let k = 0; k < 9; k++) {
+      px(g, 48 + k * 4, 69, 2, 2, k % 2 ? 0xffffff : 0xffd23f);
+      px(g, 48, 72 + k * 4, 2, 2, k % 2 ? 0xffd23f : 0xffffff);
+      px(g, 78, 72 + k * 4, 2, 2, k % 2 ? 0xffffff : 0xffd23f);
+    }
+    px(g, 51, 73, 26, 35, ORANGE);
+    px(g, 53, 75, 10, 31, 0x4a6f8f); px(g, 65, 75, 10, 31, 0x4a6f8f);
+    px(g, 55, 77, 2, 14, 0xffffff, .35); px(g, 67, 77, 2, 14, 0xffffff, .35);
+    px(g, 62, 90, 2, 6, 0xe5e7eb); px(g, 64, 90, 2, 6, 0xe5e7eb);
+    px(g, 2, 106, HW - 4, 10, 0xd9a066);                        // hardwood apron
+    for (let x = 4; x < HW - 4; x += 10) px(g, x, 106, 1, 10, 0xc08850, .6);
+    px(g, 2, 106, HW - 4, 1, 0xf5e6c8); px(g, 2, 115, HW - 4, 1, 0x000000, .2);
+    px(g, 40, 106, 1, 10, 0xf5e6c8); px(g, 87, 106, 1, 10, 0xf5e6c8);
+    g.translateCanvas(0, -o);
   });
 
-  // Emily, the artist: a studio. Paint running off the roof, a brush for a
-  // chimney, a painting and a palette for windows, a mural on the wall.
-  themed('emily', (g, HW, HH, r) => {
+  // Emily, the artist: a crooked cottage-studio. A steep lopsided roof in
+  // teal with paint running off it, a brush for a chimney, a stained-glass
+  // attic window, a gallery window, flower boxes and a rainbow awning.
+  themed('emily', (g, HW, TH, r) => {
     const PAINT = [0xff5d8f, 0x2ec4b6, 0xffd23f, 0x7b5cff, 0xff8a3d];
-    px(g, 6, 40, HW - 12, HH - 50, 0xf3e8fb);                      // walls
-    px(g, 6, 40, 8, HH - 50, 0x000000, .07);
-    for (let n = 0; n < 16; n++) {                                  // mural splashes
-      g.fillStyle(PAINT[n % 5], .55);
-      g.fillCircle(12 + r() * (HW - 24), 92 + r() * 14, 2 + r() * 4);
+    const top = 66;                                            // where the walls start
+    px(g, 8, top, HW - 16, TH - top - 8, 0xfbe3ec);             // walls, pink over mint
+    px(g, 8, top + 40, HW - 16, TH - top - 48, 0xd4f5ec);
+    [[8, 1], [40, 1], [86, 1], [118, 1]].forEach(([x]) => px(g, x, top, 3, TH - top - 8, 0x9a62b0));  // timbers
+    px(g, 8, top + 39, HW - 16, 2, 0x9a62b0);
+    px(g, 8, top, 6, TH - top - 8, 0x000000, .07);
+    for (let n = 0; n < 12; n++) { g.fillStyle(PAINT[n % 5], .5); g.fillCircle(14 + r() * (HW - 28), TH - 16 + r() * 6, 1.5 + r() * 3); }
+    // the roof: peak off-centre, so one slope is short and steep and the
+    // other long - a studio somebody built themselves
+    const peak = 52;
+    for (let y = 6; y < top; y++) {
+      const t = (y - 6) / (top - 6), xl = peak - t * 50, xr = peak + t * 74;
+      const band = Math.floor((y - 6) / 5);
+      px(g, xl, y, xr - xl, 1, band % 2 ? 0x1f9e93 : 0x2ec4b6);
+      if ((y - 6) % 5 === 4) px(g, xl, y, xr - xl, 1, 0x000000, .18);
+      px(g, xl, y, 2, 1, 0x000000, .2);
     }
-    // shingles, plum, like the other houses' roofs
-    for (let k = 0; k < 13; k++) {
-      const half = 10 + k * 4.55, y = 4 + k * 2.6, x0 = 64 - half, w = half * 2;
-      px(g, x0, y, w, 4, 0x4f2a5e);
-      for (let sx = x0 + (k % 2 ? 0 : 5); sx < x0 + w - 4; sx += 10) px(g, sx, y, 6, 3, k < 4 ? 0x9a62b0 : 0x74418a);
-      px(g, x0, y + 3, w, 1, 0x000000, .2);
+    px(g, 0, top - 4, HW, 6, 0x1f9e93); px(g, 0, top - 4, HW, 2, 0x5fe0d4);
+    for (let x = 3, k = 0; x < HW - 4; x += 5 + Math.floor(r() * 5), k++) {   // paint drips
+      const len = 3 + Math.floor(r() * 10), c = PAINT[k % 5];
+      px(g, x, top + 2, 3, len, c); px(g, x - 1, top + 1 + len, 5, 3, c); px(g, x, top + 2, 1, len, 0xffffff, .35);
     }
-    px(g, 0, 33, HW, 7, 0x74418a); px(g, 0, 33, HW, 2, 0x9a62b0);
-    // a paintbrush for a chimney, bristles up, drawn over the roof so the
-    // roof does not swallow the part that says "brush"
-    px(g, 91, 0, 8, 3, PAINT[0]); px(g, 91, 3, 8, 5, 0x3a2a1d); px(g, 92, 3, 2, 5, 0x5a4230);
-    px(g, 90, 8, 10, 4, 0xc0c6cf); px(g, 90, 8, 10, 1, 0xe5e7eb);
-    px(g, 92, 12, 6, 6, 0xb07a3a); px(g, 92, 12, 2, 6, 0xd09a5a);
-    // paint dripping off the eaves, every colour, every length
-    for (let x = 3, k = 0; x < HW - 4; x += 5 + Math.floor(r() * 5), k++) {
-      const len = 4 + Math.floor(r() * 12), c = PAINT[k % 5];
-      px(g, x, 38, 3, len, c);
-      px(g, x - 1, 38 + len - 1, 5, 3, c);
-      px(g, x, 38, 1, len, 0xffffff, .35);
-    }
-    // left window: a framed landscape in gold
-    px(g, 12, 52, 34, 30, 0xc9a227); px(g, 12, 52, 34, 2, 0xf2d06b);
-    px(g, 15, 55, 28, 24, 0x8fd3f0);
-    g.fillStyle(0xffd23f, 1); g.fillCircle(36, 61, 4);
-    px(g, 15, 70, 28, 9, 0x5fae5a); px(g, 21, 66, 12, 5, 0x4b9447);
-    // right window: a palette, with its thumb-hole and paint
-    g.fillStyle(0xc9a06a, 1); g.fillEllipse(98, 66, 34, 26);
-    g.fillStyle(0xe2bf88, 1); g.fillEllipse(96, 63, 28, 18);
-    g.fillStyle(0xf3e8fb, 1); g.fillCircle(106, 72, 3);
-    PAINT.forEach((c, k) => { g.fillStyle(c, 1); g.fillCircle(86 + k * 5, 60 + (k % 2) * 4, 2.6); });
-    // a rainbow brush-stroke over a teal door
-    PAINT.forEach((c, k) => px(g, 46 + k, 58 + k * 2, 36 - k * 2, 2, c));
-    px(g, 50, 68, 28, HH - 76, 0x1f9e93);
-    px(g, 53, 72, 22, 14, 0x000000, .12); px(g, 53, 90, 22, 14, 0x000000, .12);
-    g.fillStyle(0xff5d8f, 1); g.fillCircle(64, 79, 3);             // a flower on it
-    px(g, 72, 92, 4, 4, 0xffd76e);
-    px(g, 4, HH - 8, HW - 8, 8, 0xd9d2c5);                         // paved step
-    px(g, 4, HH - 8, HW - 8, 1, 0xefe9de);
-    [20, 44, 90, 110].forEach((x, k) => { g.fillStyle(PAINT[k], .8); g.fillEllipse(x, HH - 4, 7, 3); });
+    // stained-glass attic window: four colours in a round gold frame
+    g.fillStyle(0xc9a227, 1); g.fillCircle(52, 38, 12);
+    [[0, PAINT[0]], [1, PAINT[1]], [2, PAINT[2]], [3, PAINT[3]]].forEach(([k, c]) => {
+      g.fillStyle(c, 1); g.slice(52, 38, 10, k * Math.PI / 2, (k + 1) * Math.PI / 2); g.fillPath();
+    });
+    px(g, 51, 28, 2, 20, 0xc9a227); px(g, 42, 37, 20, 2, 0xc9a227);
+    // the brush chimney, bristles up, standing on the long slope
+    px(g, 95, 4, 8, 4, PAINT[0]); px(g, 95, 8, 8, 6, 0x3a2a1d); px(g, 96, 8, 2, 6, 0x5a4230);
+    px(g, 94, 14, 10, 4, 0xc0c6cf); px(g, 94, 14, 10, 1, 0xe5e7eb);
+    px(g, 96, 18, 6, 20, 0xb07a3a); px(g, 96, 18, 2, 20, 0xd09a5a);
+    // gallery windows: a landscape, and an easel with a canvas inside
+    [[14, 0], [88, 1]].forEach(([wx, kind]) => {
+      px(g, wx - 2, top + 10, 30, 26, 0xc9a227); px(g, wx - 2, top + 10, 30, 2, 0xf2d06b);
+      px(g, wx, top + 12, 26, 22, kind ? 0xfff6e8 : 0x8fd3f0);
+      if (!kind) {
+        g.fillStyle(0xffd23f, 1); g.fillCircle(wx + 20, top + 17, 3);
+        px(g, wx, top + 26, 26, 8, 0x5fae5a); px(g, wx + 6, top + 23, 10, 4, 0x4b9447);
+      } else {
+        px(g, wx + 11, top + 14, 2, 20, 0x9a6d3c);
+        px(g, wx + 5, top + 14, 16, 12, PAINT[3]); px(g, wx + 5, top + 20, 16, 6, PAINT[0]);
+        g.fillStyle(0xffd23f, 1); g.fillCircle(wx + 13, top + 20, 2.5);
+      }
+      px(g, wx - 4, top + 36, 34, 5, 0x9a6d3c);                // flower box
+      for (let k = 0; k < 7; k++) px(g, wx - 2 + k * 5, top + 33, 3, 3, PAINT[k % 5]);
+    });
+    // rainbow awning, scalloped, over a teal door with a round window
+    PAINT.forEach((c, k) => px(g, 44 + k * 8, top + 12, 8, 9, c));
+    for (let k = 0; k < 5; k++) { g.fillStyle(PAINT[k], 1); g.fillCircle(48 + k * 8, top + 21, 4); }
+    px(g, 50, top + 26, 28, TH - top - 34, 0x1f9e93);
+    g.fillStyle(0xbde7f7, 1); g.fillCircle(64, top + 34, 5);
+    px(g, 53, top + 44, 22, 14, 0x000000, .12);
+    g.fillStyle(0xff5d8f, 1); g.fillCircle(64, top + 50, 2.5);
+    px(g, 72, top + 42, 3, 4, 0xffd76e);
+    px(g, 4, TH - 8, HW - 8, 8, 0xd9d2c5); px(g, 4, TH - 8, HW - 8, 1, 0xefe9de);
+    [20, 44, 90, 110].forEach((x, k) => { g.fillStyle(PAINT[k], .8); g.fillEllipse(x, TH - 4, 7, 3); });
   });
 
-  // Scout, the researcher: an observatory with a library under it. A dome
-  // with its slit open and a brass telescope out of it, shelves of books in
-  // the windows.
-  themed('scout', (g, HW, HH, r) => {
+  // Scout, the researcher: an observatory tower over a library. A domed
+  // top with a telescope and a weather vane, a star-chart window, lit slit
+  // windows, a crenellated library below with its shelves on show.
+  themed('scout', (g, HW, TH, r) => {
     const STONE = [0x6d7888, 0x8e99a8, 0xa9b3c0];
-    px(g, 6, 44, HW - 12, HH - 52, STONE[1]);                      // stone walls
-    for (let y = 44, row = 0; y < HH - 8; y += 7, row++)
-      for (let x = 6 + (row % 2 ? 0 : 8); x < HW - 8; x += 16)
-        px(g, x, y, 15, 6, r() < .35 ? STONE[2] : STONE[1]), px(g, x, y + 6, 16, 1, STONE[0], .7);
-    px(g, 6, 44, 8, HH - 52, 0x000000, .14);
-    // flat roof and parapet, then the drum and dome
-    px(g, 0, 36, HW, 8, STONE[0]);
-    for (let x = 0; x < HW; x += 10) px(g, x, 32, 6, 5, STONE[0]);
-    px(g, 0, 36, HW, 2, STONE[2]);
-    px(g, 30, 28, 68, 10, 0x59636f);
-    g.fillStyle(0xaeb8c4, 1); g.fillEllipse(64, 29, 68, 52);
-    g.fillStyle(0xd3dae3, 1); g.fillEllipse(58, 22, 40, 28);
-    px(g, 30, 29, 68, 9, 0x59636f);                               // hides the dome's lower half
-    for (let x = 36; x < 94; x += 10) px(g, x, 8, 1, 21, 0x8b97a8, .5);
-    px(g, 60, 4, 10, 25, 0x1b2230);                                // the slit
-    for (let k = 0; k < 7; k++) px(g, 66 + k * 3, 14 - k * 2, 6, 5, 0xb8862e);  // telescope, brass
-    px(g, 86, 0, 7, 6, 0xd9a64a);
-    // arched windows full of books
+    const blocks = (x0, y0, w, h) => {
+      px(g, x0, y0, w, h, STONE[1]);
+      for (let y = y0, row = 0; y < y0 + h; y += 7, row++)
+        for (let x = x0 + (row % 2 ? 0 : 8); x < x0 + w - 2; x += 16) {
+          px(g, x, y, Math.min(15, x0 + w - x), 6, r() < .35 ? STONE[2] : STONE[1]);
+          px(g, x, y + 6, Math.min(16, x0 + w - x), 1, STONE[0], .7);
+        }
+    };
+    // weather vane, dome, slit and telescope
+    px(g, 63, 0, 2, 10, 0x3f4753); px(g, 58, 2, 12, 2, 0x3f4753); px(g, 68, 1, 3, 4, 0x3f4753);
+    g.fillStyle(0xaeb8c4, 1); g.fillEllipse(64, 42, 70, 64);
+    g.fillStyle(0xd3dae3, 1); g.fillEllipse(56, 32, 40, 30);
+    for (let x = 36; x < 94; x += 10) px(g, x, 12, 1, 30, 0x8b97a8, .5);
+    [[42, 22], [50, 16], [80, 20], [86, 30], [44, 34]].forEach(([x, y]) => px(g, x, y, 2, 2, 0xffd23f));  // painted stars
+    px(g, 60, 10, 10, 32, 0x1b2230);
+    for (let k = 0; k < 8; k++) px(g, 66 + k * 3, 24 - k * 3, 7, 5, 0xb8862e);
+    px(g, 88, 0, 8, 6, 0xd9a64a);
+    px(g, 26, 42, 76, 10, 0x59636f); px(g, 26, 42, 76, 2, STONE[2]);   // drum
+    // tower: a star-chart window and two lit slits
+    blocks(34, 52, 60, 52);
+    px(g, 34, 52, 6, 52, 0x000000, .14);
+    g.fillStyle(0x3f4753, 1); g.fillCircle(64, 72, 11);
+    g.fillStyle(0x121a36, 1); g.fillCircle(64, 72, 9);
+    [[59, 68], [63, 66], [68, 70], [66, 75], [60, 76]].forEach(([x, y], k, a) => {
+      px(g, x, y, 1, 1, 0xffffff);
+      if (k) { g.lineStyle(1, 0x7fa7ff, .7); g.lineBetween(a[k - 1][0], a[k - 1][1], x, y); }
+    });
+    [42, 82].forEach(x => { px(g, x, 62, 5, 14, 0x3f4753); px(g, x + 1, 63, 3, 12, 0xffd88a); });
+    // the library: parapet, then stone, then windows full of books
+    for (let x = 4; x < HW - 4; x += 10) px(g, x, 98, 6, 6, STONE[0]);
+    px(g, 2, 104, HW - 4, 4, STONE[0]); px(g, 2, 104, HW - 4, 1, STONE[2]);
+    blocks(6, 108, HW - 12, TH - 116);
+    px(g, 6, 108, 8, TH - 116, 0x000000, .14);
     [14, 86].forEach(wx => {
-      px(g, wx - 3, 54, 34, 36, 0x3f4753);
-      g.fillStyle(0x3f4753, 1); g.fillCircle(wx + 14, 55, 17);
-      px(g, wx, 58, 28, 30, 0x2a1e14);
-      g.fillStyle(0x2a1e14, 1); g.fillCircle(wx + 14, 58, 14);
-      [60, 70, 80].forEach(sy => {
+      px(g, wx - 3, 124, 34, 34, 0x3f4753);
+      g.fillStyle(0x3f4753, 1); g.fillCircle(wx + 14, 125, 17);
+      px(g, wx, 128, 28, 28, 0x2a1e14);
+      g.fillStyle(0x2a1e14, 1); g.fillCircle(wx + 14, 128, 14);
+      [126, 136, 146].forEach(sy => {
         for (let bx2 = wx + 1; bx2 < wx + 27; bx2 += 3)
           px(g, bx2, sy, 2, 8 - Math.floor(r() * 3), [0xb5504c, 0x4f81bd, 0x9bbb59, 0xd9a64a, 0x8064a2][Math.floor(r() * 5)]);
         px(g, wx, sy + 8, 28, 1, 0x7a5230);
       });
     });
-    // arched oak door with iron studs, a round window over it
-    g.fillStyle(0xf2e6c9, 1); g.fillCircle(64, 57, 6); g.lineStyle(2, 0x3f4753, 1); g.strokeCircle(64, 57, 6);
-    px(g, 63, 51, 2, 12, 0x3f4753, .7); px(g, 58, 56, 12, 2, 0x3f4753, .7);
-    px(g, 50, 72, 28, HH - 80, 0x6b4a2e);
-    g.fillStyle(0x6b4a2e, 1); g.fillCircle(64, 73, 14);
-    px(g, 63, 62, 2, HH - 70, 0x4a3220);
-    [[55, 76], [72, 76], [55, 92], [72, 92], [55, 104], [72, 104]].forEach(([a, b]) => px(g, a, b, 2, 2, 0x2b2f3a));
-    px(g, 68, 88, 3, 4, 0xffd76e);
-    px(g, 2, HH - 8, HW - 4, 8, STONE[0]); px(g, 2, HH - 8, HW - 4, 1, STONE[2]);
+    // arched oak door with studs, lanterns either side
+    px(g, 50, 128, 28, TH - 136, 0x6b4a2e);
+    g.fillStyle(0x6b4a2e, 1); g.fillCircle(64, 129, 14);
+    px(g, 63, 118, 2, TH - 126, 0x4a3220);
+    [[55, 132], [72, 132], [55, 146], [72, 146], [55, 158], [72, 158]].forEach(([a, b]) => px(g, a, b, 2, 2, 0x2b2f3a));
+    px(g, 68, 144, 3, 4, 0xffd76e);
+    [42, 82].forEach(x => { px(g, x, 128, 5, 2, 0x2b2f3a); px(g, x, 130, 5, 7, 0xffd88a); px(g, x, 137, 5, 2, 0x2b2f3a); });
+    px(g, 2, TH - 8, HW - 4, 8, STONE[0]); px(g, 2, TH - 8, HW - 4, 1, STONE[2]);
   });
 
   /* --- what stands in each themed garden --- */
@@ -1488,10 +1598,10 @@ function create() {
       .setDepth(statue.depth + 1).setBlendMode(Phaser.BlendModes.ADD);
     this.tweens.add({ targets: glow, alpha: .15, duration: 1200, yoyo: true, repeat: -1 });
   });
-  boardText = this.add.text(statue.x, statue.y - 50, '—', {
+  boardText = this.add.text(statue.x, statue.y - 50, 'TOWN HALL', {
     fontFamily: 'ui-monospace,Menlo,monospace', fontSize: '15px', color: '#1f2e22', fontStyle: 'bold',
   }).setOrigin(.5).setDepth(statue.depth + 2);
-  boardSub = this.add.text(statue.x, statue.y - 36, 'TOWN LEDGER', {
+  boardSub = this.add.text(statue.x, statue.y - 36, '', {
     fontFamily: 'ui-monospace,Menlo,monospace', fontSize: '9px', color: '#5c6b52',
   }).setOrigin(.5).setDepth(statue.depth + 2);
 
@@ -1511,8 +1621,10 @@ function create() {
     const bx = plot.x * T;
     const by = plot.y * T;
     const theme = THEMED[a.name];
-    const house = this.add.image(bx, by, theme ? `house-${a.name}` : `house-${i % 6}`)
-      .setOrigin(0, 0).setDepth(by + HH);
+    // placed by the bottom edge: every door and garden stays where it was,
+    // and a taller building rises from the same ground
+    const house = this.add.image(bx, by + HH, theme ? `house-${a.name}` : `house-${i % 6}`)
+      .setOrigin(0, 1).setDepth(by + HH);
     if (plot.flip && !theme) house.setFlipX(true);     // a mirrored ticker or painting reads backwards
     blocker(bx + HW/2, by + HH - 26, HW - 10, 50);
 
@@ -1526,7 +1638,7 @@ function create() {
       .setOrigin(.5, 1).setDepth(by + HH + 8);
     // a themed house's prop stands where the bush would: in front of the
     // wall it hid a window (Ace's hoop), under it a fence hid it (the bull)
-    this.add.image(bx + (plot.flip ? -6 : HW + 6), by + HH + 14, THEMED[a.name] || 'bush')
+    this.add.image(bx + (plot.flip ? -6 : HW + 6), by + HH + 14, theme ? theme.prop : 'bush')
       .setOrigin(.5, 1).setDepth(by + HH + 16);
 
     const plateW = Math.max(70, a.name.length * 10 + 22);
@@ -1537,7 +1649,8 @@ function create() {
       fontFamily: 'ui-monospace,Menlo,monospace', fontSize: '12px', color: '#2b3a2e',
     }).setOrigin(.5).setDepth(by + HH + 26);
 
-    const lamp = this.add.circle(bx + HW/2, by + 22, 6, statusColor[a.status] || 0x8791a8)
+    const [lx, ly] = theme ? [theme.lamp[0], HH - theme.h + theme.lamp[1]] : [HW / 2, 22];
+    const lamp = this.add.circle(bx + lx, by + ly, 6, statusColor[a.status] || 0x8791a8)
       .setStrokeStyle(1, 0x00000055).setDepth(by + HH + 27);
     this.tweens.add({ targets: lamp, alpha: .3, duration: 1000, yoyo: true, repeat: -1 });
 
@@ -1545,13 +1658,14 @@ function create() {
     doors.push({ name: a.name, x: doorX, y: doorY });
 
     // ---- the agent, pottering about outside its own house ----
-    const npc = this.physics.add.sprite(doorX + 34, doorY + 26, 'hero-down-0');
-    npc.setTint(SHIRTS[i % 6]);
+    const lk = look(a.name);
+    const npc = this.physics.add.sprite(doorX + 34, doorY + 26, `${lk}-down-0`);
+    if (lk === 'hero') npc.setTint(SHIRTS[i % 6]);      // a plain villager, told apart by shirt
     npc.body.setSize(14, 12).setOffset(5, 16);
     npc.setDepth(npc.y);
     this.physics.add.collider(npc, solids);
     npcs.push({
-      s: npc, homeX: doorX, homeY: doorY + 30,
+      s: npc, homeX: doorX, homeY: doorY + 30, look: lk,
       tx: doorX, ty: doorY + 30, wait: 400 + Math.floor(rnd() * 1400), moving: false,
     });
   });
@@ -1597,17 +1711,17 @@ function create() {
 
     // Clip, and Spotter its research assistant, each with a name over their
     // head - two people outside one door would otherwise be anyone.
-    [['Clip', 0xffb3d1, -34], ['Spotter', 0x9fe8f0, 38]].forEach(([who, tint, off]) => {
+    [['Clip', -34], ['Spotter', 38]].forEach(([who, off]) => {
       const hx = bx + SW / 2 + off, hy = by + SH + 60;   // below the sign, so the tags never cover it
-      const npc = this.physics.add.sprite(hx, hy, 'hero-down-0');
-      npc.setTint(tint);
+      const lk = look(who.toLowerCase());
+      const npc = this.physics.add.sprite(hx, hy, `${lk}-down-0`);
       npc.body.setSize(14, 12).setOffset(5, 16);
       this.physics.add.collider(npc, solids);
       const label = this.add.text(hx, hy - 22, who, {
         fontFamily: 'ui-monospace,Menlo,monospace', fontSize: '9px', color: '#ffffff',
         backgroundColor: '#00000088', padding: { x: 3, y: 1 },
       }).setOrigin(.5, 1);
-      npcs.push({ s: npc, homeX: hx, homeY: hy, tx: hx, ty: hy,
+      npcs.push({ s: npc, homeX: hx, homeY: hy, tx: hx, ty: hy, look: lk,
                   wait: 400 + Math.floor(rnd() * 1400), moving: false, label });
     });
   }
@@ -1622,6 +1736,8 @@ function create() {
   // ---- player ----
   ['down','up','side'].forEach(f => {
     this.anims.create({ key: `walk-${f}`, frames: [{key:`hero-${f}-0`},{key:`hero-${f}-1`}], frameRate: 7, repeat: -1 });
+    Object.keys(OUTFITS).forEach(who => this.anims.create({ key: walkAnim(`npc-${who}`, f),
+      frames: [{ key: `npc-${who}-${f}-0` }, { key: `npc-${who}-${f}-1` }], frameRate: 7, repeat: -1 }));
   });
   player = this.physics.add.sprite(9*T, ROAD_Y*T + 22, 'hero-down-0');
   player.setCollideWorldBounds(true);
@@ -1703,13 +1819,13 @@ function update() {
         n.moving = false;
         n.s.setVelocity(0, 0);
         n.s.anims.stop();
-        n.s.setTexture('hero-down-0');
+        n.s.setTexture(`${n.look}-down-0`);
         n.wait = now + 900 + Math.random() * 3200;      // stand about for a bit
       } else {
         n.s.setVelocity((dx/dist) * NSP, (dy/dist) * NSP);
-        if (Math.abs(dx) > Math.abs(dy)) { n.s.anims.play('walk-side', true); n.s.setFlipX(dx < 0); }
-        else if (dy < 0) { n.s.anims.play('walk-up', true); n.s.setFlipX(false); }
-        else { n.s.anims.play('walk-down', true); n.s.setFlipX(false); }
+        if (Math.abs(dx) > Math.abs(dy)) { n.s.anims.play(walkAnim(n.look, 'side'), true); n.s.setFlipX(dx < 0); }
+        else if (dy < 0) { n.s.anims.play(walkAnim(n.look, 'up'), true); n.s.setFlipX(false); }
+        else { n.s.anims.play(walkAnim(n.look, 'down'), true); n.s.setFlipX(false); }
       }
     } else if (now > n.wait) {
       n.tx = n.homeX + (Math.random() * 2 - 1) * R;
@@ -1720,16 +1836,13 @@ function update() {
     if (n.label) n.label.setPosition(n.s.x, n.s.y - 14).setDepth(n.s.y + 1);
   }
 
-  // ---- town square ledger ----
-  if (boardText) {
+  // ---- town square: the plaque says TOWN HALL, the ledger goes under it ----
+  if (boardSub) {
     const k = DATA.kpis || {};
     if (k.total_value === null || k.total_value === undefined) {
-      boardText.setText('NO LEDGER');
-      boardSub.setText('TOWN LEDGER').setColor('#5c6b52');
+      boardSub.setText('NO LEDGER YET').setColor('#5c6b52');
     } else {
-      boardText.setText(money(k.total_value));
-      const sign = k.total_pnl >= 0 ? '+' : '';
-      boardSub.setText(`${sign}${money(k.total_pnl)}  ${pctTxt(k.total_pnl_pct)}`)
+      boardSub.setText(`${money(k.total_value)}  ${pctTxt(k.total_pnl_pct)}`)
         .setColor(k.total_pnl >= 0 ? '#1d6b45' : '#8c2f3f');
     }
   }
