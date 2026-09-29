@@ -140,9 +140,31 @@ it: if the file goes missing, the render fails instead.
 Every caption asks the viewer a question, because comments are what the
 campaigns are judged on. A draft without one gets "Agree or disagree?".
 
+The watermark must have a transparent background. The image on a
+guidelines web page is often a flattened copy on a white canvas: Curious
+Mike's Notion image is one, and would put a white box over every clip. Clip
+refuses a PNG without transparency, so ask the campaign for the original
+file.
+
 A Dropbox share link can be passed to `ingest` as it is. Clip swaps `dl=0`
 for `dl=1` to get the file rather than the preview page. It refuses folder
 links, because they download as a zip.
+
+Footage too big for the disk stays where it is with `--remote`. Curious
+Mike's episodes are 27 GB of 4K each, and the droplet has about 44 GB free.
+With `--remote`, the audio is streamed once for the transcript, and each
+clip reads only its own seconds, using range requests:
+
+```
+cd /root/ecosystem && clipper/.venv/bin/python -m clipper ingest curious-mike "DROPBOX_LINK" --remote --title "Trae Young"
+```
+
+Measured 2026-09-29 on the real episode, on one core: a 30-second clip from
+minute 50 took 80 s, and nothing was stored but the clip. The certificate
+is checked on every read (ffmpeg skips this check unless told), and a server
+that ignores range requests is refused, because it would give broken clips
+rather than an error. If the campaign removes the link, clips from that
+video can no longer be made.
 
 **TikTok** has no automatic posting yet: that needs an approved TikTok
 developer app, which needs a website and a review. Until then an approved

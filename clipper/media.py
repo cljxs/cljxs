@@ -5,9 +5,12 @@ a quote in it must not become a second command.
 """
 
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
+
+SYSTEM_CA = "/etc/ssl/certs/ca-certificates.crt"
 
 
 class MediaError(RuntimeError):
@@ -22,10 +25,30 @@ def run(cmd, cwd=None, timeout=None):
     return r
 
 
+def is_url(src):
+    return str(src).startswith(("https://", "http://"))
+
+
+def input_args(src):
+    """The -i for a source, local or remote. A local path is made absolute,
+    because renders run inside the output folder. A remote one - a video
+    left on the campaign's Dropbox - gets what reading over a network needs:
+    the certificate checked (ffmpeg does not check it unless told to, and an
+    https link is only worth having if it is), a reconnect after a dropped
+    connection, and a timeout, so a stalled download fails instead of
+    hanging the run forever. Seeking (-ss before this) is done with range
+    requests: a 40-second clip reads about 40 seconds of the file."""
+    if not is_url(src):
+        return ["-i", str(Path(src).resolve())]
+    ca = os.environ.get("SSL_CERT_FILE") or SYSTEM_CA
+    return ["-tls_verify", "1", "-ca_file", ca, "-reconnect", "1", "-reconnect_delay_max", "30",
+            "-rw_timeout", "60000000", "-i", str(src)]
+
+
 def probe(path):
     """{duration, width, height, has_audio, has_video} from ffprobe."""
     r = run(["ffprobe", "-v", "error", "-print_format", "json",
-             "-show_format", "-show_streams", str(path)])
+             "-show_format", "-show_streams", *input_args(path)])
     info = json.loads(r.stdout)
     streams = info.get("streams") or []
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
@@ -42,7 +65,7 @@ def probe(path):
 def extract_audio(src, dest):
     """16 kHz mono WAV - what Whisper resamples to anyway, so decoding once
     here keeps the transcriber's memory down and makes the loudness pass cheap."""
-    run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(src),
+    run(["ffmpeg", "-nostdin", "-y", "-v", "error", *input_args(src),
          "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(dest)])
     return dest
 

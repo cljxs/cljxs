@@ -85,7 +85,11 @@ def sha256(path, block=1 << 20):
     return h.hexdigest()
 
 
-def need_space(folder, nbytes):
+REMOTE_HINT = (" - or add --remote to leave the video where it is and read only the parts "
+               "Clip needs")
+
+
+def need_space(folder, nbytes, hint=""):
     """Refuse before copying rather than fill the droplet's disk: every agent
     on it writes to the same one. Twice the file: the source plus its audio,
     clips and temporaries."""
@@ -93,7 +97,7 @@ def need_space(folder, nbytes):
     free = shutil.disk_usage(folder).free
     if nbytes and free < 2 * nbytes:
         raise RuntimeError(f"not enough disk: {free / 1e9:.1f} GB free, need about "
-                           f"{2 * nbytes / 1e9:.1f} GB for a {nbytes / 1e9:.1f} GB video")
+                           f"{2 * nbytes / 1e9:.1f} GB for a {nbytes / 1e9:.1f} GB video{hint}")
 
 
 def direct(url):
@@ -119,13 +123,67 @@ def fetch(url, dest):
     url = direct(url)
     req = urllib.request.Request(url, headers={"User-Agent": "clipper/1"})
     with urllib.request.urlopen(req, timeout=60) as r:
-        need_space(dest.parent, int(r.headers.get("Content-Length") or 0))
+        need_space(dest.parent, int(r.headers.get("Content-Length") or 0), REMOTE_HINT)
         with open(dest, "wb") as f:
             shutil.copyfileobj(r, f, 1 << 20)
     return dest
 
 
-def ingest(conn, paths, source_name, origin, title=None, move=False):
+def link_key(url):
+    """What makes two links the same video, for a video never downloaded and
+    so never hashed: the link without its per-copy parameters (Dropbox's
+    st, e and dl change every time the link is copied; its rlkey does not)."""
+    parts = urllib.parse.urlsplit(url)
+    q = [(k, v) for k, v in urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+         if k not in ("dl", "st", "e", "raw")]
+    canon = urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(sorted(q)),
+                                                   fragment=""))
+    return "link:" + hashlib.sha256(canon.encode()).hexdigest()
+
+
+def seekable(url):
+    """Whether the server answers a range request with just that range (206).
+    One that ignores it and sends the whole file (200) makes ffmpeg read the
+    start of the file as if it were the middle: a broken clip, not an error.
+    Dropbox answers 206, checked 2026-09-29."""
+    req = urllib.request.Request(url, headers={"User-Agent": "clipper/1", "Range": "bytes=0-0"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return r.status == 206
+
+
+def ingest_remote(conn, paths, src, origin, title=None):
+    """A video left where the rights holder put it. Nothing is downloaded
+    now: the audio is streamed once to transcribe it, and each clip reads
+    only its own seconds of the file. For footage bigger than the disk -
+    Curious Mike's episodes are 27 GB of 4K each."""
+    if not origin.startswith("https://"):
+        raise ValueError("--remote needs an https:// link")
+    url = direct(origin)
+    key = link_key(url)
+    seen = conn.execute("SELECT * FROM videos WHERE sha256 = ?", (key,)).fetchone()
+    if seen:
+        return seen, False
+    if not seekable(url):
+        raise ValueError("that server sends the whole file for every request, so a clip cannot "
+                         "read just its own seconds - download it instead (without --remote)")
+    info = media.probe(url)
+    if not (info["has_video"] and info["has_audio"]):
+        raise ValueError(f"{origin} needs both video and audio (video={info['has_video']}, "
+                         f"audio={info['has_audio']})")
+    with conn:
+        cur = conn.execute(
+            "INSERT INTO videos (source_id, title, origin, sha256, media_path, duration, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (src["id"], title or Path(urllib.parse.urlsplit(origin).path).stem, origin, key, url,
+             info["duration"], db.now(), db.now()))
+        vid = cur.lastrowid
+    (paths["media"] / str(vid)).mkdir(parents=True, exist_ok=True)
+    db.event(conn, "ingest", f"linked {origin} ({info['duration'] / 60:.1f} min, "
+                             f"{info['width']}x{info['height']}, left in place)", video_id=vid)
+    return conn.execute("SELECT * FROM videos WHERE id = ?", (vid,)).fetchone(), True
+
+
+def ingest(conn, paths, source_name, origin, title=None, move=False, remote=False):
     """Register a video. Returns (row, is_new). The same bytes twice is the
     same video: it is recognised by hash and not processed again."""
     src = conn.execute("SELECT * FROM sources WHERE name = ? AND active = 1",
@@ -133,6 +191,8 @@ def ingest(conn, paths, source_name, origin, title=None, move=False):
     if not src:
         raise ValueError(f"no active source named {source_name!r} - add it first with "
                          f"`python3 -m clipper source add` and the evidence you may use it")
+    if remote:
+        return ingest_remote(conn, paths, src, origin, title)
     staging = paths["media"] / "incoming"
     staging.mkdir(parents=True, exist_ok=True)
     if origin.startswith(("http://", "https://")):

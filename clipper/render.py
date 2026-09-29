@@ -90,13 +90,22 @@ def command(src, out_name, start, end, info, ass_name, cfg, wm=None):
     af = f"loudnorm=I={cfg['loudness_lufs']}:TP=-1.5:LRA=11,aresample=48000"
     extra = ["-i", str(wm[0])] if wm else []
     return ["ffmpeg", "-nostdin", "-y", "-v", "error",
-            "-ss", f"{start:.3f}", "-i", str(src), *extra, "-t", f"{end - start:.3f}",
+            "-ss", f"{start:.3f}", *media.input_args(src), *extra, "-t", f"{end - start:.3f}",
             "-filter_complex", video_filter(cfg["crop_mode"], info["width"], info["height"],
                                             ass_name, cfg["fps"], wm[1] if wm else None),
             "-map", "[v]", "-map", "0:a:0?",
             "-c:v", "libx264", "-preset", cfg["x264_preset"], "-crf", str(cfg["x264_crf"]),
             "-pix_fmt", "yuv420p", "-af", af, "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart", out_name]
+
+
+def has_transparency(path):
+    """Whether a PNG can be see-through anywhere: an alpha channel (colour
+    type 4 or 6 in its header), or a tRNS chunk giving a palette or a single
+    colour transparency. Read from the file's own bytes - the PNG spec puts
+    the colour type at byte 25, in the IHDR chunk that must come first."""
+    data = Path(path).read_bytes()
+    return len(data) > 25 and (data[25] in (4, 6) or b"tRNS" in data)
 
 
 def check_watermark(path, cfg):
@@ -116,6 +125,10 @@ def check_watermark(path, cfg):
     info = media.probe(path)
     if not (info["width"] and info["height"]):
         raise ValueError("the watermark PNG has no picture in it")
+    if not has_transparency(path):
+        raise ValueError("the watermark PNG has no transparent background, so it would put a "
+                         "solid box over every clip - ask the campaign for the transparent PNG "
+                         "(an image shown on a web page is often a flattened copy)")
     return watermark_box(info["width"], info["height"], cfg["watermark_top"],
                          cfg["watermark_max_width"])
 
@@ -134,7 +147,7 @@ def render(src, out_path, start, end, ass_text, cfg, watermark=None):
     if not info["has_video"]:
         raise media.MediaError(f"{src} has no video stream")
     tmp = out_path.with_name(out_path.stem + ".part.mp4")
-    media.run(command(Path(src).resolve(), tmp.name, start, end, info, ass_name, cfg, wm),
+    media.run(command(src, tmp.name, start, end, info, ass_name, cfg, wm),
               cwd=out_path.parent)
     tmp.replace(out_path)
     return media.probe(out_path)

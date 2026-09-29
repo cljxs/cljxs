@@ -5,7 +5,7 @@
     source rules NAME [--tags "#a #b"] [--credit "Clip from @creator"]   what every post must carry
     source rules NAME --watermark FILE|URL   a campaign's watermark, burned into every clip
     source list
-    ingest SOURCE FILE_OR_HTTPS_URL [--title "..."] [--move]
+    ingest SOURCE FILE_OR_HTTPS_URL [--title "..."] [--move] [--remote]
     run [--video ID]            transcribe, find moments, render - whatever is pending
     retry VIDEO_ID              put a failed video back where it failed
     status                      videos, stages, errors, today's spend
@@ -75,9 +75,10 @@ def cmd_source(a):
 
 def cmd_ingest(a):
     cfg, paths, conn = open_all()
-    row, new = ingest.ingest(conn, paths, a.source, a.origin, a.title, a.move)
+    row, new = ingest.ingest(conn, paths, a.source, a.origin, a.title, a.move, a.remote)
     if new:
-        print(f"video {row['id']} ingested: {row['title']} ({row['duration'] / 60:.1f} min). "
+        where = " - left in place, read over the network" if a.remote else ""
+        print(f"video {row['id']} ingested: {row['title']} ({row['duration'] / 60:.1f} min){where}. "
               f"Next: clipper/.venv/bin/python -m clipper run")
     else:
         print(f"already have it: video {row['id']} ({row['title']}, stage {row['stage']}) - "
@@ -291,6 +292,8 @@ def main(argv=None):
     i.add_argument("origin")
     i.add_argument("--title")
     i.add_argument("--move", action="store_true", help="move the file instead of copying it")
+    i.add_argument("--remote", action="store_true",
+                   help="leave an https video where it is; clips read only their own seconds")
     i.set_defaults(fn=cmd_ingest)
 
     r = sub.add_parser("run")
@@ -346,6 +349,6 @@ def main(argv=None):
         p.error("source channel needs NAME and --channel UC...")
     try:
         return a.fn(a)
-    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+    except (ValueError, OSError, RuntimeError) as exc:     # OSError: missing files, and network errors (URLError)
         print(f"clipper: {exc}", file=sys.stderr)
         return 2

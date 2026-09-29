@@ -1008,3 +1008,153 @@ class CaptionsAskAQuestion(unittest.TestCase):
         _, c, _ = postcopy.check_draft({"title": "T", "caption": "word " * 100}, CLIP_TEXT)
         self.assertLessEqual(len(c), postcopy.CAPTION_MAX)
         self.assertTrue(c.endswith(postcopy.QUESTION))
+
+
+class WatermarkMustBeSeeThrough(unittest.TestCase):
+    # Captured 2026-09-29 from the Curious Mike guidelines page on Notion:
+    # "YT: @mpj" in off-white with a grey glow, on a solid white 1568x523
+    # canvas, no alpha. Overlaid as it is, it is a white box over the video.
+    FLAT = FIXTURES / "clipper-watermark-notion-flattened.png"
+
+    def test_the_flattened_campaign_image_is_refused(self):
+        self.assertFalse(render.has_transparency(self.FLAT))
+        with self.assertRaisesRegex(ValueError, "transparent"):
+            render.check_watermark(self.FLAT, CFG)
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+    def test_a_real_alpha_channel_is_recognised(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertTrue(render.has_transparency(half_magenta_png(Path(d) / "m.png")))
+            pal = Path(d) / "pal.png"     # palette PNG, transparency in a tRNS chunk
+            subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(Path(d) / "m.png"),
+                            "-vf", "split[a][b];[a]palettegen=reserve_transparent=1[p];[b][p]paletteuse",
+                            "-frames:v", "1", str(pal)], check=True)
+            self.assertTrue(render.has_transparency(pal))
+            render.check_watermark(pal, CFG)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("openssl"), "needs ffmpeg and openssl")
+class RemoteFootage(EndToEnd):
+    """ingest --remote: a video too big for the disk (a 27 GB 4K episode on a
+    droplet with 44 GB free) is left on the rights holder's server, read over
+    https with its certificate checked, and never copied."""
+
+    def setUp(self):
+        super().setUp()
+        import http.server
+        import ssl
+        import threading
+        d = Path(self.tmp.name)
+        self.cert = d / "cert.pem"
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                        "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1",
+                        "-keyout", str(d / "key.pem"), "-out", str(self.cert)],
+                       check=True, capture_output=True)
+        serve = str(d)
+
+        test = self
+
+        class Quiet(http.server.SimpleHTTPRequestHandler):
+            """Answers Range requests the way Dropbox does (206 and the slice);
+            the standard handler ignores them and sends everything."""
+            def __init__(self, *a, **k):
+                super().__init__(*a, directory=serve, **k)
+
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                rng = self.headers.get("Range")
+                if not (rng and test.ranges):
+                    return super().do_GET()
+                path = Path(self.translate_path(self.path))
+                size = path.stat().st_size
+                a, _, b = rng.split("=", 1)[1].partition("-")
+                a, b = int(a), min(int(b) if b else size - 1, size - 1)
+                self.send_response(206)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Content-Range", f"bytes {a}-{b}/{size}")
+                self.send_header("Content-Length", str(b - a + 1))
+                self.end_headers()
+                with open(path, "rb") as f:
+                    f.seek(a)
+                    try:
+                        self.wfile.write(f.read(b - a + 1))
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+
+        self.ranges = True
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Quiet)
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(self.cert, d / "key.pem")
+        self.server.socket = ctx.wrap_socket(self.server.socket, server_side=True)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.url = f"https://127.0.0.1:{self.server.server_address[1]}/talk.mp4?rlkey=k&st=one&dl=0"
+        old = os.environ.get("SSL_CERT_FILE")
+        os.environ["SSL_CERT_FILE"] = str(self.cert)
+        self.addCleanup(lambda: os.environ.__setitem__("SSL_CERT_FILE", old) if old
+                        else os.environ.pop("SSL_CERT_FILE", None))
+        self.cli("source", "add", "mike", "--rights", "permission", "--evidence", "campaign page")
+
+    def test_clipped_without_a_copy(self):
+        code, said = self.cli("ingest", "mike", self.url, "--remote")
+        self.assertEqual(code, 0, said)
+        self.assertIn("left in place", said)
+        v = db.connect(self.home / "clipper.db").execute("SELECT * FROM videos").fetchone()
+        self.assertEqual(v["media_path"], self.url, "kept as a link (dl=1 is for Dropbox hosts only)")
+        self.assertEqual(list((self.home / "media" / "1").iterdir()), [], "nothing downloaded")
+        code, said = self.cli("ingest", "mike", self.url.replace("st=one", "st=two"), "--remote")
+        self.assertIn("already have it", said, "a re-copied link is the same video")
+        self.give_words(1)
+        code, said = self.cli("run")
+        self.assertEqual(code, 0, said)
+        clip = self.home / "clips" / "1" / "01.mp4"
+        meta = json.loads(clip.with_suffix(".json").read_text())
+        self.assertAlmostEqual(media.probe(clip)["duration"], meta["end"] - meta["start"], delta=0.2)
+        self.assertFalse((self.home / "media" / "1" / "source.mp4").exists())
+
+    def test_an_untrusted_certificate_is_refused(self):
+        other = Path(self.tmp.name) / "other.pem"
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                        "-subj", "/CN=someone-else", "-keyout", str(Path(self.tmp.name) / "k2.pem"),
+                        "-out", str(other)], check=True, capture_output=True)
+        os.environ["SSL_CERT_FILE"] = str(other)
+        # ffmpeg itself, not only the range check before it: ffmpeg checks no
+        # certificate unless told to, and every clip is read through it.
+        with self.assertRaises(media.MediaError):
+            media.probe(self.url)
+        code, said = self.cli("ingest", "mike", self.url, "--remote")
+        self.assertEqual(code, 2, said)
+        self.assertEqual(db.connect(self.home / "clipper.db").execute(
+            "SELECT COUNT(*) FROM videos").fetchone()[0], 0)
+
+    def test_every_read_of_a_clip_checks_the_certificate(self):
+        # The probe before a render checks it too, so a render command that
+        # dropped the check would still pass every other test here.
+        info = {"width": 640, "height": 360}
+        cmd = render.command(self.url, "o.mp4", 1, 5, info, "o.ass", CFG)
+        before = cmd[:cmd.index(self.url)]
+        self.assertEqual(before[before.index("-tls_verify") + 1], "1")
+        self.assertIn("-ca_file", before)
+        local = render.command("talk.mp4", "o.mp4", 1, 5, info, "o.ass", CFG)
+        self.assertIn(str(Path("talk.mp4").resolve()), local,
+                      "a local path is made absolute - ffmpeg runs in the clip's folder")
+
+    def test_a_server_that_ignores_ranges_is_refused(self):
+        self.ranges = False
+        code, said = self.cli("ingest", "mike", self.url, "--remote")
+        self.assertEqual(code, 2, said)
+        self.assertIn("whole file", said)
+
+    def test_only_https(self):
+        code, said = self.cli("ingest", "mike", self.url.replace("https", "http"), "--remote")
+        self.assertEqual(code, 2)
+        self.assertIn("https", said)
+
+    def test_a_too_big_download_says_how_to_leave_it_in_place(self):
+        with self.assertRaisesRegex(RuntimeError, "--remote"):
+            ingest.need_space(self.home, 10 ** 15, ingest.REMOTE_HINT)
