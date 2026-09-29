@@ -37,6 +37,16 @@ class PublicSite(unittest.TestCase):
         self.assertIn("OR_URL", uses)
         self.assertIn("OpenRouter", self.page("privacy.html"))
 
+    def test_the_youtube_badge_is_official_and_clickable(self):
+        # The audit asks for YouTube branding on the home page. The branding
+        # guidelines allow the "developed with YouTube" logo, unmodified, and
+        # require it to be clickable and to link back to YouTube.
+        html = self.page("index.html")
+        self.assertRegex(html, r'<a class="yt" href="https://www\.youtube\.com"[^>]*>\s*<picture>')
+        for f in ("developed-with-youtube-dark.png", "developed-with-youtube-light.png"):
+            self.assertIn(f, html)
+            self.assertEqual((DOCS / f).read_bytes()[:8], b"\x89PNG\r\n\x1a\n", f)
+
     def test_every_page_links_the_others_and_is_served_as_written(self):
         for name in PAGES:
             html = self.page(name)

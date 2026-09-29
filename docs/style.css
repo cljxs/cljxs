@@ -13,3 +13,5 @@ p, li { color: var(--fg); }
 .muted { color: var(--muted); font-size: 15px; }
 a { color: var(--link); }
 footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); }
+.yt { display: inline-block; margin: -18px 0 -22px -18px; }
+.yt img { display: block; }
