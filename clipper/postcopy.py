@@ -10,6 +10,7 @@ trusted on anything code can check:
 * lengths are cut to each platform's limit here, not asked for politely;
 * hashtags are reduced to letters, digits and underscores, at most five
   from the model;
+* the caption asks the viewer a question - added if the draft has none;
 * the source's required tags and credit line (a campaign's rules, a CC
   licence's attribution) are added by code to every post, whatever the
   model wrote.
@@ -39,6 +40,7 @@ MODEL_TAGS = 5
 MIN_LEFT = 0.05          # dollars of today's shared allowance a call needs left
 ESTIMATE = 0.004         # the most one draft is expected to cost
 NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
+QUESTION = "Agree or disagree?"   # added to a caption that asks nothing
 
 
 def _script(name, file):
@@ -79,10 +81,21 @@ def invented_numbers(title, transcript):
     return [n for n in NUMBER.findall(title) if n.replace(",", "") not in said]
 
 
+def ask(caption):
+    """A caption that asks the viewer something. Comments are what campaigns
+    are paid on (Curious Mike wants 1% likes+comments per view) and a
+    question is what gets them - so a draft without one gets one here,
+    whether a model forgot or no model was called."""
+    caption = " ".join(str(caption or "").split())
+    if not caption or "?" in caption:
+        return caption
+    return cut(caption, CAPTION_MAX - len(QUESTION) - 1) + " " + QUESTION
+
+
 def check_draft(doc, transcript):
     """(title, caption, [tags]) from a model's JSON, or raise ValueError."""
     title = cut(doc.get("title"), TITLE_MAX)
-    caption = cut(doc.get("caption"), CAPTION_MAX)
+    caption = ask(cut(doc.get("caption"), CAPTION_MAX))
     if not title or not caption:
         raise ValueError("the draft has no title or no caption")
     bad = invented_numbers(title, transcript)
@@ -99,7 +112,7 @@ def check_draft(doc, transcript):
 def template(transcript):
     """The no-model draft: the clip's own first sentence."""
     first = re.split(r"(?<=[.!?])\s", transcript.strip(), maxsplit=1)[0]
-    return cut(first, 90), cut(first, CAPTION_MAX), []
+    return cut(first, 90), ask(cut(first, CAPTION_MAX)), []
 
 
 # ------------------------------------------------------------------ the model
@@ -108,10 +121,13 @@ PROMPT = """You write the title and caption for a short vertical video clip.
 The clip's transcript is below. Everything you write must be true of THIS
 clip: no claims, numbers or names it does not contain, no "you won't
 believe", nothing that changes what the speaker meant. Make people want to
-watch by pointing at what is genuinely interesting in it.
+watch by pointing at what is genuinely interesting in it. End the caption
+with a short question that asks viewers for their own opinion on what is
+said (do they agree, who is right, where would they rank it) - comments
+are what the clip is judged on.
 
 Reply with JSON only:
-{"title": "under 70 characters", "caption": "one or two sentences, under 200 characters",
+{"title": "under 70 characters", "caption": "one or two sentences ending in a question, under 200 characters",
  "hashtags": ["3 to 5 relevant words, no # sign"]}
 
 Source: SOURCE

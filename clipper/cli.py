@@ -3,6 +3,7 @@
     source add NAME --rights KIND --evidence "..." [--url U] [--attribution "..."] [--channel UC...]
     source channel NAME --channel UC...   link a source to the creator's YouTube channel
     source rules NAME [--tags "#a #b"] [--credit "Clip from @creator"]   what every post must carry
+    source rules NAME --watermark FILE|URL   a campaign's watermark, burned into every clip
     source list
     ingest SOURCE FILE_OR_HTTPS_URL [--title "..."] [--move]
     run [--video ID]            transcribe, find moments, render - whatever is pending
@@ -46,6 +47,10 @@ def cmd_source(a):
         print(f"source {row['name']} added ({row['rights']}: {rights.RIGHTS[row['rights']]})")
         return 0
     if a.action == "rules":
+        if a.watermark:
+            w, h, x, y = ingest.set_watermark(conn, paths, cfg, a.name, a.watermark)
+            print(f"watermark kept: {w}x{h}, centred at {x},{y} on every clip from {a.name}, "
+                  f"start to finish")
         with conn:
             n = conn.execute("UPDATE sources SET post_tags = COALESCE(?, post_tags), "
                              "credit = COALESCE(?, credit) WHERE name = ?",
@@ -63,7 +68,7 @@ def cmd_source(a):
               f"as one Clip may cut")
         return 0
     for s in conn.execute("SELECT * FROM sources ORDER BY id"):
-        flag = "" if s["active"] else "  [inactive]"
+        flag = ("" if s["active"] else "  [inactive]") + ("  [watermark]" if s["watermark"] else "")
         print(f"{s['id']:>3}  {s['name']:<24} {s['rights']:<14} {s['evidence'][:60]}{flag}")
     return 0
 
@@ -277,6 +282,8 @@ def main(argv=None):
     s.add_argument("--channel", help="the creator's YouTube channel id (UC...)")
     s.add_argument("--tags", help="tags every post from this source must carry")
     s.add_argument("--credit", help="a line every post from this source must carry")
+    s.add_argument("--watermark", help="a campaign's watermark PNG (file or https link), "
+                                       "overlaid unchanged on every clip from this source")
     s.set_defaults(fn=cmd_source)
 
     i = sub.add_parser("ingest")

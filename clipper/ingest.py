@@ -10,6 +10,7 @@ out source files. Both arrive here as a file or a URL.
 
 import hashlib
 import shutil
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -46,6 +47,36 @@ def set_channel(conn, name, channel_id):
         raise ValueError(f"no source named {name!r}")
 
 
+def set_watermark(conn, paths, cfg, name, origin):
+    """Keep a copy of a source's watermark (a file on the droplet or an https
+    link) and check it now - that it is a PNG and fits where it must go -
+    rather than at the first render hours later. Returns (w, h, x, y)."""
+    from clipper import render
+    if not conn.execute("SELECT 1 FROM sources WHERE name = ?", (name,)).fetchone():
+        raise ValueError(f"no source named {name!r}")
+    folder = paths["home"] / "watermarks"
+    folder.mkdir(parents=True, exist_ok=True)
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in name)
+    tmp = folder / f"{safe}.part.png"
+    if origin.startswith(("http://", "https://")):
+        fetch(origin, tmp)
+    else:
+        path = Path(origin).expanduser()
+        if not path.is_file():
+            raise FileNotFoundError(origin)
+        shutil.copy2(str(path), str(tmp))
+    try:
+        box = render.check_watermark(tmp, cfg)
+    except Exception:
+        tmp.unlink()
+        raise
+    final = folder / f"{safe}.png"
+    tmp.replace(final)
+    with conn:
+        conn.execute("UPDATE sources SET watermark = ? WHERE name = ?", (str(final), name))
+    return box
+
+
 def sha256(path, block=1 << 20):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -65,9 +96,27 @@ def need_space(folder, nbytes):
                            f"{2 * nbytes / 1e9:.1f} GB for a {nbytes / 1e9:.1f} GB video")
 
 
+def direct(url):
+    """A share link turned into the file itself. Dropbox's share link
+    (?dl=0) is a web page about the file; ?dl=1 is the file. A folder link
+    (/scl/fo/, /sh/) downloads as a zip of everything in it, which is not
+    one video - refused, with what to do instead."""
+    parts = urllib.parse.urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if not (host == "dropbox.com" or host.endswith(".dropbox.com")):
+        return url
+    if parts.path.startswith(("/scl/fo/", "/sh/")):
+        raise ValueError("that is a Dropbox folder link - open the folder, open the one video, "
+                         "and copy that file's link instead")
+    q = [(k, v) for k, v in urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+         if k not in ("dl", "raw")]
+    return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(q + [("dl", "1")])))
+
+
 def fetch(url, dest):
     if not url.startswith("https://"):
         raise ValueError("only https:// URLs - a plain http download can be altered on the way")
+    url = direct(url)
     req = urllib.request.Request(url, headers={"User-Agent": "clipper/1"})
     with urllib.request.urlopen(req, timeout=60) as r:
         need_space(dest.parent, int(r.headers.get("Content-Length") or 0))

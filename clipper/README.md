@@ -124,6 +124,26 @@ A campaign's rules (required tags, and a credit line such as "Clip from
 cd /root/ecosystem && python3 -m clipper source rules mysource --tags "#clipping #creatorname" --credit "Clip from @creatorname"
 ```
 
+A campaign that requires a watermark (Curious Mike's "YT: @mpj") gets its
+PNG set once, from a file or an https link, and Clip burns it into every clip
+from that source, first frame to last, at its own shape and colour:
+
+```
+cd /root/ecosystem && clipper/.venv/bin/python -m clipper source rules curious-mike --watermark "https://...watermark.png"
+```
+
+It goes centred near the top (`watermark_top`, 300 of 1920 px), under the
+status bar and TikTok's tabs and far above the captions. Clip refuses a
+spot where anything would cover it, and a clip is never rendered without
+it: if the file goes missing, the render fails instead.
+
+Every caption asks the viewer a question, because comments are what the
+campaigns are judged on. A draft without one gets "Agree or disagree?".
+
+A Dropbox share link can be passed to `ingest` as it is. Clip swaps `dl=0`
+for `dl=1` to get the file rather than the preview page. It refuses folder
+links, because they download as a zip.
+
 **TikTok** has no automatic posting yet: that needs an approved TikTok
 developer app, which needs a website and a review. Until then an approved
 clip shows **Download**, **Copy caption** and **Mark posted**. Marking it

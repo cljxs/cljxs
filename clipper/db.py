@@ -171,6 +171,12 @@ MIGRATIONS = [
       UNIQUE (clip_id, platform)
     );
     """,
+    # 4 - a campaign's watermark: the file Clip overlays, unchanged, on every
+    # clip from that source (Curious Mike's "YT: @mpj"). A path under
+    # CLIPPER_HOME/watermarks - a copy, so a moved download cannot drop it.
+    """
+    ALTER TABLE sources ADD COLUMN watermark TEXT;
+    """,
 ]
 
 

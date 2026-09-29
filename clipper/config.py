@@ -50,6 +50,14 @@ DEFAULTS = {
     "x264_crf": 21,
     "loudness_lufs": -14.0,          # what TikTok and Shorts normalise toward
     "fps": 30,
+    # A source's watermark goes centred, its top edge this far down the
+    # 1920-high frame: under the status bar and TikTok's Following/For You
+    # tabs, well above the captions. Never a corner, never under the
+    # captions - render.watermark_box refuses a spot that would be.
+    "watermark_top": 300,
+    # Shown at its own size; a file wider than this is scaled down evenly
+    # (never stretched) so it stays clear of TikTok's buttons on the right.
+    "watermark_max_width": 600,
 
     # --- rights -------------------------------------------------------------
     # Clipping campaigns pay for views, which is commercial use - so a

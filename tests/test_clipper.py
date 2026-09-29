@@ -807,3 +807,204 @@ class YouTubeSignInAndUpload(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "quotaExceeded"):
             youtube.upload(video, {"title": "T", "description": "D", "tags": []}, "public", "24",
                            token="tok", send=refuse)
+
+
+# ---------------------------------------------------------------- Curious Mike's rules
+
+from clipper import ingest  # noqa: E402
+
+
+def pixel(video, t, x, y):
+    """(r, g, b) of one pixel of one frame, straight from ffmpeg."""
+    # 2x2 at even co-ordinates: a yuv420p frame has one colour sample per 2x2
+    # block, and a 1x1 crop of it has no colour at all (ffmpeg refuses it).
+    r = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-ss", f"{t:.3f}", "-i", str(video),
+                        "-frames:v", "1", "-vf", f"crop=2:2:{x // 2 * 2}:{y // 2 * 2}", "-f", "rawvideo",
+                        "-pix_fmt", "rgb24", "-"], capture_output=True, check=True)
+    return tuple(r.stdout[:3])
+
+
+def close(a, b, tol=40):
+    return all(abs(p - q) <= tol for p, q in zip(a, b))
+
+
+MAGENTA = (255, 0, 255)
+
+
+def half_magenta_png(path, w=400, h=100):
+    """Left half solid magenta, right half fully transparent: shows both that
+    the mark is drawn and that its transparency is kept (a lost alpha channel
+    turns the right half black - a changed watermark)."""
+    subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi",
+                    "-i", f"color=c=magenta:s={w}x{h},format=rgba",
+                    "-vf", f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lt(X,{w // 2}),255,0)'",
+                    "-frames:v", "1", str(path)], check=True)
+    return path
+
+
+class WatermarkPlace(unittest.TestCase):
+    """Rule 6: the mark goes where no overlay covers it, at its own shape."""
+
+    def test_centred_at_its_own_size(self):
+        w, h, x, y = render.watermark_box(400, 100, 300, 600)
+        self.assertEqual((w, h, y), (400, 100, 300))
+        self.assertEqual(x + w / 2, render.W / 2, "centred - never a corner")
+
+    def test_too_wide_is_shrunk_evenly_never_stretched(self):
+        w, h, x, y = render.watermark_box(1200, 300, 300, 600)
+        self.assertEqual((w, h), (600, 150))
+        self.assertLessEqual(x + w, render.RIGHT_CLEAR, "clear of TikTok's buttons")
+
+    def test_refuses_the_status_bar_and_the_captions(self):
+        with self.assertRaisesRegex(ValueError, "status bar"):
+            render.watermark_box(400, 100, 100, 600)
+        with self.assertRaisesRegex(ValueError, "into the captions"):
+            render.watermark_box(400, 100, render.CAPTION_TOP - 50, 600)
+        with self.assertRaisesRegex(ValueError, "buttons"):
+            render.watermark_box(1000, 50, 300, 2000)
+
+    def test_the_caption_band_comes_from_the_captions(self):
+        # Captions sit MARGIN_V up from the bottom; the band must start above
+        # that by at least one line of the largest style, so a mark placed just
+        # above it is not under a word.
+        self.assertLess(render.CAPTION_TOP, render.H - captions.MARGIN_V
+                        - max(s["size"] for s in captions.STYLES.values()))
+        render.watermark_box(400, 100, config.DEFAULTS["watermark_top"],
+                             config.DEFAULTS["watermark_max_width"])   # the default spot is legal
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class WatermarkRender(unittest.TestCase):
+    """The mark is in the rendered file, first frame to last, unchanged."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        d = Path(cls.tmp.name)
+        cls.src = d / "src.mp4"
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error",
+                        "-f", "lavfi", "-i", "color=c=0x303030:s=640x360:r=30",
+                        "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=16000",
+                        "-t", "8", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
+                        str(cls.src)], check=True)
+        cls.png = half_magenta_png(d / "mark.png")
+        cls.cfg = dict(CFG, x264_preset="ultrafast")
+        cls.out = render.render(cls.src, d / "out" / "01.mp4", 2.0, 6.0, captions.build([], 2.0, 6.0), cls.cfg, watermark=cls.png)
+        cls.plain = render.render(cls.src, d / "plain" / "01.mp4", 2.0, 6.0, captions.build([], 2.0, 6.0), cls.cfg)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_on_screen_for_the_whole_clip(self):
+        w, h, x, y = render.watermark_box(400, 100, self.cfg["watermark_top"],
+                                          self.cfg["watermark_max_width"])
+        clip = Path(self.tmp.name) / "out" / "01.mp4"
+        for t in (0.0, 1.9, self.out["duration"] - 0.1):
+            self.assertTrue(close(pixel(clip, t, x + w // 4, y + h // 2), MAGENTA),
+                            f"watermark missing at {t:.1f}s")
+
+    def test_its_transparency_is_kept(self):
+        w, h, x, y = render.watermark_box(400, 100, self.cfg["watermark_top"],
+                                          self.cfg["watermark_max_width"])
+        here = (x + 3 * w // 4, y + h // 2)
+        self.assertTrue(close(pixel(Path(self.tmp.name) / "out" / "01.mp4", 1.0, *here),
+                              pixel(Path(self.tmp.name) / "plain" / "01.mp4", 1.0, *here), tol=12),
+                        "the transparent half shows the video, not a black box")
+
+    def test_the_image_does_not_shorten_the_clip(self):
+        # -t read as the image's length (an -i after it) or the image ending
+        # the overlay would cut the clip to one frame.
+        self.assertAlmostEqual(self.out["duration"], 4.0, delta=0.15)
+        self.assertAlmostEqual(self.out["duration"], self.plain["duration"], delta=0.05)
+
+    def test_only_the_png_the_campaign_supplied(self):
+        jpg = Path(self.tmp.name) / "mark.jpg"
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(self.png), str(jpg)], check=True)
+        with self.assertRaisesRegex(ValueError, "PNG"):
+            render.check_watermark(jpg, self.cfg)
+        with self.assertRaisesRegex(media.MediaError, "missing"):
+            render.check_watermark(Path(self.tmp.name) / "gone.png", self.cfg)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class WatermarkEverywhere(EndToEnd):
+    """Through the CLI: a source's watermark is on every clip it makes, and a
+    missing watermark stops the render rather than make an unpaid clip."""
+
+    def setUp(self):
+        super().setUp()
+        self.png = half_magenta_png(Path(self.tmp.name) / "yt-mpj.png")
+        self.cli("source", "add", "mike", "--rights", "permission", "--evidence", "campaign page")
+
+    def test_every_clip_carries_it(self):
+        code, said = self.cli("source", "rules", "mike", "--watermark", str(self.png))
+        self.assertEqual(code, 0, said)
+        self.assertIn("watermark kept: 400x100", said)
+        self.png.unlink()                      # the source keeps its own copy
+        self.cli("ingest", "mike", str(self.video))
+        self.give_words(1)
+        code, said = self.cli("run")
+        self.assertEqual(code, 0, said)
+        clip = self.home / "clips" / "1" / "01.mp4"
+        self.assertEqual(json.loads(clip.with_suffix(".json").read_text())["watermark"], "mike.png")
+        w, h, x, y = render.watermark_box(400, 100, 300, 600)
+        self.assertTrue(close(pixel(clip, 0.5, x + 50, y + 50), MAGENTA))
+
+    def test_a_lost_watermark_stops_the_render(self):
+        self.cli("source", "rules", "mike", "--watermark", str(self.png))
+        (self.home / "watermarks" / "mike.png").unlink()
+        self.cli("ingest", "mike", str(self.video))
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 1)
+        self.assertFalse((self.home / "clips" / "1" / "01.mp4").exists(), "no clip without the mark")
+        err = db.connect(self.home / "clipper.db").execute("SELECT error FROM videos").fetchone()[0]
+        self.assertIn("watermark", err)
+
+    def test_a_bad_file_is_refused_when_set_not_hours_later(self):
+        bad = Path(self.tmp.name) / "notes.txt"
+        bad.write_text("YT: @mpj")
+        code, said = self.cli("source", "rules", "mike", "--watermark", str(bad))
+        self.assertEqual(code, 2)
+        self.assertFalse(list((self.home / "watermarks").glob("*")), "nothing half-kept")
+
+
+class DropboxLinks(unittest.TestCase):
+    # The shape of a Dropbox share link as copied from the app in 2026: a
+    # /scl/fi/ path, an rlkey, an st, and dl=0 (the preview page, not the file).
+    LINK = ("https://www.dropbox.com/scl/fi/jx035jv80zkn4oh835who/CURIOUS-MIKE-TRAE-YOUNG.mp4"
+            "?rlkey=abc123def456&st=xyz789&dl=0")
+
+    def test_a_share_link_becomes_the_file(self):
+        got = urllib.parse.urlsplit(ingest.direct(self.LINK))
+        q = dict(urllib.parse.parse_qsl(got.query))
+        self.assertEqual(q["dl"], "1")
+        self.assertEqual((q["rlkey"], q["st"]), ("abc123def456", "xyz789"), "the key is kept")
+        self.assertEqual(got.path, "/scl/fi/jx035jv80zkn4oh835who/CURIOUS-MIKE-TRAE-YOUNG.mp4")
+        self.assertEqual(ingest.direct(self.LINK.replace("&dl=0", ""))[-4:], "dl=1")
+
+    def test_a_folder_link_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "folder"):
+            ingest.direct("https://www.dropbox.com/scl/fo/abc/def?rlkey=x&dl=0")
+
+    def test_other_links_are_left_alone(self):
+        u = "https://example.com/video.mp4?dl=0"
+        self.assertEqual(ingest.direct(u), u)
+
+
+class CaptionsAskAQuestion(unittest.TestCase):
+    """Rule 2: comments count, and a question is what gets them."""
+
+    def test_a_draft_without_a_question_gets_one(self):
+        _, c, _ = postcopy.check_draft({"title": "Peach blossoms", "caption": "He got lost."}, CLIP_TEXT)
+        self.assertEqual(c, "He got lost. " + postcopy.QUESTION)
+        self.assertTrue(postcopy.template(CLIP_TEXT)[1].endswith("?"))
+
+    def test_a_question_already_there_is_left_alone(self):
+        _, c, _ = postcopy.check_draft({"title": "T", "caption": "Would you have kept walking?"}, CLIP_TEXT)
+        self.assertEqual(c, "Would you have kept walking?")
+
+    def test_still_within_the_limit(self):
+        _, c, _ = postcopy.check_draft({"title": "T", "caption": "word " * 100}, CLIP_TEXT)
+        self.assertLessEqual(len(c), postcopy.CAPTION_MAX)
+        self.assertTrue(c.endswith(postcopy.QUESTION))

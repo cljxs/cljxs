@@ -84,8 +84,10 @@ def stage_render(conn, paths, cfg, video):
         ass = captions.build(words, c["start"], c["end"], cfg["caption_style"],
                              cfg["caption_uppercase"], cfg["caption_max_words"],
                              cfg["caption_max_chars"])
-        info = render.render(video["media_path"], out, c["start"], c["end"], ass, cfg)
+        info = render.render(video["media_path"], out, c["start"], c["end"], ass, cfg,
+                             watermark=src["watermark"])
         meta = {"source": src["name"], "rights": src["rights"], "evidence": src["evidence"],
+                "watermark": Path(src["watermark"]).name if src["watermark"] else None,
                 "attribution": src["attribution"], "video_title": video["title"],
                 "origin": video["origin"], "start": c["start"], "end": c["end"],
                 "score": c["score"], "scorer": c["scorer"],
