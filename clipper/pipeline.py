@@ -22,12 +22,31 @@ def folder(paths, video):
     return paths["media"] / str(video["id"])
 
 
+def loudness_of(paths, video):
+    """Per-second loudness, measured once and kept as loudness.json. The
+    audio it is measured from is deleted after transcribing, so a video
+    that reaches here without either gets its audio extracted again."""
+    f = folder(paths, video)
+    loud_file, audio = f / "loudness.json", f / "audio.wav"
+    if loud_file.exists():
+        return json.loads(loud_file.read_text())
+    if not audio.exists():
+        media.extract_audio(video["media_path"], audio)
+    loud = media.loudness(audio)
+    loud_file.write_text(json.dumps(loud))
+    return loud
+
+
 def stage_transcribe(conn, paths, cfg, video):
     f = folder(paths, video)
     audio = f / "audio.wav"
     if not audio.exists():
         media.extract_audio(video["media_path"], audio)
     t = transcribe.transcribe(audio, f / "transcript.json", cfg)
+    loudness_of(paths, video)
+    # Everything later reads transcript.json and loudness.json, never the
+    # audio: 155 MB for an 81-minute episode, kept for nothing.
+    audio.unlink()
     db.event(conn, "transcribe", f"{len(t['words'])} words ({t['provider']} {t['model']})",
              video_id=video["id"])
     return "transcribed"
@@ -42,14 +61,8 @@ def words_of(conn, paths, video):
 
 
 def stage_find(conn, paths, cfg, video):
-    f = folder(paths, video)
     words = words_of(conn, paths, video)
-    loud_file = f / "loudness.json"
-    if loud_file.exists():
-        loud = json.loads(loud_file.read_text())
-    else:
-        loud = media.loudness(f / "audio.wav")
-        loud_file.write_text(json.dumps(loud))
+    loud = loudness_of(paths, video)
     src = conn.execute("SELECT * FROM sources WHERE id = ?", (video["source_id"],)).fetchone()
     hunt = json.loads(src["hunt"]) if src["hunt"] else []
     sents = moments.sentences(words, cfg["sentence_pause_seconds"])

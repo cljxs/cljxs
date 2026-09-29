@@ -1480,3 +1480,36 @@ class TranscribedInPieces(unittest.TestCase):
                             "-c:a", "pcm_s16le", str(wav)], check=True)
             with self.assertRaisesRegex(ValueError, "16-bit mono"):
                 transcribe.chunks(wav, 10)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class AudioIsNotKept(EndToEnd):
+    """The audio is only for transcribing and measuring loudness: 155 MB for
+    the 81-minute Trae Young episode, and nothing reads it afterwards."""
+
+    def test_gone_once_transcribed_and_measured(self):
+        self.cli("source", "add", "pd", "--rights", "public-domain", "--evidence", "LibriVox")
+        self.cli("ingest", "pd", str(self.video))
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        f = self.home / "media" / "1"
+        self.assertFalse((f / "audio.wav").exists())
+        self.assertTrue((f / "transcript.json").exists() and (f / "loudness.json").exists())
+        loud = json.loads((f / "loudness.json").read_text())
+        self.assertGreater(len(loud), 50, "measured before the audio went")
+
+    def test_a_video_from_before_this_is_measured_again(self):
+        # Transcribed by an older Clip: no loudness.json, and no audio either.
+        self.cli("source", "add", "pd", "--rights", "public-domain", "--evidence", "LibriVox")
+        self.cli("ingest", "pd", str(self.video))
+        self.give_words(1)
+        conn = db.connect(self.home / "clipper.db")
+        pipeline.advance(conn, config.paths(), config.load(), conn.execute("SELECT * FROM videos").fetchone())
+        f = self.home / "media" / "1"
+        (f / "loudness.json").unlink()
+        with conn:
+            conn.execute("DELETE FROM post_copy")
+            conn.execute("DELETE FROM clips")
+            conn.execute("UPDATE videos SET stage = 'transcribed'")
+        self.assertEqual(self.cli("run")[0], 0)
+        self.assertTrue((f / "loudness.json").exists())
