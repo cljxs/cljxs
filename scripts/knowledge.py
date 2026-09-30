@@ -346,11 +346,12 @@ SEEDS = [
               "answer 'I did' for who made it, and read the description once. "
               "Nothing here can publish; the owner presses Publish.",
          evidence="BACKBONE.md 'Publishing a listing on Etsy'"),
-    dict(dept="etsy", kind="fact", confidence="observed", source="owner",
-         title="Emily's daily build cap counts the Eastern day",
-         body="The cap counts builds started since Eastern midnight, all statuses. "
-              "Raise it for one day with emily-cap.py today, never by editing code.",
-         evidence="emily-new-build.py daily_cap(); scripts/emily-cap.py"),
+    dict(dept="etsy", kind="decision", confidence="observed", source="owner",
+         title="Emily has no daily build count",
+         body="The owner removed the 3-a-day build cap on 2026-09-30. Builds are "
+              "bounded by money instead: each is booked against the task queue's "
+              "daily_total_spend_cap, and AI calls run under daily_ai_budget.",
+         evidence="emily-new-build.py; tasks/limits.json"),
     dict(dept="etsy", kind="question", confidence="believed", source="owner",
          title="Can a 'personalized' listing actually be personalized?",
          body="A listing that promises a name or custom text needs a way to take "

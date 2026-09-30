@@ -13,9 +13,10 @@ inert. Emily fires when a row exists in `tasks/queue.db` with
       --brief "warm muted cabin, rain on the window, for book lovers" \
       --product poster
 
-It refuses duplicate ideas (dedupe on the slug) and caps at 3 builds a day
-unless you pass `--force`. Within a couple of seconds the dispatcher claims
-the task and wakes Emily.
+It refuses duplicate ideas (dedupe on the slug). There is no daily count
+of builds; the task queue's spend caps in `tasks/limits.json` bound the
+money. Within a couple of seconds the dispatcher claims the task and wakes
+Emily.
 
 ## Install
 

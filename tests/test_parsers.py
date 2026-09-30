@@ -12315,102 +12315,59 @@ class TheGateJudgesAScanTheWayCompareDoes(unittest.TestCase):
         self.assertIn("tote bag", kept)
 
 
-class TheBuildCapCountsTheEasternDay(unittest.TestCase):
-    """"Emily already has 3 build task(s) queued today" - with nothing queued.
+class EmilyHasNoDailyBuildCount(unittest.TestCase):
+    """"Let's get rid of the 3 creation cap limit on Emily" (2026-09-30).
 
-    The owner approved three totes after 8 PM Eastern on the 23rd. The cap
-    took its date off a UTC clock, where 8 PM Eastern is already the 24th, so
-    the next morning's approval from the Deck was refused on the strength of
-    last night's finished builds. "Queued" was wrong as well: every status
-    counts, which is right for a cap on spending and wrong as a description.
-    And the advice, "re-run with --force", was a flag the Deck's button cannot
-    pass.
+    Builds were refused after the third of an Eastern day. What bounds a build
+    now is money - the task queue's daily_total_spend_cap, which answers 429 -
+    not a count. Checked against the queue as it would be on a busy day: five
+    builds already started today, and the sixth still goes in.
     """
 
-    def setUp(self):
-        self.nb = load("emily_new_build_cap", "emily-new-build.py")
+    def run_build(self, answers):
+        nb = load("emily_new_build_nocap", "emily-new-build.py")
+        calls = []
 
-    def task(self, n, created, status="done", idea=None):
-        return {"id": n, "created_at": created, "status": status,
-                "payload": json.dumps({"idea": idea or f"Tote {n}"})}
+        def call(method, path, body=None):
+            calls.append((method, path))
+            return answers(method, path)
+        nb.call = call
+        nb.generate_artwork = lambda *a, **k: (True, "stub - no artwork, no spend in a test")
+        argv = sys.argv
+        sys.argv = ["emily-new-build.py", "Sixth Tote Today", "--product", "tote"]
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+                code = nb.main()
+        finally:
+            sys.argv = argv
+        return code, calls, out.getvalue()
 
-    def test_last_nights_builds_belong_to_last_night(self):
-        rows = [self.task(1, "2026-09-24 00:05:10"),          # 20:05 ET on the 23rd
-                self.task(2, "2026-09-24 00:31:44"),
-                self.task(3, "2026-09-24 01:02:09", "failed"),
-                self.task(4, "2026-09-24 14:20:00")]           # 10:20 ET on the 24th
-        self.assertEqual([t["id"] for t in self.nb.started_today(rows, "2026-09-24")], [4])
-        self.assertEqual([t["id"] for t in self.nb.started_today(rows, "2026-09-23")], [1, 2, 3])
+    def test_a_sixth_build_in_a_day_is_queued(self):
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        today = [{"id": n, "created_at": now, "status": "done",
+                  "payload": json.dumps({"idea": f"Tote {n}"})} for n in range(1, 6)]
 
-    def test_every_status_counts_because_each_one_spent(self):
-        rows = [self.task(n, "2026-09-24 15:00:00", st)
-                for n, st in enumerate(("done", "failed", "cancelled", "pending"))]
-        self.assertEqual(len(self.nb.started_today(rows, "2026-09-24")), 4)
+        def answers(method, path):
+            if method == "GET":
+                return 200, today
+            return 201, {"id": 99}
+        code, calls, said = self.run_build(answers)
+        self.assertEqual(code, 0, said)
+        self.assertIn(("POST", "/tasks"), calls)
+        self.assertIn("queued task #99", said)
 
-    def test_junk_rows_are_not_a_crash(self):
-        self.assertEqual(self.nb.started_today(None, "2026-09-24"), [])
-        self.assertEqual(self.nb.started_today([{"created_at": "soon"}, {}], "2026-09-24"), [])
+    def test_the_spend_cap_still_says_no(self):
+        code, calls, said = self.run_build(
+            lambda m, p: (429, {"error": "daily_total_spend_cap 10 would be exceeded"}))
+        self.assertEqual(code, 1)
+        self.assertIn("spend cap hit", said)
 
-    def test_the_day_is_not_worked_out_here(self):
-        src = (SCRIPTS / "emily-new-build.py").read_text()
-        body = src.split("def started_today(", 1)[1].split("\ndef ", 1)[0]
-        self.assertIn("et_time.day()", body)
-        self.assertNotIn("strftime", body)
-
-    # --- through the real scripts, against a stub task API -----------------
-
-    def serve(self, rows):
-        import http.server, threading
-
-        class H(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                body = json.dumps(rows).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(body)
-
-            def log_message(self, *a):
-                pass
-        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        self.addCleanup(srv.shutdown)
-        return f"http://127.0.0.1:{srv.server_address[1]}"
-
-    def now_utc(self):
-        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-
-    def test_the_cap_names_what_it_counted_and_says_finished_ones_count(self):
-        api = self.serve([self.task(n, self.now_utc(), idea=f"Tote {n}") for n in (1, 2, 3)])
-        r = subprocess.run([sys.executable, str(SCRIPTS / "emily-new-build.py"), "Another Tote",
-                            "--product", "tote"], capture_output=True, text=True,
-                           env=dict(os.environ, MISSION_CONTROL_API=api))
-        self.assertEqual(r.returncode, self.nb.CAP_REACHED, r.stderr)
-        self.assertIn("Tote 1 (done)", r.stderr)
-        self.assertIn("Eastern", r.stderr)
-        self.assertNotIn("queued", r.stderr)
-
-    def test_the_deck_is_told_the_command_for_this_idea(self):
-        root = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
-        (root / "scripts").symlink_to(SCRIPTS)
-        state = root / "agents" / "scout" / "state"
-        state.mkdir(parents=True)
-        (state / "ideas.json").write_text(json.dumps({"ideas": [
-            {"id": 7, "title": "Book Market Tote", "product": "tote", "status": "pending"}]}))
-        api = self.serve([self.task(n, self.now_utc()) for n in (1, 2, 3)])
-        r = subprocess.run([sys.executable, str(SCRIPTS / "scout-review.py"), "approve", "7"],
-                           capture_output=True, text=True,
-                           env=dict(os.environ, ECOSYSTEM_ROOT=str(root), MISSION_CONTROL_API=api))
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("scout-review.py approve 7 --force", r.stderr)
-        self.assertEqual(json.loads((state / "ideas.json").read_text())["ideas"][0]["status"],
-                         "pending", "a refused approval must leave the idea pending")
-
-    def test_under_the_cap_nothing_is_refused_for_last_night(self):
-        # The morning in question: three builds last night, none today.
-        yesterday_evening = [self.task(n, "2000-01-02 01:00:00") for n in (1, 2, 3)]
-        self.assertEqual(self.nb.started_today(yesterday_evening), [])
+    def test_approving_an_idea_has_no_cap_to_get_round(self):
+        src = (SCRIPTS / "scout-review.py").read_text()
+        self.assertNotIn("CAP_REACHED", src)
+        self.assertNotIn("--force", src)
+        self.assertFalse((SCRIPTS / "emily-cap.py").exists())
 
 
 class TheBriefingValuesBelfortsBookAsBelfortDoes(unittest.TestCase):
@@ -12699,68 +12656,6 @@ class AComparisonIsDrawnAsTheProduct(unittest.TestCase):
     def test_the_command_line_hands_it_over(self):
         src = (SCRIPTS / "emily-assets.py").read_text()
         self.assertIn("compare(a.prompt, a.compare, key, Path(a.out), a.product)", src)
-
-
-class TheCapCanBeRaisedForOneDay(unittest.TestCase):
-    """"I want to override the 3 per day limit just for today."
-
-    The only way to change the cap was EMILY_DAILY_CAP on the service, which
-    stays raised until somebody remembers to lower it. A raise now carries
-    today's Eastern date and is ignored from midnight Eastern on.
-    """
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
-        self.old = os.environ.get("ECOSYSTEM_ROOT")
-        os.environ["ECOSYSTEM_ROOT"] = str(self.root)
-        self.nb = load("emily_new_build_raise", "emily-new-build.py")
-
-    def tearDown(self):
-        if self.old is None:
-            os.environ.pop("ECOSYSTEM_ROOT", None)
-        else:
-            os.environ["ECOSYSTEM_ROOT"] = self.old
-        self.tmp.cleanup()
-
-    def raise_to(self, n, day):
-        self.nb.CAP_TODAY.parent.mkdir(parents=True, exist_ok=True)
-        self.nb.CAP_TODAY.write_text(json.dumps({"day": day, "cap": n}))
-
-    def test_a_raise_applies_on_its_day(self):
-        self.raise_to(6, "2026-09-24")
-        self.assertEqual(self.nb.daily_cap("2026-09-24"), (6, True))
-
-    def test_it_is_gone_the_next_day_by_itself(self):
-        self.raise_to(6, "2026-09-24")
-        self.assertEqual(self.nb.daily_cap("2026-09-25"), (self.nb.DAILY_DRAFT_CAP, False))
-
-    def test_junk_is_the_standing_cap(self):
-        self.nb.CAP_TODAY.parent.mkdir(parents=True, exist_ok=True)
-        for junk in ("{", '{"day": "2026-09-24", "cap": 0}', '{"day": "2026-09-24", "cap": "x"}', "[]"):
-            self.nb.CAP_TODAY.write_text(junk)
-            self.assertEqual(self.nb.daily_cap("2026-09-24"), (self.nb.DAILY_DRAFT_CAP, False), junk)
-
-    def test_the_command_writes_todays_eastern_date(self):
-        r = subprocess.run([sys.executable, str(SCRIPTS / "emily-cap.py"), "today", "6"],
-                           capture_output=True, text=True,
-                           env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root),
-                                    MISSION_CONTROL_API="http://127.0.0.1:9"))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        saved = json.loads(self.nb.CAP_TODAY.read_text())
-        self.assertEqual(saved, {"day": et_time.day(), "cap": 6})
-        self.assertIn("for " + et_time.day() + " only", r.stdout)
-        r = subprocess.run([sys.executable, str(SCRIPTS / "emily-cap.py"), "clear"],
-                           capture_output=True, text=True,
-                           env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root),
-                                    MISSION_CONTROL_API="http://127.0.0.1:9"))
-        self.assertFalse(self.nb.CAP_TODAY.exists())
-
-    def test_the_build_uses_it(self):
-        src = (SCRIPTS / "emily-new-build.py").read_text()
-        body = src.split("def main(", 1)[1]
-        self.assertIn("cap, raised = daily_cap()", body)
-        self.assertIn("len(done_today) >= cap", body)
 
 
 class TheStoreReportIsSubtractionNotMemory(unittest.TestCase):

@@ -16,7 +16,7 @@ code (freshest injury news first, then soonest), and every one of them gets
 its own estimate - ace-judge.py refuses a sweep while a focus stands.
 
 FOR ONE DAY. The focus carries its Eastern date and stops applying at
-midnight Eastern by itself, the way emily-cap.py's raise does - a setting
+midnight Eastern by itself - a setting
 that stays until somebody remembers to undo it is the forgotten-edit failure
 this repo keeps naming. `clear` ends it sooner.
 

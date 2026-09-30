@@ -17,7 +17,6 @@ Standard library only.
 """
 
 import argparse
-import importlib.util
 import json
 import os
 import subprocess
@@ -34,13 +33,6 @@ IDEAS = ROOT / "agents" / "scout" / "state" / "ideas.json"
 LESSONS = ROOT / "agents" / "emily" / "state" / "lessons.md"
 NEW_BUILD = ROOT / "scripts" / "emily-new-build.py"
 
-# The exit code emily-new-build uses for "the daily cap was reached", read
-# from that script rather than written here as a second copy of the number.
-_nb = importlib.util.spec_from_file_location(
-    "emily_new_build", Path(__file__).resolve().parent / "emily-new-build.py")
-_nbm = importlib.util.module_from_spec(_nb)
-_nb.loader.exec_module(_nbm)
-CAP_REACHED = _nbm.CAP_REACHED
 
 
 def load():
@@ -150,21 +142,12 @@ def cmd_approve(a, d):
     # competing with. Everything measured died at this line.
     if isinstance(idea.get("evidence"), dict) and idea["evidence"].get("phrase"):
         cmd += ["--evidence", json.dumps(idea["evidence"])]
-    if a.force:
-        cmd.append("--force")
     print("queueing to emily:", " ".join(cmd[2:5]), "...")
     r = subprocess.run(cmd, capture_output=True, text=True)
     sys.stdout.write(r.stdout)
     sys.stderr.write(r.stderr)
     if r.returncode != 0:
         print("\nEmily was NOT queued. The idea stays pending.", file=sys.stderr)
-        if r.returncode == CAP_REACHED and not a.force:
-            # Named for THIS idea, with its id - the Deck's button cannot pass
-            # a flag, and "re-run with --force" told the owner nothing they
-            # could do from where they were.
-            print(f"To build it anyway today, on the droplet:\n"
-                  f"  python3 scripts/scout-review.py approve {idea.get('id')} --force",
-                  file=sys.stderr)
         return r.returncode
     idea["status"] = "approved"
     idea["verdict_reason"] = a.reason or "approved by you"
@@ -194,7 +177,7 @@ def main():
     p.set_defaults(fn=cmd_list)
 
     p = sub.add_parser("approve"); p.add_argument("id")
-    p.add_argument("--reason", default=""); p.add_argument("--force", action="store_true")
+    p.add_argument("--reason", default="")
     p.set_defaults(fn=cmd_approve)
 
     p = sub.add_parser("reject"); p.add_argument("id"); p.add_argument("reason")

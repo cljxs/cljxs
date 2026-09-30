@@ -26,42 +26,19 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import et_time  # noqa: E402
-
 API = os.environ.get("MISSION_CONTROL_API", "http://127.0.0.1:3001")
-DAILY_DRAFT_CAP = int(os.environ.get("EMILY_DAILY_CAP", "3"))
 
-# A raised cap for ONE Eastern day, written by emily-cap.py. It carries its
-# date and stops applying at midnight Eastern by itself: the alternative - a
-# higher EMILY_DAILY_CAP on the service - stays raised until somebody
-# remembers to lower it, which is the forgotten-edit failure this repo keeps
-# naming.
-ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
-CAP_TODAY = ROOT / "agents" / "emily" / "state" / "cap-today.json"
-
-
-def daily_cap(today=None):
-    """(cap, raised) for today: the raised cap if one was set for today's
-    Eastern date, otherwise the standing one."""
-    today = today or et_time.day()
-    try:
-        d = json.loads(CAP_TODAY.read_text())
-        if d.get("day") == today and int(d.get("cap")) > 0:
-            return int(d["cap"]), True
-    except Exception:
-        pass
-    return DAILY_DRAFT_CAP, False
+# There is no count of builds a day. There was one - 3, raised a day at a
+# time with emily-cap.py - and the owner removed it on 2026-09-30. What bounds
+# the spending is money, not a count: every build is booked at COST_ESTIMATE
+# against the task queue's daily_total_spend_cap, and the AI calls run under
+# daily_ai_budget (tasks/limits.json, budget.py).
 
 # What one build is booked at against the task queue's spend caps: the
 # artwork plus Emily's run. An estimate, not a measurement - the real cost is
 # on OpenRouter's bill. gm.py reads it too, to decide whether today's AI
 # allowance has room before it sends a build.
 COST_ESTIMATE = 0.25
-
-# Distinct from a failure, so scout-review can say how to override the cap
-# for the one idea that hit it, rather than repeat a flag the Deck cannot pass.
-CAP_REACHED = 3
 
 
 def call(method, path, body=None):
@@ -84,48 +61,6 @@ def call(method, path, body=None):
 
 def slugify(s):
     return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", s.lower())).strip("-")[:60]
-
-
-def started_today(rows, today=None):
-    """Emily's build tasks started on today's EASTERN date, whatever became
-    of them.
-
-    Every status counts, finished and failed alike: the cap is on spending,
-    and a build that finished spent its money on artwork just the same. What
-    this used to get wrong was the day. It took the date off a UTC clock, so
-    the day rolled over at 8 PM Eastern - three totes approved after 8 PM on
-    the 23rd filled the cap for the 24th, and the Deck refused an approval the
-    next morning saying three builds were "queued" when none was. The Eastern
-    date comes from et_time, like every other date here.
-
-    created_at is SQLite's datetime('now'): UTC with no marker, which
-    to_eastern reads as UTC.
-    """
-    today = today or et_time.day()
-    out = []
-    for t in rows if isinstance(rows, list) else []:
-        when = et_time.to_eastern(str(t.get("created_at") or ""))
-        if when is not None and et_time.day(when) == today:
-            out.append(t)
-    return out
-
-
-def drafts_today():
-    status, rows = call("GET", "/tasks?assignee=emily")
-    if status != 200:
-        return []
-    return started_today(rows)
-
-
-def task_label(t):
-    """'Coastal Tide Botanical Collage Tote (done)' for the cap message."""
-    try:
-        payload = json.loads(t.get("payload") or "{}") if isinstance(t.get("payload"), str) \
-            else (t.get("payload") or {})
-    except Exception:
-        payload = {}
-    return f"{payload.get('idea') or payload.get('title') or 'task ' + str(t.get('id'))} " \
-           f"({t.get('status') or '?'})"
 
 
 def _assets():
@@ -201,21 +136,7 @@ def main():
                          "supply, price band and the market's own tags")
     ap.add_argument("--priority", type=int, default=0)
     ap.add_argument("--cost-estimate", type=float, default=COST_ESTIMATE)
-    ap.add_argument("--force", action="store_true",
-                    help="bypass the daily draft cap (an explicit go-ahead)")
     a = ap.parse_args()
-
-    done_today = drafts_today()
-    cap, raised = daily_cap()
-    if len(done_today) >= cap and not a.force:
-        print(f"Emily has started {len(done_today)} build(s) today "
-              f"({et_time.day()}, Eastern) and the daily cap is "
-              f"{cap}{' (raised for today)' if raised else ''}:", file=sys.stderr)
-        for t in done_today:
-            print(f"  - {task_label(t)}", file=sys.stderr)
-        print("Finished builds count too - each one paid for its artwork. "
-              "The cap resets at midnight Eastern.", file=sys.stderr)
-        return CAP_REACHED
 
     slug = slugify(a.idea)
 
