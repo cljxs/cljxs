@@ -169,6 +169,22 @@ def write(conn, cfg, clip_id, redo=False, call=None, key=None, left=None):
     clip = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
     meta = json.loads(clip["meta"])
     transcript = meta.get("text") or ""
+    listed = conn.execute("SELECT l.* FROM candidates c JOIN cutlist l ON l.id = c.cut_id WHERE c.id = ?",
+                          (clip["candidate_id"],)).fetchone()
+    if listed and listed["caption"]:
+        # The campaign wrote this post itself: its caption, word for word, and
+        # its hook as the title. No model and no added question - "Agree or
+        # disagree?" under a man describing his recovery is exactly the tone
+        # the campaign asks clippers not to take.
+        title = cut(listed["hook"] or listed["title"] or listed["caption"], TITLE_MAX)
+        caption = cut(listed["caption"], CAPTION_MAX)
+        with conn:
+            conn.execute("INSERT INTO post_copy (clip_id, title, caption, hashtags, generator, cost_usd, "
+                         "updated_at) VALUES (?, ?, ?, '[]', 'campaign', 0, ?) ON CONFLICT(clip_id) DO UPDATE "
+                         "SET title=excluded.title, caption=excluded.caption, hashtags=excluded.hashtags, "
+                         "generator=excluded.generator, cost_usd=0, updated_at=excluded.updated_at",
+                         (clip_id, title, caption, db.now()))
+        return conn.execute("SELECT * FROM post_copy WHERE clip_id = ?", (clip_id,)).fetchone()
     title, caption, tags, gen, cost = (*template(transcript), "template", 0.0)
     why = None
     try:

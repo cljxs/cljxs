@@ -79,6 +79,20 @@ DEFAULTS = {
     "spot_daily_units": 3000,        # of the free 10,000/day; the rest is left for uploads later
     "spot_min_match": 0.5,           # share of a trending clip's words found in the footage
 
+    # --- Twitch: the chat watcher (twitch.py) --------------------------------
+    # A clip is asked for when chat runs twitch_spike_ratio times faster than
+    # usual AND at least twitch_spike_min_rate messages a second - believed
+    # values, from three minutes of one busy chat (5-7 a second); tune them
+    # on what the first streams produce.
+    "twitch_spike_ratio": 3.0,
+    "twitch_spike_min_rate": 2.0,
+    "twitch_clip_seconds": 60,        # 5-60: Twitch keeps the last this-many of ~90 s
+    # Asked this long after chat explodes, so the reaction is in the clip.
+    "twitch_clip_delay_seconds": 5,
+    "twitch_cooldown_seconds": 180,   # between two clips of one stream
+    "twitch_max_clips_per_stream": 8,  # a handful a stream, never a flood
+    "twitch_moments_hours": 48,       # past broadcasts' top clips from this far back
+
     # --- posting ------------------------------------------------------------
     "platforms": ["youtube", "tiktok"],
     # Asked for; YouTube itself keeps uploads private until the Google Cloud

@@ -68,6 +68,11 @@ if ! git -C "$ROOT" pull --ff-only; then
 fi
 
 for AGENT in "${AGENTS[@]}"; do
+  # Clip lives in clipper/, not agents/: it has units but no AGENTS.md,
+  # because no model reads instructions to run it.
+  if [ ! -d "$ROOT/agents/$AGENT" ]; then
+    step "$AGENT: no AGENTS.md to rebuild (not a model agent)"
+  else
   step "$AGENT: rebuilding AGENTS.md"
   if ! "$ROOT/scripts/merge-header.sh" "$AGENT" $YES; then
     echo
@@ -75,6 +80,7 @@ for AGENT in "${AGENTS[@]}"; do
     echo "seeded text and not $AGENT's own rules, re-run this with" >&2
     echo "  $0 ${AGENTS[*]} --yes-headers" >&2
     exit 1
+  fi
   fi
 
   step "$AGENT: installing units"

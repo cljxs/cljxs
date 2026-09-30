@@ -18,6 +18,13 @@ STYLES = {
               "highlight": "&H0000E1FF", "outline": 12, "shadow": 0, "box": True},
 }
 
+# A campaign's hook: on screen for the whole clip, top-centre, black on a
+# white box - under the status bar and TikTok's tabs (render.TOP_CLEAR is
+# 220), wrapped to fit, and moved below a watermark that sits up here.
+HOOK_TOP = 250
+HOOK_SIZE = 56
+HOOK_LINES = 3                  # the most it may wrap to; render checks the room for this
+
 # Bottom margin, in 1920-high pixels. TikTok and Shorts both lay the caption,
 # the username and the buttons over the bottom quarter of the screen, so text
 # there is covered. 560 puts it at about 70% of the way down.
@@ -58,8 +65,13 @@ def chunks(words, max_words=3, max_chars=18, gap=0.5):
     return out
 
 
+def hook_height():
+    """Pixels a hook can take up at most: its lines and the box round them."""
+    return HOOK_LINES * int(HOOK_SIZE * 1.25) + 2 * 14
+
+
 def build(words, clip_start, clip_end, style="bold-yellow", upper=True, max_words=3,
-          max_chars=18, pop=True):
+          max_chars=18, pop=True, hook=None, hook_top=HOOK_TOP):
     """The whole .ass file for one clip. `words` are transcript words (source
     clock); only those inside the clip are used, shifted to start at 0."""
     st = STYLES[style]
@@ -77,11 +89,16 @@ def build(words, clip_start, clip_end, style="bold-yellow", upper=True, max_word
         "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
         f"Style: Cap,{st['font']},{st['size']},{st['primary']},&H000000FF,&H00000000,{back},"
         f"{st['bold']},0,0,0,100,100,0,0,{border},{st['outline']},{st['shadow']},2,60,60,{MARGIN_V},1",
+        f"Style: Hook,DejaVu Sans,{HOOK_SIZE},&H00111111,&H000000FF,&H00FFFFFF,&H00000000,"
+        f"-1,0,0,0,100,100,0,0,3,14,0,8,90,90,{int(hook_top)},1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     clip_len = clip_end - clip_start
+    if hook:
+        # \q0: this line wraps at word boundaries; the captions stay unwrapped
+        lines.append(f"Dialogue: 1,{ts(0)},{ts(clip_len)},Hook,,0,0,0,,{{\\q0}}{clean(hook, False)}")
     for g, group in enumerate(groups):
         nxt = groups[g + 1][0]["start"] if g + 1 < len(groups) else clip_len
         # Hold the chunk on screen a little past its last word, but never

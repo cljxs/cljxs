@@ -125,18 +125,28 @@ def need_space(folder, nbytes, hint=""):
                            f"{2 * nbytes / 1e9:.1f} GB for a {nbytes / 1e9:.1f} GB video{hint}")
 
 
+def is_dropbox(url):
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    return host == "dropbox.com" or host.endswith(".dropbox.com")
+
+
+def is_dropbox_folder(url):
+    """A Dropbox link to a folder (/scl/fo/, /sh/), not to one file."""
+    return is_dropbox(url) and urllib.parse.urlsplit(url).path.startswith(("/scl/fo/", "/sh/"))
+
+
 def direct(url):
     """A share link turned into the file itself. Dropbox's share link
     (?dl=0) is a web page about the file; ?dl=1 is the file. A folder link
-    (/scl/fo/, /sh/) downloads as a zip of everything in it, which is not
-    one video - refused, with what to do instead."""
-    parts = urllib.parse.urlsplit(url)
-    host = (parts.hostname or "").lower()
-    if not (host == "dropbox.com" or host.endswith(".dropbox.com")):
+    downloads as a zip of everything in it, which is not one video -
+    refused, with what to do instead."""
+    if not is_dropbox(url):
         return url
-    if parts.path.startswith(("/scl/fo/", "/sh/")):
+    parts = urllib.parse.urlsplit(url)
+    if is_dropbox_folder(url):
         raise ValueError("that is a Dropbox folder link - open the folder, open the one video, "
-                         "and copy that file's link instead")
+                         "and copy that file's link instead; or give the folder to its source "
+                         "(source rules NAME --dropbox-folder LINK) and Clip picks up every video in it")
     q = [(k, v) for k, v in urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
          if k not in ("dl", "raw")]
     return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(q + [("dl", "1")])))

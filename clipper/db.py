@@ -194,6 +194,68 @@ MIGRATIONS = [
     """
     ALTER TABLE sources ADD COLUMN spellings TEXT;
     """,
+    # 8 - a campaign's own clip list (campaign.py): the moments it names on a
+    # published episode, with its hook and caption. A video knows which
+    # episode it is; a candidate cut from the list knows which entry.
+    """
+    ALTER TABLE videos ADD COLUMN episode TEXT;        -- the YouTube id of the published episode
+    ALTER TABLE candidates ADD COLUMN cut_id INTEGER;  -- cutlist.id when cut from a campaign's list
+    CREATE TABLE cutlist (
+      id INTEGER PRIMARY KEY,
+      source_id INTEGER NOT NULL REFERENCES sources(id),
+      episode TEXT NOT NULL,
+      key TEXT NOT NULL,                -- the campaign's own id: "C45", "2"
+      priority INTEGER NOT NULL,        -- the campaign's order: its "start here" rows first
+      first_batch INTEGER NOT NULL DEFAULT 0,
+      start REAL NOT NULL,
+      end REAL NOT NULL,
+      title TEXT, topic TEXT,
+      hook TEXT,                        -- on screen, the whole clip
+      caption TEXT,                     -- the post, verbatim
+      direction TEXT,                   -- how the campaign says to cut it
+      imported_at TEXT NOT NULL,
+      UNIQUE (source_id, episode, key)
+    );
+    """,
+    # 9 - Twitch (twitch.py) and the Dropbox pickup (dropbox.py). A Twitch
+    # clip here is one the watcher made on your account; a moment is one
+    # viewers clipped from a past broadcast, for you to clip yourself. A
+    # pickup is a file seen in a source's Dropbox folder, and what came of it.
+    """
+    ALTER TABLE sources ADD COLUMN twitch TEXT;          -- the Twitch channel the watcher follows
+    ALTER TABLE sources ADD COLUMN dropbox_folder TEXT;  -- a shared folder link the pickup empties
+    CREATE TABLE twitch_clips (
+      id TEXT PRIMARY KEY,              -- Twitch's clip id
+      channel TEXT NOT NULL,
+      edit_url TEXT,                    -- Twitch's page to trim, publish and download it (24 h)
+      url TEXT,                         -- clips.twitch.tv/<id>, once Twitch confirms it exists
+      status TEXT NOT NULL,             -- asked, made, failed
+      chat_rate REAL,                   -- messages a second when it was made
+      chat_usual REAL,                  -- and what was usual just before
+      chat_words TEXT,                  -- JSON [[word, count], ...]: what chat was saying
+      stream_started_at TEXT,
+      created_at TEXT NOT NULL,
+      detail TEXT
+    );
+    CREATE TABLE twitch_moments (
+      id TEXT PRIMARY KEY,              -- the viewer's clip id
+      channel TEXT NOT NULL,
+      title TEXT, views INTEGER, creator TEXT,
+      video_id TEXT, vod_offset INTEGER, duration REAL,
+      created_at TEXT, fetched_at TEXT NOT NULL
+    );
+    CREATE TABLE pickups (
+      file_id TEXT NOT NULL,            -- Dropbox's id for the file
+      content_hash TEXT NOT NULL,       -- a re-uploaded file with new content is a new pickup
+      path TEXT NOT NULL,
+      size INTEGER,
+      status TEXT NOT NULL,             -- ingested, refused, failed
+      video_id INTEGER REFERENCES videos(id),
+      detail TEXT,
+      seen_at TEXT NOT NULL,
+      PRIMARY KEY (file_id, content_hash)
+    );
+    """,
 ]
 
 

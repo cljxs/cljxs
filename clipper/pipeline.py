@@ -13,9 +13,13 @@ import json
 import traceback
 from pathlib import Path
 
-from clipper import captions, db, media, moments, postcopy, render, score, transcribe
+from clipper import campaign, captions, db, media, moments, postcopy, render, score, transcribe
 
 MAX_ATTEMPTS = 3
+
+# A clip probes a little longer than it was cut: the container ends on a
+# frame and an audio packet, not on the second.
+WHOLE_SLACK = 1.0
 
 
 def folder(paths, video):
@@ -60,8 +64,27 @@ def words_of(conn, paths, video):
     return transcribe.respell(words, json.loads(src["spellings"]) if src and src["spellings"] else [])
 
 
+def already_a_clip(cfg, video):
+    """A video no longer than the longest clip is one somebody already cut -
+    a Twitch clip is at most 60 s - so it is used whole. Choosing its "best
+    35 seconds" would cut off the setup or the payoff the person picked."""
+    return video["duration"] <= cfg["max_clip_seconds"] + WHOLE_SLACK
+
+
 def stage_find(conn, paths, cfg, video):
     words = words_of(conn, paths, video)
+    if already_a_clip(cfg, video):
+        with conn:
+            conn.execute("DELETE FROM clips WHERE video_id = ?", (video["id"],))
+            conn.execute("DELETE FROM candidates WHERE video_id = ?", (video["id"],))
+            conn.execute(
+                "INSERT INTO candidates (video_id, start, end, text, score, scorer, features, "
+                "reasons, selected) VALUES (?, 0, ?, ?, 100, 'whole', '{}', ?, 1)",
+                (video["id"], video["duration"], "".join(w["word"] for w in words).strip(),
+                 db.as_json([f"already a clip ({video['duration']:.0f}s): used whole"])))
+        db.event(conn, "find", f"{video['duration']:.0f}s - already a clip, used whole",
+                 video_id=video["id"])
+        return "found"
     loud = loudness_of(paths, video)
     src = conn.execute("SELECT * FROM sources WHERE id = ?", (video["source_id"],)).fetchone()
     hunt = json.loads(src["hunt"]) if src["hunt"] else []
@@ -71,6 +94,12 @@ def stage_find(conn, paths, cfg, video):
     # At least one clip per topic on the campaign's list: the list is the
     # moments it says to make, so a smaller cap would silently drop some.
     chosen = moments.choose(scored, max(cfg["max_clips_per_video"], len(hunt)), cfg["min_score"], hunt)
+    # A campaign that names its own moments for this episode is followed
+    # instead: Clip's picks are kept as unselected candidates (they are what
+    # learning needs) and the campaign's first batch is queued below.
+    listed = campaign.entries(conn, video)
+    if listed:
+        chosen = []
     picked = {(c["i"], c["j"]) for c in chosen}
     with conn:
         conn.execute("DELETE FROM clips WHERE video_id = ?", (video["id"],))
@@ -84,6 +113,12 @@ def stage_find(conn, paths, cfg, video):
                 (video["id"], start, end, c["text"], c["score"], score.SCORER,
                  db.as_json(c["features"]), db.as_json(c["reasons"]),
                  1 if (c["i"], c["j"]) in picked else 0))
+    if listed:
+        queued = campaign.queue(conn, paths, cfg, video, first_batch=True) or campaign.queue(
+            conn, paths, cfg, video, n=cfg["max_clips_per_video"])
+        db.event(conn, "find", f"the campaign lists {len(listed)} moments for this episode; queued its "
+                               f"first {len(queued)}. More: clipper cuts {video['id']} N", video_id=video["id"])
+        return "found"
     covered = sorted({t for c in chosen for t in c["topics"]})
     missing = [t["name"] for t in hunt if t["name"] not in covered]
     db.event(conn, "find", f"{len(sents)} sentences, {len(scored)} candidate windows, "
@@ -97,8 +132,10 @@ def stage_find(conn, paths, cfg, video):
 def stage_render(conn, paths, cfg, video):
     words = words_of(conn, paths, video)
     src = conn.execute("SELECT * FROM sources WHERE id = ?", (video["source_id"],)).fetchone()
+    # ties broken by the order they were queued: a campaign's moments all score
+    # 100, and its own order ("start with these 6") is the order they are made
     picked = conn.execute("SELECT * FROM candidates WHERE video_id = ? AND selected = 1 "
-                          "ORDER BY score DESC", (video["id"],)).fetchall()
+                          "ORDER BY score DESC, id", (video["id"],)).fetchall()
     out_dir = paths["clips"] / str(video["id"])
     for c in picked:
         if conn.execute("SELECT 1 FROM clips WHERE candidate_id = ?", (c["id"],)).fetchone():
@@ -109,13 +146,19 @@ def stage_render(conn, paths, cfg, video):
         rank = conn.execute("SELECT COALESCE(MAX(rank), 0) + 1 FROM clips WHERE video_id = ?",
                             (video["id"],)).fetchone()[0]
         out = out_dir / f"{rank:02d}.mp4"
+        cut = conn.execute("SELECT * FROM cutlist WHERE id = ?", (c["cut_id"],)).fetchone() if c["cut_id"] else None
+        scfg = render.source_cfg(cfg, src)
+        hook = cut["hook"] if cut and cut["hook"] else None
+        top = render.hook_top(render.check_watermark(src["watermark"], scfg) if src["watermark"] else None) \
+            if hook else captions.HOOK_TOP
         ass = captions.build(words, c["start"], c["end"], cfg["caption_style"],
                              cfg["caption_uppercase"], cfg["caption_max_words"],
-                             cfg["caption_max_chars"])
+                             cfg["caption_max_chars"], hook=hook, hook_top=top)
         info = render.render(video["media_path"], out, c["start"], c["end"], ass,
-                             render.source_cfg(cfg, src), watermark=src["watermark"])
+                             scfg, watermark=src["watermark"])
         meta = {"source": src["name"], "rights": src["rights"], "evidence": src["evidence"],
                 "watermark": Path(src["watermark"]).name if src["watermark"] else None,
+                "hook": hook, "campaign_key": cut["key"] if cut else None,
                 "attribution": src["attribution"], "video_title": video["title"],
                 "origin": video["origin"], "start": c["start"], "end": c["end"],
                 "score": c["score"], "scorer": c["scorer"],
@@ -255,6 +298,10 @@ def forget(conn, paths, video_id, including_posted=False):
                          (video_id,))
             conn.execute("DELETE FROM clips WHERE video_id = ?", (video_id,))
             conn.execute("DELETE FROM candidates WHERE video_id = ?", (video_id,))
+            # The Dropbox file stays marked as picked up: forgetting a test
+            # video must not make the next pickup bring it straight back.
+            conn.execute("UPDATE pickups SET video_id = NULL, detail = 'forgotten' WHERE video_id = ?",
+                         (video_id,))
             conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
         for folder in (paths["media"] / str(video_id), paths["clips"] / str(video_id)):
             shutil.rmtree(folder, ignore_errors=True)

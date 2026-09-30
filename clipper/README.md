@@ -229,6 +229,111 @@ applied. To make approved clips go out public, apply for the audit (the
 YouTube API documentation). It takes weeks. Until it passes, a private
 upload can't be switched to public.
 
+## Twitch: clips from a live stream
+
+For a campaign whose footage is a Twitch channel, such as Plaqueboymax on
+clipping.net. Twitch lets any signed-in account press **Clip** on a live
+stream, through its API as well as its player. Only the streamer or their
+editors can clip a past broadcast or download a clip through the API, so
+those two stay with you. What happens:
+
+1. **While he's live**, the watcher reads his chat anonymously and
+   read-only, like a logged-out viewer. When chat suddenly runs three times
+   faster than usual, it waits five seconds and clips the last minute on
+   your account. That's at most 8 clips a stream, 3 minutes apart.
+2. **The next morning**, Clip's studio lists those clips, with what chat
+   was saying. It also lists the most-viewed moments other viewers clipped
+   from recent past broadcasts, each linked to its second of the broadcast,
+   for you to clip yourself.
+3. **You download each clip**: dashboard.twitch.tv → Content → Clips →
+   the clip → Share → Download → Landscape. It lands in Files → Downloads
+   on the iPad. Move it into the source's Dropbox folder (next section).
+4. **Clip picks it up** within 15 minutes and renders it whole, adding the
+   watermark and captions. A video of 60 seconds or less is treated as
+   already a clip, so it isn't searched for a "best part".
+
+Setup, once:
+
+1. **Register an app** at dev.twitch.tv/console → *Register Your
+   Application*: name `Clip`, OAuth Redirect URL `http://localhost`,
+   category *Application Integration*, **Client Type: Public**. A public app
+   has no secret. Copy its *Client ID*, then:
+
+```
+cd /root/ecosystem && python3 scripts/set-credential.py clip TWITCH_CLIENT_ID
+```
+
+2. **Sign in.** The command shows a code; open twitch.tv/activate on the iPad,
+   check the code, and approve:
+
+```
+cd /root/ecosystem && python3 -m clipper twitch-login
+```
+
+3. **Follow the channel** on your Twitch account. Some channels only let
+   followers clip.
+4. **Add the source and its channel.** The evidence is the campaign page:
+
+```
+cd /root/ecosystem && python3 -m clipper source add plaqueboymax --rights permission --evidence "clipping.net Plaqueboymax campaign: clips of PBM from his Twitch, watermark required"
+```
+```
+cd /root/ecosystem && python3 -m clipper source rules plaqueboymax --twitch plaqueboymax
+```
+
+5. **Start the timers.** The watcher checks every 3 minutes whether he's live,
+   and the pickup looks in Dropbox every 15:
+
+```
+cd /root/ecosystem && scripts/deploy.sh clip
+```
+
+Twitch's sign-in lasts while it's used. A refresh token unused for 30 days
+lapses, and a watcher checking every 3 minutes never leaves it that long. If
+it does lapse, the studio says so; run `twitch-login` again.
+
+The spike rule (3x usual, and at least 2 messages a second) comes from three
+minutes of one busy chat, so treat it as a starting point. If the clips miss,
+change `twitch_spike_ratio`, `twitch_spike_min_rate` or
+`twitch_clip_delay_seconds` in `clipper/var/config.json`.
+
+## Dropbox folder pickup
+
+Instead of sending a link for every clip: one shared Dropbox folder per
+source, and every video put in it is ingested and rendered. Clip only reads
+the folder; it changes and deletes nothing there.
+
+1. **Create a Dropbox app** at dropbox.com/developers/apps → *Create app*
+   → *Scoped access* → **App folder** → any unique name. On its
+   **Permissions** tab, tick `files.metadata.read` and `sharing.read`, then
+   *Submit*. On its **Settings** tab are the *App key* and *App secret*:
+
+```
+cd /root/ecosystem && python3 scripts/set-credential.py clip DROPBOX_APP_KEY
+```
+```
+cd /root/ecosystem && python3 scripts/set-credential.py clip DROPBOX_APP_SECRET
+```
+
+2. **Make the folder** in your Dropbox, e.g. `Clip - Plaqueboymax`. In the
+   Dropbox app, go to *Share → Copy link* (anyone with the link can view).
+   Then:
+
+```
+cd /root/ecosystem && python3 -m clipper source rules plaqueboymax --dropbox-folder "PASTE-THE-LINK"
+```
+
+3. Test it by dropping one downloaded clip in the folder:
+
+```
+cd /root/ecosystem && clipper/.venv/bin/python -m clipper pickup --run
+```
+
+Each file is picked up once, even after `forget`. Upload new content under
+the same name and it counts as a new file. Files in subfolders aren't
+picked up, and neither is anything that isn't a video. The studio lists
+what was picked up and anything that couldn't be.
+
 ## Commands
 
 | Command | Does |
@@ -238,6 +343,9 @@ upload can't be switched to public.
 | `python -m clipper retry <video>` | Puts a failed video back at the stage that failed. |
 | `python -m clipper forget <video>` | Removes a video and every clip made from it, such as a test run. It refuses if a clip was posted, unless you add `--including-posted`; the post stays online. |
 | `python -m clipper source list` | Sources and their evidence. |
+| `python -m clipper watch` | While a watched Twitch channel is live, clips where its chat explodes. Its timer runs it. |
+| `python -m clipper moments` | The most-viewed moments of recent past broadcasts, linked to their second, for you to clip. |
+| `python -m clipper pickup --run` | Ingests new videos from the sources' Dropbox folders and renders them. Its timer runs it. |
 
 Finished clips are saved in `clipper/var/clips/<video>/`, as `01.mp4` (best
 first) plus `01.json` (everything about it). Viewing them on the iPad comes

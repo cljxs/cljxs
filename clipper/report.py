@@ -7,7 +7,7 @@ rule for "can Clip act on this trending moment?" exists once.
 
 import json
 
-from clipper import db, postcopy, trends, youtube
+from clipper import db, postcopy, trends, twitch, youtube
 
 
 def trend_state(t, allowed):
@@ -31,6 +31,30 @@ def post_words(conn, clip):
     words = postcopy.compose(row, src)
     return {"title": row["title"], "caption": row["caption"], "hashtags": json.loads(row["hashtags"]),
             "generator": row["generator"], "youtube": words["youtube"], "tiktok": words["tiktok"]}
+
+
+def twitch_state(conn, cfg):
+    """The watcher's clips, the past moments to clip by hand, and the
+    Dropbox folders picked up from - one reader for the Deck and the CLI."""
+    c = youtube.creds()
+    clips = []
+    for r in conn.execute("SELECT * FROM twitch_clips ORDER BY created_at DESC LIMIT 20"):
+        clips.append({k: r[k] for k in ("id", "channel", "edit_url", "url", "status", "chat_rate",
+                                         "chat_usual", "created_at", "detail")}
+                     | {"words": json.loads(r["chat_words"] or "[]")})
+    moments = [dict(m, link=twitch.vod_link(m["video_id"], m["vod_offset"])) for m in conn.execute(
+        "SELECT * FROM twitch_moments ORDER BY views DESC LIMIT 12")]
+    pickups = [dict(r) for r in conn.execute("SELECT path, status, video_id, detail, seen_at FROM pickups "
+                                              "ORDER BY seen_at DESC LIMIT 10")]
+    return {
+        "ready": bool(c.get("TWITCH_CLIENT_ID") and c.get("TWITCH_REFRESH_TOKEN")),
+        "channels": [s["twitch"] for s in twitch.watched(conn)],
+        "clips": clips, "moments": moments,
+        "dropbox_ready": bool(c.get("DROPBOX_APP_KEY") and c.get("DROPBOX_APP_SECRET")),
+        "folders": [s["name"] for s in conn.execute(
+            "SELECT name FROM sources WHERE active = 1 AND dropbox_folder IS NOT NULL ORDER BY id")],
+        "pickups": pickups,
+    }
 
 
 def snapshot(conn, paths, cfg):
@@ -75,6 +99,7 @@ def snapshot(conn, paths, cfg):
         "platforms": cfg["platforms"],
         "youtube_ready": all(youtube.creds().get(k) for k in
                              ("YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REFRESH_TOKEN")),
+        "twitch": twitch_state(conn, cfg),
         "spotter": {"last_run": dict(last) if last else None, "units_today": trends.units_today(conn),
                     "units_cap": cfg["spot_daily_units"], "has_key": bool(trends.api_key()),
                     "min_subscribers": cfg["spot_min_subscribers"],

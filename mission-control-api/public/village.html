@@ -2752,6 +2752,8 @@ function openClipPanel(){
     <div id="clipStats"><div class="muted">loading…</div></div>
     <div class="sect">Clips</div>
     <div id="clipClips"></div>
+    <div class="sect">Twitch — clips to download</div>
+    <div id="clipTwitch"></div>
     <div class="sect">Spotter — trending now</div>
     <div id="clipSpot"></div>
     <div class="sect">In the studio</div>
@@ -2786,7 +2788,7 @@ function drawClip(){
   if (!c.installed) {
     $('clipStats').innerHTML = `<div class="verdict">Clip is not set up on this machine yet${c.error ? ' — ' + esc(c.error) : ''}.
       Install it with the commands in <b>clipper/README.md</b>.</div>`;
-    ['clipClips', 'clipSpot', 'clipQueue'].forEach(id => $(id).innerHTML = '');
+    ['clipClips', 'clipTwitch', 'clipSpot', 'clipQueue'].forEach(id => $(id).innerHTML = '');
     return;
   }
   const sp = c.spotter || {};
@@ -2821,6 +2823,8 @@ function drawClip(){
       </div>`).join('') + `</div>`
     : `<div class="muted">No clips yet. Give Clip a video you have the rights to:
        <b>python3 -m clipper ingest &lt;source&gt; &lt;file&gt;</b>, then <b>run</b>.</div>`;
+
+  $('clipTwitch').innerHTML = drawTwitch(c.twitch || {});
 
   let spot = '';
   if (!sp.has_key) {
@@ -2870,6 +2874,62 @@ function drawClip(){
       <div class="w">#${v.id} <b>${esc(v.title)}</b> · ${esc(v.source)} · ${esc(v.stage)} · ${v.clips} clip(s)
         ${v.error ? `<div class="muted" style="color:#f59e0b">${esc(v.error.slice(0, 200))}</div>` : ''}</div>`).join('')
     : '<div class="muted">Nothing processed yet.</div>';
+}
+
+// The Twitch watcher's clips (made on your account, for you to download),
+// the past-broadcast moments viewers clipped (for you to clip), and what
+// the Dropbox pickup brought in. Links come from Twitch's API: only https.
+const httpsOnly = u => /^https:\/\//.test(u || '') ? esc(u) : '#';
+const utcAgo = ts => ts ? ago(Math.round((Date.now() - Date.parse(ts.replace(' ', 'T') + (ts.endsWith('Z') ? '' : 'Z'))) / 60000)) : '';
+function drawTwitch(tw){
+  let h = '';
+  const chans = tw.channels || [];
+  if (!tw.ready) {
+    h += `<div class="verdict">The Twitch watcher isn't signed in yet. Setup is in <b>clipper/README.md</b>
+      ("Twitch"), ending with <b>python3 -m clipper twitch-login</b>.</div>`;
+  } else if (!chans.length) {
+    h += `<div class="muted">No channel to watch yet: <b>python3 -m clipper source rules NAME --twitch LOGIN</b></div>`;
+  } else {
+    h += `<div class="muted">Watching <b>${esc(chans.join(', '))}</b> whenever live: when chat explodes, Clip clips
+      the last minute on your account.</div>`;
+  }
+  const clips = tw.clips || [];
+  if (clips.length) {
+    h += `<div class="muted" style="margin:6px 0">Download each (dashboard.twitch.tv → Content → Clips → Share →
+      Download → Landscape) and put it in your Dropbox folder — Clip takes it from there.</div>` + clips.map(k => {
+      const pill = k.status === 'made' ? 'ok' : '';
+      const words = (k.words || []).slice(0, 3).map(w => esc(w[0]) + ' ×' + w[1]).join(', ');
+      return `<div class="w">${esc(utcAgo(k.created_at))} · <b>${esc(k.channel)}</b>
+        · chat ${k.chat_rate}/s (usual ${k.chat_usual}/s)${words ? ' · ' + words : ''}
+        <span class="pill ${pill}">${esc(k.status)}</span>
+        ${k.edit_url ? `<a href="${httpsOnly(k.edit_url)}" target="_blank" rel="noopener">Trim</a>` : ''}
+        ${k.url ? ` · <a href="${httpsOnly(k.url)}" target="_blank" rel="noopener">Watch</a>` : ''}
+        ${k.detail ? `<div class="muted">${esc(k.detail)}</div>` : ''}</div>`;
+    }).join('');
+  } else if (tw.ready && chans.length) {
+    h += `<div class="muted">No clips yet — they appear here the morning after a stream.</div>`;
+  }
+  const moments = tw.moments || [];
+  if (moments.length) {
+    h += `<div class="muted" style="margin:10px 0 6px">Clip these yourself — the most-viewed moments of recent
+      past broadcasts (open it, press Clip, then download it the same way):</div>` + moments.map(m => `
+      <div class="w"><a href="${httpsOnly(m.link)}" target="_blank" rel="noopener">${esc(m.title || 'untitled')}</a>
+        · ${big(m.views)} views · at ${clock(m.vod_offset)} · clipped by ${esc(m.creator || '?')}</div>`).join('');
+  }
+  if (!tw.dropbox_ready) {
+    h += `<div class="verdict" style="margin-top:8px">Dropbox pickup isn't set up: Clip needs a Dropbox app's key and
+      secret (clipper/README.md, "Dropbox folder pickup").</div>`;
+  } else if (!(tw.folders || []).length) {
+    h += `<div class="muted" style="margin-top:8px">No Dropbox folder yet: <b>python3 -m clipper source rules NAME
+      --dropbox-folder LINK</b></div>`;
+  }
+  const picks = tw.pickups || [];
+  if (picks.length) {
+    h += `<div class="muted" style="margin:10px 0 6px">Picked up from Dropbox (${esc((tw.folders || []).join(', '))}):</div>`
+      + picks.map(p => `<div class="w">${esc(p.path)} · <span class="pill ${p.status === 'ingested' ? 'ok' : ''}">${esc(p.status)}</span>
+        ${esc(p.detail || '')} · ${esc(utcAgo(p.seen_at))}</div>`).join('');
+  }
+  return h;
 }
 
 // The words a clip posts with, and - once approved - where each post went.

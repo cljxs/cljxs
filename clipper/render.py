@@ -108,6 +108,21 @@ def has_transparency(path):
     return len(data) > 25 and (data[25] in (4, 6) or b"tRNS" in data)
 
 
+def hook_top(wm_box):
+    """Where a campaign's hook goes: its usual place under the status bar, or
+    just below the watermark when the watermark is up there - a hook over the
+    watermark is a covered watermark, which the campaign does not pay for."""
+    top = captions.HOOK_TOP
+    if wm_box:
+        w, h, x, y = wm_box
+        if y < top + captions.hook_height() and y + h > top:
+            top = y + h + 20
+    if top + captions.hook_height() > CAPTION_TOP:
+        raise ValueError(f"no room for a hook: it would reach the captions at {CAPTION_TOP} "
+                         f"(watermark at {wm_box[3] if wm_box else '-'}; move it lower or higher)")
+    return top
+
+
 def source_cfg(cfg, src):
     """cfg with a source's own watermark position, if it has one."""
     top = src["watermark_top"] if src is not None else None
