@@ -217,6 +217,52 @@ class Busy(RuntimeError):
     pass
 
 
+def forget(conn, paths, video_id, including_posted=False):
+    """Remove a video and everything made from it - a test run, a wrong
+    upload - so its clips stop appearing for review. Clips, candidates,
+    drafts, verdicts and publication records go, with the files on disk.
+    What was spent stays in the ledger and the event log keeps its history:
+    those are records of what happened, not of what is waiting.
+
+    A clip that went out is refused unless asked for, because this is the
+    only record Clip has of that post - and forgetting it here does not take
+    it down there. Returns (title, clips removed, [posted urls])."""
+    import shutil
+    v = conn.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
+    if not v:
+        raise ValueError(f"no video {video_id}")
+    posted = [p["url"] or f"clip {p['rank']} on {p['platform']}" for p in conn.execute(
+        "SELECT c.rank, p.platform, p.url FROM publications p JOIN clips c ON c.id = p.clip_id "
+        "WHERE c.video_id = ? AND p.status = 'posted'", (video_id,))]
+    if posted and not including_posted:
+        raise ValueError(f"video {video_id} has {len(posted)} posted clip(s): {', '.join(posted)}. "
+                         f"Forgetting them does not take them down. Add --including-posted to go ahead")
+    paths["lock"].parent.mkdir(parents=True, exist_ok=True)
+    with open(paths["lock"], "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Busy("a Clipper run is in progress - forget it when the run has finished")
+        clips = "SELECT id FROM clips WHERE video_id = ?"
+        n = conn.execute("SELECT COUNT(*) FROM clips WHERE video_id = ?", (video_id,)).fetchone()[0]
+        with conn:
+            for table in ("publications", "reviews", "post_copy"):
+                conn.execute(f"DELETE FROM {table} WHERE clip_id IN ({clips})", (video_id,))
+            conn.execute(f"UPDATE trending_clips SET remade_clip_id = NULL WHERE remade_clip_id IN ({clips})",
+                         (video_id,))
+            conn.execute("UPDATE trending_clips SET match_video_id = NULL, match_start = NULL, "
+                         "match_end = NULL, match_score = NULL, match_text = NULL WHERE match_video_id = ?",
+                         (video_id,))
+            conn.execute("DELETE FROM clips WHERE video_id = ?", (video_id,))
+            conn.execute("DELETE FROM candidates WHERE video_id = ?", (video_id,))
+            conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
+        for folder in (paths["media"] / str(video_id), paths["clips"] / str(video_id)):
+            shutil.rmtree(folder, ignore_errors=True)
+    db.event(conn, "forget", f"forgot video {video_id} ({v['title']}): {n} clip(s)"
+             + (f", {len(posted)} of them posted" if posted else ""))
+    return v["title"], n, posted
+
+
 def run(conn, paths, cfg, video_id=None):
     """Advance every unfinished video. One run at a time: two transcribers on
     a one-CPU droplet is two slow ones and an out-of-memory kill."""

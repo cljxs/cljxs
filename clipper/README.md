@@ -236,6 +236,7 @@ upload can't be switched to public.
 | `python -m clipper status` | Videos, stages, errors, and today's spend. |
 | `python -m clipper clips` | Clips with score, timestamps, reasons and file. |
 | `python -m clipper retry <video>` | Puts a failed video back at the stage that failed. |
+| `python -m clipper forget <video>` | Removes a video and every clip made from it, such as a test run. It refuses if a clip was posted, unless you add `--including-posted`; the post stays online. |
 | `python -m clipper source list` | Sources and their evidence. |
 
 Finished clips are saved in `clipper/var/clips/<video>/`, as `01.mp4` (best

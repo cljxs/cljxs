@@ -12,6 +12,7 @@
     run [--video ID]            transcribe, find moments, render - whatever is pending
     retry VIDEO_ID              put a failed video back where it failed
     refind VIDEO_ID             choose its moments again (a new --hunt); only before any clip exists
+    forget VIDEO_ID [--including-posted]   remove a video and all its clips (a test run)
     status                      videos, stages, errors, today's spend
     clips [VIDEO_ID]            finished clips with score and reason
 
@@ -148,6 +149,14 @@ def cmd_refind(a):
     v = pipeline.refind(conn, a.video)
     print(f"video {v['id']} back at transcribed: its moments will be chosen again (the "
           f"transcript is kept). Run: clipper/.venv/bin/python -m clipper run --video {v['id']}")
+    return 0
+
+
+def cmd_forget(a):
+    cfg, paths, conn = open_all()
+    title, n, posted = pipeline.forget(conn, paths, a.video, a.including_posted)
+    print(f"forgot video {a.video} ({title}): {n} clip(s) and their files are gone"
+          + (f"; still online, take down by hand if wanted: {', '.join(posted)}" if posted else ""))
     return 0
 
 
@@ -353,6 +362,11 @@ def main(argv=None):
     t = sub.add_parser("retry")
     t.add_argument("video", type=int)
     t.set_defaults(fn=cmd_retry)
+    t = sub.add_parser("forget", help="remove a video and every clip made from it (a test run)")
+    t.add_argument("video", type=int)
+    t.add_argument("--including-posted", action="store_true",
+                   help="even if some of its clips were posted (they stay online)")
+    t.set_defaults(fn=cmd_forget)
     t = sub.add_parser("refind", help="choose a video's moments again, e.g. after --hunt")
     t.add_argument("video", type=int)
     t.set_defaults(fn=cmd_refind)

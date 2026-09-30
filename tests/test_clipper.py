@@ -1513,3 +1513,87 @@ class AudioIsNotKept(EndToEnd):
             conn.execute("UPDATE videos SET stage = 'transcribed'")
         self.assertEqual(self.cli("run")[0], 0)
         self.assertTrue((f / "loudness.json").exists())
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class ForgetATestVideo(EndToEnd):
+    """2026-09-30: the LibriVox story from setup kept its 5 clips in the
+    village beside the 7 real Curious Mike ones. `forget` removes a video
+    and everything made from it, and nothing else."""
+
+    # The base end-to-end tests expect an empty Clip; they run in their own class.
+    test_permitted_video_in_captioned_short_out = None
+    test_a_failing_stage_is_retried_then_parked_then_retryable = None
+
+    def two_videos(self):
+        self.cli("source", "add", "setup-test", "--rights", "public-domain", "--evidence", "LibriVox")
+        self.cli("source", "add", "mike", "--rights", "permission", "--evidence", "campaign page")
+        self.real = Path(self.tmp.name) / "episode.mp4"
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error",
+                        "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30",
+                        "-f", "lavfi", "-i", "sine=frequency=330:sample_rate=16000",
+                        "-t", "60", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
+                        str(self.real)], check=True)
+        self.cli("ingest", "setup-test", str(self.video), "--title", "story")   # video 1, the test
+        self.cli("ingest", "mike", str(self.real), "--title", "Trae Young")  # video 2, the real one
+        self.give_words(1); self.give_words(2)
+        code, said = self.cli("run")
+        self.assertEqual(code, 0, said)
+        self.conn = db.connect(self.home / "clipper.db")
+        with self.conn:
+            self.conn.execute("INSERT INTO trending_clips (yt_id, creator_id, title, seen_at, match_video_id, "
+                              "match_start, match_end) VALUES ('t1', 'UC', 'x', ?, 1, 1.0, 20.0)", (db.now(),))
+            db.record_cost(self.conn, "openrouter", "copy", 0.002, video_id=1)
+
+    def count(self, sql, *a):
+        return self.conn.execute(sql, a).fetchone()[0]
+
+    def test_the_test_video_goes_and_the_real_one_stays(self):
+        self.two_videos()
+        before = self.count("SELECT COUNT(*) FROM clips WHERE video_id = 2")
+        self.assertGreater(before, 0)
+        code, said = self.cli("forget", "1")
+        self.assertEqual(code, 0, said)
+        self.assertIn("forgot video 1 (story)", said)
+        self.assertEqual(self.count("SELECT COUNT(*) FROM clips WHERE video_id = 1"), 0)
+        self.assertEqual(self.count("SELECT COUNT(*) FROM candidates WHERE video_id = 1"), 0)
+        self.assertEqual(self.count("SELECT COUNT(*) FROM videos WHERE id = 1"), 0)
+        self.assertFalse((self.home / "clips" / "1").exists())
+        self.assertFalse((self.home / "media" / "1").exists())
+        # the real video is untouched, on disk and in what the village shows
+        self.assertEqual(self.count("SELECT COUNT(*) FROM clips WHERE video_id = 2"), before)
+        self.assertTrue((self.home / "clips" / "2" / "01.mp4").exists())
+        deck = report.snapshot(self.conn, config.paths(), config.load())
+        self.assertEqual({c["video_id"] for c in deck["clips"]}, {2})
+        # history stays: what was spent, and a note of what was forgotten
+        self.assertEqual(self.count("SELECT COUNT(*) FROM costs WHERE video_id = 1"), 1)
+        self.assertIn("forgot video 1", self.conn.execute(
+            "SELECT msg FROM events WHERE stage = 'forget'").fetchone()[0])
+        # Spotter no longer points at footage that is gone
+        self.assertIsNone(self.count("SELECT match_video_id FROM trending_clips WHERE yt_id = 't1'"))
+
+    def test_a_posted_clip_is_not_forgotten_by_accident(self):
+        self.two_videos()
+        cid = self.count("SELECT id FROM clips WHERE video_id = 1 ORDER BY rank LIMIT 1")
+        with self.conn:
+            self.conn.execute("INSERT INTO publications (clip_id, platform, status, url, created_at) "
+                              "VALUES (?, 'youtube', 'posted', 'https://youtu.be/test1', ?)", (cid, db.now()))
+        code, said = self.cli("forget", "1")
+        self.assertEqual(code, 2)
+        self.assertIn("https://youtu.be/test1", said)
+        self.assertIn("--including-posted", said)
+        self.assertGreater(self.count("SELECT COUNT(*) FROM clips WHERE video_id = 1"), 0, "nothing removed")
+        code, said = self.cli("forget", "1", "--including-posted")
+        self.assertEqual(code, 0, said)
+        self.assertIn("still online", said)
+        self.assertEqual(self.count("SELECT COUNT(*) FROM publications"), 0)
+
+    def test_not_while_a_run_is_going(self):
+        self.two_videos()
+        import fcntl
+        with open(config.paths()["lock"], "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            code, said = self.cli("forget", "1")
+        self.assertEqual(code, 2)
+        self.assertIn("in progress", said)
+        self.assertGreater(self.count("SELECT COUNT(*) FROM clips WHERE video_id = 1"), 0)
