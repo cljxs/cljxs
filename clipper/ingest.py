@@ -68,6 +68,7 @@ def set_watermark(conn, paths, cfg, name, origin, cut_out=False, top=None):
             raise FileNotFoundError(origin)
         shutil.copy2(str(path), str(tmp))
     try:
+        as_png(tmp)
         if cut_out:
             flat = tmp.with_name(tmp.stem + ".flat.png")
             tmp.replace(flat)
@@ -86,6 +87,27 @@ def set_watermark(conn, paths, cfg, name, origin, cut_out=False, top=None):
         conn.execute("UPDATE sources SET watermark = ?, watermark_top = COALESCE(?, watermark_top) "
                      "WHERE name = ?", (str(final), top, name))
     return box
+
+
+def as_png(path):
+    """A watermark saved as WebP or JPEG, converted to PNG in place. Safari
+    saves the image on a campaign page as whatever the site serves -
+    clipping.net serves .webp - and holding the image is the only way to get
+    it on an iPad. ffmpeg keeps an alpha channel when the file has one, and
+    adds none when it does not, so the see-through check still means
+    something. A PNG is left exactly as it is."""
+    from clipper import render
+    with open(path, "rb") as f:
+        if f.read(8) == render.PNG_SIGNATURE:
+            return path
+    out = path.with_name(path.stem + ".conv.png")
+    try:
+        media.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(path), "-frames:v", "1", str(out)])
+    except media.MediaError:
+        out.unlink(missing_ok=True)
+        raise ValueError("the watermark is not an image Clip can read - save it as PNG, WebP or JPEG")
+    out.replace(path)
+    return path
 
 
 def set_watermark_top(conn, cfg, name, top):

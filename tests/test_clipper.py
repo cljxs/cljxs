@@ -2231,3 +2231,59 @@ class ChatReaderOverTls(unittest.TestCase):
         self.assertIn("PONG :tmi.twitch.tv", self.heard[1], "an unanswered PING drops the connection")
         self.assertIn("JOIN #plaqueboymax", self.heard[2], "joined again after RECONNECT")
         self.assertEqual(slept, [1])
+
+
+def has_webp_encoder():
+    r = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True) \
+        if shutil.which("ffmpeg") else None
+    return bool(r and "libwebp" in r.stdout)
+
+
+@unittest.skipUnless(has_webp_encoder(), "needs ffmpeg with a WebP encoder to make the test files")
+class WatermarkSavedAsWebP(EndToEnd):
+    """2026-09-30: the plaqueboymax watermark, held and saved in Safari on
+    the iPad, arrived as image.webp - clipping.net serves its images as
+    WebP - and Clip refused it for not being a PNG."""
+
+    test_permitted_video_in_captioned_short_out = None
+    test_a_failing_stage_is_retried_then_parked_then_retryable = None
+
+    def setUp(self):
+        super().setUp()
+        self.cli("source", "add", "pbm", "--rights", "permission", "--evidence", "campaign page")
+        d = Path(self.tmp.name)
+        self.alpha, self.flat = d / "image.webp", d / "flat.webp"
+        # a white mark on a see-through canvas, and the same on solid white
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                        "color=c=black@0.0:s=400x100,format=rgba,drawbox=x=20:y=20:w=200:h=50:color=white@1:t=fill",
+                        "-frames:v", "1", "-c:v", "libwebp", str(self.alpha)], check=True)
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                        "color=c=white:s=400x100,drawbox=x=20:y=20:w=200:h=50:color=black:t=fill",
+                        "-frames:v", "1", "-c:v", "libwebp", str(self.flat)], check=True)
+
+    def kept(self):
+        conn = db.connect(self.home / "clipper.db")
+        return Path(conn.execute("SELECT watermark FROM sources WHERE name = 'pbm'").fetchone()[0])
+
+    def test_a_webp_with_transparency_is_kept_as_a_png(self):
+        code, said = self.cli("source", "rules", "pbm", "--watermark", str(self.alpha))
+        self.assertEqual(code, 0, said)
+        self.assertIn("watermark kept: 400x100", said)
+        png = self.kept()
+        self.assertEqual(png.read_bytes()[:8], render.PNG_SIGNATURE)
+        self.assertTrue(render.has_transparency(png))
+
+    def test_a_flat_webp_is_still_refused(self):
+        # Converting must not invent transparency: a flat image made RGBA
+        # would pass the check and burn a white box into every clip.
+        code, said = self.cli("source", "rules", "pbm", "--watermark", str(self.flat))
+        self.assertEqual(code, 2)
+        self.assertIn("transparent", said)
+
+    def test_not_an_image_says_so(self):
+        text = Path(self.tmp.name) / "image.webp.txt"
+        text.write_text("not a picture")
+        code, said = self.cli("source", "rules", "pbm", "--watermark", str(text))
+        self.assertEqual(code, 2)
+        self.assertIn("not an image Clip can read", said)
+        self.assertEqual(list((self.home / "watermarks").glob("*")), [], "nothing half-written left behind")
