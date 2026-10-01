@@ -57,6 +57,17 @@ LIVE_CHECK = 300
 # How long after asking for a clip Twitch has usually made it; after
 # CONFIRM_GIVE_UP with no clip, Twitch's docs say assume it failed.
 CONFIRM_AFTER, CONFIRM_GIVE_UP = 20, 90
+# How long an explosion is measured after chat first crosses the bar. The
+# crossing itself is always "just over 3x" - the first night's eight clips
+# were all 3.04x-3.18x - so ranking on it ranks nothing. The peak in the
+# seconds after is how big the moment really was.
+PEAK_WINDOW = 20
+
+
+def say_now(line):
+    """print, flushed: under systemd stdout is a pipe and Python holds it
+    until exit - the first night's log arrived all at once at 05:12."""
+    print(line, flush=True)
 
 
 class NotSetUp(RuntimeError):
@@ -240,7 +251,7 @@ def parse(line):
     return cmd, args
 
 
-def irc_messages(channel, now=time.time, tick=5.0, say=print, host=IRC_HOST, port=IRC_PORT,
+def irc_messages(channel, now=time.time, tick=5.0, say=say_now, host=IRC_HOST, port=IRC_PORT,
                  context=None, sleep=time.sleep):
     """(time, message) for each chat message, and (time, None) at least
     every `tick` seconds when chat is quiet, forever - reconnecting when
@@ -326,14 +337,19 @@ class Chat:
         usual = statistics.median(seen) / self.BUCKET if seen else 0.0
         return len(recent) / self.NOW, usual
 
+    def measure(self, t):
+        """What chat is doing now: its speed, its usual speed, its words."""
+        rate, usual = self.rates(t)
+        return {"rate": round(rate, 2), "usual": round(usual, 2), "words": self.words(t)}
+
     def spike(self, t):
         """None, or what chat was doing when it exploded."""
         if self.first is None or t - self.first < self.WARMUP:
             return None
-        rate, usual = self.rates(t)
-        if rate < self.min_rate or rate < self.ratio * usual:
+        m = self.measure(t)
+        if m["rate"] < self.min_rate or m["rate"] < self.ratio * m["usual"]:
             return None
-        return {"rate": round(rate, 2), "usual": round(usual, 2), "words": self.words(t)}
+        return m
 
     def words(self, t, n=5):
         """What chat was saying: the commonest words in the last NOW
@@ -431,7 +447,35 @@ def refresh_moments(conn, api, login, broadcaster_id, hours, me=None, now=time.t
     return len(kept)
 
 
-def watch(conn, cfg, source, api=None, chat=irc_messages, now=time.time, say=print):
+def jump(clip):
+    """How many times faster than usual chat got at a clip's peak - the one
+    measure clips are ranked by. Raw speed would favour the end of every
+    stream, when the most people are watching. Takes a twitch_clips row or
+    a Chat.measure() reading."""
+    rate = clip["chat_rate"] if "chat_rate" in clip.keys() else clip["rate"]
+    usual = clip["chat_usual"] if "chat_usual" in clip.keys() else clip["usual"]
+    return (rate or 0) / max(usual or 0, 0.1)
+
+
+def best_of(clips, keep):
+    """Clips of one stream, best first, each with "best" (in the top `keep`)
+    and "jump". Clips Twitch never made are not ranked."""
+    made = sorted((dict(c) for c in clips if c["status"] == "made"), key=jump, reverse=True)
+    return [dict(c, best=i < keep, jump=round(jump(c), 2)) for i, c in enumerate(made)]
+
+
+def record_peak(conn, peak, say):
+    """A clip's chat numbers become the peak of its explosion."""
+    if not peak["cid"]:
+        return
+    b = peak["best"]
+    with conn:
+        conn.execute("UPDATE twitch_clips SET chat_rate = ?, chat_usual = ?, chat_words = ? WHERE id = ?",
+                     (b["rate"], b["usual"], db.as_json(b["words"]), peak["cid"]))
+    say(f"  {peak['cid']} peaked at {b['rate']}/s, {jump(b):.1f}x usual")
+
+
+def watch(conn, cfg, source, api=None, chat=irc_messages, now=time.time, say=say_now):
     """Watch one live stream's chat until the stream ends, clipping where it
     explodes. Returns {"live": bool, "clips": n}. Offline is not an error:
     the timer asks again in a few minutes."""
@@ -445,26 +489,37 @@ def watch(conn, cfg, source, api=None, chat=irc_messages, now=time.time, say=pri
     db.event(conn, "twitch", f"{login} is live - watching chat")
     meter = Chat(cfg["twitch_spike_ratio"], cfg["twitch_spike_min_rate"])
     made, last_clip, pending, asked = 0, float("-inf"), None, {}   # asked: clip id -> when
+    peak = None          # the explosion being measured: {"until", "best", "cid"}
     next_look = next_confirm = 0.0
     next_live = now() + LIVE_CHECK
     for t, text in chat(login):
         if text is not None:
             meter.add(t, text)
         # Once a second is plenty: a busy chat is dozens of messages a second.
-        if t >= next_look and pending is None and made < cfg["twitch_max_clips_per_stream"] \
-                and t - last_clip >= cfg["twitch_cooldown_seconds"]:
+        if t >= next_look:
             next_look = t + 1
-            what = meter.spike(t)
-            if what:
-                # Wait a moment: the reaction is half of what makes it a clip.
-                pending = (t + cfg["twitch_clip_delay_seconds"], what)
-        if pending and t >= pending[0]:
-            made, last_clip, what, pending = made + 1, t, pending[1], None
-            cid = make_clip(conn, api, login, bid, cfg, what, stream)
+            if peak:
+                m = meter.measure(t)
+                if jump(m) > jump(peak["best"]):
+                    peak["best"] = m
+            elif pending is None and made < cfg["twitch_max_clips_per_stream"] \
+                    and t - last_clip >= cfg["twitch_cooldown_seconds"]:
+                what = meter.spike(t)
+                if what:
+                    # Wait a moment: the reaction is half of what makes it a clip.
+                    pending = t + cfg["twitch_clip_delay_seconds"]
+                    peak = {"until": t + PEAK_WINDOW, "best": what, "cid": None}
+        if pending and t >= pending:
+            made, last_clip, pending = made + 1, t, None
+            cid = make_clip(conn, api, login, bid, cfg, peak["best"], stream)
             say(f"clip {made}: {cid or 'Twitch refused - see clipper status'} "
-                f"(chat {what['rate']}/s, usual {what['usual']}/s)")
+                f"(chat {peak['best']['rate']}/s so far, usual {peak['best']['usual']}/s)")
+            peak["cid"] = cid
             if cid:
                 asked[cid] = t
+        if peak and pending is None and t >= peak["until"]:
+            record_peak(conn, peak, say)
+            peak = None
         if asked and t >= next_confirm:
             next_confirm = t + 10
             due = [i for i, at in asked.items() if t - at >= CONFIRM_AFTER]
@@ -476,13 +531,20 @@ def watch(conn, cfg, source, api=None, chat=irc_messages, now=time.time, say=pri
             next_live = t + LIVE_CHECK
             if not api.stream(login):
                 break
+    if peak:
+        record_peak(conn, peak, say)
     confirm(conn, api, list(asked), give_up=True)
     try:
         n = refresh_moments(conn, api, login, bid, cfg["twitch_moments_hours"], api.me()["id"], now)
     except TwitchError as exc:
         n = 0
         db.event(conn, "twitch", f"{login}: could not list past moments: {exc.message}", level="warn")
-    db.event(conn, "twitch", f"{login} went offline: {made} clip(s) asked for, {n} past moment(s) listed")
+    ranked = best_of(conn.execute("SELECT * FROM twitch_clips WHERE channel = ? AND stream_started_at = ?",
+                                  (login, stream.get("started_at"))).fetchall(), cfg["twitch_keep_best"])
+    top = [c for c in ranked if c["best"]]
+    db.event(conn, "twitch", f"{login} went offline: {made} clip(s) asked for, {len(ranked)} made; "
+                             f"best {len(top)}: " + ", ".join(f"{c['jump']}x" for c in top)
+             + f"; {n} past moment(s) listed")
     return {"live": True, "clips": made}
 
 

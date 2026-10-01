@@ -95,7 +95,12 @@ DEFAULTS = {
     # Asked this long after chat explodes, so the reaction is in the clip.
     "twitch_clip_delay_seconds": 5,
     "twitch_cooldown_seconds": 180,   # between two clips of one stream
-    "twitch_max_clips_per_stream": 8,  # a handful a stream, never a flood
+    # Every moment over the bar is clipped (Twitch can only clip live, so it
+    # cannot wait to see which are best); when the stream ends the
+    # twitch_keep_best biggest chat jumps are marked best for you. The
+    # first night stopped at 8 two hours in and missed the last four.
+    "twitch_keep_best": 8,
+    "twitch_max_clips_per_stream": 40,  # a safety ceiling, never a flood
     "twitch_moments_hours": 48,       # past broadcasts' top clips from this far back
 
     # --- posting ------------------------------------------------------------

@@ -240,7 +240,13 @@ those two stay with you. What happens:
 1. **While he's live**, the watcher reads his chat anonymously and
    read-only, like a logged-out viewer. When chat suddenly runs three times
    faster than usual, it waits five seconds and clips the last minute on
-   your account. That's at most 8 clips a stream, 3 minutes apart.
+   your account. It clips **every** such moment, 3 minutes apart, up to a
+   safety ceiling of 40 a stream. It keeps measuring for 20 seconds after
+   chat crosses the bar, because the crossing is always just over 3x and the
+   peak after it shows how big the moment really was.
+   When the stream ends, the 8 biggest jumps are marked **best**
+   (`twitch_keep_best`). The ranking uses the jump over usual, not raw speed,
+   since chat is busiest at the end of every stream.
 2. **The next morning**, Clip's studio lists those clips, with what chat
    was saying. It also lists the most-viewed moments other viewers clipped
    from recent past broadcasts, each linked to its second of the broadcast,

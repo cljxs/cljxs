@@ -1955,6 +1955,46 @@ class Watcher(unittest.TestCase):
             self.conn.execute("DELETE FROM twitch_clips")
         self.assertEqual(self.run_watch(CHAT + bursts, FakeTwitch(), tick_until=400)["clips"], 3)
 
+    def test_every_moment_is_clipped_and_the_biggest_jumps_are_best(self):
+        # 2026-10-01: the first night clipped the first 8 moments over the bar,
+        # reached the limit two hours in, and was blind for the last four.
+        # Now every one is clipped and the biggest jumps are marked best.
+        loop = [(t + 180 * k, m) for k in range(9) for t, m in CHAT]      # 27 minutes of real chat
+        # Ten explosions - more than the old limit of 8. Each starts the same
+        # (150 messages in 5 s, which crosses the bar) and the real reaction
+        # comes 10 s later, after the clip is asked for: only measuring on
+        # past the crossing can tell the big ones from the small.
+        sizes = [60, 300, 120, 220, 90, 260, 150, 70, 110, 80]
+        times = [150 + 130 * i for i in range(len(sizes))]
+        msgs = loop + [m for at, n in zip(times, sizes)
+                       for m in burst(at, 150) + burst(at + 10, n)]
+        self.cfg.update(twitch_cooldown_seconds=100, twitch_keep_best=3)
+        api = FakeTwitch()
+        r = self.run_watch(msgs, api, tick_until=1600)
+        self.assertEqual(r["clips"], len(sizes), "all ten over the bar, not the first few")
+
+        def burst_of(clip_id):
+            at = api.made[int(clip_id[4:]) - 1][0]
+            return max(i for i, b in enumerate(times) if b <= at)
+        ranked = twitch.best_of(self.conn.execute("SELECT * FROM twitch_clips").fetchall(), 3)
+        self.assertEqual(sorted(sizes[burst_of(c["id"])] for c in ranked if c["best"]), [220, 260, 300])
+        state = report.twitch_state(self.conn, self.cfg)
+        self.assertEqual([(st["made"], st["best"]) for st in state["streams"]], [(10, 3)])
+        self.assertEqual(sum(c["best"] for c in state["clips"]), 3)
+        self.assertEqual([c["best"] for c in state["clips"]][:3], [True] * 3, "best first")
+        last = self.conn.execute("SELECT msg FROM events ORDER BY id DESC LIMIT 1").fetchone()[0]
+        self.assertIn("best 3", last)
+
+    def test_ranked_by_the_jump_not_the_raw_speed(self):
+        # Late in a stream more people watch: 20/s against a usual 10/s is a
+        # smaller moment than 12/s against a usual 3/s.
+        rows = [{"id": "late", "status": "made", "chat_rate": 20.0, "chat_usual": 10.0},
+                {"id": "early", "status": "made", "chat_rate": 12.0, "chat_usual": 3.0},
+                {"id": "never", "status": "failed", "chat_rate": 50.0, "chat_usual": 1.0}]
+        ranked = twitch.best_of(rows, 1)
+        self.assertEqual([(c["id"], c["best"], c["jump"]) for c in ranked],
+                         [("early", True, 4.0), ("late", False, 2.0)])
+
     def test_a_refusal_is_said_not_swallowed(self):
         api = FakeTwitch(refuse="The broadcaster has restricted the ability to capture clips to followers")
         self.run_watch(CHAT + burst(150, 100), api)

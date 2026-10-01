@@ -2894,18 +2894,27 @@ function drawTwitch(tw){
       the last minute on your account.</div>`;
   }
   const clips = tw.clips || [];
+  const clipRow = k => {
+    const pill = k.best ? 'ok' : '';
+    const words = (k.words || []).slice(0, 3).map(w => esc(w[0]) + ' ×' + w[1]).join(', ');
+    return `<div class="w">${esc(utcAgo(k.created_at))} · <b>${esc(k.channel)}</b>
+      · chat ${k.chat_rate}/s (usual ${k.chat_usual}/s)${words ? ' · ' + words : ''}
+      <span class="pill ${pill}">${k.best ? 'best · ' + k.jump + '×' : k.jump ? k.jump + '×' : esc(k.status)}</span>
+      ${k.url ? `<a href="${httpsOnly(k.url)}" target="_blank" rel="noopener">Watch</a>` : ''}
+      ${k.detail ? `<div class="muted">${esc(k.detail)}</div>` : ''}</div>`;
+  };
   if (clips.length) {
-    h += `<div class="muted" style="margin:6px 0">Download each (dashboard.twitch.tv → Content → Clips → Share →
-      Download → Landscape) and put it in your Dropbox folder — Clip takes it from there.</div>` + clips.map(k => {
-      const pill = k.status === 'made' ? 'ok' : '';
-      const words = (k.words || []).slice(0, 3).map(w => esc(w[0]) + ' ×' + w[1]).join(', ');
-      return `<div class="w">${esc(utcAgo(k.created_at))} · <b>${esc(k.channel)}</b>
-        · chat ${k.chat_rate}/s (usual ${k.chat_usual}/s)${words ? ' · ' + words : ''}
-        <span class="pill ${pill}">${esc(k.status)}</span>
-        ${k.edit_url ? `<a href="${httpsOnly(k.edit_url)}" target="_blank" rel="noopener">Trim</a>` : ''}
-        ${k.url ? ` · <a href="${httpsOnly(k.url)}" target="_blank" rel="noopener">Watch</a>` : ''}
-        ${k.detail ? `<div class="muted">${esc(k.detail)}</div>` : ''}</div>`;
-    }).join('');
+    h += `<div class="muted" style="margin:6px 0">Download the <b>best</b> ones (dashboard.twitch.tv → Content →
+      Clips → Share → Download → Landscape) and put them in your Dropbox folder — Clip takes it from there.
+      Ranked by how far chat jumped above its usual pace.</div>`;
+    for (const st of tw.streams || []) {
+      const mine = clips.filter(k => k.channel === st.channel && k.stream_started_at === st.started_at);
+      const top = mine.filter(k => k.best), rest = mine.filter(k => !k.best);
+      h += `<div class="muted" style="margin:8px 0 4px"><b>${esc(st.channel)}</b>, stream of
+        ${esc(utcAgo(st.started_at))}: ${st.made} clip(s), best ${st.best}</div>` + top.map(clipRow).join('')
+        + (rest.length ? `<details><summary class="muted">${rest.length} more, smaller jumps</summary>`
+           + rest.map(clipRow).join('') + `</details>` : '');
+    }
   } else if (tw.ready && chans.length) {
     h += `<div class="muted">No clips yet — they appear here the morning after a stream.</div>`;
   }

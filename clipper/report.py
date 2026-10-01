@@ -37,11 +37,22 @@ def twitch_state(conn, cfg):
     """The watcher's clips, the past moments to clip by hand, and the
     Dropbox folders picked up from - one reader for the Deck and the CLI."""
     c = youtube.creds()
-    clips = []
-    for r in conn.execute("SELECT * FROM twitch_clips ORDER BY created_at DESC LIMIT 20"):
-        clips.append({k: r[k] for k in ("id", "channel", "edit_url", "url", "status", "chat_rate",
-                                         "chat_usual", "created_at", "detail")}
-                     | {"words": json.loads(r["chat_words"] or "[]")})
+    # The last three streams, each best first (twitch.best_of): the ranking
+    # is the watcher's, read here rather than restated.
+    clips, streams = [], []
+    for st in conn.execute("SELECT channel, stream_started_at FROM twitch_clips GROUP BY channel, "
+                           "stream_started_at ORDER BY MAX(created_at) DESC LIMIT 3").fetchall():
+        rows = conn.execute("SELECT * FROM twitch_clips WHERE channel = ? AND stream_started_at IS ?",
+                            (st["channel"], st["stream_started_at"])).fetchall()
+        ranked = twitch.best_of(rows, cfg["twitch_keep_best"])
+        streams.append({"channel": st["channel"], "started_at": st["stream_started_at"],
+                        "asked": len(rows), "made": len(ranked),
+                        "best": sum(1 for c in ranked if c["best"])})
+        for r in ranked + [dict(r) for r in rows if r["status"] != "made"]:
+            clips.append({k: r[k] for k in ("id", "channel", "edit_url", "url", "status", "chat_rate",
+                                             "chat_usual", "created_at", "detail", "stream_started_at")}
+                         | {"words": json.loads(r["chat_words"] or "[]"),
+                            "best": bool(r.get("best")), "jump": r.get("jump")})
     moments = [dict(m, link=twitch.vod_link(m["video_id"], m["vod_offset"])) for m in conn.execute(
         "SELECT * FROM twitch_moments ORDER BY views DESC LIMIT 12")]
     pickups = [dict(r) for r in conn.execute("SELECT path, status, video_id, detail, seen_at FROM pickups "
@@ -49,7 +60,7 @@ def twitch_state(conn, cfg):
     return {
         "ready": bool(c.get("TWITCH_CLIENT_ID") and c.get("TWITCH_REFRESH_TOKEN")),
         "channels": [s["twitch"] for s in twitch.watched(conn)],
-        "clips": clips, "moments": moments,
+        "clips": clips, "streams": streams, "moments": moments,
         "dropbox_ready": bool(c.get("DROPBOX_APP_KEY") and c.get("DROPBOX_APP_SECRET")),
         "folders": [s["name"] for s in conn.execute(
             "SELECT name FROM sources WHERE active = 1 AND dropbox_folder IS NOT NULL ORDER BY id")],
