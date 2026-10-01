@@ -15008,3 +15008,63 @@ class BelfortGuardrailsFromTheReview(unittest.TestCase):
         self.assertLess(src.index("belfort-trade.py\" shadow"), src.index("openclaw agent --agent belfort"))
         message = src.split("openclaw agent --agent belfort", 1)[1].split("--session-id")[0]
         self.assertNotIn("SHADOW", message)
+
+
+class TheNoAIBookIsItsOwnMoney(unittest.TestCase):
+    """"Put the no AI stats in Belfort's house on a separate page and make sure
+    that 10,000 is separate from his" (2026-10-01)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.state = self.root / "agents" / "belfort" / "state"
+        self.state.mkdir(parents=True)
+        (self.root / "agents" / "belfort" / "data").mkdir()
+        (self.root / "agents" / "belfort" / "data" / "quotes.json").write_text(json.dumps(
+            {"quotes": {"MRVL": {"price": 110.0}, "PANW": {"price": 90.0}}, "benchmarks": {"QQQ": rising_qqq()}}))
+        (self.state / "portfolio.json").write_text(json.dumps({
+            "starting_cash": 10000.0, "cash": 9000.0, "created_utc": "2026-07-10 14:00:00",
+            "positions": [{"symbol": "MRVL", "shares": 10, "cost_basis": 100.0}], "trades": []}))
+        (self.state / "shadow.json").write_text(json.dumps({
+            "starting_cash": 10000.0, "cash": 8000.0, "created_utc": "2026-10-01 13:40:00",
+            "positions": [{"symbol": "PANW", "shares": 20, "cost_basis": 100.0}], "trades": []}))
+        (self.state / "equity.jsonl").write_text(
+            json.dumps({"utc": "2026-09-30 19:56:00", "book": "belfort", "value": 9000}) + "\n"
+            + json.dumps({"utc": "2026-10-01 13:41:00", "book": "belfort", "value": 10000}) + "\n")
+
+    def books(self):
+        r = subprocess.run([sys.executable, str(SCRIPTS / "belfort-trade.py"), "stats", "--json"],
+                           capture_output=True, text=True, env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def test_each_page_gets_its_own_book(self):
+        d = self.books()
+        mine, shadow = (next(b for b in d["books"] if b["book"] == k) for k in ("belfort", "shadow"))
+        self.assertEqual((mine["value"], mine["cash"], [p["symbol"] for p in mine["positions"]]),
+                         (10100.0, 9000.0, ["MRVL"]))
+        self.assertEqual((shadow["value"], shadow["cash"], [p["symbol"] for p in shadow["positions"]]),
+                         (9800.0, 8000.0, ["PANW"]))
+
+    def test_side_by_side_is_over_the_same_days(self):
+        # Belfort's own total runs from July; the shadow book's from today.
+        # Compared from the shadow book's start: 10,000 then, 10,100 now.
+        d = self.books()["same_days"]
+        self.assertEqual((d["since"], d["belfort_pct"], d["shadow_pct"]), ("2026-10-01", 1.0, -2.0))
+
+    def test_the_deck_never_counts_it(self):
+        # dashboard-data.js reads portfolio.json, falling back to a file whose
+        # name looks like a portfolio. shadow.json must never be that file.
+        js = (ROOT / "mission-control-api" / "dashboard-data.js").read_text()
+        pattern = re.search(r"find\(f => /(.+?)/i\.test\(f\)", js).group(1)
+        self.assertIsNone(re.search(pattern, "shadow.json", re.I))
+        self.assertIn("'portfolio.json'", js)
+        self.assertNotIn("shadow", js)
+
+    def test_the_house_has_the_two_pages(self):
+        html = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        self.assertIn('data-page="shadow">No-AI book</button>', html)
+        self.assertIn("separate $10,000 paper account</b>, not Belfort's money", html)
+        self.assertIn("/api/belfort/books", html)
+        self.assertIn("belfortRoutes.register(app)", (ROOT / "mission-control-api" / "server.js").read_text())

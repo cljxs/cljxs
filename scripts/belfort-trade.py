@@ -549,13 +549,54 @@ def book_stats(p, book, doc=None):
     }
 
 
+def book_view(p):
+    """What a page shows of one book: its cash, its positions with their
+    stops, its last trades - each book's own, never added to the other."""
+    rows = []
+    for pos in p["positions"]:
+        sh = float(pos.get("shares") or 0)
+        if sh <= 0:
+            continue
+        px = float(last_price(pos["symbol"], pos.get("cost_basis")) or 0)
+        cb = float(pos.get("cost_basis") or 0)
+        rows.append({"symbol": pos["symbol"], "shares": sh, "entry": cb, "last": round(px, 2),
+                     "value": round(sh * px, 2), "pnl_pct": round((px / cb - 1) * 100, 2) if cb else None,
+                     "stop": exit_check(entry_of(p, pos), quote(pos["symbol"]))[2],
+                     "cluster": cluster_of(pos["symbol"])})
+    return {"cash": round(float(p["cash"]), 2), "starting_cash": float(p.get("starting_cash") or 10000),
+            "positions": rows,
+            "trades": [{k: t.get(k) for k in ("utc", "side", "symbol", "shares", "price", "notional",
+                                               "realised_pnl", "reason")} for t in p.get("trades", [])[-10:][::-1]]}
+
+
+def same_days(books):
+    """Belfort and the shadow book over the SAME days - the shadow book's,
+    which started later. Their own totals cover different stretches of the
+    market and cannot be compared. None until both have been running."""
+    shadow = next((b for b in books if b["book"] == "shadow"), None)
+    if not shadow:
+        return None
+    start = load(SHADOW).get("created_utc") or ""
+    try:
+        rows = [json.loads(line) for line in EQUITY.read_text().splitlines() if line.strip()]
+    except OSError:
+        rows = []
+    first = next((r["value"] for r in rows if r.get("book") == "belfort" and str(r.get("utc", "")) >= start), None)
+    now_value = next(b["value"] for b in books if b["book"] == "belfort")
+    return {"since": start[:10], "shadow_pct": shadow["return_pct"], "qqq_pct": shadow["qqq_return_pct"],
+            "belfort_pct": round((now_value / first - 1) * 100, 2) if first else None}
+
+
 def cmd_stats(a):
     books = [book_stats(load(), "belfort")]
     if SHADOW.exists():
         books.append(book_stats(load(SHADOW), "shadow"))
     state, why = regime()
     if a.json:
-        print(json.dumps({"regime": state, "regime_why": why, "books": books}, indent=1))
+        for b in books:
+            b.update(book_view(load(SHADOW) if b["book"] == "shadow" else load()))
+        print(json.dumps({"regime": state, "regime_why": why, "books": books,
+                          "same_days": same_days(books)}, indent=1))
         return 0
     fmt = lambda v, suffix="%": "-" if v is None else f"{v:+.2f}{suffix}" if suffix == "%" else f"{v}{suffix}"
     print(f"regime: {state} - {why}\n")
