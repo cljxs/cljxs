@@ -10,12 +10,14 @@ cite it.
 Standard library only — no pip installs, no compiler needed.
 """
 
+import hashlib
 import json
 import os
 import ssl
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +34,10 @@ UNIVERSE = [
     "PLTR", "COIN", "HOOD", "SHOP", "NET", "DDOG", "SNOW", "CRWD", "ZS", "PANW",
     "MDB", "TSLA", "META", "GOOGL", "AMZN", "MSFT", "AAPL", "UBER", "ABNB", "RBLX",
 ]
+
+# Not traded - read by belfort-trade.py's regime() and stats: the market
+# Belfort's universe lives in, and what holding it instead would have made.
+BENCHMARKS = ["QQQ", "SPY"]
 
 UA = "Mozilla/5.0 (compatible; belfort-fetch/1.0)"
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=1y&interval=1d"
@@ -197,7 +203,13 @@ def parse_rss(raw, limit=25):
 
         title = tag("title")
         if title:
-            items.append({"title": title[:180], "published": tag("pubDate")})
+            link = tag("link") or ""
+            host = urllib.parse.urlsplit(link).hostname or ""
+            items.append({"title": title[:180], "published": tag("pubDate"),
+                          # what a buy cites (belfort-trade.py --headline): the
+                          # same headline keeps the same id across refreshes
+                          "id": hashlib.sha1(title.encode()).hexdigest()[:8],
+                          "publisher": host[4:] if host.startswith("www.") else host})
     return items
 
 
@@ -250,6 +262,15 @@ def main():
         log("no quotes fetched at all — leaving previous data files untouched")
         return 1
 
+    benchmarks = {}
+    for sym in BENCHMARKS:
+        time.sleep(REQUEST_GAP)
+        try:
+            benchmarks[sym] = fetch_one(sym)
+        except Exception as exc:
+            failures.append({"symbol": sym, "error": str(exc)[:120]})
+            log(f"{sym}: FAILED — {exc}")
+
     # Pre-screen in plain code so the agent reasons over a short list, not 30.
     candidates = sorted(
         [q for q in quotes.values() if q["mechanical_score"] == 3],
@@ -260,6 +281,7 @@ def main():
         "asof_utc": started.strftime("%Y-%m-%d %H:%M:%S"),
         "count": len(quotes),
         "quotes": quotes,
+        "benchmarks": benchmarks,
     }, indent=1) + "\n")
 
     (DATA_DIR / "candidates.json").write_text(json.dumps({

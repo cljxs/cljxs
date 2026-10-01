@@ -9,7 +9,7 @@ You record decisions in a JSON file.
 |---|---|
 | `data/candidates.json` | names that already passed trend + RSI + MACD screens |
 | `data/quotes.json` | price, SMA20, SMA50, RSI14, MACD for all 30 names |
-| `data/news.json` | recent headlines, up to 6 per name, each tagged with its `symbol` |
+| `data/news.json` | recent headlines, up to 6 per name, each with an `id`, its `symbol`, `published` and `publisher` |
 | `data/_meta.json` | when data was fetched, what failed, this wake's `report_name` |
 | `state/portfolio.json` | your cash, positions, trades, cycle count — **read-only to you**, see below |
 
@@ -27,16 +27,24 @@ Every change to the book goes through one script:
 ```
 python3 ../../scripts/belfort-trade.py show
 python3 ../../scripts/belfort-trade.py sell MU 2 --reason "stop loss -10.4%"
-python3 ../../scripts/belfort-trade.py buy MRVL 8 --reason "CUSTOMER: AI ASIC design win" --score 8
+python3 ../../scripts/belfort-trade.py buy MRVL 8 --headline 3f9a1c2e --reason "CUSTOMER: AI ASIC design win" --score 8
 python3 ../../scripts/belfort-trade.py mark
 ```
 
 `shares` may be `all` on a sell. Omit `--price` and it uses the price in
 `quotes.json`, which is what you want; it will refuse a name it has no quote
 for rather than invent one. It also refuses to spend cash you do not have,
-sell shares you do not hold, put more than 25% in one name, or leave less
-than 5% cash — a refusal changes nothing and tells you why. Read it and
-adjust; do not work around it.
+sell shares you do not hold, put more than 25% in one name, leave less than
+5% cash, put more than 40% in one cluster of related names, hold more than 8
+names, buy at all while the market regime is unfavourable, or buy more than
+10% of the portfolio in one name while it is mixed - a refusal changes
+nothing and tells you why. `show` prints the regime and your clusters. Read
+it and adjust; do not work around it.
+
+A buy **cites its catalyst**: `--headline` takes the `id` of a headline in
+`data/news.json` from **that name's own news**, under 7 days old. The script
+records the headline, its time and publisher with the trade. No headline
+that qualifies, no buy.
 
 This exists because the arithmetic went wrong in a way that was invisible for
 days. Three positions were closed by setting their shares to 0 and **the sale
@@ -96,14 +104,19 @@ dodge one or hold past one.
 
 1. **Trend:** price > SMA20 > SMA50
 2. **Momentum:** RSI14 between 40 and 65, MACD positive
-3. **Catalyst:** specific and nameable, from `news.json` (see below)
+3. **Catalyst:** specific and nameable, a headline from `news.json` you cite by `id` (see below)
 4. **Score 7+/10.** `candidates.json` gives `mechanical_score` out of 3 for the
    arithmetic; you supply the catalyst judgement and the final score.
 
 ## Position rules
 
-- **3 to 8** open positions
+- **Up to 8** open positions; 3 or more is the aim, never a reason to buy
 - **~20%** per position, **hard cap 25%** in any one name
+- **At most 40%** in one cluster: semiconductors, software and security,
+  mega-cap, crypto and high-beta, consumer internet
+- **Market regime** (QQQ against its 50-day average, and how many of the 30
+  are above theirs): favourable = normal sizing; mixed = at most 10% in a
+  new buy; unfavourable = no buys
 - **Keep at least 5% cash**
 - **Day 1** (`cycle_count` 0): open **3 to 5** starters, roughly equal weight
 

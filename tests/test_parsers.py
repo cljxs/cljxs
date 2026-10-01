@@ -60,6 +60,22 @@ trade = load("belfort_trade", "belfort-trade.py")
 import et_time
 
 
+def rising_qqq(price=500.0):
+    """QQQ above a rising 50-day average: a favourable regime for
+    belfort-trade.py, so a test about something else is not sized down."""
+    closes = [400.0 + i for i in range(70)]
+    return {"price": price, "sma50": sum(closes[-50:]) / 50,
+            "history": [[f"2026-07-{1 + i // 3:02d}", c] for i, c in enumerate(closes)]}
+
+
+def fresh_news(*symbols):
+    """news.json with one headline per name, id "h-<NAME>", published now."""
+    from email.utils import format_datetime
+    stamp = format_datetime(datetime.now(timezone.utc))
+    return {"headlines": [{"id": f"h-{s}", "symbol": s, "title": f"EARNINGS: {s} raised guidance",
+                           "published": stamp, "publisher": "example.com"} for s in symbols]}
+
+
 class ModelSlug(unittest.TestCase):
     """preflight reported a healthy ace as broken, 2026-09-16.
 
@@ -12405,13 +12421,15 @@ class TheBriefingValuesBelfortsBookAsBelfortDoes(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def price(self, **px):
-        self.quotes.write_text(json.dumps({"quotes": {k: {"price": v} for k, v in px.items()}}))
+        self.quotes.write_text(json.dumps({"quotes": {k: {"price": v} for k, v in px.items()},
+                                           "benchmarks": {"QQQ": rising_qqq()}}))
 
     def book(self):
         """Buy at one set of prices, mark at another - the real shape."""
+        (self.quotes.parent / "news.json").write_text(json.dumps(fresh_news("CRWD", "MRVL")))
         self.price(CRWD=241.88, MRVL=241.48)
-        self.trade("buy", "CRWD", "4")
-        self.trade("buy", "MRVL", "9")
+        self.trade("buy", "CRWD", "4", "--headline", "h-CRWD")
+        self.trade("buy", "MRVL", "9", "--headline", "h-MRVL")
         self.price(CRWD=261.30, MRVL=254.10)
         self.trade("mark")
         return json.loads((self.root / "agents" / "belfort" / "state" / "portfolio.json").read_text())
@@ -14698,12 +14716,14 @@ class BelfortsSellRulesAreCode(unittest.TestCase):
     def test_the_cash_floor_is_5_percent(self):
         self.state.write_text(json.dumps({"starting_cash": 10000.0, "cash": 10000.0, "positions": [], "trades": []}))
         self.quotes.write_text(json.dumps({"quotes": {"A": {"price": 100.0}, "B": {"price": 100.0},
-                                                      "C": {"price": 100.0}, "D": {"price": 100.0}}}))
+                                                      "C": {"price": 100.0}, "D": {"price": 100.0}},
+                                           "benchmarks": {"QQQ": rising_qqq()}}))
+        (self.quotes.parent / "news.json").write_text(json.dumps(fresh_news(*"ABCD")))
         for sym in "ABC":
-            self.assertEqual(self.run_trade("buy", sym, "24").returncode, 0)
-        r = self.run_trade("buy", "D", "22")                       # would leave 6% cash
+            self.assertEqual(self.run_trade("buy", sym, "24", "--headline", f"h-{sym}").returncode, 0)
+        r = self.run_trade("buy", "D", "22", "--headline", "h-D")   # would leave 6% cash
         self.assertEqual(r.returncode, 0, r.stderr)
-        r = self.run_trade("buy", "D", "2")                        # 4%
+        r = self.run_trade("buy", "D", "2", "--headline", "h-D")    # 4%
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("minimum is 5%", r.stderr)
 
@@ -14726,7 +14746,8 @@ class BelfortReadsNewsForAllThirty(unittest.TestCase):
     def test_the_real_feed_parses(self):
         items = self.fetch.parse_rss(self.RSS.decode())
         self.assertEqual(len(items), 20)
-        self.assertEqual(items[0], {"title": "headline 1", "published": "Thu, 01 Oct 2026 03:26:17 +0000"})
+        self.assertEqual(items[0], {"title": "headline 1", "published": "Thu, 01 Oct 2026 03:26:17 +0000",
+                                    "id": "a649c928", "publisher": "example.invalid"})
 
     def test_every_name_is_asked_for_and_tagged(self):
         asked = []
@@ -14775,3 +14796,215 @@ class BelfortsSellRulesNeedAnEntryDate(unittest.TestCase):
         p = {"trades": [{"side": "BUY", "symbol": "X", "utc": "2026-09-29 13:36:00"}]}
         pos = trade.entry_of(p, {"symbol": "X", "shares": 1, "cost_basis": 100.0})
         self.assertEqual(pos["entry_utc"], "2026-09-29 13:36:00")
+
+
+class BelfortGuardrailsFromTheReview(unittest.TestCase):
+    """2026-10-01, from an outside review of Belfort's rules: a market regime
+    filter, caps on clusters of related names, catalysts tied to a real
+    headline, a no-AI shadow book, and the numbers to compare them by."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        b = self.root / "agents" / "belfort"
+        (b / "state").mkdir(parents=True)
+        (b / "data").mkdir(parents=True)
+        self.state, self.data = b / "state", b / "data"
+        self.book({"starting_cash": 10000.0, "cash": 10000.0, "positions": [], "trades": [],
+                   "created_utc": "2026-07-10 14:00:00"})
+        self.prices(dict.fromkeys(["NVDA", "AMD", "MU", "PANW", "A", "B", "C", "D", "E", "F", "G", "H", "I"], 100.0))
+        (self.data / "news.json").write_text(json.dumps(fresh_news("NVDA", "AMD", "MU", "PANW")))
+        self.old = os.environ.get("ECOSYSTEM_ROOT")
+
+    def book(self, p, name="portfolio.json"):
+        (self.state / name).write_text(json.dumps(p))
+
+    def prices(self, px, qqq=None, extra=None):
+        quotes = {k: dict({"price": v, "sma50": v * 0.95}, **(extra or {}).get(k, {})) for k, v in px.items()}
+        (self.data / "quotes.json").write_text(json.dumps(
+            {"quotes": quotes, "benchmarks": {"QQQ": qqq if qqq is not None else rising_qqq()}}))
+
+    def run_trade(self, *args):
+        return subprocess.run([sys.executable, str(SCRIPTS / "belfort-trade.py"), *args],
+                              capture_output=True, text=True, env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)))
+
+    def mod(self):
+        os.environ["ECOSYSTEM_ROOT"] = str(self.root)
+        self.addCleanup(lambda: os.environ.pop("ECOSYSTEM_ROOT", None) if self.old is None
+                        else os.environ.__setitem__("ECOSYSTEM_ROOT", self.old))
+        return load("belfort_trade_guard", "belfort-trade.py")
+
+    # --- 1. the market regime ------------------------------------------------
+
+    def qqq(self, closes, price):
+        return {"price": price, "history": [[f"2026-07-{1 + i // 3:02d}", c] for i, c in enumerate(closes)]}
+
+    def test_regime_states(self):
+        t = self.mod()
+        rising, falling = [400.0 + i for i in range(70)], [470.0 - i for i in range(70)]
+        names = {"quotes": {s: {"price": 100.0, "sma50": 95.0} for s in "ABCD"}}
+        self.assertEqual(t.regime(dict(names, benchmarks={"QQQ": self.qqq(rising, 500)}))[0], "favorable")
+        self.assertEqual(t.regime(dict(names, benchmarks={"QQQ": self.qqq(rising, 440)}))[0], "neutral",
+                         "below a rising average: mixed")
+        self.assertEqual(t.regime(dict(names, benchmarks={"QQQ": self.qqq(falling, 380)}))[0], "unfavorable")
+        weak = {"quotes": {s: {"price": 90.0, "sma50": 95.0} for s in "ABC"} | {"D": {"price": 100.0, "sma50": 95.0}}}
+        self.assertEqual(t.regime(dict(weak, benchmarks={"QQQ": self.qqq(rising, 500)}))[0], "unfavorable",
+                         "QQQ fine but only a quarter of the names above their average")
+        self.assertEqual(t.regime(names)[0], "unknown")
+
+    def test_unfavourable_means_no_buys_and_mixed_means_small_ones(self):
+        self.prices({"NVDA": 100.0}, qqq=self.qqq([470.0 - i for i in range(70)], 380))
+        r = self.run_trade("buy", "NVDA", "5", "--headline", "h-NVDA")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("regime is unfavourable", r.stderr)
+        self.prices({"NVDA": 100.0}, qqq=self.qqq([400.0 + i for i in range(70)], 440))
+        r = self.run_trade("buy", "NVDA", "11", "--headline", "h-NVDA")
+        self.assertIn("cap is 10% while the regime is neutral", r.stderr)
+        self.assertEqual(self.run_trade("buy", "NVDA", "9", "--headline", "h-NVDA").returncode, 0)
+
+    def test_no_qqq_data_is_treated_as_mixed(self):
+        (self.data / "quotes.json").write_text(json.dumps({"quotes": {"NVDA": {"price": 100.0}}}))
+        r = self.run_trade("buy", "NVDA", "20", "--headline", "h-NVDA")
+        self.assertIn("cap is 10% while the regime is unknown", r.stderr)
+
+    def test_the_real_fetcher_supplies_the_benchmarks(self):
+        chart = (FIXTURES / "belfort-yahoo-chart-tsm.json").read_bytes()
+        os.environ["ECOSYSTEM_ROOT"] = str(self.root)
+        try:
+            fetch = load("belfort_fetch_bench", "belfort-fetch.py")
+        finally:
+            os.environ.pop("ECOSYSTEM_ROOT", None) if self.old is None else os.environ.__setitem__("ECOSYSTEM_ROOT", self.old)
+        fetch.http_get = lambda url, retries=2: chart
+        fetch.REQUEST_GAP = 0
+        fetch.fetch_news.__defaults__ = (None, 0)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(fetch.main(), 0)
+        doc = json.loads((self.data / "quotes.json").read_text())
+        self.assertEqual(sorted(doc["benchmarks"]), ["QQQ", "SPY"])
+        self.assertEqual(len(doc["benchmarks"]["QQQ"]["history"]), fetch.HISTORY_BARS)
+        self.assertIn(self.mod().regime(doc)[0], ("favorable", "neutral", "unfavorable"))
+
+    # --- 2. clusters ------------------------------------------------------------
+
+    def test_one_cluster_is_capped_at_40_percent(self):
+        for sym, n in (("NVDA", "20"), ("AMD", "20")):
+            self.assertEqual(self.run_trade("buy", sym, n, "--headline", f"h-{sym}").returncode, 0)
+        r = self.run_trade("buy", "MU", "5", "--headline", "h-MU")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("semiconductors would be 45.0%", r.stderr)
+        self.assertEqual(self.run_trade("buy", "PANW", "20", "--headline", "h-PANW").returncode, 0,
+                         "another cluster is fine")
+        self.assertIn("semiconductors 40%", self.run_trade("show").stdout)
+
+    def test_an_unlisted_name_is_its_own_cluster_and_eight_is_the_most(self):
+        t = self.mod()
+        self.assertEqual(t.cluster_of("A"), "A")
+        p = {"starting_cash": 10000.0, "cash": 10000.0, "positions": [], "trades": []}
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+            for sym in "ABCDEFGH":
+                self.assertEqual(t.buy(p, sym, 10, state=("favorable", "")), 0)
+            self.assertEqual(t.buy(p, "I", 10, state=("favorable", "")), 1)
+        self.assertIn("8 names held, the most is 8", err.getvalue())
+
+    # --- 5. the catalyst is a real headline -----------------------------------
+
+    def test_a_buy_cites_a_headline_from_its_own_news(self):
+        self.assertIn("cites its catalyst", self.run_trade("buy", "NVDA", "5").stderr)
+        self.assertIn("no headline 'nope'", self.run_trade("buy", "NVDA", "5", "--headline", "nope").stderr)
+        self.assertIn("from AMD's news, not NVDA's",
+                      self.run_trade("buy", "NVDA", "5", "--headline", "h-AMD").stderr)
+        r = self.run_trade("buy", "NVDA", "5", "--headline", "h-NVDA", "--reason", "EARNINGS: guidance raised")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        p = json.loads((self.state / "portfolio.json").read_text())
+        self.assertEqual(p["trades"][-1]["catalyst"]["title"], "EARNINGS: NVDA raised guidance")
+        self.assertEqual(p["trades"][-1]["catalyst"]["publisher"], "example.com")
+        self.assertEqual(p["positions"][0]["catalyst"]["id"], "h-NVDA")
+
+    def test_an_old_headline_is_not_a_catalyst(self):
+        from email.utils import format_datetime
+        news = fresh_news("NVDA")
+        news["headlines"][0]["published"] = format_datetime(datetime.now(timezone.utc) - timedelta(days=8))
+        (self.data / "news.json").write_text(json.dumps(news))
+        self.assertIn("is 8 days old", self.run_trade("buy", "NVDA", "5", "--headline", "h-NVDA").stderr)
+
+    # --- 3. the shadow book --------------------------------------------------
+
+    def candidates(self, *syms):
+        (self.data / "candidates.json").write_text(json.dumps(
+            {"candidates": [{"symbol": s, "price": 100.0} for s in syms]}))
+
+    def test_the_shadow_book_buys_the_top_candidate_it_may(self):
+        self.candidates("NVDA", "AMD", "PANW")
+        self.book({"starting_cash": 10000.0, "cash": 5800.0, "trades": [], "created_utc": "2026-09-01 14:00:00",
+                   "positions": [{"symbol": "NVDA", "shares": 21, "cost_basis": 100.0},
+                                 {"symbol": "AMD", "shares": 21, "cost_basis": 100.0}]}, "shadow.json")
+        r = self.run_trade("shadow")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # NVDA held; AMD would take semiconductors past 40%; PANW is next
+        self.assertIn("bought 20 PANW (favorable)", r.stdout)
+        self.assertEqual(json.loads((self.state / "portfolio.json").read_text())["positions"], [],
+                         "Belfort's own book is not touched")
+        self.assertIn("no buy", self.run_trade("shadow").stdout,
+                      "one buy a turn, and PANW is now held")
+
+    def test_the_shadow_book_never_adds_to_a_name_it_holds(self):
+        # Like Belfort: one new name at a time, no averaging up. A 5% PANW
+        # could take 20% more and stay inside every cap - it still may not.
+        self.candidates("PANW")
+        self.book({"starting_cash": 10000.0, "cash": 9500.0, "trades": [], "created_utc": "2026-09-01 14:00:00",
+                   "positions": [{"symbol": "PANW", "shares": 5, "cost_basis": 100.0}]}, "shadow.json")
+        self.assertIn("no buy", self.run_trade("shadow").stdout)
+
+    def test_the_shadow_book_starts_itself_and_obeys_the_regime(self):
+        self.candidates("PANW")
+        self.prices({"PANW": 100.0}, qqq=self.qqq([470.0 - i for i in range(70)], 380))
+        r = self.run_trade("shadow")
+        self.assertIn("no buy: regime unfavourable", r.stdout)
+        shadow = json.loads((self.state / "shadow.json").read_text())
+        self.assertEqual((shadow["starting_cash"], shadow["cash"], shadow["cycle_count"]), (10000.0, 10000.0, 1))
+
+    def test_the_shadow_book_sells_by_the_same_exit_rules(self):
+        self.candidates()
+        self.book({"starting_cash": 10000.0, "cash": 9000.0, "created_utc": "2026-09-01 14:00:00",
+                   "trades": [{"side": "BUY", "symbol": "PANW", "shares": 10, "price": 100, "notional": 1000}],
+                   "positions": [{"symbol": "PANW", "shares": 10, "cost_basis": 112.0,
+                                  "entry_utc": "2026-09-01 14:00:00"}]}, "shadow.json")
+        r = self.run_trade("shadow")
+        self.assertIn("sold PANW: STOP LOSS", r.stdout)
+
+    # --- 4. the numbers --------------------------------------------------------
+
+    def test_stats_for_both_books_against_qqq(self):
+        sells = [("WIN", 1100.0, 100.0, "TAKE PROFIT: +25%"), ("WIN2", 1050.0, 50.0, "Broken thesis"),
+                 ("LOSS", 900.0, -100.0, "STOP LOSS: -10%")]
+        self.book({"starting_cash": 10000.0, "cash": 10050.0, "positions": [], "created_utc": "2026-07-10 14:00:00",
+                   "trades": [{"side": "SELL", "symbol": s, "notional": n, "realised_pnl": r, "reason": why}
+                              for s, n, r, why in sells]})
+        (self.state / "equity.jsonl").write_text("".join(json.dumps({"book": "belfort", "value": v}) + "\n"
+                                                         for v in (10000, 10400, 9880, 10100)))
+        t = self.mod()
+        st = t.book_stats(t.load(), "belfort")
+        self.assertEqual((st["closed"], st["win_rate"]), (3, 66.7))
+        self.assertEqual((st["avg_win_pct"], st["avg_loss_pct"]), (7.5, -10.0))
+        self.assertEqual((st["profit_factor"], st["expectancy_pct"]), (1.5, 1.67))
+        self.assertEqual(st["max_drawdown_pct"], 5.0, "10,400 down to 9,880")
+        self.assertEqual(st["exits_by_rule"], {"stop loss": 1, "take profit": 1, "protect a gain": 0,
+                                               "dead money": 0, "judgement": 1})
+        # QQQ from the book's first day: rising_qqq's 2026-07-10 close is 427, now 500
+        self.assertEqual(st["qqq_return_pct"], round((500 / 427 - 1) * 100, 2))
+        out = self.run_trade("stats").stdout
+        self.assertIn("BELFORT (AI)", out)
+        self.assertNotIn("SHADOW", out, "no shadow book yet, none shown")
+
+    def test_mark_keeps_the_value_history(self):
+        self.run_trade("mark")
+        self.run_trade("mark")
+        rows = [json.loads(l) for l in (self.state / "equity.jsonl").read_text().splitlines()]
+        self.assertEqual([r["book"] for r in rows], ["belfort", "belfort"])
+
+    def test_the_cycle_runs_the_shadow_book_and_does_not_tell_belfort(self):
+        src = (SCRIPTS / "belfort-cycle.sh").read_text()
+        self.assertLess(src.index("belfort-trade.py\" shadow"), src.index("openclaw agent --agent belfort"))
+        message = src.split("openclaw agent --agent belfort", 1)[1].split("--session-id")[0]
+        self.assertNotIn("SHADOW", message)

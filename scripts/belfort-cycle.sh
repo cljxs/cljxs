@@ -63,6 +63,11 @@ REPORT="$(python3 "$ROOT/scripts/et_time.py" report-name belfort)"
 # told what was sold and judges only whether a thesis broke.
 EXITS="$(python3 "$ROOT/scripts/belfort-trade.py" exits --apply 2>&1)" || EXITS="exits FAILED, check by hand: $EXITS"
 echo "$EXITS"
+# The no-AI book takes its turn on the same data: same rules and exits, the
+# top candidate instead of a judgement. Belfort is not told about it.
+# Its refusals while it tries candidates are routine, so stderr is dropped.
+SHADOW_LINE="$(python3 "$ROOT/scripts/belfort-trade.py" shadow 2>/dev/null)" || SHADOW_LINE="  !! the shadow book failed - run belfort-trade.py shadow by hand to see why"
+echo "$SHADOW_LINE"
 openclaw agent --agent belfort \
   --message "Scheduled cycle. This wake's report is a NEW file: reports/$REPORT - write it there. Do not edit an earlier report, even one from today.
 
