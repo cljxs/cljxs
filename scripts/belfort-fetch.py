@@ -38,6 +38,16 @@ CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=1y&in
 NEWS_URL = "https://feeds.finance.yahoo.com/rss/2.0/headline?s={syms}&region=US&lang=en-US"
 REQUEST_GAP = 0.35          # be polite to a free endpoint
 TIMEOUT = 20
+# Daily closes kept per name: the memory belfort-trade.py's exit rules read
+# (the highest close since entry, trading days held).
+HISTORY_BARS = 90
+# News, one request per name. It used to be one request for the first 12 of
+# the 30 names, which Yahoo answers with 20 headlines between them - and 18
+# names, two of them held, had none. Hourly, not every 10 minutes: 30
+# requests a fetch would be 1,300 a day to a free endpoint for headlines that
+# change a few times a day.
+NEWS_PER_NAME = 6
+NEWS_EVERY_SECONDS = 55 * 60
 
 
 def log(msg):
@@ -158,17 +168,14 @@ def fetch_one(sym):
         "macd_ok": macd_ok,
         "mechanical_score": sum([trend_ok, rsi_ok, macd_ok]),
         "last_bar": dates[-1],
+        "history": [[d, r2(c)] for d, c in zip(dates[-HISTORY_BARS:], closes[-HISTORY_BARS:])],
     }
 
 
-def fetch_news(symbols):
-    try:
-        raw = http_get(NEWS_URL.format(syms=",".join(symbols))).decode("utf-8", "replace")
-    except Exception as exc:
-        log(f"news fetch failed: {exc}")
-        return []
+def parse_rss(raw, limit=25):
+    """[{title, published}] from a Yahoo headline RSS feed."""
     items, pos = [], 0
-    while len(items) < 25:
+    while len(items) < limit:
         start = raw.find("<item>", pos)
         if start == -1:
             break
@@ -192,6 +199,37 @@ def fetch_news(symbols):
         if title:
             items.append({"title": title[:180], "published": tag("pubDate")})
     return items
+
+
+def fetch_news(symbols, get=None, gap=REQUEST_GAP):
+    """Up to NEWS_PER_NAME headlines for EACH name, tagged with it. A
+    headline about several names is kept once, under the first."""
+    get = get or http_get
+    out, seen = [], set()
+    for i, sym in enumerate(symbols):
+        try:
+            raw = get(NEWS_URL.format(syms=sym)).decode("utf-8", "replace")
+        except Exception as exc:
+            log(f"news {sym}: {exc}")
+            continue
+        for item in parse_rss(raw, NEWS_PER_NAME):
+            if item["title"] not in seen:
+                seen.add(item["title"])
+                out.append(dict(item, symbol=sym))
+        if gap and i < len(symbols) - 1:
+            time.sleep(gap)
+    return out
+
+
+def news_is_fresh(path, now=None):
+    """Whether news.json was written within NEWS_EVERY_SECONDS, for all 30."""
+    try:
+        d = json.loads(path.read_text())
+        age = (now or time.time()) - datetime.strptime(
+            d["asof_utc"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+        return age < NEWS_EVERY_SECONDS and set(d.get("symbols") or []) >= set(UNIVERSE)
+    except Exception:
+        return False
 
 
 def main():
@@ -231,11 +269,17 @@ def main():
         "candidates": candidates,
     }, indent=1) + "\n")
 
-    news = fetch_news(UNIVERSE[:12])
-    (DATA_DIR / "news.json").write_text(json.dumps({
-        "asof_utc": started.strftime("%Y-%m-%d %H:%M:%S"),
-        "headlines": news,
-    }, indent=1) + "\n")
+    news_file = DATA_DIR / "news.json"
+    if news_is_fresh(news_file):
+        news = json.loads(news_file.read_text())["headlines"]
+    else:
+        news = fetch_news(UNIVERSE)
+        if news:
+            news_file.write_text(json.dumps({
+                "asof_utc": started.strftime("%Y-%m-%d %H:%M:%S"),
+                "symbols": UNIVERSE,
+                "headlines": news,
+            }, indent=1) + "\n")
 
     # Eastern, not UTC. The 09:35 ET open is 13:35 UTC, which looks like the
     # afternoon - and that is exactly how it got filed as `-close.md`.

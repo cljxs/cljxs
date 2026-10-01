@@ -11,15 +11,24 @@ trading loss was under 4%.
     belfort-trade.py buy  MRVL 8 --price 237.47 --reason "TYPE: the fact"
     belfort-trade.py sell MU   2 --price 927.60 --reason "stop loss -10%"
     belfort-trade.py show
+    belfort-trade.py exits [--apply]   # the sell rules, in code; --apply sells what is due
     belfort-trade.py mark        # end of cycle: re-mark, bump cycle_count, stamp the file
 
 Every trade is validated against the rules before it is applied:
   * you cannot spend cash you do not have
   * you cannot sell shares you do not hold
   * no single position may exceed 25% of portfolio value
-  * at least 15% of the portfolio must stay in cash after a buy
+  * at least 5% of the portfolio must stay in cash after a buy
 
-A refused trade changes nothing and says why. Standard library only.
+A refused trade changes nothing and says why.
+
+THE SELL RULES are code too (exit_check). They lived only in Belfort's
+instructions until 2026-10-01, and the "+8%: protect it" rule could not be
+followed at all: nothing remembered how high a position had been. The
+fetcher now keeps each name's daily closes, and the highest close since
+entry is that memory. belfort-cycle.sh runs `exits --apply` before Belfort
+wakes; he is told what was sold and judges only a broken thesis.
+Standard library only.
 """
 
 import argparse
@@ -34,7 +43,15 @@ STATE = ROOT / "agents" / "belfort" / "state" / "portfolio.json"
 QUOTES = ROOT / "agents" / "belfort" / "data" / "quotes.json"
 
 MAX_POSITION_PCT = 25.0
-MIN_CASH_PCT = 15.0
+MIN_CASH_PCT = 5.0          # the owner lowered it from 15% on 2026-10-01
+
+# The exit rules, in percent from cost.
+STOP_LOSS = -10.0           # close, no exceptions, no averaging down
+TAKE_PROFIT = 25.0          # close
+PROTECT_AT = 8.0            # once a position has been up this much...
+TRAIL = 10.0                # ...its stop follows the highest price, this far below,
+                            #    and never below what was paid
+DEAD_DAYS, DEAD_BAND = 5, 2.0   # 5+ trading days within +/-2%: dead money
 
 
 def now():
@@ -57,6 +74,69 @@ def load():
 def save(p):
     p["last_cycle_utc"] = now()
     STATE.write_text(json.dumps(p, indent=2, sort_keys=True) + "\n")
+
+
+def quote(symbol):
+    try:
+        return json.loads(QUOTES.read_text())["quotes"][symbol.upper()]
+    except Exception:
+        return None
+
+
+def exit_check(pos, q):
+    """(rule, reason, stop_price) for one open position against its quote;
+    rule is None when nothing is due. stop_price is where it is sold: the
+    -10% stop, or - once it has been up 8% - TRAIL below its highest price,
+    never below what was paid."""
+    cb = float(pos.get("cost_basis") or 0)
+    if not q or not cb or q.get("price") is None:
+        return None, "no quote", None
+    px = float(q["price"])
+    entry_day = str(pos.get("entry_utc") or "")[:10]
+    # No known entry date: the closes say nothing about this position, and a
+    # high from before it was bought must never sell it.
+    history = (q.get("history") or []) if entry_day else []
+    peak = max([float(c) for d, c in history if d >= entry_day] + [px])
+    # Rounded before comparing: 90 against a cost of 100 is -9.999999999999998%
+    # in floating point, and a stop at exactly -10% would never fire.
+    pnl = round((px / cb - 1) * 100, 6)
+    peak_pnl = round((peak / cb - 1) * 100, 6)
+    stop = round(cb * (1 + STOP_LOSS / 100), 2)
+    if peak_pnl >= PROTECT_AT:
+        stop = round(max(cb, peak * (1 - TRAIL / 100)), 2)
+    held = sum(1 for d, _ in history if d > entry_day)
+
+    if pnl <= STOP_LOSS:
+        return "stop", f"STOP LOSS: {pnl:+.1f}% from cost ${cb:,.2f}", stop
+    if pnl >= TAKE_PROFIT:
+        return "take", f"TAKE PROFIT: {pnl:+.1f}% from cost ${cb:,.2f}", stop
+    if peak_pnl >= PROTECT_AT and px <= stop:
+        return "protect", (f"PROTECT GAIN: was up {peak_pnl:+.1f}% (high ${peak:,.2f}), now {pnl:+.1f}%, "
+                           f"at or under its stop ${stop:,.2f}"), stop
+    if held >= DEAD_DAYS and abs(pnl) <= DEAD_BAND:
+        return "dead", f"DEAD MONEY: {pnl:+.1f}% after {held} trading days", stop
+    return None, f"{pnl:+.1f}%, stop ${stop:,.2f}", stop
+
+
+def entry_of(p, pos):
+    """The position with its entry date: its own, or its latest BUY's."""
+    if pos.get("entry_utc"):
+        return pos
+    buys = [t.get("utc") for t in p.get("trades", [])
+            if str(t.get("side", "")).upper() == "BUY" and str(t.get("symbol", "")).upper() == pos["symbol"].upper()]
+    return dict(pos, entry_utc=max(buys)) if any(buys) else pos
+
+
+def exits_due(p):
+    """[(symbol, rule, reason)] for every open position whose exit is due."""
+    out = []
+    for pos in p["positions"]:
+        if float(pos.get("shares") or 0) <= 0:
+            continue
+        rule, reason, _ = exit_check(entry_of(p, pos), quote(pos["symbol"]))
+        if rule:
+            out.append((pos["symbol"], rule, reason))
+    return out
 
 
 def last_price(symbol, fallback=None):
@@ -185,19 +265,27 @@ def cmd_buy(a):
 
 def cmd_sell(a):
     p = load()
-    sym = a.symbol.upper()
+    code = sell(p, a.symbol, a.shares, a.price, a.reason)
+    if code == 0:
+        save(p)
+    return code
+
+
+def sell(p, symbol, shares_arg="all", price=None, reason=""):
+    """Apply one sale to p in memory; the caller saves. 0, or 1 if refused."""
+    sym = symbol.upper()
     pos = position(p, sym)
     held = float(pos.get("shares") or 0) if pos else 0
     if held <= 0:
         print(f"REFUSED: no open position in {sym}.", file=sys.stderr)
         return 1
 
-    shares = int(held) if a.shares in (None, "all") else int(a.shares)
+    shares = int(held) if shares_arg in (None, "all") else int(shares_arg)
     if shares <= 0 or shares > held:
         print(f"REFUSED: you hold {held:.0f} {sym}, cannot sell {shares}.", file=sys.stderr)
         return 1
 
-    px = a.price if a.price is not None else last_price(sym)
+    px = price if price is not None else last_price(sym)
     if px is None:
         print(f"no price for {sym} in quotes.json and none given - refusing.", file=sys.stderr)
         return 1
@@ -217,10 +305,29 @@ def cmd_sell(a):
     p["trades"].append({"cycle": p.get("cycle_count", 0), "side": "SELL", "symbol": sym,
                         "shares": shares, "price": round(float(px), 2),
                         "notional": round(proceeds, 2), "realised_pnl": round(realised, 2),
-                        "utc": now(), "reason": a.reason or ""})
-    save(p)
+                        "utc": now(), "reason": reason or ""})
     print(f"SOLD {shares} {sym} @ ${float(px):,.2f} = ${proceeds:,.2f}  "
           f"realised {realised:+,.2f}   cash now ${float(p['cash']):,.2f}")
+    return 0
+
+
+def cmd_exits(a):
+    """The sell rules, checked in code. Without --apply it says what is due;
+    with it, it sells each one, with the rule as the trade's reason."""
+    p = load()
+    due = exits_due(p)
+    if not due:
+        held = [x for x in p["positions"] if float(x.get("shares") or 0) > 0]
+        print("exits: nothing due" + "".join(
+            f"\n  {x['symbol']}: {exit_check(entry_of(p, x), quote(x['symbol']))[1]}" for x in held))
+        return 0
+    for sym, rule, reason in due:
+        if not a.apply:
+            print(f"DUE {sym}: {reason}")
+        elif sell(p, sym, "all", None, reason) != 0:
+            return 1
+    if a.apply:
+        save(p)
     return 0
 
 
@@ -237,8 +344,10 @@ def summary(p):
         px = float(last_price(pos["symbol"], pos.get("cost_basis")) or 0)
         cb = float(pos.get("cost_basis") or 0)
         pnl = (px / cb - 1) * 100 if cb else 0
+        stop = exit_check(entry_of(p, pos), quote(pos["symbol"]))[2]
         lines.append(f"  {pos['symbol']:<6} {sh:>6.0f} sh  entry ${cb:>8,.2f}  "
-                     f"last ${px:>8,.2f}  value ${sh * px:>9,.2f}  {pnl:+.2f}%")
+                     f"last ${px:>8,.2f}  value ${sh * px:>9,.2f}  {pnl:+.2f}%"
+                     + (f"  stop ${stop:,.2f}" if stop else ""))
     lines.append(f"\ntrades    {len(p['trades'])}")
     for t in p["trades"][-8:]:
         lines.append(f"  cycle {t.get('cycle', '?')}  {t.get('side', '?'):<4} "
@@ -328,6 +437,10 @@ def main():
     b.add_argument("symbol"); b.add_argument("shares")
     b.add_argument("--price", type=float); b.add_argument("--reason", default="")
     b.add_argument("--score", type=int, default=0); b.set_defaults(fn=cmd_buy)
+
+    e = sub.add_parser("exits")
+    e.add_argument("--apply", action="store_true", help="sell every position whose exit is due")
+    e.set_defaults(fn=cmd_exits)
 
     s = sub.add_parser("sell")
     s.add_argument("symbol"); s.add_argument("shares", nargs="?", default="all")

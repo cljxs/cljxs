@@ -57,8 +57,18 @@ trap 'rm -f "$LOG"' EXIT
 # open report instead, and was failed for it - its trades were fine. The name
 # comes from et_time.py, the same function the verifier checks against.
 REPORT="$(python3 "$ROOT/scripts/et_time.py" report-name belfort)"
+# The sell rules run here, in code, before Belfort wakes - stop loss, take
+# profit, protect a gain, dead money. They were instructions only until
+# 2026-10-01, and "+8%: protect it" could not be followed at all. He is
+# told what was sold and judges only whether a thesis broke.
+EXITS="$(python3 "$ROOT/scripts/belfort-trade.py" exits --apply 2>&1)" || EXITS="exits FAILED, check by hand: $EXITS"
+echo "$EXITS"
 openclaw agent --agent belfort \
-  --message "Scheduled cycle. This wake's report is a NEW file: reports/$REPORT - write it there. Do not edit an earlier report, even one from today." \
+  --message "Scheduled cycle. This wake's report is a NEW file: reports/$REPORT - write it there. Do not edit an earlier report, even one from today.
+
+The exit rules were already applied by code before you woke:
+$EXITS
+Report these sales as they are; do not sell for those rules again. You judge only a broken thesis." \
   --session-id "wake-belfort-$STARTED" \
   --timeout 600 --json 2>&1 | tee "$LOG"
 # The agent's own exit code is deliberately not checked here. It exits 0 for

@@ -14585,3 +14585,193 @@ class AQueuedRunThatAskedAQuestionSaysSo(unittest.TestCase):
         self.assertIn("Never ask the user anything (no ask_user)", t.wake_message(30))
         head = (ROOT / "agents" / "emily" / "_emily-agents-header.md").read_text()
         self.assertIn("**Never ask the user\nanything**", head)
+
+
+class BelfortsSellRulesAreCode(unittest.TestCase):
+    """"Make the script flag or force the sells that are due ... this rule
+    seems it hasn't been enforced: up 8%, don't let it fall back below what he
+    paid" (2026-10-01).
+
+    The exit rules were instructions only. "+8%" could not be followed at all:
+    nothing remembered how high a position had been. The fetcher now keeps
+    each name's daily closes; exit_check reads the highest since entry."""
+
+    TSM = json.loads((FIXTURES / "belfort-yahoo-chart-tsm.json").read_text())
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        b = self.root / "agents" / "belfort"
+        (b / "state").mkdir(parents=True)
+        (b / "data").mkdir(parents=True)
+        self.state = b / "state" / "portfolio.json"
+        self.quotes = b / "data" / "quotes.json"
+
+    def q(self, price, closes, start="2026-09-21"):
+        """A quote with daily closes from `start`, one a trading day."""
+        day = datetime.strptime(start, "%Y-%m-%d")
+        hist = []
+        for c in closes:
+            while day.weekday() >= 5:
+                day += timedelta(days=1)
+            hist.append([day.strftime("%Y-%m-%d"), c])
+            day += timedelta(days=1)
+        return {"price": price, "history": hist}
+
+    def pos(self, cost=100.0, entry="2026-09-21 13:36:00"):
+        return {"symbol": "X", "shares": 10, "cost_basis": cost, "entry_utc": entry}
+
+    def test_stop_loss_and_take_profit(self):
+        self.assertEqual(trade.exit_check(self.pos(), self.q(90.0, [100, 95]))[0], "stop")
+        self.assertIsNone(trade.exit_check(self.pos(), self.q(90.1, [100, 95]))[0])
+        self.assertEqual(trade.exit_check(self.pos(), self.q(125.0, [110, 120]))[0], "take")
+
+    def test_up_8_percent_then_back_to_cost_is_sold(self):
+        # Never below what was paid, once it has been up 8%.
+        been_up = self.q(100.0, [104, 108.5, 103])
+        rule, reason, stop = trade.exit_check(self.pos(), been_up)
+        self.assertEqual((rule, stop), ("protect", 100.0))
+        self.assertIn("was up +8.5%", reason)
+        # the same price, never up 8%: an ordinary position, stop at -10%
+        never = self.q(100.0, [104, 107.9, 103])
+        self.assertEqual(trade.exit_check(self.pos(), never)[:3:2], (None, 90.0))
+
+    def test_the_protected_stop_follows_the_high(self):
+        # Up 20% at the high: the stop is 10% under it, +8% over cost - a gain kept.
+        rule, _, stop = trade.exit_check(self.pos(), self.q(110.0, [110, 120, 112]))
+        self.assertEqual((rule, round(stop, 2)), (None, 108.0))
+        self.assertEqual(trade.exit_check(self.pos(), self.q(107.9, [110, 120, 112]))[0], "protect")
+
+    def test_a_high_before_buying_does_not_count(self):
+        q = self.q(101.0, [130, 125, 101], start="2026-09-17")      # 130 was the 17th
+        self.assertIsNone(trade.exit_check(self.pos(entry="2026-09-21 13:36:00"), q)[0])
+
+    def test_dead_money_counts_trading_days_after_entry(self):
+        flat = [100.5, 99.8, 100.2, 100.9, 101.0, 100.4]           # entry day + 5 trading days
+        self.assertEqual(trade.exit_check(self.pos(), self.q(100.4, flat))[0], "dead")
+        self.assertIsNone(trade.exit_check(self.pos(), self.q(100.4, flat[:5]))[0], "4 days is not 5")
+        moving = flat[:5] + [103.0]
+        self.assertIsNone(trade.exit_check(self.pos(), self.q(103.0, moving))[0])
+
+    def test_real_closes_from_the_fetcher(self):
+        """TSM's real daily closes, through the real fetcher's parser."""
+        fetch = load("belfort_fetch_hist", "belfort-fetch.py")
+        fetch.http_get = lambda url, retries=2: json.dumps(self.TSM).encode()
+        q = fetch.fetch_one("TSM")
+        self.assertEqual(len(q["history"]), fetch.HISTORY_BARS)
+        self.assertEqual(q["history"][-1][1], q["price"])
+        entry = q["history"][-8][0] + " 13:36:00"
+        # bought a week ago at 9% under today's price: it has been up 8%+
+        rule, reason, stop = trade.exit_check({"symbol": "TSM", "shares": 4, "entry_utc": entry,
+                                               "cost_basis": round(q["price"] / 1.09, 2)}, q)
+        self.assertGreaterEqual(stop, round(q["price"] / 1.09, 2))
+
+    def run_trade(self, *args):
+        return subprocess.run([sys.executable, str(SCRIPTS / "belfort-trade.py"), *args],
+                              capture_output=True, text=True, env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)))
+
+    def test_exits_apply_sells_what_is_due_and_the_book_still_balances(self):
+        p = {"starting_cash": 10000.0, "cash": 7000.0, "cycle_count": 3,
+             "trades": [{"side": "BUY", "symbol": "LOSR", "shares": 10, "price": 100, "notional": 1000},
+                        {"side": "BUY", "symbol": "HOLD", "shares": 10, "price": 100, "notional": 1000},
+                        {"side": "BUY", "symbol": "WINR", "shares": 10, "price": 100, "notional": 1000}],
+             "positions": [dict(self.pos(), symbol=s) for s in ("LOSR", "HOLD", "WINR")]}
+        self.state.write_text(json.dumps(p))
+        self.quotes.write_text(json.dumps({"quotes": {
+            "LOSR": self.q(88.0, [95, 90]), "HOLD": self.q(104.0, [101, 104]),
+            "WINR": self.q(100.0, [105, 111, 102])}}))
+        r = self.run_trade("exits")
+        self.assertIn("DUE LOSR: STOP LOSS", r.stdout)
+        self.assertIn("DUE WINR: PROTECT GAIN", r.stdout)
+        self.assertNotIn("HOLD", r.stdout)
+        self.assertEqual(json.loads(self.state.read_text())["cash"], 7000.0, "without --apply nothing is sold")
+        r = self.run_trade("exits", "--apply")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        after = json.loads(self.state.read_text())
+        self.assertEqual([x["symbol"] for x in after["positions"]], ["HOLD"])
+        self.assertEqual(after["cash"], 7000.0 + 880.0 + 1000.0)
+        self.assertEqual(trade.book_gap(after)[0], 0)
+        self.assertTrue(after["trades"][-1]["reason"].startswith("PROTECT GAIN"))
+        self.assertIn("nothing due", self.run_trade("exits", "--apply").stdout)
+
+    def test_the_cash_floor_is_5_percent(self):
+        self.state.write_text(json.dumps({"starting_cash": 10000.0, "cash": 10000.0, "positions": [], "trades": []}))
+        self.quotes.write_text(json.dumps({"quotes": {"A": {"price": 100.0}, "B": {"price": 100.0},
+                                                      "C": {"price": 100.0}, "D": {"price": 100.0}}}))
+        for sym in "ABC":
+            self.assertEqual(self.run_trade("buy", sym, "24").returncode, 0)
+        r = self.run_trade("buy", "D", "22")                       # would leave 6% cash
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = self.run_trade("buy", "D", "2")                        # 4%
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("minimum is 5%", r.stderr)
+
+    def test_the_cycle_runs_the_exits_before_belfort_wakes(self):
+        src = (SCRIPTS / "belfort-cycle.sh").read_text()
+        self.assertLess(src.index("belfort-trade.py\" exits --apply"), src.index("openclaw agent --agent belfort"))
+        self.assertIn("$EXITS", src.split("openclaw agent --agent belfort", 1)[1].split("--session-id")[0])
+
+
+class BelfortReadsNewsForAllThirty(unittest.TestCase):
+    """News came from one request for the first 12 of 30 names, which Yahoo
+    answers with 20 headlines between them - CRWD and PANW, both held, had
+    none. Now one request a name, up to 6 each, tagged, hourly."""
+
+    RSS = (FIXTURES / "belfort-yahoo-news-crwd.xml").read_bytes()
+
+    def setUp(self):
+        self.fetch = load("belfort_fetch_news", "belfort-fetch.py")
+
+    def test_the_real_feed_parses(self):
+        items = self.fetch.parse_rss(self.RSS.decode())
+        self.assertEqual(len(items), 20)
+        self.assertEqual(items[0], {"title": "headline 1", "published": "Thu, 01 Oct 2026 03:26:17 +0000"})
+
+    def test_every_name_is_asked_for_and_tagged(self):
+        asked = []
+
+        def get(url):
+            asked.append(url)
+            return self.RSS
+        news = self.fetch.fetch_news(["CRWD", "PANW"], get=get, gap=0)
+        self.assertEqual(len(asked), 2)
+        self.assertIn("s=PANW", asked[1])
+        self.assertEqual([n["symbol"] for n in news], ["CRWD"] * self.fetch.NEWS_PER_NAME,
+                         "the same headline under two names is kept once")
+        self.assertIn("PANW", [s for s in self.fetch.UNIVERSE[12:]], "a name past the old first 12")
+
+    def test_a_failed_name_does_not_lose_the_rest(self):
+        def get(url):
+            if "s=CRWD" in url:
+                raise OSError("timed out")
+            return self.RSS
+        news = self.fetch.fetch_news(["CRWD", "PANW"], get=get, gap=0)
+        self.assertEqual({n["symbol"] for n in news}, {"PANW"})
+
+    def test_hourly_not_every_ten_minutes(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "news.json"
+            stamp = lambda ago: datetime.fromtimestamp(1790800000 - ago, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            f.write_text(json.dumps({"asof_utc": stamp(600), "symbols": self.fetch.UNIVERSE, "headlines": []}))
+            self.assertTrue(self.fetch.news_is_fresh(f, now=1790800000))
+            f.write_text(json.dumps({"asof_utc": stamp(3600), "symbols": self.fetch.UNIVERSE, "headlines": []}))
+            self.assertFalse(self.fetch.news_is_fresh(f, now=1790800000))
+            # last fetched for the old 12 only: fetch all 30 now, however recent
+            f.write_text(json.dumps({"asof_utc": stamp(60), "headlines": []}))
+            self.assertFalse(self.fetch.news_is_fresh(f, now=1790800000))
+
+
+class BelfortsSellRulesNeedAnEntryDate(unittest.TestCase):
+    """A position with no entry date would read 90 days of closes as its
+    own: a high from before it was bought could sell it as "protect a gain"."""
+
+    def test_no_date_only_the_plain_stops(self):
+        q = {"price": 100.0, "history": [["2026-08-03", 130.0], ["2026-09-30", 101.0]]}
+        self.assertEqual(trade.exit_check({"symbol": "X", "shares": 1, "cost_basis": 100.0}, q)[:3:2],
+                         (None, 90.0))
+
+    def test_the_buy_trade_gives_the_date(self):
+        p = {"trades": [{"side": "BUY", "symbol": "X", "utc": "2026-09-29 13:36:00"}]}
+        pos = trade.entry_of(p, {"symbol": "X", "shares": 1, "cost_basis": 100.0})
+        self.assertEqual(pos["entry_utc"], "2026-09-29 13:36:00")

@@ -9,7 +9,7 @@ You record decisions in a JSON file.
 |---|---|
 | `data/candidates.json` | names that already passed trend + RSI + MACD screens |
 | `data/quotes.json` | price, SMA20, SMA50, RSI14, MACD for all 30 names |
-| `data/news.json` | recent headlines |
+| `data/news.json` | recent headlines, up to 6 per name, each tagged with its `symbol` |
 | `data/_meta.json` | when data was fetched, what failed, this wake's `report_name` |
 | `state/portfolio.json` | your cash, positions, trades, cycle count — **read-only to you**, see below |
 
@@ -35,7 +35,7 @@ python3 ../../scripts/belfort-trade.py mark
 `quotes.json`, which is what you want; it will refuse a name it has no quote
 for rather than invent one. It also refuses to spend cash you do not have,
 sell shares you do not hold, put more than 25% in one name, or leave less
-than 15% cash — a refusal changes nothing and tells you why. Read it and
+than 5% cash — a refusal changes nothing and tells you why. Read it and
 adjust; do not work around it.
 
 This exists because the arithmetic went wrong in a way that was invisible for
@@ -53,8 +53,9 @@ and do not write that file by hand even to "fix" it.
 1. **Mark to market.** Run `belfort-trade.py show`. It prints cash, every open
    position with its live P&L, and recent trades. Use those numbers as they
    are printed.
-2. **Exits first**, before you think about buying. Run every open position
-   through the exit checks and close what triggered, with `sell`.
+2. **Exits are already done.** Code applied the exit rules below before you
+   woke; the wake message lists what it sold. Report those as they are. The
+   one exit left to you is a **broken thesis** - close that with `sell`.
 3. **Then at most ONE new entry**, only if it clears the bar, with `buy`.
 4. **Run `belfort-trade.py mark`** — it re-marks every position, increments
    `cycle_count` and stamps `last_cycle_utc`. **Before the report, not after.**
@@ -78,13 +79,18 @@ and do not write that file by hand even to "fix" it.
    filed as `2026-09-16-close.md` when it was the open.
 6. **Record one line** with: `python3 ../../scripts/remember.py belfort "<one short line>"` - it appends and trims for you. Never edit `MEMORY.md` by hand: overwriting it loses every earlier cycle, and that is what made a clean cycle report failure.
 
-## Exit rules — checked every cycle
+## Exit rules — applied by code before every cycle
 
-- **Stop loss:** close at **-10%** from cost. No exceptions, no averaging down.
-- **Take profit:** close or trim at **+25%**.
-- **+8% reached:** stop to breakeven, then trail.
-- **Dead money:** flat within ±2% for 5+ trading days → close.
-- **Broken thesis:** the reason you bought is gone → close.
+`belfort-trade.py exits --apply` runs before you wake; `show` prints each
+position's current stop. You do not re-check these, and you never sell to
+dodge one or hold past one.
+
+- **Stop loss:** sold at **-10%** from cost. No averaging down.
+- **Take profit:** sold at **+25%**.
+- **Protect a gain:** once a position has been **+8%**, its stop follows the
+  highest price since entry, **10% below it, never below what you paid**.
+- **Dead money:** within ±2% after 5+ trading days → sold.
+- **Broken thesis:** the reason you bought is gone → **you** close it.
 
 ## Entry bar — all four, or you pass
 
@@ -98,7 +104,7 @@ and do not write that file by hand even to "fix" it.
 
 - **3 to 8** open positions
 - **~20%** per position, **hard cap 25%** in any one name
-- **Keep at least 15% cash**
+- **Keep at least 5% cash**
 - **Day 1** (`cycle_count` 0): open **3 to 5** starters, roughly equal weight
 
 ## What counts as a catalyst
