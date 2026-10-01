@@ -31,8 +31,23 @@ Check the agents.list index with `openclaw agents list` before running the
 
 | | Schedule | Costs |
 |---|---|---|
-| `ace-fetch.timer` | every 30 min, 09:00-23:30 ET, daily | **nothing** - plain Python |
+| `ace-fetch.timer` | every 30 min, 09:00-23:30 ET, daily | **nothing** - plain Python. Also grades finished bets, runs the no-AI bettors, writes the blind sheet |
+| `ace-close.timer` | every 5 min, 10:00-23:55 ET | **nothing** - re-prices games starting within 2 hours |
 | `ace-cycle.timer` | 15:00, 23:30 ET, daily | **fuel** - 2 AI wakes per day |
+
+## Since 2026-10-01 (an outside review, items 1-10)
+
+What is measured, and the numbers frozen until 2026-12-01: `PREREGISTRATION.md`.
+
+    python3 scripts/ace-book.py show          the bankroll, kept by code from state/bets.jsonl
+    python3 scripts/ace-clv.py                closing-line value, and blind estimates vs the market
+    python3 scripts/ace-baselines.py report   the no-AI bettors beside Ace
+    python3 scripts/ace-sharp.py check        is the Pinnacle key working? (free)
+    python3 scripts/ace-sharp.py budget       credits used today / left this month
+
+The Pinnacle price needs a free key from the-odds-api.com, put in with
+`python3 scripts/set-credential.py ace ODDS_API_KEY`. Without it everything
+runs on DraftKings alone, as before.
 
 ## Data source
 

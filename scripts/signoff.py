@@ -51,6 +51,7 @@ def jkey(r):
 AGENTS = {
     "ace": [
         ("STATE", "json", "state/bankroll.json", "cycle_count"),
+        ("BLIND", "blind", "data/blind.json", None),
         ("LEDGER", "ledger", "state/ledger.json", None),
         ("REPORT", "report", "reports", None),
         ("MEMORY", "memory", "MEMORY.md", None),
@@ -203,6 +204,23 @@ def main():
             else:
                 lines.append(f"{label}: MISSING - {why}")
                 missing.append(label)
+            continue
+
+        if kind == "blind":
+            # Written by the fetcher, so not "this cycle's file" - what this
+            # cycle owes is an estimate for every game on it. The verifier
+            # asks ace_judge.blind_missing too: one rule, two readers.
+            owed = ace_judge.blind_missing(started or None)
+            total = len((ace_judge.blind_sheet() or {}).get("games") or [])
+            if owed:
+                lines.append(f"{label}: MISSING - {len(owed)} of {total} game(s) on {rel} have no "
+                             f"blind estimate this cycle ({', '.join(str(n) for n in owed[:15])}"
+                             f"{' ...' if len(owed) > 15 else ''}). Run: python3 ../../scripts/"
+                             f"ace-judge.py blind \"1:55,2:41,...\"")
+                missing.append(label)
+            else:
+                lines.append(f"{label}: {total} game(s) estimated blind" if total
+                             else f"{label}: no games on {rel} this cycle")
             continue
 
         if not path.exists():

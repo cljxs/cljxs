@@ -9,13 +9,14 @@ data file, Ace does not cite it.
 Standard library only — no pip installs, no compiler needed.
 """
 
+import hashlib
 import json
 import os
 import ssl
 import sys
 import time
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -31,7 +32,11 @@ BASE = "https://site.web.api.espn.com/apis/site/v2/sports"
 UA = "Mozilla/5.0 (compatible; ace-fetch/1.0)"
 TIMEOUT = 20
 GAP = 0.4
-DEEP_CAP = 12          # polite cap on per-game context fetches, per sport
+# Per-game context fetches, per sport. Was 12, a cost cap from when Ace read
+# every file; it capped what Ace could estimate, not what he could risk. The
+# review (2026-10-01): "cap actions, not data". ESPN is free, and a real
+# college Saturday has about 75 games inside ESTIMATE_WINDOW_HOURS.
+DEEP_CAP = 80
 
 # How many games Ace is asked to judge in one cycle, and how far ahead it looks.
 #
@@ -41,8 +46,13 @@ DEEP_CAP = 12          # polite cap on per-game context fetches, per sport
 # mechanical work: a game starting in three days cannot be bet on information
 # that does not exist yet, and one that has started cannot be bet at all. So
 # the field is narrowed here and the judgement is left to Ace.
-BET_WINDOW_HOURS = 14  # far enough to cover tonight's slate, not next weekend
-MAX_GAMES = 8          # 8 games = 16 rows, which a cycle can actually get through
+BET_WINDOW_HOURS = 12  # what may be BET: tonight's slate, not tomorrow's
+MAX_GAMES = 24         # games offered for betting; judged in batches, so a long list is cheap
+# What Ace ESTIMATES, blind, before he sees a price (data/blind.json): every
+# game starting within this many hours, priced or not, lopsided or not. A
+# calibration study needs every game, not the ones he chose - so tomorrow
+# afternoon's games are in tonight's sheet too.
+ESTIMATE_WINDOW_HOURS = 30
 
 SPORTS = {
     "mlb": {"path": "baseball/mlb", "months": {4, 5, 6, 7, 8, 9, 10}},
@@ -193,7 +203,7 @@ def pick_for_context(scheduled, now=None):
         spread = board_spread(e)
         # None sorts last within its group without pretending to be a number.
         key = (spread is None, spread if spread is not None else 0.0, hours)
-        (inside if 0 < hours <= BET_WINDOW_HOURS else outside).append((key, e))
+        (inside if 0 < hours <= ESTIMATE_WINDOW_HOURS else outside).append((key, e))
     inside.sort(key=lambda x: x[0])
     outside.sort(key=lambda x: x[0])
     return [e for _k, e in inside] + [e for _k, e in outside]
@@ -227,14 +237,23 @@ def fresh_injuries(context, now=None, window_hours=FRESH_INJURY_HOURS):
         if hours < 0 or hours > window_hours:
             continue
         out.append({
+            # What a bet cites (ace-judge.py bet --event ID), and when it was
+            # reported - the moment the price is checked against.
+            "id": injury_id(inj),
             "team": inj.get("team"),
             "player": inj.get("player"),
             "position": inj.get("position"),
             "status": inj.get("status"),
+            "reported_utc": when.strftime("%Y-%m-%dT%H:%MZ"),
             "hours_old": round(hours, 1),
         })
     out.sort(key=lambda i: i["hours_old"])
     return out[:MAX_FRESH_INJURIES]
+
+
+def injury_id(inj):
+    raw = "|".join(str(inj.get(k) or "") for k in ("team", "player", "status", "date"))
+    return "i" + hashlib.sha1(raw.encode()).hexdigest()[:6]
 
 
 def unplayable(context):
@@ -259,17 +278,11 @@ def unplayable(context):
     return ""
 
 
-def build_context(sport, path, event):
-    """One compact context file per game. Compact matters: Ace reads these,
-    and every byte it reads is fuel."""
-    eid = event["id"]
-    comp = event["competitions"][0]
-    home, away = team_of(comp, True), team_of(comp, False)
-
-    summary = get(f"{BASE}/{path}/summary?event={eid}")
-
-    # odds
-    pc = (summary.get("pickcenter") or comp.get("odds") or [])
+def odds_of(summary, comp=None):
+    """DraftKings' moneyline and the no-vig chances from a game's summary.
+    One reader, used by the fetch, the 5-minute close and ace-judge.py's
+    price at the moment of a bet."""
+    pc = (summary.get("pickcenter") or (comp or {}).get("odds") or [])
     odds = {}
     if pc:
         o = pc[0]
@@ -294,6 +307,22 @@ def build_context(sport, path, event):
         # the one that matters. Betting against implied means betting into the
         # vig on every wager. The raw probabilities are still computed above,
         # because vig_pct needs them; they just do not leave this function.
+    return odds
+
+
+def summary_of(sport, event_id):
+    return get(f"{BASE}/{SPORTS[sport]['path']}/summary?event={event_id}")
+
+
+def build_context(sport, path, event):
+    """One compact context file per game. Compact matters: Ace reads these,
+    and every byte it reads is fuel."""
+    eid = event["id"]
+    comp = event["competitions"][0]
+    home, away = team_of(comp, True), team_of(comp, False)
+
+    summary = get(f"{BASE}/{path}/summary?event={eid}")
+    odds = odds_of(summary, comp)
 
     # ESPN's predictor used to be written here, carrying a warning that a gap
     # between it and the line is never an edge. The warning did not work: every
@@ -346,8 +375,10 @@ def build_context(sport, path, event):
         "start_utc": event.get("date"),
         "status": comp["status"]["type"]["name"],
         "home": {"abbr": (home.get("team") or {}).get("abbreviation"),
+                 "name": (home.get("team") or {}).get("displayName"),
                  "record": ((home.get("records") or [{}])[0]).get("summary")},
         "away": {"abbr": (away.get("team") or {}).get("abbreviation"),
+                 "name": (away.get("team") or {}).get("displayName"),
                  "record": ((away.get("records") or [{}])[0]).get("summary")},
         "odds": odds,
         "injuries": injuries,
@@ -447,8 +478,10 @@ def build_ledger(day, ctx_dir, slot, focus=None):
         mine.sort(key=lambda g: (not fresh_injuries(g[2], now), g[0], g[1]))
         chosen = mine[:focus["games"]]
     else:
+        # Within a sport, games with fresh news first, then soonest - the
+        # review: rank by information, not by how close the spread is.
         by_sport = {}
-        for g, _ in playable:
+        for g, _ in sorted(playable, key=lambda x: (not fresh_injuries(x[0][2], now), x[0][0], x[0][1])):
             by_sport.setdefault(g[2].get("sport") or "?", []).append(g)
         chosen, order = [], sorted(by_sport)
         while len(chosen) < MAX_GAMES and any(by_sport.values()):
@@ -482,13 +515,19 @@ def build_ledger(day, ctx_dir, slot, focus=None):
             why = []
             if pct is None:
                 why.append("no priced line in the context file")
+            sharp = (c.get("sharp") or {}).get(f"novig_{side}_pct")
             rows.append({
                 "selection": f"{team} ML",
                 "sport": c.get("sport"),
                 "match": c.get("short") or c.get("match"),
                 "starts_utc": c.get("start_utc"),
+                "event_id": c.get("event_id"),
+                "side": side,
                 "price": ml,
                 "novig_pct": pct,
+                # Pinnacle's no-vig chance for this side, when ace-sharp.py
+                # has one - the sharper market the bar measures against.
+                "sharp_pct": sharp,
                 "my_pct": None,
                 "edge_pts": None,
                 # Rule 2 made visible. An empty list is a real answer: no news
@@ -530,7 +569,157 @@ def build_ledger(day, ctx_dir, slot, focus=None):
     }
 
 
+def build_blind(day, ctx_dir, slot, now=None):
+    """data/blind.json: every game starting within ESTIMATE_WINDOW_HOURS, with
+    no price on it - no moneyline, no no-vig chance, no spread, total or
+    against-the-spread record. Ace gives each game a home-win chance from
+    this sheet BEFORE he sees a price (ace-judge.py blind), because an
+    estimate made after reading the line is an estimate of the line.
+
+    Lopsided and unpriced games are kept: a calibration study needs every
+    game, and the -600 cut-off is a betting rule, not an estimating one."""
+    now = now or datetime.now(timezone.utc)
+    games = []
+    for f in sorted(ctx_dir.glob("*.json")):
+        try:
+            c = json.loads(f.read_text())
+            start = datetime.strptime(c.get("start_utc", ""), "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+        hours = (start - now).total_seconds() / 3600
+        if str(c.get("status") or "").upper() != "STATUS_SCHEDULED" or not 0 < hours <= ESTIMATE_WINDOW_HOURS:
+            continue
+        form = {}
+        for g in c.get("last_five") or []:
+            form.setdefault(g.get("team"), []).append(f"{g.get('result')} {g.get('score')} v {g.get('opponent')}")
+        games.append({
+            "sport": c.get("sport"), "event_id": c.get("event_id"),
+            "match": c.get("short") or c.get("match"), "starts_utc": c.get("start_utc"),
+            "home": {k: (c.get("home") or {}).get(k) for k in ("abbr", "record")},
+            "away": {k: (c.get("away") or {}).get(k) for k in ("abbr", "record")},
+            "last_five": form,
+            "fresh_injuries": fresh_injuries(c, now),
+            "probable_pitchers": c.get("probable_pitchers") or [],
+            "weather": c.get("weather") or {},
+            "venue": c.get("venue"),
+        })
+    games.sort(key=lambda g: (g["starts_utc"] or "", g["match"] or ""))
+    for n, g in enumerate(games, 1):
+        g["n"] = n
+    return {
+        "asof_utc": now.strftime("%Y-%m-%d %H:%M:%S"), "day": day, "slot": slot,
+        "window_hours": ESTIMATE_WINDOW_HOURS,
+        "how": "Give every game the HOME team's chance of winning, from this sheet only: "
+               "python3 ../../scripts/ace-judge.py blind \"1:55,2:41,...\". No prices are on it on purpose.",
+        "games": games,
+    }
+
+
+def ace_book():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ace_book", Path(__file__).resolve().parent / "ace-book.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# Sports whose scoreboard is one day: a game ending after the last fetch
+# (11:30pm ET - a West-coast NBA game) is only final on yesterday's board.
+DAILY_BOARDS = ("mlb", "nba")
+
+
+def settle_bets(boards, now=None):
+    """Results off the scoreboards already fetched, then every open bet that
+    has finished is graded by ace-book.py. Never fatal: a failure here must
+    not cost the slate."""
+    try:
+        book = ace_book()
+        n = book.migrate()
+        if n:
+            log(f"book: imported {n} hand-written bet(s) into state/bets.jsonl")
+            book.rebuild()
+        for sport, events in boards:
+            book.record_results(sport, events, now=now)
+        for d in book.settle(now=now):
+            log(f"book: settled {d['selection']} ({d['match']}) {d['result']} {d['profit']:+,.2f}")
+    except Exception as exc:
+        log(f"book: NOT settled - {exc}")
+
+
+def ace_sharp():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ace_sharp", Path(__file__).resolve().parent / "ace-sharp.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def sharp_into_contexts(ctx_dir, close=False, now=None):
+    """Ask ace-sharp.py for Pinnacle's prices where its budget allows, and
+    write each joined game's into its context file as "sharp". Returns the
+    contexts that changed."""
+    sharp = ace_sharp()
+    if not sharp.api_key():
+        return []
+    contexts = {}
+    for f in ctx_dir.glob("*.json"):
+        try:
+            contexts[f] = json.loads(f.read_text())
+        except Exception:
+            continue
+    changed = sharp.refresh(list(contexts.values()), close=close, now=now)
+    for f, c in contexts.items():
+        if id(c) in changed:
+            f.write_text(json.dumps(c, indent=1) + "\n")
+    return [c for c in contexts.values() if id(c) in changed]
+
+
+# The close (2026-10-01): a game's last price was up to 30 minutes old at
+# kick-off, and the last half hour is when lineups and inactives move it.
+# ace-close.timer runs `ace-fetch.py --close` every 5 minutes; it refreshes
+# only the games starting within this many hours, so it stays a few calls.
+CLOSE_WITHIN_HOURS = 2.0
+
+
+def close_run(now=None, fetch_summary=None):
+    now = now or datetime.now(timezone.utc)
+    fetch_summary = fetch_summary or summary_of
+    fresh = []
+    for f in sorted(CTX.glob("*.json")):
+        try:
+            c = json.loads(f.read_text())
+            start = datetime.strptime(c.get("start_utc", ""), "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+        if not 0 < (start - now).total_seconds() / 3600 <= CLOSE_WITHIN_HOURS:
+            continue
+        try:
+            odds = odds_of(fetch_summary(c["sport"], c["event_id"]))
+        except Exception as exc:
+            log(f"close {c.get('short')}: FAILED - {exc}")
+            continue
+        if odds.get("novig_home_pct") is None:
+            continue
+        c["odds"], c["fetched_utc"] = odds, now.strftime("%Y-%m-%d %H:%M:%S")
+        f.write_text(json.dumps(c, indent=1) + "\n")
+        fresh.append(c)
+        time.sleep(GAP)
+    try:
+        sharp_into_contexts(CTX, close=True, now=now)
+    except Exception as exc:
+        log(f"close: sharp price NOT added - {exc}")
+    if fresh:
+        # Re-read: the sharp step may have added Pinnacle's price to them.
+        fresh = [json.loads((CTX / f"{c['sport']}-{c['event_id']}.json").read_text()) for c in fresh]
+        ace_clv().record_lines(fresh, now=now)
+    log(f"close: {len(fresh)} game(s) starting within {CLOSE_WITHIN_HOURS:g}h re-priced")
+    return 0
+
+
 def main():
+    if "--close" in sys.argv[1:]:
+        CTX.mkdir(parents=True, exist_ok=True)
+        return close_run()
     CTX.mkdir(parents=True, exist_ok=True)
     started = datetime.now(timezone.utc)
     focus = ace_focus()
@@ -541,6 +730,7 @@ def main():
 
     slate, failures, deep_written = [], [], 0
     written = []            # every context this run, for the closing-line history
+    boards = []             # (sport, events) - where results come from
 
     for sport in season:
         path = SPORTS[sport]["path"]
@@ -552,6 +742,13 @@ def main():
             continue
 
         events = board.get("events", [])
+        boards.append((sport, events))
+        if sport in DAILY_BOARDS:
+            yesterday = (et_time.eastern_now() - timedelta(days=1)).strftime("%Y%m%d")
+            try:
+                boards.append((sport, get(f"{BASE}/{path}/scoreboard?dates={yesterday}").get("events", [])))
+            except Exception as e:
+                log(f"{sport}: yesterday's board FAILED - {e} (late finals wait for the next run)")
         scheduled = [e for e in events
                      if e["competitions"][0]["status"]["type"]["name"] == "STATUS_SCHEDULED"]
         finals = [e for e in events
@@ -593,6 +790,19 @@ def main():
         log("nothing fetched — leaving previous data files untouched")
         return 1
 
+    # Pinnacle's price beside DraftKings', when there is a key and credit
+    # for it (ace-sharp.py keeps the budget). Written into the context files
+    # so the candidates, the bar and the price history can read it.
+    try:
+        sharp_into_contexts(CTX)
+    except Exception as exc:
+        log(f"sharp price NOT added - {exc}")
+
+    try:
+        written = [json.loads((CTX / f"{c['sport']}-{c['event_id']}.json").read_text()) for c in written]
+    except Exception:
+        pass
+
     # Each game's price, kept until it starts: the last one kept is the close
     # Ace's verdicts are graded against. A failure here must not cost the
     # slate, so it is said and the run goes on.
@@ -602,12 +812,28 @@ def main():
     except Exception as exc:
         log(f"closing-line history NOT updated - {exc}")
 
+    # Every finished bet is graded here, by code, from these scoreboards.
+    settle_bets(boards)
+
     # Eastern, not UTC. A 23:30 ET wake happens on the next UTC day, and
     # using that date filed a report under tomorrow's name.
     now_et = et_time.eastern_now()
+    (DATA / "blind.json").write_text(json.dumps(
+        build_blind(et_time.day(now_et), CTX, et_time.slot("ace", now_et)), indent=1) + "\n")
     (DATA / "candidates.json").write_text(
         json.dumps(build_ledger(et_time.day(now_et), CTX,
                                 et_time.slot("ace", now_et), focus), indent=1) + "\n")
+
+    # The no-AI bettors decide on the same candidates, at the same prices.
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ace_baselines", Path(__file__).resolve().parent / "ace-baselines.py")
+        bl = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bl)
+        for row in bl.run():
+            log(f"no-AI {row['strategy']}: {row['selection']} ({row['match']}) {row['price']}")
+    except Exception as exc:
+        log(f"no-AI bettors NOT run - {exc}")
 
     (DATA / "slate.json").write_text(json.dumps({
         "asof_utc": started.strftime("%Y-%m-%d %H:%M:%S"),

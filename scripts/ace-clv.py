@@ -45,6 +45,15 @@ JOURNAL = STATE / "judgements.jsonl"
 
 KEEP_DAYS = 30          # how long a game's line history is kept after it starts
 STAMP = "%Y-%m-%dT%H:%M:%SZ"
+# Every price seen is kept, not only the first and last (2026-10-01): "has
+# DraftKings moved since the news?" needs the price from before the news,
+# and the close is now polled every 5 minutes in the last two hours. 400 is
+# 30 hours of half-hourly prices plus two hours of 5-minute ones, with room.
+HISTORY_CAP = 400
+# How far a side's no-vig chance may have risen since a piece of news and
+# the news still count as unpriced. ~2 points is 8-10 cents on a moneyline
+# near even - the move a book makes when it has reacted.
+MOVED_MAX_PTS = 2.0
 
 
 def utc_now():
@@ -97,12 +106,24 @@ def record_lines(contexts, now=None, path=None):
                 "moneyline_away": odds.get("moneyline_away"),
                 "novig_home_pct": odds.get("novig_home_pct"),
                 "novig_away_pct": odds.get("novig_away_pct")}
+        sharp = c.get("sharp") or {}
+        if sharp.get("novig_home_pct") is not None:
+            # Pinnacle's, when ace-sharp.py had one: the sharper close.
+            seen.update(sharp_home_pct=sharp["novig_home_pct"], sharp_away_pct=sharp["novig_away_pct"],
+                        sharp_at=sharp.get("at"))
         entry = lines.get(key) or {
             "sport": c.get("sport"), "match": match, "start_utc": c.get("start_utc"),
             "home": (c.get("home") or {}).get("abbr"), "away": (c.get("away") or {}).get("abbr"),
             "first": seen, "observations": 0}
         entry["last"] = seen
         entry["observations"] = int(entry.get("observations") or 0) + 1
+        hist = entry.get("history") or [entry["first"]]
+        if hist[-1] != seen:
+            hist.append(seen)
+        entry["history"] = hist[-HISTORY_CAP:]
+        for k in ("event_id",):
+            if c.get(k) is not None:
+                entry[k] = c.get(k)
         lines[key] = entry
     cutoff = now - timedelta(days=KEEP_DAYS)
     lines = {k: v for k, v in lines.items()
@@ -131,6 +152,39 @@ def log_judgements(rows, now=None, path=None):
                 "stake": r.get("stake")}) + "\n")
 
 
+def price_at(entry, side, at):
+    """The side's no-vig chance at the last price seen at or before `at`
+    (a datetime), or None when no price had been seen yet."""
+    best = None
+    for snap in (entry or {}).get("history") or [(entry or {}).get("first") or {}]:
+        when = parse_start(snap.get("at"))
+        if when is None or when > at or snap.get(f"novig_{side}_pct") is None:
+            continue
+        if best is None or when >= parse_start(best.get("at")):
+            best = snap
+    return None if best is None else float(best[f"novig_{side}_pct"])
+
+
+def unpriced(entry, side, reported, now_pct):
+    """(True, how far it moved) when the side's price has moved less than
+    MOVED_MAX_PTS toward it since `reported` (a datetime) - the news may not
+    be in the price yet - or (False, why). Nobody saw a price before the
+    news: (False, ...), because nothing then shows it is unpriced.
+
+    Ace's bet and the no-AI news bettor both ask this, so it is answered
+    once, here, where the price history lives."""
+    before = price_at(entry, side, reported)
+    if before is None:
+        return False, "no price was seen before the news, so nothing shows it is still unpriced"
+    if now_pct is None:
+        return False, "no current price"
+    moved = round(float(now_pct) - before, 1)
+    if moved >= MOVED_MAX_PTS:
+        return False, (f"the price has already moved {moved:+.1f} pts toward this side since the "
+                       f"news ({before:.1f}% -> {float(now_pct):.1f}%) - the market has it")
+    return True, moved
+
+
 # ------------------------------------------------------------------ grading
 
 def decimal_odds(american):
@@ -153,6 +207,22 @@ def side_of(selection, entry):
     if team and team == entry.get("away"):
         return "away"
     return None
+
+
+def sharp_close(entry, side):
+    """Pinnacle's last no-vig chance for the side before the start, or None."""
+    for snap in reversed((entry or {}).get("history") or []):
+        if snap.get(f"sharp_{side}_pct") is not None:
+            return float(snap[f"sharp_{side}_pct"])
+    return None
+
+
+def clv_at(price, close_pct):
+    """The price taken, valued at a closing chance: close x decimal - 1, in %."""
+    d = decimal_odds(price)
+    if d is None or close_pct is None:
+        return None
+    return round((float(close_pct) / 100 * d - 1) * 100, 1)
 
 
 def grade(judgement, entry, now=None):
@@ -179,13 +249,13 @@ def grade(judgement, entry, now=None):
                                           if close_at else None),
            # A close seen before the verdict says nothing about the verdict.
            "later_price": bool(judged_at and close_at and close_at > judged_at),
-           "clv_pct": None, "moved": None, "toward": None}
+           "clv_pct": None, "moved": None, "toward": None,
+           "sharp_close_pct": sharp_close(entry, side), "sharp_clv_pct": None}
     if then_pct is not None:
         out["moved"] = round(close_pct - float(then_pct), 1)
     if judgement.get("status") == "bet":
-        d = decimal_odds(judgement.get("price"))
-        if d:
-            out["clv_pct"] = round((close_pct / 100 * d - 1) * 100, 1)
+        out["clv_pct"] = clv_at(judgement.get("price"), close_pct)
+        out["sharp_clv_pct"] = clv_at(judgement.get("price"), out["sharp_close_pct"])
     if out["my_pct"] is not None and then_pct is not None and out["later_price"]:
         lean = float(out["my_pct"]) - float(then_pct)
         if lean:
@@ -233,6 +303,73 @@ def report(now=None, lines_path=None, journal_path=None):
     }
 
 
+def calibration(blind_path=None, results_path=None, lines_path=None):
+    """Are Ace's BLIND estimates better forecasts than the market's own
+    numbers? Brier score - the mean squared gap between a chance and what
+    happened, 0 is perfect, 0.25 is a coin flip - over every finished game he
+    estimated before seeing a price, against the same games' DraftKings
+    no-vig chance at the moment he estimated, at the close, and Pinnacle's
+    close where there is one. The review's first gate: if his blind number
+    cannot beat the market's, no bar or staking rule turns it into money."""
+    blind = {}
+    try:
+        text = Path(blind_path or STATE / "blind.jsonl").read_text()
+    except FileNotFoundError:
+        text = ""
+    for line in text.splitlines():
+        try:
+            j = json.loads(line)
+        except Exception:
+            continue
+        start, when = parse_start(j.get("starts_utc")), parse_start(j.get("utc"))
+        if start and when and when < start:
+            blind[j.get("key")] = j                    # the latest before the start
+    results = _read(results_path or STATE / "results.json", {})
+    lines = _read(lines_path or LINES, {})
+    rows = []
+    for k, j in blind.items():
+        res = results.get(f"{j.get('sport')}|{j.get('event_id')}") or {}
+        if res.get("winner") not in ("home", "away"):
+            continue
+        y = 1.0 if res["winner"] == "home" else 0.0
+        entry = lines.get(k)
+        rows.append({"y": y, "blind": float(j["home_pct"]) / 100,
+                     "then": (price_at(entry, "home", parse_start(j["utc"])) if entry else None),
+                     "close": ((entry or {}).get("last") or {}).get("novig_home_pct"),
+                     "sharp": sharp_close(entry, "home")})
+
+    def brier(key):
+        xs = [(r[key] if key == "blind" else (r[key] / 100 if r[key] is not None else None), r["y"]) for r in rows]
+        xs = [(p, y) for p, y in xs if p is not None]
+        return (round(sum((p - y) ** 2 for p, y in xs) / len(xs), 4), len(xs)) if xs else (None, 0)
+
+    out = {"games": len(rows)}
+    for k in ("blind", "then", "close", "sharp"):
+        out[f"brier_{k}"], out[f"n_{k}"] = brier(k)
+    paired = [r for r in rows if r["then"] is not None]
+    out["paired"] = len(paired)
+    if paired:
+        out["blind_vs_market_then"] = round(
+            sum((r["blind"] - r["y"]) ** 2 - (r["then"] / 100 - r["y"]) ** 2 for r in paired) / len(paired), 4)
+    return out
+
+
+def calibration_lines(c):
+    if not c["games"]:
+        return ["Blind estimates: none graded yet - a game counts once it is final."]
+    out = [f"Blind estimates graded: {c['games']} finished games (Brier score: lower is better, 0.25 is a coin flip)",
+           f"  Ace, blind:                 {c['brier_blind']}"]
+    for k, label in (("then", "DraftKings when he estimated"), ("close", "DraftKings close"),
+                     ("sharp", "Pinnacle close")):
+        if c[f"brier_{k}"] is not None:
+            out.append(f"  {label + ':':<28}{c[f'brier_{k}']}   ({c[f'n_{k}']} games)")
+    if c.get("blind_vs_market_then") is not None:
+        d = c["blind_vs_market_then"]
+        out.append(f"  On the same {c['paired']} games Ace is {'WORSE' if d > 0 else 'better'} than the market "
+                   f"by {abs(d):.4f}. The preregistered gate is 300 games.")
+    return out
+
+
 def lines_of(r):
     out = ["Ace's closing line value - games that have started. The close is the last "
            "DraftKings price seen before kickoff."]
@@ -273,7 +410,9 @@ def lines_of(r):
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     r = report()
-    print(json.dumps(r, indent=1) if "--json" in argv else "\n".join(lines_of(r)))
+    r["calibration"] = calibration()
+    print(json.dumps(r, indent=1) if "--json" in argv
+          else "\n".join(lines_of(r) + [""] + calibration_lines(r["calibration"])))
     return 0
 
 

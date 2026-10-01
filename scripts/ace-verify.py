@@ -169,21 +169,6 @@ def check_ledger(problems, notes, started):
         notes.append(f"ledger has {len(judged)} rows (no candidates.json to join against)")
         return
 
-    # An estimate is the only evidence that ever accumulates about whether the
-    # EV bar is set right. Without it a passed row says Ace passed and
-    # nothing about how close it was, and a month of those answers nothing.
-    # This is a problem rather than a note on purpose: a rule that only warns
-    # is the rule that was there before.
-    want = min(ace_judge.MIN_ESTIMATES, len(base))
-    got = ace_judge.estimates_in(ledger)
-    if len(got) < want:
-        problems.append(
-            f"only {len(got)} of {len(judged)} judged rows carry --my-pct, and a "
-            f"cycle owes {want}. Your estimate against the no-vig line IS the "
-            f"bar; without it the ledger records that you passed and nothing "
-            f"about how close it was. Give one for each game you studied:\n"
-            f"    ace-judge.py pass <n> --my-pct 54.5 --why \"...\"")
-
     base_keys = {key(r) for r in base}
     matched = [r for r in judged if key(r) in base_keys]
     orphans = [r for r in judged if key(r) not in base_keys]
@@ -209,6 +194,40 @@ def check_ledger(problems, notes, started):
 
     notes.append(f"ledger: {len(judged)} judged, {len(matched)} joined to the board, "
                  f"{len(base_keys) - len(matched)} left unjudged")
+
+
+def check_blind(problems, notes, started):
+    """Every game on data/blind.json estimated, blind, this cycle. It
+    replaced "at least 3 estimates" (2026-10-01): Ace chose which three, so
+    the sample said as much about what he found interesting as about whether
+    he can forecast, and a blind estimate on every game is what a
+    calibration study needs. ace_judge.blind_missing is the one rule;
+    signoff.py asks the same function."""
+    missing = ace_judge.blind_missing(started or None)
+    sheet = ace_judge.blind_sheet() or {}
+    total = len(sheet.get("games") or [])
+    if missing:
+        problems.append(
+            f"{len(missing)} of {total} game(s) on data/blind.json have no blind estimate from "
+            f"this cycle ({', '.join(str(n) for n in missing[:15])}{' ...' if len(missing) > 15 else ''}). "
+            f"Every game gets one, before the prices:\n"
+            f"    python3 ../../scripts/ace-judge.py blind \"1:55,2:41,...\"")
+    elif total:
+        notes.append(f"blind: all {total} game(s) estimated")
+
+
+def check_book(problems):
+    """bankroll.json must say what state/bets.jsonl says. A difference is a
+    hand edit - the one thing a balancing check cannot see, because a
+    consistent mistake balances perfectly."""
+    try:
+        d = ace_judge.book().drift()
+    except Exception as exc:
+        d = f"could not be checked ({exc})"
+    if d:
+        problems.append(f"state/bankroll.json does not match state/bets.jsonl: {d}. It is kept by "
+                        f"ace-book.py and never edited by hand - restore it with "
+                        f"`python3 ../../scripts/ace-book.py rebuild`.")
 
 
 def expected_report(agent_name, agent_dir, started=None):
@@ -247,6 +266,8 @@ def main():
         problems.append(f"state/bankroll.json was last written {age}s ago, before this "
                         "cycle started - this run did not touch it")
 
+    check_book(problems)
+    check_blind(problems, notes, started)
     check_ledger(problems, notes, started)
 
     # Prefer the name the fetcher already stamped. Computing it again here

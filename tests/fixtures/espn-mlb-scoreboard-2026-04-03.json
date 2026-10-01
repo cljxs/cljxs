@@ -1,0 +1,694 @@
+{
+ "events": [
+  {
+   "id": "401814785",
+   "date": "2026-04-03T17:05Z",
+   "name": "Los Angeles Dodgers at Washington Nationals",
+   "shortName": "LAD @ WSH",
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "id": "3",
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "description": "Final",
+       "detail": "Final"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "score": "6",
+       "winner": false,
+       "team": {
+        "abbreviation": "WSH",
+        "displayName": "Washington Nationals",
+        "shortDisplayName": "Nationals",
+        "location": "Washington",
+        "name": "Nationals"
+       }
+      },
+      {
+       "homeAway": "away",
+       "score": "13",
+       "winner": true,
+       "team": {
+        "abbreviation": "LAD",
+        "displayName": "Los Angeles Dodgers",
+        "shortDisplayName": "Dodgers",
+        "location": "Los Angeles",
+        "name": "Dodgers"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401814788",
+   "date": "2026-04-03T17:10Z",
+   "name": "St. Louis Cardinals at Detroit Tigers",
+   "shortName": "STL @ DET",
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "id": "3",
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "description": "Final",
+       "detail": "Final"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "score": "4",
+       "winner": true,
+       "team": {
+        "abbreviation": "DET",
+        "displayName": "Detroit Tigers",
+        "shortDisplayName": "Tigers",
+        "location": "Detroit",
+        "name": "Tigers"
+       }
+      },
+      {
+       "homeAway": "away",
+       "score": "0",
+       "winner": false,
+       "team": {
+        "abbreviation": "STL",
+        "displayName": "St. Louis Cardinals",
+        "shortDisplayName": "Cardinals",
+        "location": "St. Louis",
+        "name": "Cardinals"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401814786",
+   "date": "2026-04-03T17:35Z",
+   "name": "Miami Marlins at New York Yankees",
+   "shortName": "MIA @ NYY",
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "id": "3",
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "description": "Final",
+       "detail": "Final"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "score": "8",
+       "winner": true,
+       "team": {
+        "abbreviation": "NYY",
+        "displayName": "New York Yankees",
+        "shortDisplayName": "Yankees",
+        "location": "New York",
+        "name": "Yankees"
+       }
+      },
+      {
+       "homeAway": "away",
+       "score": "2",
+       "winner": false,
+       "team": {
+        "abbreviation": "MIA",
+        "displayName": "Miami Marlins",
+        "shortDisplayName": "Marlins",
+        "location": "Miami",
+        "name": "Marlins"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401814787",
+   "date": "2026-04-03T18:10Z",
+   "name": "San Diego Padres at Boston Red Sox",
+   "shortName": "SD @ BOS",
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "id": "3",
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "description": "Final",
+       "detail": "Final"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "score": "5",
+       "winner": true,
+       "team": {
+        "abbreviation": "BOS",
+        "displayName": "Boston Red Sox",
+        "shortDisplayName": "Red Sox",
+        "location": "Boston",
+        "name": "Red Sox"
+       }
+      },
+      {
+       "homeAway": "away",
+       "score": "2",
+       "winner": false,
+       "team": {
+        "abbreviation": "SD",
+        "displayName": "San Diego Padres",
+        "shortDisplayName": "Padres",
+        "location": "San Diego",
+        "name": "Padres"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401867263",
+   "date": "2026-04-03T18:10Z",
+   "name": "Toronto Blue Jays at Chicago White Sox",
+   "shortName": "TOR @ CHW",
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "id": "3",
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "description": "Final",
+       "detail": "Final/10"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "score": "5",
+       "winner": true,
+       "team": {
+        "abbreviation": "CHW",
+        "displayName": "Chicago White Sox",
+        "shortDisplayName": "White Sox",
+        "location": "Chicago",
+        "name": "White Sox"
+       }
+      },
+      {
+       "homeAway": "away",
+       "score": "4",
+       "winner": false,
+       "team": {
+        "abbreviation": "TOR",
+        "displayName": "Toronto Blue Jays",
+        "shortDisplayName": "Blue Jays",
+        "location": "Toronto",
+        "name": "Blue Jays"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401814789",
+   "date": "2026-04-03T20:05Z",
+   "name": "Cincinnati Reds at Texas Rangers",
+   "shortName": "CIN @ TEX",
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "id": "3",
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "description": "Final",
+       "detail": "Final"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "score": "3",
+       "winner": false,
+       "team": {
+        "abbreviation": "TEX",
+        "displayName": "Texas Rangers",
+        "shortDisplayName": "Rangers",
+        "location": "Texas",
+        "name": "Rangers"
+       }
+      },
+      {
+       "homeAway": "away",
+       "score": "5",
+       "winner": true,
+       "team": {
+        "abbreviation": "CIN",
+        "displayName": "Cincinnati Reds",
+        "shortDisplayName": "Reds",
+        "location": "Cincinnati",
+        "name": "Reds"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401814784",
+   "date": "2026-04-03T20:10Z",
+   "name": "Chicago Cubs at Cleveland Guardians",
+   "shortName": "CHC @ CLE",
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "id": "3",
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "description": "Final",
+       "detail": "Final"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "score": "4",
+       "winner": true,
+       "team": {
+        "abbreviation": "CLE",
+        "displayName": "Cleveland Guardians",
+        "shortDisplayName": "Guardians",
+        "location": "Cleveland",
+        "name": "Guardians"
+       }
+      },
+      {
+       "homeAway": "away",
+       "score": "1",
+       "winner": false,
+       "team": {
+        "abbreviation": "CHC",
+        "displayName": "Chicago Cubs",
+        "shortDisplayName": "Cubs",
+        "location": "Chicago",
+        "name": "Cubs"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401814792",
+   "date": "2026-04-03T20:10Z",
+   "name": "Philadelphia Phillies at Colorado Rockies",
+   "shortName": "PHI @ COL",
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "id": "3",
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "description": "Final",
+       "detail": "Final"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "score": "1",
+       "winner": false,
+       "team": {
+        "abbreviation": "COL",
+        "displayName": "Colorado Rockies",
+        "shortDisplayName": "Rockies",
+        "location": "Colorado",
+        "name": "Rockies"
+       }
+      },
+      {
+       "homeAway": "away",
+       "score": "10",
+       "winner": true,
+       "team": {
+        "abbreviation": "PHI",
+        "displayName": "Philadelphia Phillies",
+        "shortDisplayName": "Phillies",
+        "location": "Philadelphia",
+        "name": "Phillies"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401814783",
+   "date": "2026-04-03T20:12Z",
+   "name": "Baltimore Orioles at Pittsburgh Pirates",
+   "shortName": "BAL @ PIT",
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "id": "3",
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "description": "Final",
+       "detail": "Final"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "score": "5",
+       "winner": true,
+       "team": {
+        "abbreviation": "PIT",
+        "displayName": "Pittsburgh Pirates",
+        "shortDisplayName": "Pirates",
+        "location": "Pittsburgh",
+        "name": "Pirates"
+       }
+      },
+      {
+       "homeAway": "away",
+       "score": "4",
+       "winner": false,
+       "team": {
+        "abbreviation": "BAL",
+        "displayName": "Baltimore Orioles",
+        "shortDisplayName": "Orioles",
+        "location": "Baltimore",
+        "name": "Orioles"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401814791",
+   "date": "2026-04-03T21:05Z",
+   "name": "Tampa Bay Rays at Minnesota Twins",
+   "shortName": "TB @ MIN",
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "id": "3",
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "description": "Final",
+       "detail": "Final"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "score": "10",
+       "winner": true,
+       "team": {
+        "abbreviation": "MIN",
+        "displayName": "Minnesota Twins",
+        "shortDisplayName": "Twins",
+        "location": "Minnesota",
+        "name": "Twins"
+       }
+      },
+      {
+       "homeAway": "away",
+       "score": "4",
+       "winner": false,
+       "team": {
+        "abbreviation": "TB",
+        "displayName": "Tampa Bay Rays",
+        "shortDisplayName": "Rays",
+        "location": "Tampa Bay",
+        "name": "Rays"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401814790",
+   "date": "2026-04-03T23:40Z",
+   "name": "Milwaukee Brewers at Kansas City Royals",
+   "shortName": "MIL @ KC",
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "id": "6",
+       "name": "STATUS_POSTPONED",
+       "state": "post",
+       "completed": false,
+       "description": "Postponed",
+       "detail": "Postponed"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "score": "0",
+       "winner": null,
+       "team": {
+        "abbreviation": "KC",
+        "displayName": "Kansas City Royals",
+        "shortDisplayName": "Royals",
+        "location": "Kansas City",
+        "name": "Royals"
+       }
+      },
+      {
+       "homeAway": "away",
+       "score": "0",
+       "winner": null,
+       "team": {
+        "abbreviation": "MIL",
+        "displayName": "Milwaukee Brewers",
+        "shortDisplayName": "Brewers",
+        "location": "Milwaukee",
+        "name": "Brewers"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401814796",
+   "date": "2026-04-04T01:38Z",
+   "name": "Seattle Mariners at Los Angeles Angels",
+   "shortName": "SEA @ LAA",
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "id": "3",
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "description": "Final",
+       "detail": "Final/10"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "score": "1",
+       "winner": false,
+       "team": {
+        "abbreviation": "LAA",
+        "displayName": "Los Angeles Angels",
+        "shortDisplayName": "Angels",
+        "location": "Los Angeles",
+        "name": "Angels"
+       }
+      },
+      {
+       "homeAway": "away",
+       "score": "3",
+       "winner": true,
+       "team": {
+        "abbreviation": "SEA",
+        "displayName": "Seattle Mariners",
+        "shortDisplayName": "Mariners",
+        "location": "Seattle",
+        "name": "Mariners"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401814793",
+   "date": "2026-04-04T01:40Z",
+   "name": "Atlanta Braves at Arizona Diamondbacks",
+   "shortName": "ATL @ ARI",
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "id": "3",
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "description": "Final",
+       "detail": "Final"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "score": "0",
+       "winner": false,
+       "team": {
+        "abbreviation": "ARI",
+        "displayName": "Arizona Diamondbacks",
+        "shortDisplayName": "Diamondbacks",
+        "location": "Arizona",
+        "name": "Diamondbacks"
+       }
+      },
+      {
+       "homeAway": "away",
+       "score": "2",
+       "winner": true,
+       "team": {
+        "abbreviation": "ATL",
+        "displayName": "Atlanta Braves",
+        "shortDisplayName": "Braves",
+        "location": "Atlanta",
+        "name": "Braves"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401814794",
+   "date": "2026-04-04T01:40Z",
+   "name": "Houston Astros at Athletics Athletics",
+   "shortName": "HOU @ ATH",
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "id": "3",
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "description": "Final",
+       "detail": "Final"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "score": "11",
+       "winner": true,
+       "team": {
+        "abbreviation": "ATH",
+        "displayName": "Athletics",
+        "shortDisplayName": "Athletics",
+        "location": "Athletics",
+        "name": "Athletics"
+       }
+      },
+      {
+       "homeAway": "away",
+       "score": "4",
+       "winner": false,
+       "team": {
+        "abbreviation": "HOU",
+        "displayName": "Houston Astros",
+        "shortDisplayName": "Astros",
+        "location": "Houston",
+        "name": "Astros"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401814795",
+   "date": "2026-04-04T02:15Z",
+   "name": "New York Mets at San Francisco Giants",
+   "shortName": "NYM @ SF",
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "id": "3",
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "description": "Final",
+       "detail": "Final"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "score": "3",
+       "winner": false,
+       "team": {
+        "abbreviation": "SF",
+        "displayName": "San Francisco Giants",
+        "shortDisplayName": "Giants",
+        "location": "San Francisco",
+        "name": "Giants"
+       }
+      },
+      {
+       "homeAway": "away",
+       "score": "10",
+       "winner": true,
+       "team": {
+        "abbreviation": "NYM",
+        "displayName": "New York Mets",
+        "shortDisplayName": "Mets",
+        "location": "New York",
+        "name": "Mets"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

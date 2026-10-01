@@ -3466,8 +3466,9 @@ class TheWindowIsSharedBetweenSports(unittest.TestCase):
 
     def test_baseball_no_longer_takes_every_slot(self):
         # The board that found this: MLB starting first, football later.
-        for i in range(14):
-            self.game("mlb", f"mlb{i}", 1 + i * 0.1)
+        # More baseball than the window holds (it was 8 games then, 24 now).
+        for i in range(self.m.MAX_GAMES + 6):
+            self.game("mlb", f"mlb{i}", 1 + i * 0.05)
         for i in range(6):
             self.game("cfb", f"cfb{i}", 5 + i * 0.1)
         _out, games = self.slate()
@@ -3478,7 +3479,7 @@ class TheWindowIsSharedBetweenSports(unittest.TestCase):
 
     def test_one_sport_alone_still_fills_the_window(self):
         # Sharing must not mean holding slots empty for a sport with no games.
-        for i in range(12):
+        for i in range(self.m.MAX_GAMES + 4):
             self.game("mlb", f"mlb{i}", 1 + i * 0.1)
         _out, games = self.slate()
         self.assertEqual(len(games), self.m.MAX_GAMES)
@@ -3644,24 +3645,29 @@ class ACapIsNotACapUntilSomethingChecksIt(unittest.TestCase):
                             "ace-verify has its own copy of the cap again")
 
     def test_counting_open_bets_survives_a_missing_or_broken_file(self):
-        # It is read at the moment a bet is recorded, and a crash there would
-        # cost a cycle over a file that simply is not there yet.
+        # Read at the moment a bet is recorded; a crash there would cost a
+        # cycle over a file that is not there yet. The book counts from
+        # state/bets.jsonl now, skipping a line it cannot read.
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "agents" / "ace" / "state").mkdir(parents=True)
-            self.m.AGENT = root / "agents" / "ace"
-            self.assertEqual(self.m.open_bet_count(), 0)
-            (root / "agents/ace/state/bankroll.json").write_text("{ not json")
-            self.assertEqual(self.m.open_bet_count(), 0)
-            (root / "agents/ace/state/bankroll.json").write_text(
-                json.dumps({"open_bets": [{"stake": 150}] * 3}))
-            self.assertEqual(self.m.open_bet_count(), 3)
+            b = load("ace_book_cap", "ace-book.py")
+            path = Path(tmp) / "bets.jsonl"
+            self.assertEqual(len(b.fold(b.events(path))["open"]), 0)
+            path.write_text("{ not json\n" + "".join(
+                json.dumps({"kind": "bet", "id": f"b{i}", "stake": 100}) + "\n" for i in range(3)))
+            self.assertEqual(len(b.fold(b.events(path))["open"]), 3)
 
     def test_bet_refuses_once_the_cap_is_reached(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            b = load("ace_book_cap2", "ace-book.py")
+            b.BETS, b.BANK = Path(tmp) / "bets.jsonl", Path(tmp) / "bankroll.json"
+            for i in range(self.m.MAX_OPEN_BETS - 1):
+                b.append({"kind": "bet", "id": f"b{i}", "sport": "nfl", "event_id": str(i), "stake": 100})
+            self.assertIsNone(b.refusal("nfl", "99", "X ML"))
+            b.append({"kind": "bet", "id": "last", "sport": "nfl", "event_id": "98", "stake": 100})
+            self.assertIn(f"the cap is {self.m.MAX_OPEN_BETS}", b.refusal("nfl", "99", "X ML"))
         src = (SCRIPTS / "ace-judge.py").read_text()
-        body = src.split("def cmd_bet(", 1)[1].split("\ndef ", 1)[0]
-        self.assertIn("open_bet_count()", body)
-        self.assertIn("MAX_OPEN_BETS", body)
+        body = src.split("def record(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("b.refusal(", body, "record() must ask the book before a bet")
 
 
 class AWeekOfPassesShouldSayHowClose(unittest.TestCase):
@@ -3731,10 +3737,14 @@ class AWeekOfPassesShouldSayHowClose(unittest.TestCase):
         a = A()
         a.number, a.why, a.my_pct, a.stake = "1", "SP scratched", None, None
         self.assertEqual(self.m.record(a, "bet"), 1)
+        # With one, it is judged on what a bet needs next - the news it cites -
+        # not sent back for the estimate it now has.
         a.my_pct = 71.0
-        self.assertEqual(self.m.record(a, "bet"), 0)
-        row = json.loads(self.m.LEDGER.read_text())["candidates"][0]
-        self.assertEqual(row["edge_pts"], 14.0)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(self.m.record(a, "bet"), 1)
+        self.assertNotIn("--my-pct", err.getvalue())
+        self.assertIn("--event", err.getvalue())
 
     def test_a_bet_is_refused_for_bet_reasons_not_pass_reasons(self):
         # Guarding the pass rule on status is what keeps the advice correct.
@@ -3999,111 +4009,118 @@ class WhatAPropsFeedWouldCost(unittest.TestCase):
         self.assertIn("cheapest that fits", r.stdout)
 
 
-class ACycleOwesEstimates(unittest.TestCase):
-    """Requiring an estimate on a pass that names one or two games was not
-    enough: a cycle can sweep all sixteen rows with `rest` and one shared
-    reason, record nothing, and pass. That is exactly what happened - "passed
-    1-16, no edge on the no-vig line" - and it is what a week of unanswerable
-    "no bets" is made of.
-
-    Nothing can see which context files were opened, so "estimate the ones you
-    studied" is unenforceable as written. A count is not: a cycle owes
-    MIN_ESTIMATES, Ace chooses which, and the choosing is what makes them the
-    studied ones.
-    """
+class EveryGameIsEstimatedBlindFirst(unittest.TestCase):
+    """2026-10-01, from an outside review. "At least 3 estimates a cycle" let
+    Ace choose which games to estimate - so the sample said as much about
+    what he found interesting as about whether he can forecast - and every
+    estimate was made after reading the line, which measures anchoring, not
+    knowledge. Now every game in the next 30 hours gets a home-win chance from
+    data/blind.json, a sheet with no prices on it, before any price is shown.
+    (Replaces ACycleOwesEstimates.)"""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        (self.root / "agents/ace/state").mkdir(parents=True)
-        (self.root / "agents/ace/data").mkdir(parents=True)
+        self.agent = self.root / "agents/ace"
+        (self.agent / "state").mkdir(parents=True)
+        (self.agent / "data").mkdir(parents=True)
         os.environ["ECOSYSTEM_ROOT"] = str(self.root)
-        self.av = load("ace_verify", "ace-verify.py")
-        self.cands = [{"selection": f"T{i} ML", "match": f"A@B{i}", "price": -150,
-                       "novig_pct": 57.0, "sport": "cfb"} for i in range(16)]
-        self.slate(self.cands)
+        self.addCleanup(os.environ.pop, "ECOSYSTEM_ROOT", None)
+        self.j = load("ace_judge_blind", "ace-judge.py")
+        self.start = (datetime.now(timezone.utc) + timedelta(hours=5)).strftime("%Y-%m-%dT%H:%MZ")
+        (self.agent / "data/blind.json").write_text(json.dumps({"games": [
+            {"n": n, "sport": "cfb", "event_id": str(400 + n), "match": f"A{n} @ H{n}",
+             "starts_utc": self.start, "home": {"abbr": f"H{n}"}, "away": {"abbr": f"A{n}"}}
+            for n in (1, 2, 3)]}))
+        (self.agent / "data/candidates.json").write_text(json.dumps({"candidates": [
+            {"selection": "H1 ML", "match": "A1 @ H1", "price": -150, "novig_pct": 57.0, "sport": "cfb"}]}))
 
-    def tearDown(self):
-        os.environ.pop("ECOSYSTEM_ROOT", None)
-        self.tmp.cleanup()
+    def run_j(self, *args):
+        return subprocess.run([sys.executable, str(SCRIPTS / "ace-judge.py"), *args], capture_output=True,
+                              text=True, env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)))
 
-    def slate(self, rows):
-        (self.root / "agents/ace/data/candidates.json").write_text(json.dumps(
-            {"day": "2026-09-19", "slot": "afternoon", "candidates": rows}))
+    def test_prices_are_refused_until_every_game_has_one(self):
+        r = self.run_j("list")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("blind estimates first: 3 game(s)", r.stderr)
+        self.assertEqual(self.run_j("blind", "1:55,2:41").returncode, 0)
+        r = self.run_j("pass", "1", "--my-pct", "50", "--why", "x")
+        self.assertIn("(3)", r.stderr, "names the one still owed")
+        self.assertEqual(self.run_j("rest", "--why", "x").returncode, 1)
+        self.assertEqual(self.run_j("blind", "3:62").returncode, 0)
+        self.assertIn("H1 ML", self.run_j("list").stdout)
 
-    def judge(self, n_rows, n_estimates):
-        rows = [dict(c, status="passed", why_not=["no edge"])
-                for c in self.cands[:n_rows]]
-        for i in range(n_estimates):
-            rows[i]["my_pct"] = 54.0 + i
-        (self.root / "agents/ace/state/ledger.json").write_text(json.dumps(
-            {"day": "2026-09-19", "slot": "afternoon", "verdict": "No picks.",
-             "candidates": rows}))
+    def test_a_bad_entry_records_nothing(self):
+        for bad, why in (("1:55,4:50", "there is no game 4"), ("1:0", "between 1 and 99"),
+                         ("1:55,two", "is not number:percent")):
+            r = self.run_j("blind", bad)
+            self.assertEqual(r.returncode, 1, bad)
+            self.assertIn(why, r.stderr)
+        self.assertFalse((self.agent / "state/blind.jsonl").exists())
+
+    def test_what_is_recorded(self):
+        self.run_j("blind", "1:55,2:41,3:62")
+        rows = [json.loads(l) for l in (self.agent / "state/blind.jsonl").read_text().splitlines()]
+        self.assertEqual([(r["home"], r["home_pct"], r["event_id"]) for r in rows],
+                         [("H1", 55.0, "401"), ("H2", 41.0, "402"), ("H3", 62.0, "403")])
+        self.assertEqual(rows[0]["key"], f"cfb|A1 @ H1|{self.start}", "ace-clv's game key, for grading")
+
+    def test_estimates_from_an_earlier_cycle_do_not_count(self):
+        self.run_j("blind", "1:55,2:41,3:62")
+        (self.agent / "state/.cycle-started").write_text(str(int(time.time()) + 5))
+        self.assertEqual(self.j.blind_missing(), [1, 2, 3])
+
+    def test_no_sheet_owes_nothing(self):
+        (self.agent / "data/blind.json").unlink()
+        self.assertEqual(self.j.blind_missing(), [])
+        self.assertEqual(self.run_j("list").returncode, 0)
+
+    def test_the_verifier_and_the_signoff_ask_one_function(self):
+        av = load("ace_verify_blind", "ace-verify.py")
         problems, notes = [], []
-        self.av.check_ledger(problems, notes, None)
-        return [p for p in problems if "my-pct" in p]
-
-    def test_the_sweep_that_started_this_now_fails(self):
-        # 16 rows judged, 0 estimates - today's cycle, verbatim.
-        self.assertTrue(self.judge(16, 0))
-
-    def test_one_short_is_still_short(self):
-        want = load("ace_judge", "ace-judge.py").MIN_ESTIMATES
-        self.assertTrue(self.judge(16, want - 1))
-
-    def test_meeting_the_count_passes(self):
-        want = load("ace_judge", "ace-judge.py").MIN_ESTIMATES
-        self.assertEqual(self.judge(16, want), [])
-
-    def test_more_than_asked_for_is_fine(self):
-        self.assertEqual(self.judge(16, 9), [])
-
-    def test_a_slate_smaller_than_the_minimum_asks_only_for_what_is_there(self):
-        # Failing a cycle for not estimating games that were never offered is
-        # the empty-slate mistake this repo already made once.
-        self.slate(self.cands[:2])
-        self.assertEqual(self.judge(2, 2), [])
-
-    def test_a_one_game_slate_still_owes_that_one(self):
-        self.slate(self.cands[:1])
-        self.assertTrue(self.judge(1, 0))
-        self.assertEqual(self.judge(1, 1), [])
-
-    def test_it_is_a_problem_not_a_note(self):
-        # A rule that only warns is the rule that was there before.
-        rows = [dict(c, status="passed", why_not=["no edge"]) for c in self.cands]
-        (self.root / "agents/ace/state/ledger.json").write_text(json.dumps(
-            {"day": "2026-09-19", "slot": "afternoon", "verdict": "x",
-             "candidates": rows}))
+        av.check_blind(problems, notes, None)
+        self.assertIn("3 of 3 game(s) on data/blind.json have no blind estimate", problems[0])
+        self.run_j("blind", "1:55,2:41,3:62")
         problems, notes = [], []
-        self.av.check_ledger(problems, notes, None)
-        self.assertTrue([p for p in problems if "my-pct" in p])
-        self.assertFalse([n for n in notes if "my-pct" in n])
+        av.check_blind(problems, notes, None)
+        self.assertEqual((problems, notes), ([], ["blind: all 3 game(s) estimated"]))
+        for f in ("ace-verify.py", "signoff.py"):
+            self.assertIn("ace_judge.blind_missing(", (SCRIPTS / f).read_text(), f)
 
-    def test_a_string_estimate_does_not_count(self):
-        # Only a number can be subtracted from the no-vig line.
-        rows = [dict(c, status="passed", why_not=["no edge"]) for c in self.cands]
-        for i in range(5):
-            rows[i]["my_pct"] = "54.0"
-        (self.root / "agents/ace/state/ledger.json").write_text(json.dumps(
-            {"day": "2026-09-19", "slot": "afternoon", "verdict": "x",
-             "candidates": rows}))
-        problems, notes = [], []
-        self.av.check_ledger(problems, notes, None)
-        self.assertTrue([p for p in problems if "my-pct" in p])
+    def test_the_sheet_has_no_price_on_it(self):
+        f = load("ace_fetch_blind", "ace-fetch.py")
+        ctx = self.root / "ctx"
+        ctx.mkdir()
+        now = datetime.now(timezone.utc)
+        def game(name, hours, status="STATUS_SCHEDULED", home=-150, away=130):
+            (ctx / f"nfl-{name}.json").write_text(json.dumps({
+                "sport": "nfl", "event_id": name, "short": name, "status": status,
+                "start_utc": (now + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%MZ"),
+                "home": {"abbr": "H", "name": "Home Team", "record": "3-1"}, "away": {"abbr": "A", "record": "1-3"},
+                "odds": {"moneyline_home": home, "moneyline_away": away, "novig_home_pct": 58.0,
+                         "novig_away_pct": 42.0, "spread": -3.5, "over_under": 44.5, "details": "H -3.5"},
+                "against_the_spread": [{"team": "H", "records": [["ATS", "3-1"]]}],
+                "last_five": [{"team": "H", "result": "W", "score": "24-10", "opponent": "X"}]}))
+        game("SOON", 3)
+        game("TOMORROW", 26)
+        game("BLOWOUT", 4, home=-5000, away=1800)
+        game("TOOFAR", 40)
+        game("STARTED", -1, status="STATUS_IN_PROGRESS")
+        sheet = f.build_blind("2026-10-01", ctx, "afternoon", now)
+        self.assertEqual([g["match"] for g in sheet["games"]], ["SOON", "BLOWOUT", "TOMORROW"],
+                         "30 hours ahead, lopsided kept, started and far-off games out")
+        self.assertEqual([g["n"] for g in sheet["games"]], [1, 2, 3])
+        text = json.dumps(sheet["games"])
+        for priced in ("moneyline", "novig", "spread", "over_under", "-3.5", "44.5", "ATS", "-150"):
+            self.assertNotIn(priced, text)
+        self.assertEqual(sheet["games"][0]["last_five"], {"H": ["W 24-10 v X"]})
 
-    def test_the_header_states_the_number_the_verifier_enforces(self):
-        # The failure this repo keeps repeating: a rule in the verifier and
-        # not in the instructions.
+    def test_the_header_says_so(self):
         header = (ROOT / "agents" / "ace" / "_ace-agents-header.md").read_text()
-        m = re.search(r"`--my-pct` for at least (\d+) games", header)
-        self.assertIsNotNone(m, "Ace is failed for this but never told the count")
-        self.assertEqual(int(m.group(1)),
-                         load("ace_judge", "ace-judge.py").MIN_ESTIMATES)
-
-    def test_the_verifier_does_not_keep_its_own_copy_of_the_number(self):
-        src = (SCRIPTS / "ace-verify.py").read_text()
-        self.assertIn("ace_judge.MIN_ESTIMATES", src)
+        self.assertIn('ace-judge.py blind "1:55,2:41,3:62,4:50"', header)
+        self.assertIn("**every** game the HOME team's chance", header)
+        self.assertRegex(header, r"the verifier fails a cycle that comes home without them")
 
 
 class StrayMarksBesideTheArt(unittest.TestCase):
@@ -14376,14 +14393,20 @@ class TheWakeMessageNamesTheReport(unittest.TestCase):
                             "the name is worked out before the agent is woken")
 
 
-class AceBetsOnExpectedValueWithQuarterKellyStakes(unittest.TestCase):
-    """2026-09-28: "8 points over the no-vig line" and "1.5% of bankroll, flat"
-    were sentences in Ace's header, arithmetic a model was trusted to do.
-    Code now computes the expected value at the offered price and refuses a
-    bet under +3%, and sizes the stake at quarter-Kelly capped at 3%."""
+class AceBetsByTheReviewedBar(unittest.TestCase):
+    """2026-10-01, from an outside review. The +3% expected-value bar was Ace's
+    own estimate restated - any estimate a few points over the line cleared
+    it, most easily on long shots - and "real information the market has not
+    priced" was a sentence. Now the estimate is pulled 60% back to the market
+    before it is measured, a bet cites a fresh injury by id, code checks the
+    price has not already moved on it, and the stake is a flat $100 kept by
+    ace-book.py. (Was AceBetsOnExpectedValueWithQuarterKellyStakes.)"""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        os.environ["ACE_NO_LIVE_PRICE"] = "1"
+        self.addCleanup(os.environ.pop, "ACE_NO_LIVE_PRICE", None)
         self.m = load("ace_judge_ev", "ace-judge.py")
         agent = Path(self.tmp.name) / "ace"
         (agent / "state").mkdir(parents=True)
@@ -14391,14 +14414,37 @@ class AceBetsOnExpectedValueWithQuarterKellyStakes(unittest.TestCase):
         for name, val in (("AGENT", agent), ("CANDIDATES", agent / "data" / "candidates.json"),
                           ("LEDGER", agent / "state" / "ledger.json")):
             setattr(self.m, name, val)
-        self.m.CANDIDATES.write_text(json.dumps({"candidates": [
-            {"selection": "FAV ML", "match": "DOG @ FAV", "price": -150, "novig_pct": 58.0, "sport": "nfl"},
-            {"selection": "DOG ML", "match": "DOG @ FAV", "price": 150, "novig_pct": 42.0, "sport": "nfl"}]}))
-        (agent / "state" / "bankroll.json").write_text(json.dumps({"bankroll": 10000.0}))
-        self.addCleanup(self.tmp.cleanup)
+        self.now = datetime.now(timezone.utc)
+        self.start = (self.now + timedelta(hours=5)).strftime("%Y-%m-%dT%H:%MZ")
+        self.news(hours_ago=1.0)
+        (agent / "state" / "bankroll.json").write_text(json.dumps(
+            {"starting_bankroll": 10000.0, "bankroll": 10000.0, "cycle_count": 3}))
+        self.prices_seen(before=41.5)
 
-    def act(self, status, number="1", my_pct=None, stake=None, why="x"):
-        a = types.SimpleNamespace(number=number, my_pct=my_pct, stake=stake, why=why)
+    def stamp(self, hours_ago):
+        return (self.now - timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%MZ")
+
+    def news(self, hours_ago, sharp=None):
+        inj = [{"id": "iabc12", "team": "FAV", "player": "QB One", "position": "QB", "status": "Out",
+                "reported_utc": self.stamp(hours_ago), "hours_old": hours_ago}]
+        row = lambda sel, side, price, pct: {"selection": sel, "match": "DOG @ FAV", "price": price,
+                                             "novig_pct": pct, "sport": "nfl", "event_id": "401",
+                                             "side": side, "starts_utc": self.start,
+                                             "sharp_pct": sharp, "fresh_injuries": inj}
+        self.m.CANDIDATES.write_text(json.dumps({"asof_utc": "x", "candidates": [
+            row("FAV ML", "home", -150, 58.0), row("DOG ML", "away", 150, 42.0)]}))
+
+    def prices_seen(self, before, hours_ago=3.0):
+        snap = lambda h, away: {"at": (self.now - timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                "novig_home_pct": 100 - away, "novig_away_pct": away}
+        key = f"nfl|DOG @ FAV|{self.start}"
+        (self.m.AGENT / "state" / "lines.json").write_text(json.dumps({key: {
+            "sport": "nfl", "match": "DOG @ FAV", "start_utc": self.start, "home": "FAV", "away": "DOG",
+            "first": snap(hours_ago, before), "last": snap(0, 42.0),
+            "history": [snap(hours_ago, before), snap(0, 42.0)]}}))
+
+    def act(self, status, number="1", my_pct=None, stake=None, why="x", event=None):
+        a = types.SimpleNamespace(number=number, my_pct=my_pct, stake=stake, why=why, event=event)
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
             code = self.m.record(a, status)
@@ -14407,6 +14453,10 @@ class AceBetsOnExpectedValueWithQuarterKellyStakes(unittest.TestCase):
     def rows(self):
         return {r["selection"]: r for r in json.loads(self.m.LEDGER.read_text())["candidates"]}
 
+    def bets(self):
+        p = self.m.AGENT / "state" / "bets.jsonl"
+        return [json.loads(l) for l in p.read_text().splitlines()] if p.exists() else []
+
     def test_expected_value_at_the_offered_price(self):
         self.assertEqual(self.m.ev_pct(71.0, -150), 18.3)       # 0.71 x 1.667 - 1
         self.assertEqual(self.m.ev_pct(40.0, 150), 0.0)         # 0.40 x 2.5 - 1
@@ -14414,43 +14464,119 @@ class AceBetsOnExpectedValueWithQuarterKellyStakes(unittest.TestCase):
         self.assertIsNone(self.m.ev_pct(None, -150))
         self.assertIsNone(self.m.ev_pct(50.0, None))
 
-    def test_quarter_kelly_and_its_cap(self):
-        # p=0.45 at +150: full Kelly (1.5 x .45 - .55) / 1.5 = 8.33%; a quarter is 2.08%.
+    def test_quarter_kelly_and_its_cap_now_a_shadow(self):
         self.assertEqual(self.m.kelly_stake(45.0, 150, 10000), (208.33, 2.08))
-        # p=0.70 at +150: a quarter of 50% is 12.5% - capped at 3%.
         self.assertEqual(self.m.kelly_stake(70.0, 150, 10000), (300.0, 3.0))
         self.assertEqual(self.m.kelly_stake(40.0, 150, 10000), (0.0, 0.0), "no edge, no stake")
 
+    def test_the_estimate_is_pulled_toward_the_market(self):
+        # The header's own example: 50% against a 42.8% market counts as 45.7%.
+        v = self.m.bar(50.0, {"novig_pct": 42.8, "price": 124})
+        self.assertEqual((v["p_used"], v["gap_pts"], v["need_pts"], v["clears"]), (45.7, 2.9, 2.0, True))
+        v = self.m.bar(46.0, {"novig_pct": 42.8, "price": 124})
+        self.assertEqual((v["p_used"], v["clears"]), (44.1, False))
+        self.assertIn("and the bar is +2", v["why"])
+
+    def test_the_bar_is_three_percent_of_a_big_chance(self):
+        self.assertEqual(self.m.bar(80.0, {"novig_pct": 70.0, "price": -250})["need_pts"], 2.1)
+
+    def test_only_sides_the_market_gives_30_to_75(self):
+        for q, price in ((25.0, 290), (80.0, -420)):
+            v = self.m.bar(99.0, {"novig_pct": q, "price": price})
+            self.assertFalse(v["clears"], q)
+            self.assertIn("between 30% and 75%", v["why"])
+
+    def test_pinnacle_is_the_market_when_there_is_one(self):
+        v = self.m.bar(50.0, {"novig_pct": 42.0, "sharp_pct": 47.0, "price": 150})
+        self.assertEqual((v["q"], v["q_source"], v["p_used"]), (47.0, "Pinnacle", 48.2))
+        self.assertFalse(v["clears"], "1.2 points over Pinnacle is not 2")
+
     def test_a_bet_under_the_bar_is_refused_with_its_number(self):
-        code, said = self.act("bet", my_pct=60.0)               # 0.60 x 1.667 - 1 = 0.0%
+        code, said = self.act("bet", number="2", my_pct=44.0, event="iabc12")
         self.assertEqual(code, 1)
-        self.assertIn("+0.0% - under the +3% bar", said)
+        self.assertIn("counts as 42.8%", said)
+        self.assertIn("+0.8 pts, and the bar is +2", said)
         self.assertFalse(self.m.LEDGER.exists(), "nothing recorded")
 
     def test_a_chosen_stake_is_refused(self):
-        code, said = self.act("bet", my_pct=71.0, stake=150)
+        code, said = self.act("bet", number="2", my_pct=52.0, stake=150, event="iabc12")
         self.assertEqual(code, 1)
-        self.assertIn("the stake is computed now", said)
+        self.assertIn("flat 1% of the starting bankroll", said)
 
-    def test_a_bet_over_the_bar_is_sized_by_code(self):
-        code, said = self.act("bet", number="2", my_pct=45.0)   # +12.5% at +150
+    def test_a_bet_without_news_is_refused_and_told_the_ids(self):
+        code, said = self.act("bet", number="2", my_pct=52.0)
+        self.assertEqual(code, 1)
+        self.assertIn("This row has: iabc12 (FAV QB One, Out)", said)
+        code, said = self.act("bet", number="2", my_pct=52.0, event="nope")
+        self.assertIn("no fresh injury 'nope'", said)
+
+    def test_news_the_price_already_has_is_refused(self):
+        self.prices_seen(before=39.0)                          # 39.0 -> 42.0 since the report
+        code, said = self.act("bet", number="2", my_pct=52.0, event="iabc12")
+        self.assertEqual(code, 1)
+        self.assertIn("already moved +3.0 pts toward this side", said)
+
+    def test_no_price_before_the_news_is_refused(self):
+        self.prices_seen(before=41.5, hours_ago=0.5)           # first seen after the report
+        code, said = self.act("bet", number="2", my_pct=52.0, event="iabc12")
+        self.assertEqual(code, 1)
+        self.assertIn("no price was seen before the news", said)
+
+    def test_old_news_is_refused(self):
+        self.news(hours_ago=7.0)
+        self.prices_seen(before=41.5, hours_ago=9.0)
+        code, said = self.act("bet", number="2", my_pct=52.0, event="iabc12")
+        self.assertEqual(code, 1)
+        self.assertIn("is 7.0 hours old", said)
+
+    def test_a_bet_that_clears_everything_is_booked_flat_by_the_book(self):
+        code, said = self.act("bet", number="2", my_pct=52.0, event="iabc12", why="QB out, line still")
         self.assertEqual(code, 0, said)
-        row = self.rows()["DOG ML"]
-        self.assertEqual((row["ev_pct"], row["clears_bar"]), (12.5, True))
-        self.assertEqual((row["stake"], row["stake_pct"]), (208.33, 2.08))
-        self.assertIn("stake $208.33 (2.08% of bankroll, quarter-Kelly)", said)
+        self.assertIn("counted as 46%, stake $100.00 flat, citing QB One (Out)", said)
+        [bet] = self.bets()
+        self.assertEqual((bet["stake"], bet["side"], bet["event"]["id"], bet["p_used"]),
+                         (100.0, "away", "iabc12", 46.0))
+        self.assertEqual(bet["kelly_shadow_stake"], self.m.kelly_stake(46.0, 150, 10000)[0])
+        self.assertTrue(bet["price_source"].startswith("candidates.json at"))
+        bank = json.loads((self.m.AGENT / "state" / "bankroll.json").read_text())
+        self.assertEqual((bank["bankroll"], len(bank["open_bets"]), bank["cycle_count"]), (9900.0, 1, 3))
+        self.assertEqual(self.rows()["DOG ML"]["stake"], 100.0)
 
-    def test_every_estimated_pass_carries_its_ev(self):
+    def test_one_bet_a_game(self):
+        self.assertEqual(self.act("bet", number="2", my_pct=52.0, event="iabc12")[0], 0)
+        code, said = self.act("bet", number="1", my_pct=75.0, event="iabc12")
+        self.assertEqual(code, 1)
+        self.assertIn("already a bet on this game (DOG ML, open)", said)
+
+    def test_the_bet_is_booked_at_the_price_now(self):
+        # candidates.json can be half an hour old; the bet is re-priced first.
+        os.environ.pop("ACE_NO_LIVE_PRICE")
+        fake = types.SimpleNamespace(
+            summary_of=lambda sport, eid: {"called": (sport, eid)},
+            odds_of=lambda summary: {"moneyline_away": 140, "novig_away_pct": 42.3} if summary["called"] == ("nfl", "401") else {})
+        real = self.m._load
+        self.m._load = lambda name, file: fake if file == "ace-fetch.py" and name == "ace_fetch_live" else real(name, file)
+        code, said = self.act("bet", number="2", my_pct=52.0, event="iabc12")
+        self.assertEqual(code, 0, said)
+        bet = self.bets()[0]
+        self.assertEqual((bet["price"], bet["novig_pct"]), (140, 42.3))
+        self.assertTrue(bet["price_source"].startswith("live at"))
+
+    def test_every_estimated_pass_carries_its_bar(self):
         self.act("passed", my_pct=59.0)
         row = self.rows()["FAV ML"]
-        self.assertEqual((row["ev_pct"], row["clears_bar"]), (-1.7, False))
+        self.assertEqual((row["p_used"], row["gap_pts"], row["clears_bar"]), (58.4, 0.4, False))
 
     def test_the_header_quotes_the_code(self):
         head = (ROOT / "agents" / "ace" / "_ace-agents-header.md").read_text()
-        self.assertIn(f"At least +{self.m.EV_MIN_PCT:g}% expected value", head)
-        self.assertIn(f"capped at {self.m.STAKE_CAP_PCT:g}% of bankroll", head)
-        self.assertIn("Quarter-Kelly", head)
-        for gone in ("8+ percentage points", "1.5% of bankroll per bet", "--stake 150"):
+        self.assertIn(f"counts as only {1 - self.m.SHRINK:.0%} of its distance", head)
+        self.assertIn(f"**at least {self.m.GAP_MIN_PTS:g} points** (or {self.m.GAP_MIN_REL:g}%", head)
+        lo, hi = self.m.BET_RANGE
+        self.assertIn(f"{lo:g}–{hi:g}%", head)
+        self.assertIn("50% against a 42.8% market\n   counts as 45.7%", head)
+        stake = load("ace_book_hdr", "ace-book.py")
+        self.assertIn(f"every bet is ${10000 * stake.FLAT_STAKE_PCT / 100:,.0f}**", head)
+        for gone in ("8+ percentage points", "Quarter-Kelly, capped", "+3% expected value", "--stake 150"):
             self.assertNotIn(gone, head)
 
     def test_the_deck_highlights_by_the_flag_code_wrote(self):
@@ -14462,11 +14588,11 @@ class AceBetsOnExpectedValueWithQuarterKellyStakes(unittest.TestCase):
 
 
 class AceBankrollHoldsDataNotRules(unittest.TestCase):
-    """2026-09-28: bankroll.json carried unit_pct 1.5, max_stake_pct,
-    max_open_bets 2 and a stop-loss - five settings no code read, two
-    contradicting what code enforced (quarter-Kelly, max 4 open). The 15% stop
-    was a sentence in the header nothing checked. The rules are constants in
-    ace-judge.py now; `bet` enforces the stop and `mark` strips the old keys."""
+    """2026-09-28: bankroll.json carried unit_pct, max_stake_pct, max_open_bets
+    and a stop-loss - settings no code read. The rules are constants in code;
+    `mark` strips the old keys. 2026-10-01: the -15% stop - which a bettor
+    with no edge at 3% stakes hits about half the time - became a 30% fault
+    stop in ace-book.py and an evidence stop on closing-line value."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -14478,17 +14604,15 @@ class AceBankrollHoldsDataNotRules(unittest.TestCase):
         for name, val in (("AGENT", agent), ("CANDIDATES", agent / "data" / "candidates.json"),
                           ("LEDGER", agent / "state" / "ledger.json")):
             setattr(self.m, name, val)
-        self.m.CANDIDATES.write_text(json.dumps({"candidates": [
-            {"selection": "DOG ML", "match": "DOG @ FAV", "price": 150, "novig_pct": 42.0, "sport": "nfl"}]}))
         self.bank = agent / "state" / "bankroll.json"
+        self.bank.write_text(json.dumps({"starting_bankroll": 10000.0, "bankroll": 10000.0}))
 
-    def bet(self, bankroll):
-        self.bank.write_text(json.dumps({"starting_bankroll": 10000.0, "bankroll": bankroll}))
-        a = types.SimpleNamespace(number="1", my_pct=45.0, stake=None, why="x")
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            code = self.m.record(a, "bet")
-        return code, out.getvalue()
+    def lose(self, n, stake=100.0):
+        b = self.m.book()
+        for i in range(n):
+            b.append({"kind": "bet", "id": f"b{i}", "sport": "nfl", "event_id": str(i), "stake": stake})
+            b.append({"kind": "settle", "id": f"b{i}", "result": "lost", "profit": -stake})
+        return b
 
     def test_the_seed_holds_no_rules(self):
         seed = json.loads((ROOT / "agents" / "ace" / "state" / "bankroll.seed.json").read_text())
@@ -14496,15 +14620,21 @@ class AceBankrollHoldsDataNotRules(unittest.TestCase):
             self.assertNotIn(k, seed)
         self.assertEqual(seed["starting_bankroll"], seed["bankroll"], "the stop measures from here")
 
-    def test_bet_refuses_at_the_stop(self):
-        code, said = self.bet(8500.0)
-        self.assertEqual(code, 1)
-        self.assertIn("FULL STOP: the bankroll is $8,500.00, at or below the $8,500.00 stop", said)
-        self.assertFalse(self.m.LEDGER.exists(), "nothing recorded")
+    def test_the_fault_stop_is_30_percent_of_settled_losses(self):
+        b = self.lose(29)
+        self.assertIsNone(b.refusal("nfl", "999", "X ML"))
+        b.append({"kind": "bet", "id": "b29", "sport": "nfl", "event_id": "29", "stake": 100.0})
+        b.append({"kind": "settle", "id": "b29", "result": "lost", "profit": -100.0})
+        self.assertIn("30% fault stop", b.refusal("nfl", "999", "X ML"))
 
-    def test_bet_is_allowed_just_above_it(self):
-        code, said = self.bet(8500.01)
-        self.assertEqual(code, 0, said)
+    def test_the_evidence_stop(self):
+        graded = lambda clv: {"graded": [{"status": "bet", "clv_pct": clv, "sharp_clv_pct": None}] * 60}
+        self.m._clv = lambda: types.SimpleNamespace(report=lambda **k: graded(-0.1))
+        self.assertIn("after 60 bets the average closing-line value is -0.10%", self.m.evidence_stop())
+        self.m._clv = lambda: types.SimpleNamespace(report=lambda **k: graded(0.4))
+        self.assertIsNone(self.m.evidence_stop())
+        self.m._clv = lambda: types.SimpleNamespace(report=lambda **k: {"graded": graded(-5)["graded"][:59]})
+        self.assertIsNone(self.m.evidence_stop(), "59 bets is too few to judge")
 
     def test_mark_strips_the_retired_keys_and_keeps_the_rest(self):
         self.bank.write_text(json.dumps({"bankroll": 9800.0, "starting_bankroll": 10000.0,
@@ -14522,12 +14652,12 @@ class AceBankrollHoldsDataNotRules(unittest.TestCase):
 
     def test_the_header_quotes_the_code(self):
         head = (ROOT / "agents" / "ace" / "_ace-agents-header.md").read_text()
-        self.assertIn(f"**Bankroll down {self.m.STOP_LOSS_PCT:g}%**", head)
-        floor = 10000 * (1 - self.m.STOP_LOSS_PCT / 100)
-        self.assertIn(f"(${floor:,.0f} on the $10,000 start)", head)
-        self.assertNotIn("The bar is eight", head)
-        # The worked example in the header is the code's own arithmetic.
-        self.assertIn(f"about\n{self.m.ev_pct(58.0, -130):+.1f}% expected value", head)
+        b = load("ace_book_stop", "ace-book.py")
+        self.assertIn(f"settled bets down {b.FAULT_STOP_PCT:g}% of the start "
+                      f"(${10000 * b.FAULT_STOP_PCT / 100:,.0f})", head)
+        self.assertIn(f"after {self.m.EVIDENCE_MIN_BETS} bets, an average closing-line value at or below\n  zero", head)
+        self.assertNotIn("FULL STOP", head)
+        self.assertNotIn("Bankroll down 15%", head)
 
 
 class AQueuedRunThatAskedAQuestionSaysSo(unittest.TestCase):
@@ -15347,3 +15477,393 @@ class BelfortStopsSizesAndEarnings(unittest.TestCase):
         for line in ("belfort-trade.py size MRVL", "1% of the\nportfolio", "earnings within 5 trading days",
                      "again at **12:35\nET**", "**8+ trading days**, and behind QQQ"):
             self.assertIn(line, head)
+
+
+class AceMoneyIsKeptByCode(unittest.TestCase):
+    """2026-10-01, the review's first item: Ace graded his own bets - found the
+    game, decided it was won, worked out the profit, edited bankroll.json -
+    and everything downstream read that file. A verifier that checks a file
+    balances cannot see a consistent mistake. ace-book.py keeps the money now,
+    from ESPN's final scores. Every scoreboard here is a real one."""
+
+    NFL = json.loads((FIXTURES / "espn-nfl-scoreboard-finals-week3.json").read_text())["events"]
+    MLB = json.loads((FIXTURES / "espn-mlb-scoreboard-2026-04-03.json").read_text())["events"]
+    SCHEDULED = json.loads((FIXTURES / "espn-nfl-scoreboard-week.json").read_text())["events"]
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        d = Path(self.tmp.name)
+        self.b = load("ace_book_t", "ace-book.py")
+        self.b.STATE, self.b.BETS, self.b.BANK, self.b.RESULTS = d, d / "bets.jsonl", d / "bankroll.json", d / "results.json"
+        self.b.BANK.write_text(json.dumps({"starting_bankroll": 10000.0, "bankroll": 10000.0, "cycle_count": 7}))
+
+    def bet(self, sport, eid, sel, side, price, start):
+        return self.b.place({"sport": sport, "event_id": eid, "selection": sel, "side": side,
+                             "match": "x", "price": price, "starts_utc": start})
+
+    def settled(self):
+        return {s["selection"]: (s["result"], s["profit"]) for s in json.loads(self.b.BANK.read_text())["settled_bets"]}
+
+    def test_real_finals_settle_won_and_lost(self):
+        self.bet("nfl", "401872948", "ATL ML", "away", 150, "2026-09-25T00:15Z")    # ATL 35 @ GB 14
+        self.bet("nfl", "401872953", "LAC ML", "away", -110, "2026-09-27T17:00Z")   # LAC 16 @ BUF 24
+        self.b.record_results("nfl", self.NFL, now=datetime(2026, 9, 30, tzinfo=timezone.utc))
+        done = self.b.settle(now=datetime(2026, 9, 30, tzinfo=timezone.utc))
+        self.assertEqual(len(done), 2)
+        self.assertEqual(self.settled(), {"ATL ML": ("won", 150.0), "LAC ML": ("lost", -100.0)})
+        self.assertEqual(done[0]["detail"], "ATL 35 @ GB 14")
+        bank = json.loads(self.b.BANK.read_text())
+        self.assertEqual((bank["bankroll"], bank["open_bets"], bank["cycle_count"]), (10050.0, [], 7))
+        self.assertEqual(self.b.settle(now=datetime(2026, 9, 30, tzinfo=timezone.utc)), [], "never twice")
+        # A second settle line for the same bet (two fetches racing) never
+        # overrides the first.
+        first = [e for e in self.b.events() if e["kind"] == "settle"][0]
+        self.b.append(dict(first, result="void", profit=0.0))
+        self.assertEqual(self.b.fold(self.b.events(), 10000.0)["bankroll"], 10050.0)
+
+    def test_a_real_postponement_is_void_and_the_stake_comes_back(self):
+        self.bet("mlb", "401814790", "KC ML", "home", -120, "2026-04-03T23:40Z")
+        self.b.record_results("mlb", self.MLB, now=datetime(2026, 4, 4, tzinfo=timezone.utc))
+        self.b.settle(now=datetime(2026, 4, 4, tzinfo=timezone.utc))
+        self.assertEqual(self.settled(), {"KC ML": ("void", 0.0)})
+        self.assertEqual(json.loads(self.b.BANK.read_text())["bankroll"], 10000.0)
+
+    def test_a_scheduled_game_showing_zero_zero_is_not_a_result(self):
+        # ESPN puts "0" in the score of a game that has not started.
+        self.assertEqual(self.b.results_of("nfl", self.SCHEDULED), {})
+
+    def test_a_tie_is_a_push(self):
+        ev = copy.deepcopy(self.NFL[0])
+        for c in ev["competitions"][0]["competitors"]:
+            c["score"] = "20"
+        self.bet("nfl", "401872948", "GB ML", "home", -200, "2026-09-25T00:15Z")
+        self.b.record_results("nfl", [ev], now=datetime(2026, 9, 30, tzinfo=timezone.utc))
+        self.b.settle(now=datetime(2026, 9, 30, tzinfo=timezone.utc))
+        self.assertEqual(self.settled(), {"GB ML": ("push", 0.0)})
+
+    def test_no_result_waits_then_voids_after_72_hours(self):
+        self.bet("nfl", "123", "X ML", "home", 100, "2026-09-25T00:15Z")
+        self.assertEqual(self.b.settle(now=datetime(2026, 9, 27, tzinfo=timezone.utc)), [])
+        self.b.settle(now=datetime(2026, 9, 28, 1, tzinfo=timezone.utc))
+        self.assertEqual(self.settled(), {"X ML": ("void", 0.0)})
+
+    def test_the_rebuilt_bankroll_passes_the_verifiers_balance(self):
+        self.bet("nfl", "401872948", "ATL ML", "away", 150, "2026-09-25T00:15Z")
+        self.bet("nfl", "401872953", "LAC ML", "away", -110, "2026-09-27T17:00Z")
+        self.bet("nfl", "401872964", "PIT ML", "away", -148, "2026-10-02T00:15Z")   # still open
+        self.b.record_results("nfl", self.NFL, now=datetime(2026, 9, 30, tzinfo=timezone.utc))
+        self.b.settle(now=datetime(2026, 9, 30, tzinfo=timezone.utc))
+        av = load("ace_verify_book", "ace-verify.py")
+        problems = []
+        av.reconcile(json.loads(self.b.BANK.read_text()), problems)
+        self.assertEqual(problems, [])
+        self.assertEqual(json.loads(self.b.BANK.read_text())["bankroll"], 10000 - 300 + 250 + 0)
+
+    def test_a_hand_edit_is_caught(self):
+        self.bet("nfl", "401872948", "ATL ML", "away", 150, "2026-09-25T00:15Z")
+        self.assertIsNone(self.b.drift())
+        doc = json.loads(self.b.BANK.read_text())
+        doc["bankroll"] = 10400.0
+        self.b.BANK.write_text(json.dumps(doc))
+        self.assertIn("bankroll $10,400.00 but the bets give $9,900.00", self.b.drift())
+
+    def test_hand_written_bets_are_imported_once(self):
+        self.b.BETS.unlink(missing_ok=True)
+        self.b.BANK.write_text(json.dumps({"starting_bankroll": 10000.0, "bankroll": 9915.0, "settled_bets": [
+            {"selection": "LAR ML", "match": "NYG @ LAR", "stake": 150, "profit": 65.0, "result": "won"}],
+            "open_bets": [{"selection": "PIT ML", "match": "PIT @ CLE", "stake": 150, "price": -148,
+                           "starts_utc": "2026-10-02T00:15Z"}]}))
+        self.assertEqual(self.b.migrate(), 2)
+        self.assertIsNone(self.b.migrate(), "once")
+        doc = self.b.rebuild()
+        self.assertEqual((doc["bankroll"], len(doc["open_bets"]), doc["settled_bets"][0]["profit"]),
+                         (9915.0, 1, 65.0))
+        # No ESPN id on it: it settles by the fixture name and start.
+        res = {"nfl|401872964": {"sport": "nfl", "event_id": "401872964", "match": "PIT @ CLE",
+                                 "start_utc": "2026-10-02T00:15Z", "status": "STATUS_FINAL", "home": "CLE",
+                                 "away": "PIT", "home_score": 10, "away_score": 20, "winner": "away"}}
+        self.b.RESULTS.write_text(json.dumps(res))
+        self.b.settle(now=datetime(2026, 10, 2, 4, tzinfo=timezone.utc))
+        self.assertEqual(self.settled()["PIT ML"], ("won", round(150 * 100 / 148, 2)))
+
+    def test_the_fetcher_grades_from_the_boards_it_already_has(self):
+        root = Path(self.tmp.name) / "root"
+        (root / "agents/ace/state").mkdir(parents=True)
+        (root / "agents/ace/state/bankroll.json").write_text(json.dumps({"starting_bankroll": 10000.0, "bankroll": 10000.0}))
+        os.environ["ECOSYSTEM_ROOT"] = str(root)
+        self.addCleanup(os.environ.pop, "ECOSYSTEM_ROOT", None)
+        f = load("ace_fetch_settle", "ace-fetch.py")
+        book = f.ace_book()
+        book.place({"sport": "nfl", "event_id": "401872948", "selection": "ATL ML", "side": "away",
+                    "match": "ATL @ GB", "price": 150, "starts_utc": "2026-09-25T00:15Z"})
+        with contextlib.redirect_stdout(io.StringIO()):
+            f.settle_bets([("nfl", self.NFL)])
+        bank = json.loads((root / "agents/ace/state/bankroll.json").read_text())
+        self.assertEqual((bank["bankroll"], bank["settled_bets"][0]["result"]), (10150.0, "won"))
+        self.assertIn('boards.append((sport, get(f"{BASE}/{path}/scoreboard?dates={yesterday}")',
+                      (SCRIPTS / "ace-fetch.py").read_text(), "late finals: yesterday's board for daily sports")
+
+    def test_help_touches_nothing(self):
+        # preflight runs `<script> --help` to read the subcommands. ace-book.py
+        # once did its import before reading the command, and the test of
+        # that check left a bets.jsonl in the repository.
+        root = Path(self.tmp.name) / "helproot"
+        (root / "agents/ace/state").mkdir(parents=True)
+        (root / "agents/ace/state/bankroll.json").write_text(json.dumps({"open_bets": [{"stake": 1}]}))
+        for script in ("ace-book.py", "ace-sharp.py", "ace-baselines.py"):
+            r = subprocess.run([sys.executable, str(SCRIPTS / script), "--help"], capture_output=True, text=True,
+                               env=dict(os.environ, ECOSYSTEM_ROOT=str(root)))
+            self.assertEqual(r.returncode, 0, script)
+            self.assertIn("{", r.stdout, f"{script}: argparse lists its subcommands for preflight")
+        self.assertEqual(sorted(p.name for p in (root / "agents/ace/state").iterdir()), ["bankroll.json"])
+
+    def test_the_header_says_code_keeps_the_money(self):
+        head = (ROOT / "agents" / "ace" / "_ace-agents-header.md").read_text()
+        self.assertIn("python3 ../../scripts/ace-book.py show", head)
+        self.assertIn("**kept by `ace-book.py`; never edit it**", head)
+        self.assertNotIn("compute win/loss, update `bankroll`", head)
+
+
+class AcePricesBeforeAndAtTheClose(unittest.TestCase):
+    """The price history behind "has the market moved on this news?", the
+    5-minute close, and Pinnacle's price from The Odds API. The Pinnacle
+    payload is the shape The Odds API documents; replace it with a capture
+    (`ace-sharp.py check nfl`) once a key exists - believed, not verified."""
+
+    ODDS = json.loads((FIXTURES / "the-odds-api-v4-h2h-documented-shape.json").read_text())
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "agents/ace/state").mkdir(parents=True)
+        (self.root / "agents/ace/data/context").mkdir(parents=True)
+        os.environ["ECOSYSTEM_ROOT"] = str(self.root)
+        self.addCleanup(os.environ.pop, "ECOSYSTEM_ROOT", None)
+        os.environ.pop("ODDS_API_KEY", None)
+        self.clv = load("ace_clv_p", "ace-clv.py")
+        self.sharp = load("ace_sharp_p", "ace-sharp.py")
+
+    def ctx(self, hours, name="PIT @ CLE", eid="401872964", home=("CLE", "Cleveland Browns"),
+            away=("PIT", "Pittsburgh Steelers"), sport="nfl", now=None):
+        start = ((now or datetime.now(timezone.utc)) + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%MZ")
+        return {"sport": sport, "event_id": eid, "short": name, "start_utc": start, "status": "STATUS_SCHEDULED",
+                "home": {"abbr": home[0], "name": home[1]}, "away": {"abbr": away[0], "name": away[1]},
+                "odds": {"moneyline_home": 124, "moneyline_away": -148, "novig_home_pct": 42.8, "novig_away_pct": 57.2}}
+
+    def test_every_price_is_kept_and_read_back_by_time(self):
+        t0 = datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
+        c = self.ctx(10, now=t0)
+        path = self.root / "lines.json"
+        self.clv.record_lines([c], now=t0, path=path)
+        c["odds"] = dict(c["odds"], novig_home_pct=45.0, novig_away_pct=55.0)
+        self.clv.record_lines([c], now=t0 + timedelta(hours=1), path=path)
+        entry = list(json.loads(path.read_text()).values())[0]
+        self.assertEqual(len(entry["history"]), 2)
+        self.assertEqual(self.clv.price_at(entry, "home", t0 + timedelta(minutes=30)), 42.8)
+        self.assertEqual(self.clv.price_at(entry, "home", t0 + timedelta(hours=2)), 45.0)
+        self.assertIsNone(self.clv.price_at(entry, "home", t0 - timedelta(minutes=1)))
+        self.assertEqual(self.clv.unpriced(entry, "home", t0 + timedelta(minutes=30), 44.7), (True, 1.9))
+        ok, why = self.clv.unpriced(entry, "home", t0 + timedelta(minutes=30), 44.8)
+        self.assertFalse(ok)
+        self.assertIn("+2.0 pts", why)
+
+    def test_the_close_is_re_read_every_5_minutes_near_the_start(self):
+        f = load("ace_fetch_close", "ace-fetch.py")
+        now = datetime.now(timezone.utc)
+        soon, later = self.ctx(1.5, now=now), self.ctx(3, name="LATE", eid="2", now=now)
+        for c in (soon, later):
+            (f.CTX / f"nfl-{c['event_id']}.json").write_text(json.dumps(c))
+        asked = []
+        def summary(sport, eid):
+            asked.append(eid)
+            return {"pickcenter": [{"provider": {"name": "DraftKings"}, "homeTeamOdds": {"moneyLine": 130},
+                                    "awayTeamOdds": {"moneyLine": -155}}]}
+        f.GAP = 0
+        with contextlib.redirect_stdout(io.StringIO()):
+            f.close_run(now=now, fetch_summary=summary)
+        self.assertEqual(asked, ["401872964"], "only games within 2 hours")
+        self.assertEqual(json.loads((f.CTX / "nfl-401872964.json").read_text())["odds"]["moneyline_home"], 130)
+        entry = list(json.loads((self.root / "agents/ace/state/lines.json").read_text()).values())[0]
+        self.assertEqual(entry["last"]["moneyline_home"], 130)
+        timer = (ROOT / "deploy" / "ace-close.timer").read_text()
+        self.assertIn("OnCalendar=*-*-* 10..23:00/5 America/New_York", timer)
+        for unit in ("ace-close.service", "ace-fetch.service"):
+            self.assertIn("/usr/bin/flock /run/ace-fetch.lock", (ROOT / "deploy" / unit).read_text(), unit)
+        self.assertIn("ace-fetch.py --close", (ROOT / "deploy" / "ace-close.service").read_text())
+
+    def test_pinnacle_joins_by_time_and_name(self):
+        c = self.ctx(0, now=datetime(2026, 10, 2, 0, 15, tzinfo=timezone.utc))
+        e = self.sharp.join(c, self.ODDS)
+        self.assertEqual(e["home_team"], "Cleveland Browns")
+        self.assertTrue(self.sharp.attach(c, e, now=datetime(2026, 10, 1, 17, tzinfo=timezone.utc)))
+        self.assertEqual((c["sharp"]["novig_home_pct"], c["sharp"]["novig_away_pct"]), (42.0, 58.0))
+        self.assertEqual((c["sharp"]["draftkings_home_price"], c["sharp"]["draftkings_away_price"]), (124, -147))
+        far = self.ctx(0, now=datetime(2026, 10, 2, 5, tzinfo=timezone.utc))
+        self.assertIsNone(self.sharp.join(far, self.ODDS), "same teams, nearly five hours off")
+
+    def test_names_are_compared_without_accents_or_brackets(self):
+        c = self.ctx(0, name="M-OH @ SJSU", home=("SJSU", "San Jose State Spartans"),
+                     away=("M-OH", "Miami (OH) RedHawks"), sport="cfb",
+                     now=datetime(2026, 10, 3, 23, 30, tzinfo=timezone.utc))
+        self.assertIsNotNone(self.sharp.join(c, self.ODDS))
+        self.assertFalse(self.sharp.same_team("Miami Hurricanes", "Miami (OH) RedHawks"))
+        self.assertTrue(self.sharp.same_team("Miami RedHawks", "Miami (OH) RedHawks"))
+
+    def test_the_budget(self):
+        now = datetime(2026, 10, 1, 18, 40, tzinfo=timezone.utc)      # 2:40pm ET
+        calls = []
+        def fetch(sport):
+            calls.append(sport)
+            return self.ODDS, 480
+        ctxs = [self.ctx(5, now=now)]
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(len(self.sharp.refresh(ctxs, now=now, fetch=fetch)), 1)
+            self.sharp.refresh(ctxs, now=now + timedelta(minutes=30), fetch=fetch)
+        self.assertEqual(calls, ["nfl"], "one decision snapshot a sport a day")
+        early = datetime(2026, 10, 1, 15, tzinfo=timezone.utc)          # 11am ET
+        self.assertEqual(self.sharp.wanted(ctxs, False, early, self.sharp._usage(early) | {"decision_done": []}), {})
+        u = self.sharp._usage(now)
+        self.assertEqual((u["calls"], u["remaining"]), (1, 480))
+        self.assertFalse(self.sharp.may_spend(dict(u, calls=self.sharp.DAILY_CAP)))
+        self.assertFalse(self.sharp.may_spend(dict(u, remaining=self.sharp.RESERVE)))
+        close_ctx = [self.ctx(0.25, now=now)]
+        self.assertEqual(self.sharp.wanted(close_ctx, True, now, dict(u, last={})), {"nfl": "close"})
+        self.assertEqual(self.sharp.wanted(close_ctx, True, now, dict(u, last={"nfl": "2026-10-01T18:30:00Z"})), {},
+                         "a close snapshot 10 minutes ago is recent enough")
+
+    def test_the_key_is_never_in_an_error(self):
+        secret = "abc123secretkeyvalue"
+        def boom(req, timeout=None, context=None):
+            raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, io.BytesIO(b'{"error_code": "INVALID_KEY"}'))
+        with unittest.mock.patch.object(self.sharp.urllib.request, "urlopen", boom):
+            with self.assertRaises(self.sharp.ApiError) as e:
+                self.sharp.call("/v4/sports/", {}, key=secret)
+        self.assertEqual(str(e.exception), "HTTP 401 INVALID_KEY")
+        self.assertNotIn(secret, str(e.exception))
+
+    def test_the_key_comes_from_credentials_env(self):
+        self.assertIsNone(self.sharp.api_key())
+        creds = self.root / "agents/ace/state/credentials.env"
+        creds.write_text("ODDS_API_KEY = abc123\n")
+        sharp = load("ace_sharp_k", "ace-sharp.py")
+        self.assertEqual(sharp.api_key(), "abc123")
+
+
+class TheNoAIBettorsAndTheBlindScore(unittest.TestCase):
+    """The review's comparison stable and its first gate: bettors with no AI
+    on the same games, and Ace's blind estimates scored against the market's
+    own numbers. If the fresh-news bettor matches Ace, the model is
+    decoration; if his blind numbers do not beat the market's, his bets are
+    luck."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "agents/ace/state").mkdir(parents=True)
+        (self.root / "agents/ace/data").mkdir(parents=True)
+        os.environ["ECOSYSTEM_ROOT"] = str(self.root)
+        self.addCleanup(os.environ.pop, "ECOSYSTEM_ROOT", None)
+        self.bl = load("ace_baselines_t", "ace-baselines.py")
+        self.clv = load("ace_clv_t", "ace-clv.py")
+        self.now = datetime(2026, 10, 1, 19, tzinfo=timezone.utc)
+        self.start = "2026-10-01T23:00Z"
+
+    def rows(self, home_pct=57.2, news=(), sharp_home=None, eid="401"):
+        mk = lambda sel, side, price, pct, sh: {
+            "selection": sel, "match": "PIT @ CLE", "sport": "nfl", "event_id": eid, "side": side,
+            "starts_utc": self.start, "price": price, "novig_pct": pct, "sharp_pct": sh,
+            "fresh_injuries": list(news)}
+        return [mk("CLE ML", "home", -148, home_pct, sharp_home),
+                mk("PIT ML", "away", 124, round(100 - home_pct, 1), None if sharp_home is None else round(100 - sharp_home, 1))]
+
+    def lines(self, hist):
+        return {f"nfl|PIT @ CLE|{self.start}": {"start_utc": self.start, "last": hist[-1], "history": hist}}
+
+    def snap(self, minutes_ago, home):
+        return {"at": (self.now - timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "novig_home_pct": home, "novig_away_pct": round(100 - home, 1)}
+
+    def picks(self, rows, lines):
+        return {s: r["selection"] for s, r, _ in self.bl.decide(rows, lines, self.now, self.clv)}
+
+    def test_random_and_favourite_decide_within_six_hours(self):
+        got = self.picks(self.rows(), {})
+        self.assertEqual(got["favourite"], "CLE ML")
+        self.assertIn(got["random"], ("CLE ML", "PIT ML"))
+        self.assertEqual(self.picks(self.rows(), {}), got, "the coin is fixed by the game id")
+        self.start = "2026-10-02T03:00Z"                                # 8 hours out
+        self.assertNotIn("favourite", self.picks(self.rows(), {}))
+
+    def test_news_backs_the_injured_teams_opponent_while_the_price_has_not_moved(self):
+        inj = {"id": "i1", "team": "CLE", "player": "QB", "status": "Out", "hours_old": 1.0,
+               "reported_utc": (self.now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%MZ")}
+        lines = self.lines([self.snap(120, 58.0), self.snap(0, 57.2)])
+        self.assertEqual(self.picks(self.rows(news=[inj]), lines)["news"], "PIT ML")
+        moved = self.lines([self.snap(120, 60.0), self.snap(0, 57.2)])     # PIT 40 -> 42.8
+        self.assertNotIn("news", self.picks(self.rows(news=[inj]), moved), "the market already has it")
+        old = dict(inj, hours_old=4.0)
+        self.assertNotIn("news", self.picks(self.rows(news=[old]), lines))
+        q = dict(inj, status="Questionable")
+        self.assertNotIn("news", self.picks(self.rows(news=[q]), lines))
+
+    def test_sharp_and_steam(self):
+        self.assertEqual(self.picks(self.rows(sharp_home=59.5), {})["sharp"], "CLE ML")
+        self.assertNotIn("sharp", self.picks(self.rows(sharp_home=59.0), {}))
+        steam = self.lines([self.snap(90, 55.5), self.snap(0, 57.2)])
+        self.assertEqual(self.picks(self.rows(), steam)["steam"], "CLE ML")
+        self.assertNotIn("steam", self.picks(self.rows(), self.lines([self.snap(90, 56.0), self.snap(0, 57.2)])))
+
+    def test_run_records_each_strategy_once_a_game_and_report_scores_it(self):
+        cands = self.root / "agents/ace/data/candidates.json"
+        cands.write_text(json.dumps({"candidates": self.rows()}))
+        out = self.root / "agents/ace/state/baselines.jsonl"
+        self.assertEqual(len(self.bl.run(now=self.now, path=out)), 2)
+        self.assertEqual(self.bl.run(now=self.now, path=out), [], "once a game")
+        (self.root / "agents/ace/state/lines.json").write_text(json.dumps(
+            {f"nfl|PIT @ CLE|{self.start}": {"start_utc": "2026-09-01T00:00Z", "last": self.snap(0, 60.0),
+                                             "history": [self.snap(0, 60.0)]}}))
+        (self.root / "agents/ace/state/results.json").write_text(json.dumps(
+            {"nfl|401": {"winner": "home", "status": "STATUS_FINAL"}}))
+        r = self.bl.report(path=out)
+        fav = r["favourite"]
+        self.assertEqual((fav["bets"], fav["settled"], fav["won"], fav["profit"]), (1, 1, 1, 67.57))
+        self.assertEqual(fav["avg_clv_pct"], self.clv.clv_at(-148, 60.0))
+        self.assertIn("ace", r)
+
+    def test_blind_estimates_are_scored_against_the_market(self):
+        st = self.root / "agents/ace/state"
+        rows = [("1", 70, "home", 60.0), ("2", 40, "away", 45.0), ("3", 55, "home", 50.0)]
+        with (st / "blind.jsonl").open("w") as f:
+            for eid, pct, _w, _q in rows:
+                f.write(json.dumps({"utc": "2026-10-01T15:00:00Z", "key": f"nfl|G{eid}|{self.start}", "sport": "nfl",
+                                    "event_id": eid, "starts_utc": self.start, "home_pct": pct}) + "\n")
+        (st / "results.json").write_text(json.dumps({f"nfl|{e}": {"winner": w} for e, _p, w, _q in rows}))
+        (st / "lines.json").write_text(json.dumps({f"nfl|G{e}|{self.start}": {
+            "last": {"novig_home_pct": q}, "history": [{"at": "2026-10-01T14:00:00Z", "novig_home_pct": q}]}
+            for e, _p, _w, q in rows}))
+        c = self.clv.calibration()
+        # blind: (.3^2 + .4^2 + .45^2)/3 = .1508 ; market: (.4^2 + .45^2 + .5^2)/3 = .2042
+        self.assertEqual((c["games"], c["brier_blind"], c["brier_then"]), (3, 0.1508, 0.2042))
+        self.assertEqual(c["blind_vs_market_then"], -0.0533)
+        self.assertIn("Ace is better than the market", "\n".join(self.clv.calibration_lines(c)))
+
+    def test_an_estimate_made_after_the_start_does_not_count(self):
+        st = self.root / "agents/ace/state"
+        (st / "blind.jsonl").write_text(json.dumps({"utc": "2026-10-02T01:00:00Z", "key": "k", "sport": "nfl",
+                                                    "event_id": "1", "starts_utc": self.start, "home_pct": 90}) + "\n")
+        (st / "results.json").write_text(json.dumps({"nfl|1": {"winner": "home"}}))
+        self.assertEqual(self.clv.calibration()["games"], 0)
+
+    def test_the_preregistration_is_frozen_with_the_codes_numbers(self):
+        pre = (ROOT / "agents" / "ace" / "PREREGISTRATION.md").read_text()
+        j = load("ace_judge_pre", "ace-judge.py")
+        b = load("ace_book_pre", "ace-book.py")
+        self.assertIn("Frozen **2026-10-01**", pre)
+        self.assertIn(f"| Shrink toward the market | {j.SHRINK:.0%}", pre)
+        self.assertIn(f"| Bet range | market chance {j.BET_RANGE[0]:g}–{j.BET_RANGE[1]:g}% |", pre)
+        self.assertIn(f"| Max open bets | {b.MAX_OPEN_BETS}, one per game |", pre)
+        self.assertIn(f"{j.EVIDENCE_MIN_BETS} settled bets with an average CLV", pre)
+        self.assertIn(f"reach {b.FAULT_STOP_PCT:g}% of the starting bankroll", pre)

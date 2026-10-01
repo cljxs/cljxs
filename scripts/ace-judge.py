@@ -44,7 +44,7 @@ CANDIDATES = AGENT / "data" / "candidates.json"
 LEDGER = AGENT / "state" / "ledger.json"
 
 # Copied straight across from the fetcher's row. The join key is the first two.
-CARRY = ("selection", "match", "sport", "price", "novig_pct", "starts_utc")
+CARRY = ("selection", "match", "sport", "price", "novig_pct", "starts_utc", "event_id", "side", "sharp_pct")
 
 
 # What counts as a judged row, in one place.
@@ -230,6 +230,10 @@ def key(r):
 
 
 def cmd_list(a):
+    gate = blind_gate()
+    if gate:
+        print(gate, file=sys.stderr)
+        return 1
     _, rows = load_candidates()
     led = load_ledger()
     done = {key(r): r for r in led.get("candidates", [])}
@@ -240,15 +244,24 @@ def cmd_list(a):
         mark = f"  [{mine['status']}]" if mine else ""
         price = r.get("price")
         price = f"{price:+d}" if isinstance(price, int) else str(price)
+        sharp = f"  Pinnacle {r['sharp_pct']}%" if r.get("sharp_pct") is not None else ""
         print(f"  {i:>3}. {str(r.get('selection')):<10} {str(r.get('match')):<14} "
-              f"price {price:>6}   no-vig {r.get('novig_pct')}%{mark}")
+              f"price {price:>6}   no-vig {r.get('novig_pct')}%{sharp}{mark}")
+        for inj in r.get("fresh_injuries") or []:
+            if r.get("side") != "away":          # once a game, under its home row
+                print(f"         news {inj.get('id')}: {inj.get('team')} {inj.get('player')} "
+                      f"({inj.get('position')}) {inj.get('status')}, {inj.get('hours_old')}h ago")
     print(f"\n{len(done)} judged so far. The other {len(rows) - len(done)} will show "
           f"as unjudged on the board, which is honest - judge the ones you looked at.")
     return 0
 
 
 def record(a, status):
-    _, rows = load_candidates()
+    doc, rows = load_candidates()
+    gate = blind_gate()
+    if gate:
+        print(gate, file=sys.stderr)
+        return 1
     nums, err = parse_numbers(a.number, len(rows))
     if err:
         print(f"{err}. Run `ace-judge.py list` to see them.", file=sys.stderr)
@@ -291,47 +304,55 @@ def record(a, status):
               file=sys.stderr)
         return 1
 
-    bet_stake = bet_frac = bet_ev = None
+    placed = None
     if status == "bet":
         if len(nums) > 1:
-            print("bet one at a time. A stake is sized per game, from that game's "
-                  "estimate and price.", file=sys.stderr)
+            print("bet one at a time: each bet cites its own news and is checked against "
+                  "its own price.", file=sys.stderr)
             return 1
         if a.stake is not None:
-            print(f"drop --stake: the stake is computed now - quarter-Kelly from your "
-                  f"estimate and the price, capped at {STAKE_CAP_PCT:g}% of the bankroll.",
-                  file=sys.stderr)
+            print("drop --stake: every bet is a flat 1% of the starting bankroll, set by "
+                  "ace-book.py.", file=sys.stderr)
             return 1
-        # The bar is expected value at your estimate, so a bet without one
-        # claims to clear it with nothing on record to check - and it is the
-        # one row where that matters most, because it is the one that moves money.
+        # The bar is measured on the estimate, so a bet without one claims to
+        # clear it with nothing on record to check.
         if a.my_pct is None:
-            print(f"a bet needs --my-pct. The bar is +{EV_MIN_PCT:g}% expected value at "
-                  f"your estimate, and without the estimate there is no way to show it "
-                  f"was cleared.", file=sys.stderr)
+            print("a bet needs --my-pct: the bar is measured on your estimate, and without "
+                  "it there is no way to show it was cleared.", file=sys.stderr)
             return 1
-        src = rows[nums[0] - 1]
-        bet_ev = ev_pct(a.my_pct, src.get("price"))
-        if bet_ev is None:
-            print("this row has no usable price, so its expected value cannot be "
-                  "worked out - it cannot be bet.", file=sys.stderr)
+        src = dict(rows[nums[0] - 1])
+        b = book()
+        why_not = b.refusal(src.get("sport"), src.get("event_id"), src.get("selection"), src.get("match")) \
+            or evidence_stop()
+        if why_not:
+            print(f"refused: {why_not}.", file=sys.stderr)
             return 1
-        if bet_ev < EV_MIN_PCT:
-            print(f"refused: at {a.my_pct:g}% and a price of {src.get('price')}, the expected "
-                  f"value is {bet_ev:+.1f}% - under the +{EV_MIN_PCT:g}% bar. Pass it with "
-                  f"this estimate instead.", file=sys.stderr)
+        # The price at this moment, not the one in candidates.json - which
+        # can be half an hour old, and the bet is booked at what it says.
+        live = live_price(src)
+        if live:
+            src.update(price=live["price"], novig_pct=live["novig_pct"])
+        priced = (f"live at {live['at']} UTC" if live else
+                  f"candidates.json at {doc.get('asof_utc') if isinstance(doc, dict) else '?'} UTC")
+        verdict = bar(a.my_pct, src)
+        if not verdict["clears"]:
+            print(f"refused: {verdict['why']}. Pass it with this estimate instead.", file=sys.stderr)
             return 1
-        bank = current_bankroll()
-        if not bank:
-            print("cannot size the bet: state/bankroll.json has no bankroll.", file=sys.stderr)
+        event, why_not = cited_event(src, getattr(a, "event", None), current_pct=src.get("novig_pct"))
+        if why_not:
+            print(f"refused: {why_not}.", file=sys.stderr)
             return 1
-        floor = stop_floor()
-        if floor is not None and bank <= floor:
-            print(f"FULL STOP: the bankroll is ${bank:,.2f}, at or below the ${floor:,.2f} "
-                  f"stop ({STOP_LOSS_PCT:g}% under where it started). Open nothing - say so "
-                  f"in the report; the owner decides.", file=sys.stderr)
-            return 1
-        bet_stake, bet_frac = kelly_stake(a.my_pct, src.get("price"), bank)
+        shadow, shadow_pct = kelly_stake(verdict["p_used"], src.get("price"), b.starting_bankroll())
+        placed = {"sport": src.get("sport"), "event_id": src.get("event_id"), "match": src.get("match"),
+                  "selection": src.get("selection"), "side": src.get("side"),
+                  "starts_utc": src.get("starts_utc"), "price": src.get("price"),
+                  "price_source": priced, "novig_pct": src.get("novig_pct"),
+                  "sharp_pct": src.get("sharp_pct"), "my_pct": a.my_pct,
+                  "p_used": verdict["p_used"], "ev_pct": verdict["ev_pct"],
+                  "event": event, "why": a.why, "kelly_shadow_stake": shadow,
+                  "kelly_shadow_pct": shadow_pct}
+        rows = [dict(r) for r in rows]
+        rows[nums[0] - 1] = src
 
     led = load_ledger()
     done = []
@@ -342,15 +363,12 @@ def record(a, status):
         novig = src.get("novig_pct")
         if a.my_pct is not None and novig is not None:
             row["edge_pts"] = round(float(a.my_pct) - float(novig), 1)
-        ev = ev_pct(a.my_pct, src.get("price"))
-        if ev is not None:
-            row["ev_pct"] = ev
-            row["clears_bar"] = ev >= EV_MIN_PCT
+        if a.my_pct is not None:
+            v = bar(a.my_pct, src)
+            row.update(p_used=v["p_used"], gap_pts=v["gap_pts"], need_pts=v["need_pts"],
+                       ev_pct=v["ev_pct"], clears_bar=v["clears"])
         row["why_not"] = [a.why]
         row["status"] = status
-        if status == "bet":
-            row["stake"] = bet_stake
-            row["stake_pct"] = bet_frac
         led["candidates"] = [r for r in led.get("candidates", []) if key(r) != key(row)]
         led["candidates"].append(row)
         done.append(row)
@@ -363,15 +381,18 @@ def record(a, status):
             twin["my_pct"] = round(100.0 - float(a.my_pct), 1)
             if src.get("novig_pct") is not None:
                 twin["edge_pts"] = round(twin["my_pct"] - float(src["novig_pct"]), 1)
-            tev = ev_pct(twin["my_pct"], src.get("price"))
-            if tev is not None:
-                twin["ev_pct"], twin["clears_bar"] = tev, tev >= EV_MIN_PCT
+            tv = bar(twin["my_pct"], src)
+            twin.update(p_used=tv["p_used"], gap_pts=tv["gap_pts"], need_pts=tv["need_pts"],
+                        ev_pct=tv["ev_pct"], clears_bar=tv["clears"])
             twin["why_not"] = [f"other side of {done[0]['selection']}: {a.why}"]
             twin["status"] = "passed"
             led["candidates"].append(twin)
             filled.append(twin)
             print(f"  and PASSED the other side, {twin['selection']}, at "
                   f"{twin['my_pct']:.1f}% (edge {twin.get('edge_pts', 0):+.1f} pts)")
+    if placed:
+        bet = book().place(placed)
+        done[0].update(stake=bet["stake"], bet_id=bet["id"])
     save(led)
     log_for_clv(done + filled)
 
@@ -381,7 +402,9 @@ def record(a, status):
         if r.get("ev_pct") is not None:
             edge += f", EV {r['ev_pct']:+.1f}%"
         if status == "bet":
-            edge += f", stake ${r['stake']:,.2f} ({r['stake_pct']:g}% of bankroll, quarter-Kelly)"
+            edge += (f", counted as {r['p_used']:g}%, stake ${r['stake']:,.2f} flat, citing "
+                     f"{placed['event']['player']} ({placed['event']['status']}) - booked at "
+                     f"{r['price']} ({placed['price_source']})")
         print(f"{status.upper()}: {r['selection']} ({r['match']}) at {r['price']}"
               f"{edge} - {a.why}")
     else:
@@ -396,63 +419,65 @@ def cmd_pass(a):
     return record(a, "passed")
 
 
-# How many bets may be open at once. It lived only in Ace's header - a
-# sentence, honoured or not, with nothing checking. "Max 2 open bets" was a
-# rule the agent was asked to keep and no one could tell had been broken.
-# ace-verify.py imports this rather than restating it, and a test fails the
-# build if the header stops quoting the same number.
-MAX_OPEN_BETS = 4
-
-# THE BAR AND THE STAKE (2026-09-28). They replace "8 percentage points over
-# the no-vig line" and "1.5% of bankroll, flat", which lived only as
-# sentences in Ace's header - arithmetic a model was trusted to do.
-#
-# The bar is EXPECTED VALUE at the price actually offered, by Ace's own
-# estimate: my_pct x decimal_odds - 1. It prices the vig in, and it is the
-# same number the closing-line grade uses. +3% is the careful end of the
-# +2-3% the research suggested, because Ace's estimates are a model's.
-#
-# The stake is QUARTER-KELLY - a quarter of the fraction of bankroll the
-# Kelly formula gives for that estimate at that price - which is how
-# professionals size bets while allowing for their own estimates being wrong.
-# It is capped at the hard cap the header always had: a confident estimate at
-# plus money can make even quarter-Kelly ask for a tenth of the bankroll.
-# Code computes both; Ace supplies only his estimate and his reason.
-EV_MIN_PCT = 3.0
-KELLY_FRACTION = 0.25
-STAKE_CAP_PCT = 3.0
-
-# THE STOP. Down this far from where the bankroll started, `bet` refuses and
-# the owner decides. It sat in bankroll.json as stop_loss_pct and
-# stop_loss_floor beside unit_pct, max_stake_pct and max_open_bets - five
-# settings no code read, two of them (1.5% flat, max 2 open) contradicting
-# the rules actually enforced. A number in a data file looks like a setting
-# and is not one; `mark` removes them from the live file.
-STOP_LOSS_PCT = 15.0
-RETIRED_BANKROLL_KEYS = ("unit_pct", "max_stake_pct", "max_open_bets",
-                         "stop_loss_pct", "stop_loss_floor")
-
-
-def stop_floor():
-    """The bankroll at which betting stops: starting_bankroll less
-    STOP_LOSS_PCT. None if bankroll.json has no starting figure."""
-    try:
-        start = json.loads((AGENT / "state" / "bankroll.json").read_text()).get("starting_bankroll")
-        return round(float(start) * (1 - STOP_LOSS_PCT / 100), 2) if start else None
-    except Exception:
-        return None
-
-
-def _clv():
+def _load(name, file):
     import importlib.util
-    spec = importlib.util.spec_from_file_location("ace_clv", Path(__file__).resolve().parent / "ace-clv.py")
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / file)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
+def _clv():
+    return _load("ace_clv", "ace-clv.py")
+
+
+def book():
+    """ace-book.py, pointed at this AGENT's state - the tests move AGENT."""
+    m = _load("ace_book", "ace-book.py")
+    m.STATE = AGENT / "state"
+    m.BETS, m.BANK, m.RESULTS = m.STATE / "bets.jsonl", m.STATE / "bankroll.json", m.STATE / "results.json"
+    return m
+
+
+# How many bets may be open at once. It lived only in Ace's header - a
+# sentence, honoured or not, with nothing checking. ace-book.py owns it now
+# (it owns the money); ace-verify.py reads it from here, and a test fails
+# the build if the header stops quoting the same number.
+MAX_OPEN_BETS = _load("ace_book_cap", "ace-book.py").MAX_OPEN_BETS
+
+# THE BAR (2026-10-01, replacing "+3% expected value at Ace's estimate").
+# An outside review showed the old bar was Ace's own estimate restated: any
+# estimate a few points above the line cleared it, so with ordinary
+# estimating error it let through 13-45% of games with no edge at all - most
+# easily the long-shot underdogs, the worst-priced bets on the board. Now:
+#
+#   q        the market's chance for the side: Pinnacle's no-vig when
+#            ace-sharp.py has it, DraftKings' otherwise
+#   p_used   Ace's estimate pulled SHRINK of the way back to q:
+#            q + (1 - SHRINK) x (my_pct - q). A model's estimate is mostly
+#            noise until the record says otherwise.
+#   the bar  p_used beats q by at least GAP_MIN_PTS, or GAP_MIN_REL percent
+#            of q if that is more; the bet is still positive expected value
+#            at DraftKings' price; and q is between BET_RANGE - no long
+#            shots, no heavy favourites, while his estimates are unproven.
+SHRINK = 0.6
+GAP_MIN_PTS = 2.0
+GAP_MIN_REL = 3.0
+BET_RANGE = (30.0, 75.0)
+# Shadow staking only: quarter-Kelly at p_used, capped, stored on each bet.
+# No money rides on it; the stake is ace-book.py's flat 1%.
+KELLY_FRACTION = 0.25
+STAKE_CAP_PCT = 3.0
+# THE EVIDENCE STOP: after this many settled bets, a mean closing-line
+# value at or below zero means no edge has shown up - betting stops and the
+# owner decides. (The fault stop, a 30% loss, is ace-book.py's.)
+EVIDENCE_MIN_BETS = 60
+RETIRED_BANKROLL_KEYS = ("unit_pct", "max_stake_pct", "max_open_bets",
+                         "stop_loss_pct", "stop_loss_floor")
+
+
 def ev_pct(my_pct, price):
-    """Expected return per $1 staked, in percent, at Ace's estimate. None if
+    """Expected return per $1 staked, in percent, at a chance. None if
     either number is missing or the price is not a price."""
     d = _clv().decimal_odds(price)
     if d is None or my_pct is None:
@@ -463,7 +488,8 @@ def ev_pct(my_pct, price):
 
 
 def kelly_stake(my_pct, price, bankroll):
-    """(stake in dollars, percent of bankroll) - quarter-Kelly, capped."""
+    """(stake in dollars, percent of bankroll) - quarter-Kelly, capped. The
+    shadow figure stored on each bet."""
     d = _clv().decimal_odds(price)
     if d is None or my_pct is None or not bankroll:
         return 0.0, 0.0
@@ -475,27 +501,110 @@ def kelly_stake(my_pct, price, bankroll):
     return round(float(bankroll) * frac, 2), round(frac * 100, 2)
 
 
-def current_bankroll():
+def bar(my_pct, row):
+    """Everything the bar decides for one estimate on one row:
+    {q, q_source, p_used, gap_pts, need_pts, ev_pct, clears, why}."""
+    q, src = row.get("sharp_pct"), "Pinnacle"
+    if q is None:
+        q, src = row.get("novig_pct"), "DraftKings"
+    out = {"q": q, "q_source": src, "p_used": None, "gap_pts": None, "need_pts": None,
+           "ev_pct": None, "clears": False, "why": ""}
+    if my_pct is None or q is None:
+        out["why"] = "no estimate" if my_pct is None else "no market price to measure against"
+        return out
+    q = float(q)
+    p_used = round(q + (1 - SHRINK) * (float(my_pct) - q), 1)
+    gap = round(p_used - q, 1)
+    need = round(max(GAP_MIN_PTS, q * GAP_MIN_REL / 100), 1)
+    ev = ev_pct(p_used, row.get("price"))
+    out.update(p_used=p_used, gap_pts=gap, need_pts=need, ev_pct=ev)
+    if not BET_RANGE[0] <= q <= BET_RANGE[1]:
+        out["why"] = (f"the market gives this side {q:.1f}% - bets are only taken between "
+                      f"{BET_RANGE[0]:g}% and {BET_RANGE[1]:g}%")
+    elif gap < need:
+        out["why"] = (f"your {float(my_pct):g}% counts as {p_used:g}% (pulled {SHRINK:.0%} of the way to "
+                      f"the market's {q:.1f}%, {src}) - {gap:+.1f} pts, and the bar is +{need:g}")
+    elif ev is None or ev <= 0:
+        out["why"] = f"at {p_used:g}% the price {row.get('price')} is not positive expected value ({ev})"
+    else:
+        out["clears"] = True
+        out["why"] = f"{p_used:g}% vs the market's {q:.1f}% ({src}): {gap:+.1f} pts, EV {ev:+.1f}%"
+    return out
+
+
+def evidence_stop():
+    """Why betting has stopped on the evidence, or None."""
     try:
-        v = json.loads((AGENT / "state" / "bankroll.json").read_text()).get("bankroll")
-        return float(v) if v is not None else None
+        r = _clv().report(lines_path=AGENT / "state" / "lines.json",
+                          journal_path=AGENT / "state" / "judgements.jsonl")
     except Exception:
         return None
+    clvs = [g.get("sharp_clv_pct") if g.get("sharp_clv_pct") is not None else g.get("clv_pct")
+            for g in r.get("graded", []) if g.get("status") == "bet"]
+    clvs = [c for c in clvs if c is not None]
+    if len(clvs) >= EVIDENCE_MIN_BETS and sum(clvs) / len(clvs) <= 0:
+        return (f"after {len(clvs)} bets the average closing-line value is "
+                f"{sum(clvs) / len(clvs):+.2f}% - no edge has shown up, so betting has "
+                f"stopped and the owner decides")
+    return None
+
+
+def cited_event(row, event_id, now=None, current_pct=None):
+    """(the fresh injury a bet cites, None) or (None, why it cannot be used).
+
+    A bet must point at something that happened - one of the row's
+    fresh_injuries, by id - and the price must not have moved toward the
+    side since it was reported. "My estimate likes them more than the line
+    does" is not an edge; that sentence was the whole rule, and it was prose."""
+    now = now or datetime.now(timezone.utc)
+    news = row.get("fresh_injuries") or []
+    if not event_id:
+        ids = ", ".join(f"{i.get('id')} ({i.get('team')} {i.get('player')}, {i.get('status')})" for i in news)
+        return None, ("a bet cites the news it is built on: --event ID, from this row's fresh_injuries"
+                      + (f". This row has: {ids}" if ids else ". This row has none, so it cannot be bet"))
+    hit = next((i for i in news if i.get("id") == event_id), None)
+    if hit is None:
+        return None, f"no fresh injury {event_id!r} on this row - `ace-judge.py list` shows each row's ids"
+    clv = _clv()
+    reported = clv.parse_start(hit.get("reported_utc"))
+    if reported is None:
+        return None, "that report has no time on it, so its age cannot be checked"
+    hours = (now - reported).total_seconds() / 3600
+    fresh_h = _load("ace_fetch_fresh", "ace-fetch.py").FRESH_INJURY_HOURS
+    if hours > fresh_h:
+        return None, f"that report is {hours:.1f} hours old - news is {fresh_h:g} hours or less"
+    lines = clv._read(AGENT / "state" / "lines.json", {})
+    entry = lines.get(clv.game_key(row.get("sport"), row.get("match"), row.get("starts_utc")))
+    ok, moved = clv.unpriced(entry, row.get("side") or "home",
+                             reported, current_pct if current_pct is not None else row.get("novig_pct"))
+    if not ok:
+        return None, moved
+    return dict(hit, moved_since_pts=moved), None
+
+
+def live_price(row):
+    """DraftKings' price for this row right now, re-fetched from ESPN, as
+    {price, novig_pct, at} - or None, and the bet uses the candidates file's
+    price with its time. ACE_NO_LIVE_PRICE=1 turns the fetch off (tests,
+    replays)."""
+    if os.environ.get("ACE_NO_LIVE_PRICE") or not row.get("event_id") or row.get("side") not in ("home", "away"):
+        return None
+    try:
+        f = _load("ace_fetch_live", "ace-fetch.py")
+        odds = f.odds_of(f.summary_of(row["sport"], row["event_id"]))
+    except Exception:
+        return None
+    side = row["side"]
+    if odds.get(f"moneyline_{side}") is None or odds.get(f"novig_{side}_pct") is None:
+        return None
+    return {"price": odds[f"moneyline_{side}"], "novig_pct": odds[f"novig_{side}_pct"],
+            "at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")}
+
 
 # Passing this many games or fewer by name means Ace studied them, so it must
 # say what it estimated. Above this it is sweeping the board with one shared
 # reason, where a single number would be a fiction.
 ESTIMATE_REQUIRED_UPTO = 2
-
-# How many estimates a cycle has to come home with. Requiring one per studied
-# game was unenforceable - nothing can see which files were opened - and a
-# sweep of the whole board with `rest` records none at all, which is what a
-# week of unanswerable "no bets" was made of.
-#
-# Three, because the instructions already say to study three or four. Ace
-# chooses which three; it is the choosing that makes them the studied ones.
-# A slate smaller than three asks only for what is on it.
-MIN_ESTIMATES = 3
 
 
 def estimates_in(ledger):
@@ -504,25 +613,105 @@ def estimates_in(ledger):
             if isinstance(r.get("my_pct"), (int, float))]
 
 
-def open_bet_count():
-    """How many bets are open right now, from the bankroll file."""
+# ------------------------------------------------------------------ blind
+
+def blind_sheet():
     try:
-        b = json.loads((AGENT / "state" / "bankroll.json").read_text())
+        return json.loads((AGENT / "data" / "blind.json").read_text())
     except Exception:
+        return None
+
+
+def blind_done(since=None):
+    """{game key: home pct} estimated blind since `since` (epoch seconds)."""
+    since = cycle_started() if since is None else since
+    out = {}
+    try:
+        text = (AGENT / "state" / "blind.jsonl").read_text()
+    except FileNotFoundError:
+        return out
+    for line in text.splitlines():
+        try:
+            j = json.loads(line)
+        except Exception:
+            continue
+        when = _clv().parse_start(j.get("utc"))
+        if since and (when is None or when.timestamp() < since):
+            continue
+        out[j.get("key")] = j.get("home_pct")
+    return out
+
+
+def blind_key(g):
+    return _clv().game_key(g.get("sport"), g.get("match"), g.get("starts_utc"))
+
+
+def blind_missing(since=None):
+    """The numbers on data/blind.json not yet estimated this cycle. [] when
+    there is no sheet - nothing can be owed on a sheet that does not exist."""
+    sheet = blind_sheet()
+    if not sheet:
+        return []
+    done = blind_done(since)
+    return [g["n"] for g in sheet.get("games") or [] if blind_key(g) not in done]
+
+
+def blind_gate():
+    missing = blind_missing()
+    if not missing:
+        return None
+    return (f"blind estimates first: {len(missing)} game(s) on data/blind.json have none this cycle "
+            f"({', '.join(str(n) for n in missing[:20])}{' ...' if len(missing) > 20 else ''}). "
+            f"Read data/blind.json - it has no prices on purpose - and give each game the HOME "
+            f"team's chance:\n  python3 ../../scripts/ace-judge.py blind \"1:55,2:41,3:62\"\n"
+            f"Prices are shown after that.")
+
+
+def cmd_blind(a):
+    sheet = blind_sheet()
+    if not sheet or not sheet.get("games"):
+        print("data/blind.json has no games - nothing to estimate this cycle.")
         return 0
-    return len(b.get("open_bets") or [])
+    games = {g["n"]: g for g in sheet["games"]}
+    got, bad = {}, []
+    for part in str(a.pairs).replace(" ", "").split(","):
+        if not part:
+            continue
+        try:
+            n, pct = part.split(":", 1)
+            n, pct = int(n), float(pct)
+        except ValueError:
+            bad.append(f"{part!r} is not number:percent")
+            continue
+        if n not in games:
+            bad.append(f"there is no game {n} - the sheet has 1-{len(games)}")
+        elif not 1 <= pct <= 99:
+            bad.append(f"game {n}: {pct:g}% - a chance is between 1 and 99")
+        else:
+            got[n] = pct
+    if bad:
+        print("nothing recorded:\n  " + "\n  ".join(bad), file=sys.stderr)
+        return 1
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    path = AGENT / "state" / "blind.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as f:
+        for n, pct in sorted(got.items()):
+            g = games[n]
+            f.write(json.dumps({"utc": stamp, "key": blind_key(g), "sport": g.get("sport"),
+                                "event_id": g.get("event_id"), "match": g.get("match"),
+                                "starts_utc": g.get("starts_utc"),
+                                "home": (g.get("home") or {}).get("abbr"),
+                                "away": (g.get("away") or {}).get("abbr"),
+                                "home_pct": pct}) + "\n")
+    left = blind_missing()
+    print(f"recorded {len(got)} blind estimate(s)." + (
+        f" Still owed: {', '.join(str(n) for n in left)}." if left else
+        " Every game on the sheet is estimated - `ace-judge.py list` shows the prices now."))
+    return 0
 
 
 def cmd_bet(a):
-    # The cap is checked here because this is where a bet becomes a recorded
-    # decision. Refusing after the fact, in the verifier, would mean failing a
-    # cycle for something it could have been stopped from doing.
-    open_now = open_bet_count()
-    if open_now >= MAX_OPEN_BETS:
-        print(f"{open_now} bets are already open and the cap is "
-              f"{MAX_OPEN_BETS}. Grade something before opening another, or "
-              f"pass this one.", file=sys.stderr)
-        return 1
     return record(a, "bet")
 
 
@@ -538,6 +727,10 @@ def cmd_rest(a):
         print(f"focus day ({focus['sport']}, {focus['games']} games): no sweeping - "
               f"judge each game with its own --my-pct. `ace-judge.py list` shows "
               f"which are left.", file=sys.stderr)
+        return 1
+    gate = blind_gate()
+    if gate:
+        print(gate, file=sys.stderr)
         return 1
     _, rows = load_candidates()
     led = load_ledger()
@@ -637,8 +830,8 @@ def _pct(v):
 
 def edge_line(r):
     """The numbers behind one verdict: the price, the market's no-vig chance,
-    Ace's own estimate and the gap between them - the edge the 8-point bar is
-    measured on. A row passed in a sweep has no estimate, and says so rather
+    Ace's own estimate, the gap between them, and what the bar counts the
+    estimate as. A row passed in a sweep has no estimate, and says so rather
     than showing a gap nobody worked out."""
     head = f"price {r.get('price')}  market {_pct(r.get('novig_pct'))}"
     if r.get("my_pct") is None:
@@ -647,6 +840,7 @@ def edge_line(r):
     ev = r.get("ev_pct")
     return (head + f"  Ace {_pct(r.get('my_pct'))}  edge "
             + ("?" if edge is None else f"{float(edge):+.1f} pts")
+            + ("" if r.get("p_used") is None else f"  counts as {_pct(r['p_used'])}")
             + ("" if ev is None else f"  EV {float(ev):+.1f}%"
                + (" (clears the bar)" if r.get("clears_bar") else ""))
             + (f"  stake {r['stake']:g}" if r.get("stake") is not None else ""))
@@ -665,7 +859,12 @@ def main():
         s.add_argument("--my-pct", type=float, dest="my_pct")
         s.add_argument("--why", default="")
         s.add_argument("--stake", type=float)
+        s.add_argument("--event", help="the id of the fresh injury a bet is built on")
         s.set_defaults(fn=fn)
+
+    bl = sub.add_parser("blind", help="home-win chances from data/blind.json, before any price")
+    bl.add_argument("pairs", help='"1:55,2:41,..." - game number : home team\'s chance')
+    bl.set_defaults(fn=cmd_blind)
 
     r = sub.add_parser("rest")
     r.add_argument("--my-pct", type=float, dest="my_pct")

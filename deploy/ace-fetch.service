@@ -7,6 +7,8 @@ Type=oneshot
 User=root
 Environment=HOME=/root
 WorkingDirectory=/root/ecosystem
-ExecStart=/usr/bin/python3 /root/ecosystem/scripts/ace-fetch.py
+# One lock with ace-close.service: both rewrite the per-game context files,
+# and two writers on one file at once can leave half of each.
+ExecStart=/usr/bin/flock /run/ace-fetch.lock /usr/bin/python3 /root/ecosystem/scripts/ace-fetch.py
 StandardOutput=journal
 StandardError=journal

@@ -126,6 +126,15 @@ agents/emily/shop/
 agents/ace/state/lines.json
 agents/ace/state/lines.tmp
 agents/ace/state/judgements.jsonl
+# Kept by code since 2026-10-01: the bets, results, blind estimates, the
+# no-AI bettors and the Pinnacle credit count. Data on the droplet, not repo.
+agents/ace/state/bets.jsonl
+agents/ace/state/results.json
+agents/ace/state/results.tmp
+agents/ace/state/bankroll.tmp
+agents/ace/state/blind.jsonl
+agents/ace/state/baselines.jsonl
+agents/ace/state/sharp-usage.json
 
 # Clipper - runtime data (sources, clips, database, credentials) and its venv.
 clipper/var/
