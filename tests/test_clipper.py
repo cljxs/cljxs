@@ -2094,14 +2094,27 @@ class DropboxPickup(EndToEnd):
         self.give_words(1)
         self.assertEqual(self.cli("run")[0], 0)
         # Bug guarded: the moment finder would pick its "best 20-30 s" of a
-        # clip somebody already cut, dropping the setup or the payoff.
+        # clip somebody already cut, as if it were an episode. A clip is one
+        # candidate, cut by trim.py around its own moment.
         cands = self.conn.execute("SELECT * FROM candidates").fetchall()
         self.assertEqual(len(cands), 1)
-        self.assertEqual((cands[0]["start"], cands[0]["selected"], cands[0]["scorer"]), (0, 1, "whole"))
-        self.assertAlmostEqual(cands[0]["end"], v["duration"], places=2)
+        c = cands[0]
+        self.assertEqual((c["selected"], c["scorer"]), (1, trim.SCORER))
+        self.assertTrue(0 <= c["start"] < c["end"] <= v["duration"] + 0.01)
         info = media.probe(self.home / "clips" / "1" / "01.mp4")
         self.assertEqual((info["width"], info["height"]), (1080, 1920))
-        self.assertAlmostEqual(info["duration"], 25, delta=0.3)
+        self.assertAlmostEqual(info["duration"], c["end"] - c["start"], delta=0.3)
+
+    def test_with_trimming_off_a_clip_is_kept_whole(self):
+        cfg = json.loads((self.home / "config.json").read_text())
+        (self.home / "config.json").write_text(json.dumps(dict(cfg, trim_clips=False)))
+        self.pick()
+        self.words = [x for x in WORDS if x["end"] <= 24.0]
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        c = self.conn.execute("SELECT * FROM candidates").fetchone()
+        self.assertEqual((c["start"], c["scorer"]), (0, "whole"))
+        self.assertAlmostEqual(media.probe(self.home / "clips" / "1" / "01.mp4")["duration"], 25, delta=0.3)
 
     def test_each_file_once_and_new_content_again(self):
         self.pick()
@@ -2287,3 +2300,79 @@ class WatermarkSavedAsWebP(EndToEnd):
         self.assertEqual(code, 2)
         self.assertIn("not an image Clip can read", said)
         self.assertEqual(list((self.home / "watermarks").glob("*")), [], "nothing half-written left behind")
+
+
+# ---------------------------------------------------------------- trimming a clip to its moment
+
+from clipper import trim  # noqa: E402
+
+
+def say(t, text):
+    """A sentence as transcript words, 0.35 s a word."""
+    return [{"start": round(t + i * 0.35, 2), "end": round(t + i * 0.35 + 0.3, 2), "word": " " + w, "p": 0.9}
+            for i, w in enumerate(text.split())]
+
+
+STREAM = [(3.2, "Okay chat listen to this."), (6.5, "So he walks in the studio."),
+          (10.0, "Nobody knew who he was."), (13.5, "And then he grabs the mic."),
+          (17.0, "He starts rapping over the beat."), (20.5, "Bro what is he doing!"),
+          (22.5, "No way no way."), (24.5, "Oh my god."), (27.5, "That was crazy."),
+          (31.0, "Anyway back to the beats."), (35.0, "Let me load the next one."),
+          (39.0, "This one is hard."), (42.0, "Okay.")]
+CALM = [(3.2, "Okay chat listen to this."), (10.0, "Here is the next beat."),
+        (20.0, "It has a nice bassline."), (30.0, "Let me turn it up."), (42.0, "Okay.")]
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class TrimToTheMoment(unittest.TestCase):
+    """"Can we figure out a way for Clip to trim the videos correctly? Based
+    around the funny or crazy thing that happened?" (2026-10-01)
+
+    A 50 s clip as a stream sounds: dead air, talking, a burst of yelling,
+    talking, dead air. The loudness is measured by the real ffmpeg path
+    (media.loudness) from generated audio; the words are written to match."""
+
+    def loudness(self, burst=(22, 26)):
+        with tempfile.TemporaryDirectory() as d:
+            wav = Path(d) / "a.wav"
+            expr = (f"if(between(t,3,45),1,0)*if(between(t,{burst[0]},{burst[1]}),0.6,0.03)"
+                    f"*sin(2*PI*220*t)") if burst else "if(between(t,3,45),0.03,0)*sin(2*PI*220*t)"
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                            f"aevalsrc='{expr}':s=16000:d=50", str(wav)], check=True)
+            return media.loudness(wav)
+
+    def words(self, script):
+        return [w for t, s in script for w in say(t, s)]
+
+    def test_setup_moment_and_reaction(self):
+        start, end, why = trim.pick(self.words(STREAM), self.loudness(), 50.0, CFG)
+        self.assertEqual((start, end), (9.7, 29.3))
+        self.assertIn("the moment at 0:22", why[0])
+        # it opens on a whole sentence and keeps "That was crazy."
+        self.assertEqual(start, round(10.0 - trim.LEAD, 2))
+        self.assertEqual(end, round(28.5 + trim.TAIL, 2))
+
+    def test_it_does_not_open_on_and_or_so(self):
+        # The moment at 25: the sentence nearest 12 s before it is "And then
+        # he grabs the mic." - a clip that opens on "And" opens mid-thought.
+        start, end, why = trim.pick(self.words(STREAM), self.loudness((25, 29)), 50.0, CFG)
+        self.assertEqual(start, round(10.0 - trim.LEAD, 2))
+
+    def test_no_moment_only_loses_the_dead_air(self):
+        start, end, why = trim.pick(self.words(CALM), self.loudness(None), 50.0, CFG)
+        self.assertEqual((start, end), (round(3.2 - trim.LEAD, 2), round(42.3 + trim.TAIL, 2)))
+        self.assertIn("only the dead air", why[0])
+
+    def test_without_a_loud_burst_the_strongest_words_stand_in(self):
+        start, end, why = trim.pick(self.words(STREAM), self.loudness(None), 50.0, CFG)
+        self.assertIn("strongest reaction in what is said", why[0])
+        self.assertLess(end, 42.3, "not just the dead air: cut around 'That was crazy'")
+
+    def test_too_short_takes_more_setup(self):
+        words = self.words([(5.0, "Watch this guy right here."), (25.5, "Go."), (27.0, "Yes.")])
+        start, end, why = trim.pick(words, self.loudness((30, 32)), 50.0, CFG)
+        self.assertGreaterEqual(end - start, trim.MIN_LENGTH)
+        self.assertEqual(start, round(5.0 - trim.LEAD, 2))
+
+    def test_no_words_is_kept_whole(self):
+        self.assertEqual(trim.pick([], self.loudness(), 50.0, CFG)[:2], (0.0, 50.0))

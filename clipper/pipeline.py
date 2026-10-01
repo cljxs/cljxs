@@ -13,7 +13,7 @@ import json
 import traceback
 from pathlib import Path
 
-from clipper import campaign, captions, db, media, moments, postcopy, render, score, transcribe
+from clipper import campaign, captions, db, media, moments, postcopy, render, score, transcribe, trim
 
 MAX_ATTEMPTS = 3
 
@@ -74,16 +74,22 @@ def already_a_clip(cfg, video):
 def stage_find(conn, paths, cfg, video):
     words = words_of(conn, paths, video)
     if already_a_clip(cfg, video):
+        # Cut down to its moment (trim.py), or used whole when trimming is off.
+        if cfg["trim_clips"]:
+            start, end, why = trim.pick(words, loudness_of(paths, video), video["duration"], cfg)
+            scorer = trim.SCORER
+        else:
+            start, end, why, scorer = 0.0, video["duration"], ["trimming is off: used whole"], "whole"
+        text = "".join(w["word"] for w in words if w["start"] >= start - 0.01 and w["end"] <= end + 0.01)
         with conn:
             conn.execute("DELETE FROM clips WHERE video_id = ?", (video["id"],))
             conn.execute("DELETE FROM candidates WHERE video_id = ?", (video["id"],))
             conn.execute(
                 "INSERT INTO candidates (video_id, start, end, text, score, scorer, features, "
-                "reasons, selected) VALUES (?, 0, ?, ?, 100, 'whole', '{}', ?, 1)",
-                (video["id"], video["duration"], "".join(w["word"] for w in words).strip(),
-                 db.as_json([f"already a clip ({video['duration']:.0f}s): used whole"])))
-        db.event(conn, "find", f"{video['duration']:.0f}s - already a clip, used whole",
-                 video_id=video["id"])
+                "reasons, selected) VALUES (?, ?, ?, ?, 100, ?, '{}', ?, 1)",
+                (video["id"], start, end, text.strip(), scorer, db.as_json(why)))
+        db.event(conn, "find", f"{video['duration']:.0f}s - already a clip; {clock(start)}-{clock(end)}: "
+                               f"{'; '.join(why)}", video_id=video["id"])
         return "found"
     loud = loudness_of(paths, video)
     src = conn.execute("SELECT * FROM sources WHERE id = ?", (video["source_id"],)).fetchone()

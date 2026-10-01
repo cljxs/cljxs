@@ -248,9 +248,25 @@ those two stay with you. What happens:
 3. **You download each clip**: dashboard.twitch.tv → Content → Clips →
    the clip → Share → Download → Landscape. It lands in Files → Downloads
    on the iPad. Move it into the source's Dropbox folder (next section).
-4. **Clip picks it up** within 15 minutes and renders it whole, adding the
-   watermark and captions. A video of 60 seconds or less is treated as
-   already a clip, so it isn't searched for a "best part".
+4. **Clip picks it up** within 15 minutes, trims it to its moment and adds
+   the watermark and captions. A video of 60 seconds or less counts as a clip
+   someone already cut, so it isn't searched like an episode. Instead it's
+   cut around its moment (`clipper/trim.py`):
+   - **The moment** is the stretch where the clip gets clearly louder than
+     its own usual level (laughing, yelling, a reaction). With no loud burst,
+     the strongest exclamation in what's said ("no way", "oh my god")
+     stands in.
+   - **The start** is the setup: a whole sentence about 12 seconds before the
+     moment, never opening on "and", "so" or "he" when another start is in
+     reach.
+   - **The end** comes after the reaction: once the noise settles, at the end
+     of the sentence being said.
+   - **No moment at all:** only the dead air at either end is cut.
+
+   The clip's reasons in the studio say where the moment was and what was
+   cut. To use clips whole instead, set `"trim_clips": false` in
+   `clipper/var/config.json`. The numbers to tune are at the top of
+   `trim.py`; they haven't been tried on a real Plaqueboymax clip yet.
 
 Setup, once:
 

@@ -41,6 +41,11 @@ DEFAULTS = {
     # punctuation - Whisper leaves plenty out.
     "sentence_pause_seconds": 0.8,
 
+    # A video no longer than max_clip_seconds is one somebody already cut (a
+    # Twitch clip). On: it is trimmed to its moment - setup, the loud bit,
+    # the reaction (trim.py). Off: it is used whole.
+    "trim_clips": True,
+
     # --- editing ------------------------------------------------------------
     # "center": crop the middle of the frame (one speaker, centred).
     # "blur":   whole frame on a blurred copy of itself (wide shots, two people).
