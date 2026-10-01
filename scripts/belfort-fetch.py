@@ -19,7 +19,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -54,17 +54,28 @@ HISTORY_BARS = 90
 # change a few times a day.
 NEWS_PER_NAME = 6
 NEWS_EVERY_SECONDS = 55 * 60
+# Earnings dates, from Nasdaq's public calendar (no key; checked 2026-10-01:
+# TSM on the 15th, INTC the 22nd ...). One request a weekday for the next
+# EARNINGS_DAYS, twice a day - dates move rarely and 15 requests every ten
+# minutes would be rude.
+EARNINGS_URL = "https://api.nasdaq.com/api/calendar/earnings?date={day}"
+# Nasdaq holds a request open until it times out when the user agent names a
+# bot (seen 2026-10-01: "compatible; belfort-fetch" stalled every day; a
+# plain "Mozilla/5.0" was answered at once).
+EARNINGS_UA = "Mozilla/5.0"
+EARNINGS_DAYS = 21
+EARNINGS_EVERY_SECONDS = 12 * 3600
 
 
 def log(msg):
     print(f"[belfort-fetch {datetime.now(timezone.utc):%H:%M:%S}] {msg}", flush=True)
 
 
-def http_get(url, retries=2):
+def http_get(url, retries=2, ua=None):
     last = None
     for attempt in range(retries + 1):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            req = urllib.request.Request(url, headers={"User-Agent": ua or UA, "Accept": "application/json, */*"})
             ctx = ssl.create_default_context()
             with urllib.request.urlopen(req, timeout=TIMEOUT, context=ctx) as r:
                 return r.read()
@@ -127,6 +138,17 @@ def macd(values, fast=12, slow=26, signal=9):
     return line[-1], sig[-1], line[-1] - sig[-1]
 
 
+def atr(highs, lows, closes, n=14):
+    """Average true range over the last n days: how far the price usually
+    moves in a day, gaps included. belfort-trade.py sets stops and sizes from
+    it, so a wild name gets room and a calm one does not over-risk."""
+    trs = [max(h - l, abs(h - pc), abs(l - pc))
+           for h, l, pc in zip(highs[1:], lows[1:], closes[:-1])]
+    if len(trs) < n:
+        return None
+    return sum(trs[-n:]) / n
+
+
 def r2(x):
     return None if x is None else round(x, 2)
 
@@ -135,17 +157,20 @@ def fetch_one(sym):
     raw = http_get(CHART_URL.format(sym=sym))
     payload = json.loads(raw)
     result = payload["chart"]["result"][0]
-    closes_raw = result["indicators"]["quote"][0]["close"]
+    bars = result["indicators"]["quote"][0]
     stamps = result["timestamp"]
-    closes, dates = [], []
-    for ts, c in zip(stamps, closes_raw):
-        if c is not None:
+    closes, dates, highs, lows = [], [], [], []
+    for ts, c, h, l in zip(stamps, bars["close"], bars.get("high") or [], bars.get("low") or []):
+        if c is not None and h is not None and l is not None:
             closes.append(float(c))
+            highs.append(float(h))
+            lows.append(float(l))
             dates.append(datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d"))
     if len(closes) < 60:
         raise ValueError(f"only {len(closes)} usable closes")
 
     price = closes[-1]
+    a14 = atr(highs, lows, closes)
     s20, s50 = sma(closes, 20), sma(closes, 50)
     r14 = rsi(closes, 14)
     m_line, m_sig, m_hist = macd(closes)
@@ -175,6 +200,8 @@ def fetch_one(sym):
         "mechanical_score": sum([trend_ok, rsi_ok, macd_ok]),
         "last_bar": dates[-1],
         "history": [[d, r2(c)] for d, c in zip(dates[-HISTORY_BARS:], closes[-HISTORY_BARS:])],
+        "atr14": r2(a14),
+        "atr_pct": r2(a14 / price * 100) if a14 and price else None,
     }
 
 
@@ -231,6 +258,41 @@ def fetch_news(symbols, get=None, gap=REQUEST_GAP):
         if gap and i < len(symbols) - 1:
             time.sleep(gap)
     return out
+
+
+def fetch_earnings(symbols, today=None, get=None, gap=REQUEST_GAP):
+    """{symbol: "YYYY-MM-DD"} - the next report date of each name that
+    reports in the next EARNINGS_DAYS. None if no day could be read at all,
+    so a failed fetch never reads as "nobody reports"."""
+    get = get or (lambda url: http_get(url, retries=0, ua=EARNINGS_UA))
+    today = today or et_time.eastern_now().date()
+    out, read = {}, 0
+    for i in range(EARNINGS_DAYS):
+        day = today + timedelta(days=i)
+        if day.weekday() >= 5:
+            continue
+        try:
+            rows = ((json.loads(get(EARNINGS_URL.format(day=day))).get("data") or {}).get("rows")) or []
+            read += 1
+        except Exception as exc:
+            log(f"earnings {day}: {exc}")
+            continue
+        for row in rows:
+            sym = str(row.get("symbol") or "").upper()
+            if sym in symbols and sym not in out:
+                out[sym] = str(day)
+        if gap:
+            time.sleep(gap)
+    return out if read else None
+
+
+def file_is_fresh(path, seconds, now=None):
+    try:
+        d = json.loads(path.read_text())
+        return (now or time.time()) - datetime.strptime(
+            d["asof_utc"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp() < seconds
+    except Exception:
+        return False
 
 
 def news_is_fresh(path, now=None):
@@ -301,6 +363,16 @@ def main():
                 "asof_utc": started.strftime("%Y-%m-%d %H:%M:%S"),
                 "symbols": UNIVERSE,
                 "headlines": news,
+            }, indent=1) + "\n")
+
+    earnings_file = DATA_DIR / "earnings.json"
+    if not file_is_fresh(earnings_file, EARNINGS_EVERY_SECONDS):
+        dates = fetch_earnings(UNIVERSE)
+        if dates is not None:
+            earnings_file.write_text(json.dumps({
+                "asof_utc": started.strftime("%Y-%m-%d %H:%M:%S"),
+                "source": "Nasdaq earnings calendar", "days_ahead": EARNINGS_DAYS,
+                "dates": dates,
             }, indent=1) + "\n")
 
     # Eastern, not UTC. The 09:35 ET open is 13:35 UTC, which looks like the

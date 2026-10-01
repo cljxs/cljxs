@@ -54,6 +54,7 @@ EQUITY = ROOT / "agents" / "belfort" / "state" / "equity.jsonl"
 QUOTES = ROOT / "agents" / "belfort" / "data" / "quotes.json"
 NEWS = ROOT / "agents" / "belfort" / "data" / "news.json"
 CANDIDATES = ROOT / "agents" / "belfort" / "data" / "candidates.json"
+EARNINGS = ROOT / "agents" / "belfort" / "data" / "earnings.json"
 
 MAX_POSITION_PCT = 25.0
 MIN_CASH_PCT = 5.0          # the owner lowered it from 15% on 2026-10-01
@@ -64,7 +65,24 @@ TAKE_PROFIT = 25.0          # close
 PROTECT_AT = 8.0            # once a position has been up this much...
 TRAIL = 10.0                # ...its stop follows the highest price, this far below,
                             #    and never below what was paid
-DEAD_DAYS, DEAD_BAND = 5, 2.0   # 5+ trading days within +/-2%: dead money
+# Dead money: 8+ trading days within +/-2% AND behind QQQ over the same days.
+# Was 5 days and no market comparison; a swing trade often goes sideways
+# for a week before it moves, and flat in a flat market is not dead.
+DEAD_DAYS, DEAD_BAND = 8, 2.0
+
+# Stops and sizes from each name's own volatility (ATR, from the fetcher):
+# the stop sits ATR_MULT average days' moves under the price paid, never
+# nearer than STOP_MIN_PCT or further than STOP_MAX_PCT; a new buy may lose
+# at most RISK_PER_TRADE_PCT of the portfolio if that stop is hit. A flat
+# -10% was a coin-flip on SMCI and a big loss on MSFT. Positions bought
+# before this keep STOP_LOSS and TRAIL.
+ATR_MULT = 2.0
+STOP_MIN_PCT, STOP_MAX_PCT = 5.0, 15.0
+RISK_PER_TRADE_PCT = 1.0
+
+# No new buy within this many trading days of the name's earnings report:
+# an overnight earnings gap goes straight through any stop.
+EARNINGS_BLACKOUT_DAYS = 5
 
 # Names that move together, so a cap on one name is not a cap on one bet:
 # NVDA, AMD and MU at 20% each is 60% in one trade. A name not listed is its
@@ -177,11 +195,29 @@ def quote(symbol):
         return None
 
 
-def exit_check(pos, q):
+def risk_pct(q):
+    """How far under the price a new position's stop goes, in percent:
+    ATR_MULT days' average range, kept between STOP_MIN_PCT and STOP_MAX_PCT.
+    None when the quote has no ATR yet."""
+    if not q or not q.get("atr14") or not q.get("price"):
+        return None
+    raw = ATR_MULT * float(q["atr14"]) / float(q["price"]) * 100
+    return round(min(STOP_MAX_PCT, max(STOP_MIN_PCT, raw)), 2)
+
+
+def since(q_or_hist, day):
+    """The first daily close on or after `day`, from a quote's history."""
+    hist = q_or_hist.get("history") if isinstance(q_or_hist, dict) else q_or_hist
+    return next((float(c) for d, c in hist or [] if d >= day), None)
+
+
+def exit_check(pos, q, qqq=None):
     """(rule, reason, stop_price) for one open position against its quote;
-    rule is None when nothing is due. stop_price is where it is sold: the
-    -10% stop, or - once it has been up 8% - TRAIL below its highest price,
-    never below what was paid."""
+    rule is None when nothing is due. The stop is the position's own
+    distance (risk_pct, set from volatility when bought; -10% for older
+    positions) under what was paid - or, once it has been up 8%, that far
+    under its highest price, never below what was paid. qqq is QQQ's quote,
+    for the dead-money comparison."""
     cb = float(pos.get("cost_basis") or 0)
     if not q or not cb or q.get("price") is None:
         return None, "no quote", None
@@ -195,20 +231,26 @@ def exit_check(pos, q):
     # in floating point, and a stop at exactly -10% would never fire.
     pnl = round((px / cb - 1) * 100, 6)
     peak_pnl = round((peak / cb - 1) * 100, 6)
-    stop = round(cb * (1 + STOP_LOSS / 100), 2)
+    dist = float(pos.get("risk_pct") or -STOP_LOSS)
+    trail = float(pos.get("risk_pct") or TRAIL)
+    stop = round(cb * (1 - dist / 100), 2)
     if peak_pnl >= PROTECT_AT:
-        stop = round(max(cb, peak * (1 - TRAIL / 100)), 2)
+        stop = round(max(cb, peak * (1 - trail / 100)), 2)
     held = sum(1 for d, _ in history if d > entry_day)
 
-    if pnl <= STOP_LOSS:
-        return "stop", f"STOP LOSS: {pnl:+.1f}% from cost ${cb:,.2f}", stop
+    if pnl <= -dist:
+        return "stop", f"STOP LOSS: {pnl:+.1f}% from cost ${cb:,.2f} (its stop: -{dist:g}%)", stop
     if pnl >= TAKE_PROFIT:
         return "take", f"TAKE PROFIT: {pnl:+.1f}% from cost ${cb:,.2f}", stop
     if peak_pnl >= PROTECT_AT and px <= stop:
         return "protect", (f"PROTECT GAIN: was up {peak_pnl:+.1f}% (high ${peak:,.2f}), now {pnl:+.1f}%, "
                            f"at or under its stop ${stop:,.2f}"), stop
     if held >= DEAD_DAYS and abs(pnl) <= DEAD_BAND:
-        return "dead", f"DEAD MONEY: {pnl:+.1f}% after {held} trading days", stop
+        base = since(qqq, entry_day) if qqq else None
+        mkt = round((float(qqq["price"]) / base - 1) * 100, 6) if base and qqq.get("price") else None
+        if mkt is not None and pnl < mkt:
+            return "dead", (f"DEAD MONEY: {pnl:+.1f}% after {held} trading days, "
+                            f"while QQQ moved {mkt:+.1f}%"), stop
     return None, f"{pnl:+.1f}%, stop ${stop:,.2f}", stop
 
 
@@ -227,10 +269,82 @@ def exits_due(p):
     for pos in p["positions"]:
         if float(pos.get("shares") or 0) <= 0:
             continue
-        rule, reason, _ = exit_check(entry_of(p, pos), quote(pos["symbol"]))
+        rule, reason, _ = exit_check(entry_of(p, pos), quote(pos["symbol"]), benchmark("QQQ"))
         if rule:
             out.append((pos["symbol"], rule, reason))
     return out
+
+
+def benchmark(symbol):
+    return (quotes_doc().get("benchmarks") or {}).get(symbol)
+
+
+def trading_days_until(day, today=None):
+    """Weekdays from today (0) to `day`, or None if it has passed."""
+    from datetime import date, timedelta
+    if today is None:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import et_time      # the Eastern date; after 8pm ET, UTC is already tomorrow
+        today = et_time.eastern_now().date()
+    target = date.fromisoformat(day)
+    if target < today:
+        return None
+    n, d = 0, today
+    while d < target:
+        d += timedelta(days=1)
+        if d.weekday() < 5:
+            n += 1
+    return n
+
+
+def earnings_soon(symbol, today=None):
+    """(date, trading days away) when the name reports within the blackout,
+    else None. No earnings.json yet: None - a missing calendar must not stop
+    every buy, and says so in `show`."""
+    try:
+        day = json.loads(EARNINGS.read_text())["dates"].get(symbol.upper())
+    except Exception:
+        return None
+    if not day:
+        return None
+    n = trading_days_until(day, today)
+    return (day, n) if n is not None and n <= EARNINGS_BLACKOUT_DAYS else None
+
+
+def size(p, symbol, state=None):
+    """(shares, why) - the most of `symbol` a buy may take now: the
+    risk budget at its stop, the position cap (smaller when the regime is
+    mixed), cash above the floor, and the cluster's room. 0 with the reason
+    when none."""
+    sym = symbol.upper()
+    q = quote(sym)
+    if not q or not q.get("price"):
+        return 0, f"no price for {sym}"
+    px = float(q["price"])
+    state, why = state or regime()
+    if state == "unfavorable":
+        return 0, f"the regime is unfavourable ({why})"
+    soon = earnings_soon(sym)
+    if soon:
+        return 0, f"{sym} reports earnings {soon[0]}, {soon[1]} trading day(s) away"
+    mv = market_value(p)
+    cap = MAX_POSITION_PCT if state == "favorable" else NEUTRAL_POSITION_PCT
+    held = position(p, sym)
+    held_value = float(held["shares"]) * px if held else 0.0
+    group = cluster_of(sym)
+    in_group = sum(float(x["shares"]) * float(last_price(x["symbol"], x.get("cost_basis")) or 0)
+                   for x in p["positions"] if float(x.get("shares") or 0) > 0 and cluster_of(x["symbol"]) == group)
+    limits = {"position cap": mv * cap / 100 - held_value,
+              "cash floor": float(p["cash"]) - mv * MIN_CASH_PCT / 100,
+              f"{group} cluster": mv * CLUSTER_CAP_PCT / 100 - in_group}
+    r = risk_pct(q)
+    if r:
+        limits[f"1% risk at a -{r:g}% stop"] = mv * RISK_PER_TRADE_PCT / 100 / (r / 100)
+    name, room = min(limits.items(), key=lambda kv: kv[1])
+    shares = max(0, int(room // px))
+    if not shares:
+        return 0, f"no room left under the {name}"
+    return shares, f"{shares} shares of {sym} at ${px:,.2f}, held to the {name}" + (f"; stop -{r:g}%" if r else "")
 
 
 def last_price(symbol, fallback=None):
@@ -341,6 +455,11 @@ def buy(p, symbol, shares, price=None, reason="", score=0, cited=None, state=Non
     if state == "unfavorable":
         print(f"REFUSED: the market regime is unfavourable ({why}) - no new buys.", file=sys.stderr)
         return 1
+    soon = earnings_soon(sym)
+    if soon:
+        print(f"REFUSED: {sym} reports earnings on {soon[0]}, {soon[1]} trading day(s) away - no new "
+              f"buys within {EARNINGS_BLACKOUT_DAYS}.", file=sys.stderr)
+        return 1
 
     cost = shares * float(px)
     if cost > float(p["cash"]):
@@ -374,6 +493,14 @@ def buy(p, symbol, shares, price=None, reason="", score=0, cited=None, state=Non
               f"cap is {CLUSTER_CAP_PCT:.0f}% for one cluster.", file=sys.stderr)
         return 1
 
+    r = risk_pct(quote(sym))
+    if r and mv and cost * r / 100 > mv * RISK_PER_TRADE_PCT / 100 + 0.01:
+        print(f"REFUSED: {shares} {sym} would lose ${cost * r / 100:,.2f} at its stop (-{r:g}%, from its "
+              f"volatility) - the most a buy may risk is {RISK_PER_TRADE_PCT:g}% of the portfolio, "
+              f"${mv * RISK_PER_TRADE_PCT / 100:,.2f}: {int(mv * RISK_PER_TRADE_PCT / r // float(px))} shares. "
+              f"`belfort-trade.py size {sym}` gives the most allowed.", file=sys.stderr)
+        return 1
+
     p["cash"] = round(float(p["cash"]) - cost, 2)
     if existing and float(existing.get("shares") or 0) > 0:
         old_sh = float(existing["shares"])
@@ -384,7 +511,7 @@ def buy(p, symbol, shares, price=None, reason="", score=0, cited=None, state=Non
         p["positions"] = [x for x in p["positions"] if x.get("symbol", "").upper() != sym]
         p["positions"].append({"symbol": sym, "shares": shares, "cost_basis": round(float(px), 2),
                                "entry_utc": now(), "reason": reason or "", "score": score,
-                               "catalyst": cited, "regime": state})
+                               "catalyst": cited, "regime": state, "risk_pct": r})
     p["trades"].append({"cycle": p.get("cycle_count", 0), "side": "BUY", "symbol": sym,
                         "shares": shares, "price": round(float(px), 2),
                         "notional": round(cost, 2), "utc": now(), "reason": reason or "",
@@ -478,8 +605,8 @@ def shadow_turn(p):
         sym, px = c["symbol"], float(c["price"])
         if position(p, sym) or px <= 0:
             continue
-        room = float(p["cash"]) - mv * MIN_CASH_PCT / 100
-        shares = int(min(mv * pct / 100, room) // px)
+        # Belfort's usual ~20%, or less: whatever size() allows
+        shares = min(int(mv * pct / 100 // px), size(p, sym, (state, why))[0])
         if shares > 0 and buy(p, sym, shares, None, "SHADOW: top candidate by MACD histogram",
                               0, None, (state, why)) == 0:
             return did + [f"bought {shares} {sym} ({state})"]
@@ -488,6 +615,13 @@ def shadow_turn(p):
 
 def cmd_shadow(a):
     p = load_shadow()
+    if a.exits_only:
+        did = [f"sold {sym}: {reason}" for sym, _, reason in exits_due(p)
+               if sell(p, sym, "all", None, reason) == 0] or ["nothing due"]
+        save(p, SHADOW)
+        log_equity(p, "shadow")
+        print("shadow book, midday exits: " + "; ".join(did))
+        return 0
     did = shadow_turn(p)
     p["cycle_count"] = int(p.get("cycle_count") or 0) + 1
     p["market_value"] = round(market_value(p), 2)
@@ -614,6 +748,12 @@ def cmd_stats(a):
     return 0
 
 
+def cmd_size(a):
+    shares, why = size(load(), a.symbol)
+    print(why if shares else f"0 shares of {a.symbol.upper()}: {why}")
+    return 0
+
+
 def cmd_exits(a):
     """The sell rules, checked in code. Without --apply it says what is due;
     with it, it sells each one, with the rule as the trade's reason."""
@@ -659,6 +799,13 @@ def summary(p):
         lines.append("clusters  " + ", ".join(f"{g} {v / mv * 100:.0f}%" for g, v in
                                               sorted(groups.items(), key=lambda kv: -kv[1]))
                      + f"  (cap {CLUSTER_CAP_PCT:.0f}% each)")
+    try:
+        dates = json.loads(EARNINGS.read_text())["dates"]
+        soon = sorted((d, s) for s, d in dates.items() if earnings_soon(s))
+        lines.append("earnings  " + (", ".join(f"{s} {d}" for d, s in soon) + " - no new buys in these"
+                                     if soon else f"none within {EARNINGS_BLACKOUT_DAYS} trading days"))
+    except Exception:
+        lines.append("earnings  no calendar yet (data/earnings.json) - the blackout is not being checked")
     state, why = regime()
     lines.append(f"regime    {state} - {why}"
                  + {"favorable": "", "unfavorable": ": no new buys"}.get(state, f": new buys up to {NEUTRAL_POSITION_PCT:.0f}%"))
@@ -755,7 +902,12 @@ def main():
     b.add_argument("--headline", help="the id of the news.json headline that is the catalyst")
     b.set_defaults(fn=cmd_buy)
 
-    sub.add_parser("shadow").set_defaults(fn=cmd_shadow)
+    sh = sub.add_parser("shadow")
+    sh.add_argument("--exits-only", action="store_true", help="the midday check: sell what is due, buy nothing")
+    sh.set_defaults(fn=cmd_shadow)
+    z = sub.add_parser("size", help="the most of a name a buy may take now, and what limits it")
+    z.add_argument("symbol")
+    z.set_defaults(fn=cmd_size)
     st = sub.add_parser("stats")
     st.add_argument("--json", action="store_true")
     st.set_defaults(fn=cmd_stats)

@@ -31,13 +31,21 @@ python3 ../../scripts/belfort-trade.py buy MRVL 8 --headline 3f9a1c2e --reason "
 python3 ../../scripts/belfort-trade.py mark
 ```
 
+**How many shares:** run `python3 ../../scripts/belfort-trade.py size MRVL`
+first. It prints the most a buy may take now and which limit sets it - most
+often the risk budget: a new position may lose at most **1% of the
+portfolio** if its stop is hit, and the stop is set from that name's own
+volatility. Buy that many or fewer.
+
 `shares` may be `all` on a sell. Omit `--price` and it uses the price in
 `quotes.json`, which is what you want; it will refuse a name it has no quote
 for rather than invent one. It also refuses to spend cash you do not have,
 sell shares you do not hold, put more than 25% in one name, leave less than
 5% cash, put more than 40% in one cluster of related names, hold more than 8
-names, buy at all while the market regime is unfavourable, or buy more than
-10% of the portfolio in one name while it is mixed - a refusal changes
+names, buy at all while the market regime is unfavourable, buy more than
+10% of the portfolio in one name while it is mixed, buy a name that reports
+earnings within 5 trading days, or buy more than the 1% risk budget allows
+- a refusal changes
 nothing and tells you why. `show` prints the regime and your clusters. Read
 it and adjust; do not work around it.
 
@@ -89,15 +97,21 @@ and do not write that file by hand even to "fix" it.
 
 ## Exit rules — applied by code before every cycle
 
-`belfort-trade.py exits --apply` runs before you wake; `show` prints each
-position's current stop. You do not re-check these, and you never sell to
-dodge one or hold past one.
+`belfort-trade.py exits --apply` runs before you wake, and again at **12:35
+ET** between your wakes; `show` prints each position's current stop and
+"recent trades" shows anything sold at midday. You do not re-check these, and
+you never sell to dodge one or hold past one.
 
-- **Stop loss:** sold at **-10%** from cost. No averaging down.
+- **Stop loss:** each position's own stop, set when bought: **2x its average
+  daily move (ATR) under the price paid**, never nearer than 5% or further
+  than 15%. Positions bought before this rule (no stop stored) keep -10%.
+  No averaging down.
 - **Take profit:** sold at **+25%**.
 - **Protect a gain:** once a position has been **+8%**, its stop follows the
-  highest price since entry, **10% below it, never below what you paid**.
-- **Dead money:** within ±2% after 5+ trading days → sold.
+  highest price since entry, the same distance below it, **never below what
+  you paid**.
+- **Dead money:** within ±2% after **8+ trading days**, and behind QQQ over
+  the same days → sold.
 - **Broken thesis:** the reason you bought is gone → **you** close it.
 
 ## Entry bar — all four, or you pass
@@ -111,7 +125,11 @@ dodge one or hold past one.
 ## Position rules
 
 - **Up to 8** open positions; 3 or more is the aim, never a reason to buy
-- **~20%** per position, **hard cap 25%** in any one name
+- **Size by risk:** `size SYMBOL` - at most 1% of the portfolio lost at the
+  stop, so a calm name gets a bigger position than a wild one; **hard cap 25%**
+  in any one name
+- **No new buy within 5 trading days of the name's earnings** (`show` lists
+  who reports soon; `data/earnings.json` has the dates)
 - **At most 40%** in one cluster: semiconductors, software and security,
   mega-cap, crypto and high-beta, consumer internet
 - **Market regime** (QQQ against its 50-day average, and how many of the 30

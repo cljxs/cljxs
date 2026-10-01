@@ -14666,11 +14666,24 @@ class BelfortsSellRulesAreCode(unittest.TestCase):
         self.assertIsNone(trade.exit_check(self.pos(entry="2026-09-21 13:36:00"), q)[0])
 
     def test_dead_money_counts_trading_days_after_entry(self):
-        flat = [100.5, 99.8, 100.2, 100.9, 101.0, 100.4]           # entry day + 5 trading days
-        self.assertEqual(trade.exit_check(self.pos(), self.q(100.4, flat))[0], "dead")
-        self.assertIsNone(trade.exit_check(self.pos(), self.q(100.4, flat[:5]))[0], "4 days is not 5")
-        moving = flat[:5] + [103.0]
-        self.assertIsNone(trade.exit_check(self.pos(), self.q(103.0, moving))[0])
+        # 8 trading days, and behind QQQ over them (2026-10-01: was 5 days, no QQQ)
+        flat = [100.5, 99.8, 100.2, 100.9, 101.0, 100.4, 100.1, 99.9, 100.4]   # entry day + 8
+        qqq = self.q(515.0, [500.0] * 9)                                        # QQQ +3% since
+        rule, reason, _ = trade.exit_check(self.pos(), self.q(100.4, flat), qqq)
+        self.assertEqual(rule, "dead")
+        self.assertIn("after 8 trading days, while QQQ moved +3.0%", reason)
+        self.assertIsNone(trade.exit_check(self.pos(), self.q(100.4, flat[:8]), qqq)[0], "7 days is not 8")
+        moving = flat[:8] + [103.0]
+        self.assertIsNone(trade.exit_check(self.pos(), self.q(103.0, moving), qqq)[0])
+
+    def test_flat_in_a_flat_market_is_not_dead(self):
+        flat = [100.5, 99.8, 100.2, 100.9, 101.0, 100.4, 100.1, 99.9, 100.4]
+        self.assertIsNone(trade.exit_check(self.pos(), self.q(100.4, flat), self.q(500.0, [500.0] * 9))[0],
+                          "QQQ flat too: not behind it")
+        self.assertIsNone(trade.exit_check(self.pos(), self.q(100.4, flat))[0], "no QQQ: not judged dead")
+        # QQQ's move is measured from the entry day, not from its oldest close
+        early = self.q(515.0, [400.0] + [515.0] * 9, start="2026-09-18")
+        self.assertIsNone(trade.exit_check(self.pos(), self.q(100.4, flat), early)[0])
 
     def test_real_closes_from_the_fetcher(self):
         """TSM's real daily closes, through the real fetcher's parser."""
@@ -14878,8 +14891,10 @@ class BelfortGuardrailsFromTheReview(unittest.TestCase):
         fetch.http_get = lambda url, retries=2: chart
         fetch.REQUEST_GAP = 0
         fetch.fetch_news.__defaults__ = (None, 0)
+        fetch.fetch_earnings = lambda symbols, *a, **k: {"TSM": "2026-10-15"}
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(fetch.main(), 0)
+        self.assertEqual(json.loads((self.data / "earnings.json").read_text())["dates"], {"TSM": "2026-10-15"})
         doc = json.loads((self.data / "quotes.json").read_text())
         self.assertEqual(sorted(doc["benchmarks"]), ["QQQ", "SPY"])
         self.assertEqual(len(doc["benchmarks"]["QQQ"]["history"]), fetch.HISTORY_BARS)
@@ -15068,3 +15083,267 @@ class TheNoAIBookIsItsOwnMoney(unittest.TestCase):
         self.assertIn("separate $10,000 paper account</b>, not Belfort's money", html)
         self.assertIn("/api/belfort/books", html)
         self.assertIn("belfortRoutes.register(app)", (ROOT / "mission-control-api" / "server.js").read_text())
+
+
+class BelfortStopsSizesAndEarnings(unittest.TestCase):
+    """"Do all 8, 7 and 6 ... and add another check at 12:35" (2026-10-01),
+    from the outside review: a stop and a size from each name's own
+    volatility, no buys into earnings, a gentler dead-money rule, and a
+    midday run of the sell rules between the 9:35 and 3:55 wakes."""
+
+    TSM = (FIXTURES / "belfort-yahoo-chart-tsm.json").read_bytes()
+    NASDAQ = (FIXTURES / "belfort-nasdaq-earnings-2026-10-21.json").read_bytes()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        b = self.root / "agents" / "belfort"
+        (b / "state").mkdir(parents=True)
+        (b / "data").mkdir(parents=True)
+        self.state, self.data = b / "state", b / "data"
+        self.book({"starting_cash": 10000.0, "cash": 10000.0, "positions": [], "trades": [],
+                   "created_utc": "2026-07-10 14:00:00"})
+        self.prices({"NVDA": (100.0, 5.0), "AMD": (100.0, None), "MU": (100.0, None), "PANW": (100.0, 1.0)})
+        (self.data / "news.json").write_text(json.dumps(fresh_news("NVDA", "AMD", "MU", "PANW")))
+
+    def book(self, p, name="portfolio.json"):
+        (self.state / name).write_text(json.dumps(p))
+
+    def prices(self, px, qqq=None):
+        """{symbol: (price, atr14 or None)}"""
+        quotes = {k: dict({"price": v, "sma50": v * 0.95}, **({"atr14": a} if a else {}))
+                  for k, (v, a) in px.items()}
+        (self.data / "quotes.json").write_text(json.dumps(
+            {"quotes": quotes, "benchmarks": {"QQQ": qqq or rising_qqq()}}))
+
+    def earnings(self, **dates):
+        (self.data / "earnings.json").write_text(json.dumps(
+            {"asof_utc": "2026-10-01 14:00:00", "source": "test", "dates": dates}))
+
+    def run_trade(self, *args):
+        return subprocess.run([sys.executable, str(SCRIPTS / "belfort-trade.py"), *args],
+                              capture_output=True, text=True, env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)))
+
+    def mod(self):
+        old = os.environ.get("ECOSYSTEM_ROOT")
+        os.environ["ECOSYSTEM_ROOT"] = str(self.root)
+        try:
+            return load("belfort_trade_risk", "belfort-trade.py")
+        finally:
+            os.environ.pop("ECOSYSTEM_ROOT", None) if old is None else os.environ.__setitem__("ECOSYSTEM_ROOT", old)
+
+    def saved(self, name="portfolio.json"):
+        return json.loads((self.state / name).read_text())
+
+    # --- 6. stops and sizes from volatility ------------------------------------
+
+    def test_atr_from_the_real_chart(self):
+        fetch = load("belfort_fetch_atr", "belfort-fetch.py")
+        fetch.http_get = lambda url, retries=2: self.TSM
+        q = fetch.fetch_one("TSM")
+        bars = json.loads(self.TSM)["chart"]["result"][0]["indicators"]["quote"][0]
+        h, l, c = (bars[k][-15:] for k in ("high", "low", "close"))
+        want = sum(max(h[i] - l[i], abs(h[i] - c[i - 1]), abs(l[i] - c[i - 1])) for i in range(1, 15)) / 14
+        self.assertEqual(q["atr14"], round(want, 2))
+        self.assertEqual(q["atr_pct"], round(want / q["price"] * 100, 2))
+        self.assertGreater(want, max(h[i] - l[i] for i in range(1, 15)) / 14, "a real range, not one day's")
+
+    def test_the_stop_distance_is_twice_the_daily_move_kept_between_5_and_15(self):
+        self.assertEqual(trade.risk_pct({"price": 41.12, "atr14": 2.27}), 11.04)    # SMCI-like: wild
+        self.assertEqual(trade.risk_pct({"price": 513.0, "atr14": 12.17}), 5.0)     # MSFT-like: 4.7%, floored
+        self.assertEqual(trade.risk_pct({"price": 100.0, "atr14": 9.0}), 15.0)      # 18%, capped
+        self.assertIsNone(trade.risk_pct({"price": 100.0}), "no ATR yet: no volatility stop")
+
+    def test_a_position_is_stopped_at_its_own_distance(self):
+        pos = {"symbol": "X", "shares": 10, "cost_basis": 100.0, "entry_utc": "2026-09-21 13:36:00",
+               "risk_pct": 6.0}
+        q = lambda px, closes: {"price": px, "history": [[f"2026-09-{21 + i}", c] for i, c in enumerate(closes)]}
+        self.assertEqual(trade.exit_check(pos, q(94.5, [100, 97]))[0], None, "a -10% stop would be wrong too")
+        rule, reason, stop = trade.exit_check(pos, q(94.0, [100, 97]))
+        self.assertEqual((rule, stop), ("stop", 94.0))
+        self.assertIn("(its stop: -6%)", reason)
+        # protecting a gain: the same 6% under the high, not 10%
+        self.assertEqual(trade.exit_check(pos, q(115.0, [110, 120, 115]))[2], 112.8)
+        self.assertEqual(trade.exit_check(pos, q(112.8, [110, 120, 115]))[0], "protect")
+        # bought before the rule: no risk_pct, the old -10%
+        del pos["risk_pct"]
+        self.assertEqual(trade.exit_check(pos, q(94.0, [100, 97]))[:3:2], (None, 90.0))
+
+    def test_a_buy_may_risk_at_most_1_percent(self):
+        # NVDA at $100, ATR $5: stop -10%, so $100 of risk is 10 shares
+        r = self.run_trade("buy", "NVDA", "11", "--headline", "h-NVDA")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("would lose $110.00 at its stop (-10%", r.stderr)
+        self.assertIn("$100.00: 10 shares", r.stderr)
+        r = self.run_trade("buy", "NVDA", "10", "--headline", "h-NVDA")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        pos = self.saved()["positions"][0]
+        self.assertEqual(pos["risk_pct"], 10.0, "the stop is stored with the position, kept as bought")
+
+    def test_size_is_the_most_buy_allows(self):
+        # One fact, one place: whatever `size` says, buy takes it and refuses one more.
+        cases = [("NVDA", 10, "1% risk at a -10% stop"),      # wild: risk-limited
+                 ("PANW", 20, "1% risk at a -5% stop"),       # calm: the 5% floor - 20% at most
+                 ("AMD", 25, "position cap")]                 # no ATR yet: the caps only
+        for sym, n, limit in cases:
+            out = self.run_trade("size", sym).stdout
+            self.assertIn(f"{n} shares of {sym} at $100.00, held to the {limit}", out)
+            self.assertNotEqual(self.run_trade("buy", sym, str(n + 1), "--headline", f"h-{sym}").returncode, 0)
+        self.assertIn("stop -5%", self.run_trade("size", "PANW").stdout, "1% daily move: floored at 5%")
+
+    def test_size_counts_what_is_held_and_the_mixed_market_cap(self):
+        # 15 AMD held: the 25% cap leaves room for 10 more
+        self.book({"starting_cash": 10000.0, "cash": 8500.0, "trades": [], "created_utc": "2026-07-10 14:00:00",
+                   "positions": [{"symbol": "AMD", "shares": 15, "cost_basis": 100.0}]})
+        self.assertIn("10 shares of AMD at $100.00, held to the position cap", self.run_trade("size", "AMD").stdout)
+        # QQQ under a rising average: mixed, 10% a name
+        self.prices({"AMD": (100.0, None), "MU": (100.0, None)}, qqq={"price": 440.0, "history": [
+            [f"2026-07-{1 + i // 3:02d}", 400.0 + i] for i in range(70)]})
+        self.assertIn("10 shares of MU at $100.00, held to the position cap", self.run_trade("size", "MU").stdout)
+
+    def test_size_follows_the_cluster_room_and_the_regime(self):
+        self.book({"starting_cash": 10000.0, "cash": 6500.0, "trades": [], "created_utc": "2026-07-10 14:00:00",
+                   "positions": [{"symbol": "AMD", "shares": 35, "cost_basis": 100.0}]})
+        out = self.run_trade("size", "MU").stdout
+        self.assertIn("5 shares of MU at $100.00, held to the semiconductors cluster", out)
+        self.assertNotEqual(self.run_trade("buy", "MU", "6", "--headline", "h-MU").returncode, 0)
+        self.assertEqual(self.run_trade("buy", "MU", "5", "--headline", "h-MU").returncode, 0)
+        self.prices({"MU": (100.0, None)}, qqq={"price": 380.0, "history": [
+            [f"2026-07-{1 + i // 3:02d}", 470.0 - i] for i in range(70)]})
+        self.assertIn("0 shares of MU: the regime is unfavourable", self.run_trade("size", "MU").stdout)
+
+    def test_the_shadow_book_sizes_by_risk_too(self):
+        (self.data / "candidates.json").write_text(json.dumps({"candidates": [{"symbol": "NVDA", "price": 100.0}]}))
+        r = self.run_trade("shadow")
+        self.assertIn("bought 10 NVDA (favorable)", r.stdout, "not its usual 20: NVDA's stop is 10% away")
+        self.assertEqual(self.saved("shadow.json")["positions"][0]["risk_pct"], 10.0)
+
+    # --- 7. no buys into earnings ----------------------------------------------
+
+    def test_trading_days_until(self):
+        from datetime import date
+        t = date(2026, 10, 1)                                                  # a Thursday
+        self.assertEqual(trade.trading_days_until("2026-10-01", t), 0)
+        self.assertEqual(trade.trading_days_until("2026-10-05", t), 2, "the weekend is not counted")
+        self.assertEqual(trade.trading_days_until("2026-10-08", t), 5)
+        self.assertEqual(trade.trading_days_until("2026-10-09", t), 6)
+        self.assertIsNone(trade.trading_days_until("2026-09-30", t), "already reported")
+
+    def test_the_blackout_is_5_trading_days(self):
+        from datetime import date
+        t = self.mod()
+        self.earnings(TSM="2026-10-08", INTC="2026-10-09", MU="2026-09-30")
+        today = date(2026, 10, 1)
+        self.assertEqual(t.earnings_soon("tsm", today), ("2026-10-08", 5))
+        self.assertIsNone(t.earnings_soon("INTC", today), "6 trading days: fine")
+        self.assertIsNone(t.earnings_soon("MU", today), "already reported")
+        self.assertIsNone(t.earnings_soon("NVDA", today), "not reporting soon")
+
+    def test_a_buy_into_earnings_is_refused(self):
+        soon = (et_time.eastern_now().date() + timedelta(days=1)).isoformat()
+        later = (et_time.eastern_now().date() + timedelta(days=40)).isoformat()
+        self.earnings(NVDA=soon, PANW=later)
+        r = self.run_trade("buy", "NVDA", "5", "--headline", "h-NVDA")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn(f"NVDA reports earnings on {soon}", r.stderr)
+        self.assertIn("0 shares of NVDA: NVDA reports earnings", self.run_trade("size", "NVDA").stdout)
+        self.assertIn(f"earnings  NVDA {soon} - no new buys in these", self.run_trade("show").stdout)
+        self.assertEqual(self.run_trade("buy", "PANW", "5", "--headline", "h-PANW").returncode, 0,
+                         "40 days out is not soon")
+
+    def test_no_calendar_does_not_stop_every_buy_and_says_so(self):
+        self.assertEqual(self.run_trade("buy", "PANW", "5", "--headline", "h-PANW").returncode, 0)
+        self.assertIn("earnings  no calendar yet", self.run_trade("show").stdout)
+
+    def test_the_real_nasdaq_calendar_parses(self):
+        from datetime import date
+        fetch = load("belfort_fetch_earn", "belfort-fetch.py")
+        asked = []
+
+        def get(url):
+            asked.append(url)
+            if url.endswith("2026-10-21"):
+                return self.NASDAQ
+            return b'{"data": {"asOf": "x", "rows": null}, "message": null, "status": {"rCode": 200}}'
+        with contextlib.redirect_stdout(io.StringIO()):
+            got = fetch.fetch_earnings(["IBM", "SAP", "NVDA"], today=date(2026, 10, 19), get=get, gap=0)
+        self.assertEqual(got, {"IBM": "2026-10-21", "SAP": "2026-10-21"})
+        self.assertEqual(len(asked), 15, "21 days ahead, weekdays only")
+        self.assertTrue(asked[2].endswith("date=2026-10-21"))
+
+    def test_a_calendar_that_cannot_be_read_is_not_an_empty_one(self):
+        from datetime import date
+        fetch = load("belfort_fetch_earn_fail", "belfort-fetch.py")
+
+        def get(url):
+            raise OSError("timed out")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertIsNone(fetch.fetch_earnings(["IBM"], today=date(2026, 10, 19), get=get, gap=0))
+
+    def test_nasdaq_is_asked_as_a_browser_once(self):
+        # Seen 2026-10-01: a user agent naming a bot was held open until it
+        # timed out, every day; retrying that would stall the fetcher for minutes.
+        fetch = load("belfort_fetch_earn_ua", "belfort-fetch.py")
+        sent = []
+
+        def urlopen(req, timeout=None, context=None):
+            sent.append(req.get_header("User-agent"))
+            raise OSError("no")
+        from unittest import mock
+        with mock.patch.object(fetch.urllib.request, "urlopen", urlopen), \
+                contextlib.redirect_stdout(io.StringIO()):
+            from datetime import date
+            fetch.EARNINGS_DAYS = 1
+            fetch.fetch_earnings(["IBM"], today=date(2026, 10, 19), gap=0)
+        self.assertEqual(sent, ["Mozilla/5.0"])
+
+    # --- 8. dead money: see BelfortsSellRulesAreCode -----------------------------
+
+    def test_dead_money_reads_qqq_from_the_quotes(self):
+        t = self.mod()
+        self.prices({"NVDA": (100.4, None)}, qqq={"price": 515.0, "history": [["2026-09-21", 500.0]]})
+        q = json.loads((self.data / "quotes.json").read_text())
+        q["quotes"]["NVDA"]["history"] = [[f"2026-09-{d}", 100.0] for d in (21, 22, 23, 24, 25, 28, 29, 30)] \
+            + [["2026-10-01", 100.4]]
+        (self.data / "quotes.json").write_text(json.dumps(q))
+        p = {"cash": 9000.0, "trades": [], "positions": [
+            {"symbol": "NVDA", "shares": 10, "cost_basis": 100.0, "entry_utc": "2026-09-21 13:36:00"}]}
+        self.assertEqual([r for _, r, _ in t.exits_due(p)], ["dead"])
+
+    # --- 9. the midday check -----------------------------------------------------
+
+    def test_the_midday_shadow_check_sells_and_never_buys(self):
+        (self.data / "candidates.json").write_text(json.dumps({"candidates": [{"symbol": "AMD", "price": 100.0}]}))
+        self.prices({"PANW": (88.0, None), "AMD": (100.0, None)})
+        self.book({"starting_cash": 10000.0, "cash": 9000.0, "cycle_count": 4, "created_utc": "2026-09-01 14:00:00",
+                   "trades": [{"side": "BUY", "symbol": "PANW", "shares": 10, "price": 100, "notional": 1000}],
+                   "positions": [{"symbol": "PANW", "shares": 10, "cost_basis": 100.0,
+                                  "entry_utc": "2026-09-01 14:00:00"}]}, "shadow.json")
+        r = self.run_trade("shadow", "--exits-only")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("shadow book, midday exits: sold PANW: STOP LOSS", r.stdout)
+        after = self.saved("shadow.json")
+        self.assertEqual((after["positions"], after["cash"], after["cycle_count"]), ([], 9880.0, 4),
+                         "no AMD bought, and not counted as a cycle")
+        self.assertEqual(json.loads((self.state / "equity.jsonl").read_text().splitlines()[-1])["book"], "shadow")
+        self.assertIn("nothing due", self.run_trade("shadow", "--exits-only").stdout)
+
+    def test_the_midday_timer(self):
+        timer = (ROOT / "deploy" / "belfort-exits.timer").read_text()
+        service = (ROOT / "deploy" / "belfort-exits.service").read_text()
+        self.assertIn("OnCalendar=Mon..Fri 12:35 America/New_York", timer)
+        runs = [l.split("=", 1)[1] for l in service.splitlines() if l.startswith("ExecStart=")]
+        self.assertEqual([r.split("belfort-trade.py ")[1] for r in runs], ["exits --apply", "shadow --exits-only"])
+        self.assertNotIn("openclaw", service, "code only: no model is woken")
+        # deploy.sh installs and starts every deploy/belfort-*.timer
+        self.assertIn('"$ROOT"/deploy/"$AGENT"-*.timer', (SCRIPTS / "deploy.sh").read_text())
+        # the fetcher has fresh prices at 12:30 for it
+        self.assertIn("OnCalendar=Mon..Fri 09..16:00/10 America/New_York",
+                      (ROOT / "deploy" / "belfort-fetch.timer").read_text())
+
+    def test_belfort_is_told(self):
+        head = (ROOT / "agents" / "belfort" / "_belfort-agents-header.md").read_text()
+        for line in ("belfort-trade.py size MRVL", "1% of the\nportfolio", "earnings within 5 trading days",
+                     "again at **12:35\nET**", "**8+ trading days**, and behind QQQ"):
+            self.assertIn(line, head)
