@@ -256,6 +256,13 @@ MIGRATIONS = [
       PRIMARY KEY (file_id, content_hash)
     );
     """,
+    # 10 - where each watcher clip's moment is in the past broadcast. The
+    # first night's clips were made, then 7 of 8 were gone by morning; a
+    # moment in the broadcast is one you clip yourself, which stays.
+    """
+    ALTER TABLE twitch_clips ADD COLUMN vod_id TEXT;
+    ALTER TABLE twitch_clips ADD COLUMN vod_offset INTEGER;
+    """,
 ]
 
 

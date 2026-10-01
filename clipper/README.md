@@ -248,7 +248,12 @@ those two stay with you. What happens:
    (`twitch_keep_best`). The ranking uses the jump over usual, not raw speed,
    since chat is busiest at the end of every stream.
 2. **The next morning**, Clip's studio lists those clips, with what chat
-   was saying. It also lists the most-viewed moments other viewers clipped
+   was saying. Each also has a **Clip it at 1:23:45** link: his past
+   broadcast, opened at the same minute the watcher clipped. Clips made
+   through the API by a new account don't always last (7 of the first
+   night's 8 were gone by morning), but one you make yourself from the
+   broadcast does. Run `python3 -m clipper moments` to add the links to
+   clips from before this change. It also lists the most-viewed moments other viewers clipped
    from recent past broadcasts, each linked to its second of the broadcast,
    for you to clip yourself.
 3. **You download each clip**: dashboard.twitch.tv → Content → Clips →

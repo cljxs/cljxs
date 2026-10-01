@@ -1890,6 +1890,11 @@ class FakeTwitch:
     def me(self):
         return {"id": "me"}
 
+    def videos(self, user_id):
+        # the past broadcast of this stream, and an older one
+        return [{"id": "v900", "created_at": "2026-09-30T20:00:09Z"},
+                {"id": "v800", "created_at": "2026-09-28T21:00:00Z"}]
+
     def user(self, login):
         return {"id": "4444", "login": login}
 
@@ -1984,6 +1989,47 @@ class Watcher(unittest.TestCase):
         self.assertEqual([c["best"] for c in state["clips"]][:3], [True] * 3, "best first")
         last = self.conn.execute("SELECT msg FROM events ORDER BY id DESC LIMIT 1").fetchone()[0]
         self.assertIn("best 3", last)
+
+    def clip_row(self, cid, created, started="2026-09-30T22:40:12Z"):
+        with self.conn:
+            self.conn.execute("INSERT INTO twitch_clips (id, channel, status, chat_rate, chat_usual, "
+                              "stream_started_at, created_at) VALUES (?, 'plaqueboymax', 'made', 9, 3, ?, ?)",
+                              (cid, started, created))
+
+    def test_each_clip_links_to_its_minute_of_the_past_broadcast(self):
+        # 2026-10-01: 7 of the first night's 8 clips were gone by morning. The
+        # moment in the past broadcast is there to clip by hand, and stays.
+        self.clip_row("GrotesqueTallHyena", "2026-10-01 00:06:36")
+        api = FakeTwitch()
+        api.videos = lambda uid: [{"id": "2581", "created_at": "2026-09-30T22:40:20Z"},
+                                  {"id": "2570", "created_at": "2026-09-29T21:00:00Z"}]
+        self.assertEqual(twitch.link_to_broadcast(self.conn, api, "plaqueboymax", "4444", self.cfg), 1)
+        row = self.conn.execute("SELECT * FROM twitch_clips").fetchone()
+        # asked for at 1:26:16 into the broadcast; the watcher's minute began 60 s before
+        self.assertEqual((row["vod_id"], row["vod_offset"]), ("2581", 5116))
+        clip = report.twitch_state(self.conn, self.cfg)["clips"][0]
+        self.assertEqual(clip["vod_link"], "https://www.twitch.tv/videos/2581?t=1h25m16s")
+
+    def test_another_streams_broadcast_is_not_used(self):
+        self.clip_row("Lonely", "2026-10-01 00:06:36")
+        api = FakeTwitch()
+        api.videos = lambda uid: [{"id": "2570", "created_at": "2026-09-29T21:00:00Z"}]
+        self.assertEqual(twitch.link_to_broadcast(self.conn, api, "plaqueboymax", "4444", self.cfg), 0)
+        self.assertIsNone(report.twitch_state(self.conn, self.cfg)["clips"][0]["vod_link"])
+
+    def test_the_watch_links_its_clips_when_the_stream_ends(self):
+        api = FakeTwitch(live_until=320)
+        self.run_watch(CHAT + burst(150, 100), api, tick_until=2000)
+        row = self.conn.execute("SELECT * FROM twitch_clips").fetchone()
+        self.assertEqual(row["vod_id"], "v900")
+        self.assertGreaterEqual(row["vod_offset"], 0)
+
+    def test_moments_links_last_nights_clips_too(self):
+        self.clip_row("FromLastNight", "2026-09-30 20:30:00", started="2026-09-30T20:00:00Z")
+        with contextlib.redirect_stdout(io.StringIO()):
+            twitch.moments(self.conn, self.cfg, api=FakeTwitch(), now=lambda: 1790800000.0)
+        row = self.conn.execute("SELECT * FROM twitch_clips WHERE id = 'FromLastNight'").fetchone()
+        self.assertEqual((row["vod_id"], row["vod_offset"]), ("v900", 30 * 60 - 9 - 60))
 
     def test_ranked_by_the_jump_not_the_raw_speed(self):
         # Late in a stream more people watch: 20/s against a usual 10/s is a

@@ -52,7 +52,9 @@ def twitch_state(conn, cfg):
             clips.append({k: r[k] for k in ("id", "channel", "edit_url", "url", "status", "chat_rate",
                                              "chat_usual", "created_at", "detail", "stream_started_at")}
                          | {"words": json.loads(r["chat_words"] or "[]"),
-                            "best": bool(r.get("best")), "jump": r.get("jump")})
+                            "best": bool(r.get("best")), "jump": r.get("jump"),
+                            "vod_link": twitch.vod_link(r["vod_id"], r["vod_offset"]) if r["vod_id"] else None,
+                            "vod_offset": r["vod_offset"]})
     moments = [dict(m, link=twitch.vod_link(m["video_id"], m["vod_offset"])) for m in conn.execute(
         "SELECT * FROM twitch_moments ORDER BY views DESC LIMIT 12")]
     pickups = [dict(r) for r in conn.execute("SELECT path, status, video_id, detail, seen_at FROM pickups "

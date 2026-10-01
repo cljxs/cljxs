@@ -227,6 +227,10 @@ class Api:
         return self._call("POST", "/clips", {"broadcaster_id": broadcaster_id,
                                              "duration": duration})["data"][0]
 
+    def videos(self, user_id):
+        """The channel's past broadcasts, newest first."""
+        return self._call("GET", "/videos", {"user_id": user_id, "type": "archive", "first": 20})["data"]
+
     def clips(self, **params):
         return self._call("GET", "/clips", params)["data"]
 
@@ -539,6 +543,10 @@ def watch(conn, cfg, source, api=None, chat=irc_messages, now=time.time, say=say
     except TwitchError as exc:
         n = 0
         db.event(conn, "twitch", f"{login}: could not list past moments: {exc.message}", level="warn")
+    try:
+        link_to_broadcast(conn, api, login, bid, cfg)
+    except TwitchError as exc:
+        db.event(conn, "twitch", f"{login}: could not find the past broadcast: {exc.message}", level="warn")
     ranked = best_of(conn.execute("SELECT * FROM twitch_clips WHERE channel = ? AND stream_started_at = ?",
                                   (login, stream.get("started_at"))).fetchall(), cfg["twitch_keep_best"])
     top = [c for c in ranked if c["best"]]
@@ -546,6 +554,46 @@ def watch(conn, cfg, source, api=None, chat=irc_messages, now=time.time, say=say
                              f"best {len(top)}: " + ", ".join(f"{c['jump']}x" for c in top)
              + f"; {n} past moment(s) listed")
     return {"live": True, "clips": made}
+
+
+# A past broadcast starts when its stream does; Twitch's created_at for the
+# two can differ by a little. Anything further apart is another stream.
+SAME_STREAM = 15 * 60
+
+
+def _utc(ts):
+    """Seconds since the epoch from Twitch's RFC 3339 or SQLite's UTC text."""
+    ts = str(ts).strip().replace("T", " ").rstrip("Z")
+    return datetime.strptime(ts[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+
+
+def archive_for(videos, started_at):
+    """The past broadcast of the stream that started at `started_at`, or None."""
+    best = min(videos, key=lambda v: abs(_utc(v["created_at"]) - _utc(started_at)), default=None)
+    if best and abs(_utc(best["created_at"]) - _utc(started_at)) <= SAME_STREAM:
+        return best
+    return None
+
+
+def link_to_broadcast(conn, api, login, user_id, cfg):
+    """Give each of a channel's watcher clips its moment in the past
+    broadcast: the same minute the watcher clipped, which ends when the clip
+    was asked for. Returns how many were linked."""
+    rows = conn.execute("SELECT * FROM twitch_clips WHERE channel = ? AND vod_id IS NULL "
+                        "AND stream_started_at IS NOT NULL", (login,)).fetchall()
+    if not rows:
+        return 0
+    videos, n = api.videos(user_id), 0
+    with conn:
+        for r in rows:
+            vod = archive_for(videos, r["stream_started_at"])
+            if not vod:
+                continue
+            offset = _utc(r["created_at"]) - _utc(vod["created_at"]) - cfg["twitch_clip_seconds"]
+            conn.execute("UPDATE twitch_clips SET vod_id = ?, vod_offset = ? WHERE id = ?",
+                         (vod["id"], max(0, int(offset)), r["id"]))
+            n += 1
+    return n
 
 
 def moments(conn, cfg, api=None, now=time.time):
@@ -560,6 +608,7 @@ def moments(conn, cfg, api=None, now=time.time):
             raise ValueError(f"Twitch has no channel called {src['twitch']!r}")
         out[src["twitch"]] = refresh_moments(conn, api, src["twitch"], user["id"],
                                              cfg["twitch_moments_hours"], me, now)
+        link_to_broadcast(conn, api, src["twitch"], user["id"], cfg)
     return out
 
 
