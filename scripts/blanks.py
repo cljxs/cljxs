@@ -174,12 +174,19 @@ def brand_key(brand):
 
 def matches(blank, entry):
     """Does a catalogue entry / Printify blueprint (brand, model, title) carry
-    this blank? 'exact' (brand and model), 'brand', 'attrs', or None."""
+    this blank? 'exact' (brand and model), 'variant' (the model with a
+    letter after it: 5000B, 3001Y), 'brand', 'attrs', or None."""
     b_brand = brand_key(blank.get("brand"))
     e_brand = brand_key(entry.get("brand"))
     if b_brand and e_brand and b_brand == e_brand:
         if blank.get("model") and model_core(entry.get("model")) == blank["model"]:
-            return "exact"
+            # Printify's "5000B" is the kids' tee and "5000L" the women's, not
+            # the Gildan 5000 a seller names - the first droplet run called all
+            # three "same brand and model" and it was the ids that ordered them.
+            # A letter AFTER the number marks the variant; one before it is how
+            # the maker writes the same garment ("C1717" is Comfort Colors 1717).
+            after = re.search(r"\d{3,5}([A-Za-z]*)", str(entry.get("model") or "")).group(1)
+            return "variant" if after else "exact"
         return "brand" if not blank.get("model") else None
     if not b_brand and blank.get("attrs"):
         title = _words(entry.get("blueprint_title") or entry.get("title"))
@@ -201,7 +208,8 @@ def gap(top, kind, catalog_entries):
     if not best.get("selling"):
         return None
     entries = list(catalog_entries or [])
-    if any(matches(best, e) for e in entries):
+    # A variant is a different garment (kids', women's), so it does not count.
+    if any(matches(best, e) not in (None, "variant") for e in entries):
         return None
     fw = family_words(kind)
     have = [e.get("blueprint_title") or e.get("key") for e in entries
@@ -221,6 +229,8 @@ def closest(blank, kind, blueprints, keep=3):
         same_kind = bool(kind_words & title)
         if how == "exact":
             rank, why = 0, "same brand and model"
+        elif how == "variant":
+            rank, why = 0.5, f"same brand, a variant of the model ({bp.get('brand')} {bp.get('model')})"
         elif blank.get("brand") and brand_key(bp.get("brand")) == brand_key(blank["brand"]) \
                 and same_kind:
             rank, why = 1, f"same brand ({bp.get('brand')} {bp.get('model') or ''}), same kind"

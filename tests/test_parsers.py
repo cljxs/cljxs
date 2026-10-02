@@ -16150,6 +16150,24 @@ class TheSameBlankTheSellersUse(unittest.TestCase):
         self.assertEqual(near[0]["id"], 1257, "the same brand's crewneck before another brand's")
         self.assertEqual(self.b.brand_key("Bella+Canvas"), self.b.brand_key("BELLA + CANVAS™"))
 
+    def test_a_kids_or_womens_cut_is_not_the_same_model(self):
+        # Bug: the droplet's 'best cat mom shirt' (Gildan 5000) listed Kids Heavy
+        # Cotton Tee 5000B and Women's Midweight 5000L as "same brand and model";
+        # only their higher ids kept them behind the real one. Titles and models
+        # as Printify returned them; the ids are swapped so order cannot be luck.
+        bps = [{"id": 1, "title": "Kids Heavy Cotton™ Tee", "brand": "Gildan", "model": "5000B"},
+               {"id": 2, "title": "Women's Midweight Cotton Tee", "brand": "Gildan", "model": "5000L"},
+               {"id": 6, "title": "Unisex Heavy Cotton Tee", "brand": "Gildan", "model": "5000"}]
+        seller = self.b.identify("Best Cat Mom Shirt, Gildan 5000 unisex")[0]
+        got = self.b.closest(seller, "tshirt", bps)
+        self.assertEqual([g["id"] for g in got], [6, 1, 2])
+        self.assertEqual(got[0]["why"], "same brand and model")
+        self.assertTrue(got[1]["why"].startswith("same brand, a variant of the model"))
+        top = [dict(seller, selling=1)]
+        self.assertIsNotNone(self.b.gap(top, "tshirt", [dict(bps[0], key="tshirt")]),
+                             "owning the kids' tee is not owning the one that sells")
+        self.assertIsNone(self.b.gap(top, "tshirt", [dict(bps[2], key="tshirt")]))
+
     # --- the scan, the warning, the draft --------------------------------------
 
     def test_the_scan_reads_the_text_and_notes_who_sold(self):
