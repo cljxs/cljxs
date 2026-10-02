@@ -69,7 +69,7 @@ fresh-news bettor matches Ace, the model adds nothing.
 | Shrink toward the market | 60% (the estimate keeps 40% of its distance) |
 | Bar | +2 points, or 3% of the market's chance if larger, and EV > 0 |
 | Bet range | market chance 30–75% |
-| Fresh news | 6 hours or less; price moved less than 2 points toward the side since |
+| Fresh news | 24 hours or less; price moved less than 2 points toward the side since |
 | Betting window | games starting within 12 hours |
 | Blind window | games starting within 30 hours |
 | Close | last price before the start, re-read every 5 minutes in the last 2 hours |
@@ -77,3 +77,7 @@ fresh-news bettor matches Ace, the model adds nothing.
 ## Change log
 
 * 2026-10-01 — frozen.
+* 2026-10-02 — before any bet under these rules: fresh news widened from 6 to
+  24 hours (owner's decision). On a real board 1 of 8 bettable games had
+  news inside six hours, so the six-hour rule allowed almost no bets. The
+  price-not-moved check is unchanged and is what keeps priced news out.

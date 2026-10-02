@@ -97,13 +97,19 @@ MAX_FAVOURITE = 600
 # way to tell a report filed an hour ago from one filed eleven days ago.
 #
 # ESPN timestamps them, and on a real NFL board the ages ran 0h, 2h, 3h, 4h
-# alongside entries 264h and 449h old. Six hours is wide enough to survive the
-# gap between wakes and narrow enough that "fresh" still means something.
-FRESH_INJURY_HOURS = 6.0
+# alongside entries 264h and 449h old.
+#
+# 24, not 6 (owner, 2026-10-02). On a real Thursday board 1 of 8 bettable
+# games had any news inside six hours, and most NFL news lands Wednesday to
+# Friday - days before kick-off - so a six-hour window made a bet nearly
+# impossible. What keeps stale news out is not the clock but the price check
+# beside it (ace-clv.unpriced): a bet is refused once the line has moved 2
+# points on the news, however recent it is.
+FRESH_INJURY_HOURS = 24.0
 
 # Enough for Ace to see the shape of a team's news without the candidate file
-# turning into an injury report.
-MAX_FRESH_INJURIES = 6
+# turning into an injury report. 10 since the window became a day.
+MAX_FRESH_INJURIES = 10
 
 
 def log(m):

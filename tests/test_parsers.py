@@ -14523,11 +14523,15 @@ class AceBetsByTheReviewedBar(unittest.TestCase):
         self.assertIn("no price was seen before the news", said)
 
     def test_old_news_is_refused(self):
-        self.news(hours_ago=7.0)
-        self.prices_seen(before=41.5, hours_ago=9.0)
+        self.news(hours_ago=25.0)
+        self.prices_seen(before=41.5, hours_ago=27.0)
         code, said = self.act("bet", number="2", my_pct=52.0, event="iabc12")
         self.assertEqual(code, 1)
-        self.assertIn("is 7.0 hours old", said)
+        self.assertIn("is 25.0 hours old - news is 24 hours or less", said)
+        # A day old but unpriced is fine (2026-10-02: the window was 6 hours).
+        self.news(hours_ago=20.0)
+        self.prices_seen(before=41.5, hours_ago=22.0)
+        self.assertEqual(self.act("bet", number="2", my_pct=52.0, event="iabc12")[0], 0)
 
     def test_a_bet_that_clears_everything_is_booked_flat_by_the_book(self):
         code, said = self.act("bet", number="2", my_pct=52.0, event="iabc12", why="QB out, line still")

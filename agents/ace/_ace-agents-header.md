@@ -157,7 +157,7 @@ second chance. That has three consequences:
 `ace-judge.py bet` checks every one of these and refuses with the reason:
 
 1. **It cites real news, by id:** `--event ID`, one of that row's
-   `fresh_injuries` — reported 6 hours ago or less. Something that happened,
+   `fresh_injuries` — reported 24 hours ago or less. Something that happened,
    not something you computed. No fresh injury on the row, no bet.
 2. **The price has not already moved on it.** If DraftKings' chance for your
    side has risen 2 points or more since the news was reported, the market has
