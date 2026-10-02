@@ -16273,6 +16273,9 @@ class TheFirstRealNicheRun(unittest.TestCase):
              "tags": ["cat stickers", "cute cat sticker", "cute cat stickers"]}]}))
         self.assertEqual(ns.discover({"niches": {}}), ["cute cat sticker"])
         self.assertEqual(ns.same("glass mugs"), "glass mug")
+        old = {"niches": {k: {"source": "found"} for k in ("cute cat stickers", "cute cats sticker", "cute cat sticker")}}
+        self.assertEqual([s for s, _src, _a in ns.niches(old)], ["cat sticker", "cute cat stickers"],
+                         "duplicates saved before the fix are listed once")
         self.assertEqual(ns.same("class pass"), "class pass", "ss is not a plural")
 
     def test_sales_check_shows_the_raw_numbers(self):

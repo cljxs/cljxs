@@ -133,8 +133,14 @@ def niches(d=None, now=None):
     now = now or datetime.now(timezone.utc)
     seeds = dict.fromkeys(STARTER, "starter")
     seeds.update({k: v.get("source", "found") for k, v in d["niches"].items()})
-    out = []
+    out, seen = [], set()
     for seed, source in seeds.items():
+        # Plurals are one niche: 'cute cat stickers', 'cute cats sticker' and
+        # 'cute cat sticker' were all added before same() existed. The first
+        # (a starter, if one) is kept; the rest are never scanned.
+        if same(seed) in seen:
+            continue
+        seen.add(same(seed))
         when, _ = scan_of(seed)
         out.append((seed, source, None if when is None else (now - when).total_seconds() / 86400))
     out.sort(key=lambda x: (x[2] is not None, -(x[2] or 0)))
