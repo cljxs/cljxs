@@ -15926,16 +15926,17 @@ class AWellSellingNicheIsMeasuredInSales(unittest.TestCase):
         self.assertEqual(self.SPEC["ShopListing_fields"]["listing_id"]["type"], "integer")
 
     def test_sales_counts_recent_reviews_and_leaves_failures_out(self):
-        asked = []
-        replies = {11: ({"count": 4}, {}, None), 12: ({"count": 0}, {}, None),
-                   13: (None, {}, "HTTP 500: x"), 14: ({"count": 2}, {}, None)}
+        asked, now = [], 1_800_000_000
+        rv = lambda *days: {"count": len(days), "results": [{"create_timestamp": now - d * 86400} for d in days]}
+        replies = {11: (rv(1, 30, 89, 200), {}, None), 12: (rv(91, 400), {}, None),
+                   13: (None, {}, "HTTP 500: x"), 14: (rv(10, 60), {}, None)}
         def call(path, key):
             asked.append(path)
             return replies[int(path.split("/")[2])]
-        got = self.ms.sales("k", [11, 12, 13, 14], now=1_800_000_000, call=call)
-        self.assertEqual(got, {"reviews": 6, "selling": 2, "sales_n": 3, "sold_ids": [11, 14]},
-                         "the failed call is not a zero")
-        self.assertEqual(asked[0], f"/listings/11/reviews?limit=1&min_created={1_800_000_000 - 90 * 86400}")
+        got = self.ms.sales("k", [11, 12, 13, 14], now=now, call=call)
+        self.assertEqual(got, {"reviews": 5, "selling": 2, "sales_n": 3, "sold_ids": [11, 14]},
+                         "counted from the review dates; the failed call is not a zero")
+        self.assertEqual(asked[0], "/listings/11/reviews?limit=100", "no min_created: it read 0 on the droplet")
         self.assertIsNone(self.ms.sales("k", [13], call=lambda p, k: (None, {}, "HTTP 500")))
 
     def test_measure_keeps_the_top_listing_ids_in_etsys_order(self):
@@ -16138,7 +16139,8 @@ class TheSameBlankTheSellersUse(unittest.TestCase):
             {"listing_id": 8, "title": "Frog Tee 2"}]})
         self.assertIn("Comfort Colors 1717", m["texts"][7])
         self.assertIn("cotton", m["texts"][7])
-        got = ms.sales("k", [7, 8], call=lambda p, k: ({"count": 3 if "/7/" in p else 0}, {}, None))
+        recent = {"count": 3, "results": [{"create_timestamp": int(time.time()) - 86400}] * 3}
+        got = ms.sales("k", [7, 8], call=lambda p, k: (recent if "/7/" in p else {"count": 0, "results": []}, {}, None))
         self.assertEqual(got["sold_ids"], [7])
         ms.SCANS = self.root / "agents/scout/state/scans"
         row = {"supply": 10, "heat": 0.1, "pull": 0.1, "price": 25.0, "match": 1.0, "returned": 2, "heat_n": 2,
@@ -16277,10 +16279,9 @@ class TheFirstRealNicheRun(unittest.TestCase):
             if path.startswith("/listings/active"):
                 return {"results": [{"listing_id": 1, "shop_id": 9, "num_favorers": 40, "title": "Dog Mom Mug",
                                      "original_creation_timestamp": now - 400 * 86400}]}, {}, None
-            if path.startswith("/listings/1/reviews") and "min_created" in path:
-                return {"count": 0}, {}, None
             if path.startswith("/listings/1/reviews"):
-                return {"count": 12}, {}, None
+                return {"count": 12, "results": [{"create_timestamp": now - d * 86400}
+                                                 for d in (100, 150, 300)]}, {}, None
             if path == "/shops/9":
                 return {"transaction_sold_count": 5400}, {}, None
             raise AssertionError(path)
@@ -16288,6 +16289,7 @@ class TheFirstRealNicheRun(unittest.TestCase):
         self.assertIsNone(err)
         self.assertEqual({k: rows[0][k] for k in ("recent", "ever", "shop_sold", "favs")},
                          {"recent": 0, "ever": 12, "shop_sold": 5400, "favs": 40})
+        self.assertEqual(rows[0]["last"], "2026-10-07", "the newest review's date, for a person to check")
         self.assertAlmostEqual(rows[0]["age_days"], 400, places=0)
         self.assertIn("sales-check", (SCRIPTS / "market-scan.py").read_text().split("def main(", 1)[1])
 

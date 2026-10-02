@@ -340,6 +340,30 @@ def top_by_favs(key, phrase, call=None):
     return [r["listing_id"] for r in top], {r["listing_id"]: listing_text(r) for r in top}
 
 
+def review_stats(key, lid, since, call):
+    """(reviews since `since`, reviews ever, newest review's unix time) for one
+    listing, or None if Etsy refused - from ONE call that returns the reviews
+    themselves (up to 100) and counts the recent ones here.
+
+    It used to ask Etsy with min_created and read `count`. On the droplet,
+    2026-10-02, the ten most-favourited 'dog mom mug' listings had 52 reviews
+    between them - 21 on one listing 595 days old - and min_created reported
+    0 for every one of them. Counting the dates ourselves needs no trust in a
+    filter, and the newest date is printed so a person can check it."""
+    data, _h, err = call(f"/listings/{lid}/reviews?limit=100", key)
+    if err or not isinstance(data, dict):
+        return None
+    ever = data.get("count")
+    stamps = []
+    for rv in data.get("results") or []:
+        ts = rv.get("create_timestamp") or rv.get("created_timestamp")
+        if isinstance(ts, int) and not isinstance(ts, bool) and ts > EPOCH_FLOOR:
+            stamps.append(ts)
+    if not isinstance(ever, int) or isinstance(ever, bool):
+        ever = len(stamps)
+    return sum(1 for t in stamps if t >= since), ever, (max(stamps) if stamps else None)
+
+
 def sales(key, ids, now=None, call=None):
     """Recent sales evidence for a market's top listings, or None when no
     listing could be asked about.
@@ -358,10 +382,10 @@ def sales(key, ids, now=None, call=None):
     reviews = selling = asked = 0
     sold = []
     for lid in ids or []:
-        data, _headers, err = call(f"/listings/{lid}/reviews?limit=1&min_created={since}", key)
-        n = (data or {}).get("count") if not err else None
-        if not isinstance(n, int) or isinstance(n, bool) or n < 0:
+        got = review_stats(key, lid, since, call)
+        if got is None:
             continue
+        n = got[0]
         asked += 1
         reviews += n
         selling += n > 0
@@ -394,12 +418,12 @@ def sales_check(key, phrase, call=None, now=None, by_favs=False):
         found = most_favourited(found)
     for r in found:
         lid, shop = r.get("listing_id"), r.get("shop_id")
-        recent, _h, e1 = call(f"/listings/{lid}/reviews?limit=1&min_created={since}", key)
-        ever, _h, e2 = call(f"/listings/{lid}/reviews?limit=1", key)
+        stats = review_stats(key, lid, since, call)
         sh, _h, e3 = call(f"/shops/{shop}", key) if shop else (None, None, "no shop_id")
+        recent, ever, last = stats if stats else (None, None, None)
         out.append({"listing_id": lid, "age_days": age_days(r, now), "favs": r.get("num_favorers"),
-                    "recent": None if e1 else (recent or {}).get("count"),
-                    "ever": None if e2 else (ever or {}).get("count"),
+                    "recent": recent, "ever": ever,
+                    "last": datetime.fromtimestamp(last, timezone.utc).strftime("%Y-%m-%d") if last else None,
                     "shop_sold": None if e3 else (sh or {}).get("transaction_sold_count"),
                     "title": str(r.get("title") or "")[:40]})
         if call is ep.call:
@@ -424,12 +448,15 @@ def _sales_table(key, phrase, by_favs):
         print(f"Etsy refused: {err}", file=sys.stderr)
         return 1
     f = lambda v, w: ("?" if v is None else f"{v:,.0f}").rjust(w)
+    print(f"\n  today on this machine: {datetime.now(timezone.utc):%Y-%m-%d} - the 90 days "
+          f"count back from here")
     print(f"\n  {phrase} - " + (f"the {len(rows)} most-favourited of the first {SALES_POOL}"
                                if by_favs else f"top {len(rows)} listings as the API ranks them") + "\n")
-    print(f"  {'listing':>11} {'age d':>6} {'favs':>6} {'rev 90d':>8} {'rev ever':>9} {'shop sold':>10}  title")
+    print(f"  {'listing':>11} {'age d':>6} {'favs':>6} {'rev 90d':>8} {'rev ever':>9} "
+          f"{'last review':>12} {'shop sold':>10}  title")
     for r in rows:
         print(f"  {r['listing_id']:>11} {f(r['age_days'], 6)} {f(r['favs'], 6)} {f(r['recent'], 8)} "
-              f"{f(r['ever'], 9)} {f(r['shop_sold'], 10)}  {r['title']}")
+              f"{f(r['ever'], 9)} {(r.get('last') or '-'):>12} {f(r['shop_sold'], 10)}  {r['title'][:30]}")
     ever = [r["ever"] for r in rows if r["ever"]]
     recent = [r["recent"] for r in rows if r["recent"]]
     if ever and not recent:
