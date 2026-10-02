@@ -16133,6 +16133,23 @@ class TheSameBlankTheSellersUse(unittest.TestCase):
         self.assertEqual(self.b.closest({"brand": "Gildan", "model": "18500", "attrs": []}, "poster", self.BPS), [],
                          "nothing of the same kind is not a suggestion")
 
+    def test_printifys_brand_carries_the_registered_mark(self):
+        # Bug: the BPS above write "Comfort Colors"; the real catalogue writes
+        # "Comfort Colors®" (droplet, 2026-10-02), so the bookish-sweatshirt
+        # niche - 9 of 10 selling on Comfort Colors 1717 - never matched blueprint
+        # 706 and was offered a Gildan instead. These two records are as Printify
+        # returned them.
+        real = [{"id": 706, "title": "Unisex Garment-Dyed T-shirt", "brand": "Comfort Colors®", "model": "1717"},
+                {"id": 1257, "title": "Unisex Color Blast Crewneck Sweatshirt", "brand": "Comfort Colors®", "model": "1545"},
+                {"id": 49, "title": "Unisex Heavy Blend Crewneck Sweatshirt", "brand": "Gildan", "model": "18000"}]
+        seller = self.b.identify("Bookish Sweatshirt | Comfort Colors 1717")[0]
+        self.assertEqual(self.b.matches(seller, real[0]), "exact")
+        exact = self.b.closest(seller, "tshirt", real)
+        self.assertEqual((exact[0]["id"], exact[0]["why"]), (706, "same brand and model"))
+        near = self.b.closest({"brand": "Comfort Colors", "model": "1566", "attrs": []}, "crewneck", real)
+        self.assertEqual(near[0]["id"], 1257, "the same brand's crewneck before another brand's")
+        self.assertEqual(self.b.brand_key("Bella+Canvas"), self.b.brand_key("BELLA + CANVAS™"))
+
     # --- the scan, the warning, the draft --------------------------------------
 
     def test_the_scan_reads_the_text_and_notes_who_sold(self):

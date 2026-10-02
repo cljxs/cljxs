@@ -100,12 +100,17 @@ Do not re-litigate these from your own head. They came from real scans:
   stickers`: 436,862 listings and 0.066 favourites/day, twenty-two times
   the rate at four times the supply. `laptop stickers`: 944,997 listings,
   still 0.022. Neither scan had a single dead phrase.
-* **Print-on-demand apparel is saturated.** `funny cat shirt`, 199,229
-  listings, 0.002 favourites/day. Graphic-on-a-blank is not a way in.
+* **Apparel sells, measured in sales rather than favourites.** An earlier
+  scan read `funny cat shirt` (0.002 favourites/day) as proof apparel was
+  saturated. Counting reviews instead overturned it: on the first real
+  niche run, `bookish sweatshirt` had 9 of its 10 most-wanted listings
+  selling (185 reviews in a year), `funny dad shirt` 377 reviews,
+  `hiking shirt` 8 of 10. Mugs in the same run sold 0 or 1 of 10.
 
-So: propose stickers and evergreen angles, and stop proposing seasonal
-apparel. If you think a season is worth it, the way to find out is a scan,
-not an argument.
+So: propose where the sales evidence is, best-selling first, whatever the
+product - `scout-ideas.py brief` already orders them that way. Seasonal
+phrases still need a scan showing sales before you propose one; an
+argument is not evidence.
 
 ## Be honest about what you are
 

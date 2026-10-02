@@ -164,12 +164,20 @@ def family_words(kind):
     return FAMILIES.get(f, {f} if f else set())
 
 
+def brand_key(brand):
+    """'Comfort Colors®' -> 'comfortcolors', 'Bella+Canvas' -> 'bellacanvas'.
+    Printify writes its brands with the mark ("Comfort Colors®", seen on the
+    droplet 2026-10-02) and sellers write them without, so only letters and
+    digits are compared - before this, no Comfort Colors blank ever matched."""
+    return re.sub(r"[^a-z0-9]", "", str(brand or "").lower())
+
+
 def matches(blank, entry):
     """Does a catalogue entry / Printify blueprint (brand, model, title) carry
     this blank? 'exact' (brand and model), 'brand', 'attrs', or None."""
-    b_brand = (blank.get("brand") or "").lower()
-    e_brand = str(entry.get("brand") or "").lower()
-    if b_brand and e_brand and b_brand.replace("+", "") == e_brand.replace("+", ""):
+    b_brand = brand_key(blank.get("brand"))
+    e_brand = brand_key(entry.get("brand"))
+    if b_brand and e_brand and b_brand == e_brand:
         if blank.get("model") and model_core(entry.get("model")) == blank["model"]:
             return "exact"
         return "brand" if not blank.get("model") else None
@@ -213,8 +221,8 @@ def closest(blank, kind, blueprints, keep=3):
         same_kind = bool(kind_words & title)
         if how == "exact":
             rank, why = 0, "same brand and model"
-        elif blank.get("brand") and str(bp.get("brand") or "").lower().replace("+", "") \
-                == blank["brand"].lower().replace("+", "") and same_kind:
+        elif blank.get("brand") and brand_key(bp.get("brand")) == brand_key(blank["brand"]) \
+                and same_kind:
             rank, why = 1, f"same brand ({bp.get('brand')} {bp.get('model') or ''}), same kind"
         elif how == "attrs" and same_kind:
             rank, why = 2, "same kind and the same attributes"
