@@ -29,7 +29,10 @@ function runReview(args, port) {
   return new Promise(resolve => {
     execFile('python3', [REVIEW, ...args], {
       cwd: ROOT,
-      timeout: 60000,
+      // Approving draws the art before queueing Emily, and that step is
+      // allowed 180s (emily-new-build), redraws included. At 60s an approval
+      // from the Deck could be killed half way through its own drawing.
+      timeout: 240000,
       env: { ...process.env, MISSION_CONTROL_API: `http://127.0.0.1:${port}` },
     }, (err, stdout, stderr) => {
       resolve({

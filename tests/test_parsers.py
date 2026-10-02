@@ -16764,3 +16764,16 @@ class APlaceholderIsNeverDrafted(unittest.TestCase):
         self.assertLess(len(n), self.ea.PROOF_TRIES, "no third drawing past the budget")
         self.assertIn("out of time", rep["proof"])
         self.assertLess(self.ea.REDRAW_BUDGET_S, 180, "inside emily-new-build's limit")
+
+
+class TheDeckWaitsForTheArt(unittest.TestCase):
+    """Approving an idea draws its art first (emily-new-build allows 180s,
+    proofread redraws included). The Deck's approve call gave up after 60s,
+    so an approval from the dashboard could be killed mid-drawing."""
+
+    def test_the_deck_outwaits_the_art_step(self):
+        js = (ROOT / "mission-control-api" / "scout.js").read_text()
+        ms = int(re.search(r"timeout:\s*(\d+)", js.split("function runReview", 1)[1]).group(1))
+        art = int(re.search(r"timeout=(\d+)", (SCRIPTS / "emily-new-build.py").read_text()
+                            .split("def generate_artwork(", 1)[1]).group(1))
+        self.assertGreater(ms / 1000, art)
