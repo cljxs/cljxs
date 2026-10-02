@@ -469,6 +469,37 @@ def all_over_verdict(w, h, px):
     return True, facts, None
 
 
+TRIM_MARGIN_PCT = 2.0       # of the art's own larger side, kept around it
+
+
+def trim(w, h, px, margin_pct=TRIM_MARGIN_PCT):
+    """(w, h, px) cropped to the visible art, with a small margin.
+
+    A cut-out keeps the model's whole square with the background made
+    transparent, and Printify sizes and centres the WHOLE square. So the art
+    printed wherever the model happened to draw it inside the frame: the
+    first bookish sweatshirt (2026-10-02) came out small and low on the
+    front. Cropped to what is visible, centring the file centres the art.
+    """
+    xs, ys = [], []
+    for y in range(h):
+        row = px[y * w * 4:(y + 1) * w * 4]
+        hit = [x for x in range(w) if row[x * 4 + 3]]
+        if hit:
+            xs += (hit[0], hit[-1])
+            ys.append(y)
+    if not ys:
+        return w, h, px
+    m = int(round(max(max(xs) - min(xs), ys[-1] - ys[0]) * margin_pct / 100.0))
+    x0, x1 = max(0, min(xs) - m), min(w - 1, max(xs) + m)
+    y0, y1 = max(0, ys[0] - m), min(h - 1, ys[-1] + m)
+    nw, nh = x1 - x0 + 1, y1 - y0 + 1
+    out = bytearray()
+    for y in range(y0, y1 + 1):
+        out += px[(y * w + x0) * 4:(y * w + x1 + 1) * 4]
+    return nw, nh, out
+
+
 def main():
     if len(sys.argv) < 3:
         print("usage: knockout.py <in.png> <out.png> [--tolerance N] [--keep-specks]\n"
@@ -521,6 +552,10 @@ def main():
         wiped, parts, why = despeckle(w, h, px)
         print(f"despeckle: {why}")
 
+    tw, th, px = trim(w, h, px)
+    if (tw, th) != (w, h):
+        print(f"trim: {w}x{h} -> {tw}x{th}, the visible art and a small margin")
+    w, h = tw, th
     n = encode(dst, w, h, px)
     print(f"wrote {dst} ({n:,} bytes, RGBA)")
     return 0

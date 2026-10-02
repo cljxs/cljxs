@@ -262,6 +262,20 @@ def emily_key(product):
         return None
 
 
+def emily_products():
+    """[key] of the products Emily has set up, or [] if the catalogue cannot
+    be read - and [] never refuses anything, because an unreadable file is not
+    the owner deciding the shop sells nothing."""
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "emily_printify_list", SCRIPTS / "emily-printify.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return sorted(k for k, _e in mod.products(mod.read_catalog()))
+    except Exception:
+        return []
+
+
 def catalogue_word(product):
     """'all-over-print canvas tote bag' -> 'tote'.
 
@@ -738,6 +752,18 @@ def cmd_propose(argv):
               f"results.\n\n  Nothing was written.", file=sys.stderr)
         return 2
 
+    # 4. CAN EMILY MAKE IT? The first test run (2026-10-02) proposed an
+    # embroidered chest emblem; nothing in her catalogue is one, and it was
+    # drafted as a sticker. A product she has not been set up for is refused
+    # here, with the list, rather than guessed at three steps later.
+    have = emily_products()
+    if have and not emily_key(a.product):
+        print(f"REFUSED - Emily is not set up to make {a.product.strip()!r}.\n"
+              f"  She can make: {', '.join(have)}.\n"
+              f"  Propose one of those, or nothing.\n\n  Nothing was written.",
+              file=sys.stderr)
+        return 2
+
     tier, what, why = ipc.risky(a.phrase + " " + a.title)
     rows = []
     if PROPOSALS.is_file() and PROPOSALS.read_text().strip():
@@ -872,6 +898,9 @@ def cmd_brief(_argv):
         print(f"- FOCUS: {want}. Every idea this run is a {want}, with "
               f"\"{want}\" as its product.\n  Any other product is refused "
               f"by code, whatever the wording.")
+    have = emily_products()
+    if have:
+        print(f"- products Emily can make (anything else is refused): {', '.join(have)}")
     print("- measured phrases you may use" + (f" ({want} only)" if want else "")
           + ", fresh and above zero:")
     for phrase, row in proposable():

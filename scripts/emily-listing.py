@@ -93,10 +93,26 @@ def no_folder(raw):
     return 1
 
 
+def ordered_product(d):
+    """The product this build was ordered as, or None for a build made before
+    order.json existed."""
+    try:
+        return str(json.loads((d / "order.json").read_text()).get("product") or "").strip() or None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def cmd_listing(a):
     d = build_dir(a.build_dir)
     if d is None:
         return no_folder(a.build_dir)
+    want = ordered_product(d)
+    a.product = (a.product or want or "sticker").strip()
+    if want and a.product.lower() != want.lower():
+        print(f"not written - this build was ordered as {want!r}, not {a.product!r}.\n"
+              f"  Use --product {want}. The product is the owner's choice, made "
+              f"when the idea was approved.", file=sys.stderr)
+        return 2
 
     listing = {
         "title": a.title,
@@ -191,7 +207,11 @@ def main():
     p.add_argument("--description", required=True)
     p.add_argument("--tag", action="append", default=[],
                    help="repeat for each tag: --tag fall --tag autumn")
-    p.add_argument("--product", default="sticker")
+    # No default of its own: a build knows what it was ordered as. "sticker"
+    # was the default, so a build listed without --product became a sticker -
+    # the first test run's chest emblem did (2026-10-02). Only a build from
+    # before order.json existed still falls back to it.
+    p.add_argument("--product", default=None)
     p.add_argument("--materials", default="")
     p.set_defaults(fn=cmd_listing)
 

@@ -22,6 +22,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import struct
 import sys
 import urllib.request
@@ -149,7 +150,9 @@ PRINT_DIRECTION = (
     "NOT a photograph and NOT a product mockup: no desk, no table, no wood "
     "grain, no ruler, no hand, no packaging, no printed sticker, no shelf, "
     "no room, no perspective, no drop shadow, no reflection, no watermark, "
-    "no border."
+    "no border. "
+    "Any words must be spelled exactly and read naturally. Never draw a "
+    "date, a timestamp or a file name."
 )
 
 # ...except on a product that prints its whole surface, where PRINT_DIRECTION
@@ -402,6 +405,90 @@ def generate(path, prompt, key, model=None, product="", direction=None,
     raise RuntimeError("no image returned; response keys: " + ",".join(msg.keys()))
 
 
+# THE PROOFREAD. An image model draws letters, it does not spell them: the
+# first bookish sweatshirt (2026-10-02) said "I'M JUST HE HER FOR THE BOOKISH
+# MERCH" and an emblem carried that day's date. Nothing read the words back, so
+# both went to Printify. A model that reads images now does, and code - not
+# that model - decides what counts as a problem.
+DEFAULT_PROOF_MODEL = "google/gemini-2.5-flash"
+PROOF_TRIES = 3
+
+PROOF_ASK = (
+    "This is a print file for a product. Read every piece of text drawn in it, "
+    "exactly as drawn, letter for letter - do not correct anything. Then check "
+    "it as a customer would. Reply with JSON only, nothing else:\n"
+    '{"lines": [each line of text as drawn], "errors": [each misspelled word, '
+    "garbled or doubled or missing word, or broken letter, quoted as drawn "
+    'with what it should be]}\n'
+    'If there is no text, reply {"lines": [], "errors": []}.'
+)
+
+_MONTH = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?"
+DATE_RE = re.compile(
+    r"\b(?:19|20)\d{2}\s?[-/.]\s?\d{1,2}\s?[-/.]\s?\d{1,2}\b"        # 2026-10-02
+    r"|\b\d{1,2}\s?[-/.]\s?\d{1,2}\s?[-/.]\s?(?:19|20)?\d{2}\b"       # 10/02/2026
+    r"|\b" + _MONTH + r"\s+\d{1,2}(?:st|nd|rd|th)?\b"                # Oct 2
+    r"|\b\d{1,2}(?:st|nd|rd|th)?\s+" + _MONTH + r"(?=\W|$)",          # 2 October
+    re.I)
+
+
+def proof_model(override=None):
+    return (override or os.environ.get("EMILY_PROOF_MODEL") or "").strip() \
+        or DEFAULT_PROOF_MODEL
+
+
+def read_proof(content):
+    """The JSON object in a proofreading reply, or None. Models wrap JSON in
+    prose or a ```json fence often enough that only the braces are trusted."""
+    text = content if isinstance(content, str) else ""
+    if isinstance(content, list):                       # content parts
+        text = " ".join(str(p.get("text") or "") for p in content if isinstance(p, dict))
+    a, b = text.find("{"), text.rfind("}")
+    if a < 0 or b <= a:
+        return None
+    try:
+        d = json.loads(text[a:b + 1])
+    except ValueError:
+        return None
+    return d if isinstance(d, dict) else None
+
+
+def proof_problems(reading):
+    """[problem] from what the proofreader read. A year alone is allowed -
+    "EST. 2026" is a style - a calendar date never is."""
+    lines = [str(x) for x in (reading or {}).get("lines") or [] if str(x).strip()]
+    out = [f"prints a date: {m.group(0)!r}" for m in DATE_RE.finditer(" / ".join(lines))]
+    out += [f"text error: {e}" for e in (reading or {}).get("errors") or [] if str(e).strip()]
+    return out
+
+
+def proof(path, key, model=None):
+    """(problems, lines) for the text drawn in an image. Raises if the
+    proofreader cannot be asked or its answer cannot be read - an unread
+    proof is not a passed one, and the caller says which happened."""
+    data = base64.b64encode(Path(path).read_bytes()).decode()
+    body = json.dumps({
+        "model": proof_model(model),
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": PROOF_ASK},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{data}"}}]}],
+    }).encode()
+    req = urllib.request.Request(OR_URL, data=body, headers={
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/cljxs/cljxs",
+        "X-Title": "emily-proof",
+    })
+    with urllib.request.urlopen(req, timeout=120) as r:
+        data = json.loads(r.read())
+    msg = (data.get("choices") or [{}])[0].get("message") or {}
+    reading = read_proof(msg.get("content"))
+    if reading is None:
+        raise RuntimeError("the proofreader's reply was not JSON: "
+                           + str(msg.get("content"))[:120])
+    return proof_problems(reading), [str(x) for x in reading.get("lines") or []]
+
+
 def cost_of(usage):
     """What the call cost in dollars, or None if the provider did not say.
 
@@ -489,7 +576,34 @@ def compare(prompt, models, key, out_dir, product=""):
     return 0 if drawn else 1
 
 
+def cmd_proof(paths):
+    """emily-assets.py proof <png> ... - read the words in existing art, the
+    same proofread drafts get. The way to check the proofreader on a real
+    file, which is the only kind of check that has ever caught a parser bug."""
+    load_credentials()
+    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if not key:
+        print("no OPENROUTER_API_KEY - nothing can be proofread", file=sys.stderr)
+        return 2
+    worst = 0
+    for p in paths:
+        try:
+            problems, lines = proof(p, key)
+        except Exception as exc:
+            print(f"{p}: NOT PROOFREAD - {type(exc).__name__}: {str(exc)[:160]}")
+            worst = 2
+            continue
+        print(f"{p}: reads {' / '.join(lines) or '(no text)'}")
+        for x in problems:
+            print(f"  PROBLEM: {x}")
+        worst = max(worst, 1 if problems else 0)
+    print(f"proofread by {proof_model()}")
+    return worst
+
+
 def main():
+    if sys.argv[1:2] == ["proof"]:
+        return cmd_proof(sys.argv[2:])
     ap = argparse.ArgumentParser()
     ap.add_argument("--prompt", required=True)
     ap.add_argument("--out", required=True)
@@ -516,12 +630,26 @@ def main():
     if key and not a.placeholder_only:
         try:
             model = image_model(a.model)
-            n, usage = generate(a.out, a.prompt, key, model, a.product)
+            prompt, problems, lines, note = a.prompt, [], [], None
+            for attempt in range(1, PROOF_TRIES + 1):
+                n, usage = generate(a.out, prompt, key, model, a.product)
+                try:
+                    problems, lines = proof(a.out, key)
+                except Exception as exc:
+                    note = f"text not proofread: {str(exc)[:120]}"
+                    break
+                if not problems:
+                    break
+                # Drawn again with what went wrong said plainly.
+                prompt = (f"{a.prompt}\n\nThe last attempt was wrong: "
+                          + "; ".join(problems) + ". Spell every word exactly; no dates.")
             print(json.dumps({"ok": True, "mode": "generated", "model": model,
                               "path": a.out, "bytes": n,
                               "asked_shape": shape(a.product),
                               "got_size": _size_of(a.out),
-                              "cost_usd": cost_of(usage)}))
+                              "cost_usd": cost_of(usage),
+                              "attempts": attempt, "text": lines,
+                              "proof": note or (problems or "clean")}))
             return 0
         except Exception as exc:
             print(json.dumps({"ok": False, "mode": "generate-failed",

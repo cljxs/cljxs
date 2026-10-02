@@ -159,8 +159,11 @@ suggest or mention a price, and do not run `market-price`, `costs` or
 3. **Write the listing copy** — with this command, never by hand:
 
    ```
-   python3 ../../scripts/emily-listing.py listing builds/<slug> --title "..." --description "..." --tag fall --tag autumn --product sticker
+   python3 ../../scripts/emily-listing.py listing builds/<slug> --title "..." --description "..." --tag fall --tag autumn --product <the task's product, exactly>
    ```
+
+   `--product` is the product named in your task, letter for letter. The
+   command refuses any other - the owner chose it when approving the idea.
 
    Repeat `--tag` for each tag. Quotes, apostrophes and line breaks in your
    copy are fine — the command does the escaping, which is the entire reason

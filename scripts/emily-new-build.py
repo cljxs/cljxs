@@ -168,6 +168,17 @@ def main():
         except OSError as exc:
             print(f"  evidence not saved with the build ({exc})", file=sys.stderr)
 
+    # THE PRODUCT ORDERED, kept with the build, so the listing step can refuse
+    # any other. The first test run's emblem was ordered as one thing and
+    # listed as a sticker - the example in Emily's instructions said sticker.
+    root = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
+    try:
+        (root / "agents" / "emily" / "builds" / slug).mkdir(parents=True, exist_ok=True)
+        (root / "agents" / "emily" / "builds" / slug / "order.json").write_text(
+            json.dumps({"product": a.product}, indent=1) + "\n")
+    except OSError as exc:
+        print(f"  the ordered product was not saved with the build ({exc})", file=sys.stderr)
+
     print(f"generating artwork for '{slug}' ...")
     art_ok, art_msg = generate_artwork(slug, a.idea, a.brief, a.product,
                                        evidence)

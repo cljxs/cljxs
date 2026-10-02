@@ -772,16 +772,49 @@ def layout_images(image_id, image, area, folded):
             {"id": image_id, "x": 0.5, "y": 0.75, "scale": sc, "angle": 180}]
 
 
-def print_areas(image_id, image, variant_ids, entry):
+def is_garment(entry):
+    """Is this something worn - do its variants come in S, M, L?"""
+    return any(size_of(t) for t in (entry or {}).get("variant_titles") or [])
+
+
+def fit_images(image_id, image, area, top):
+    """One image, as large as fits inside the print area, centred across.
+
+    For a print that sits ON a product - a chest print, a mug, a tote face -
+    rather than covering it. Scale 1 means as wide as the area, which is right
+    for wide art and too tall for tall art, so the scale is cut until the
+    height fits too. A garment's art goes to the top of its area, where a chest
+    print sits; anything else is centred both ways. The first bookish
+    sweatshirt (2026-10-02) printed small and low on the front: the file was
+    the model's whole square, placed at its middle.
+    """
+    iw, ih = image
+    aw, ah = area
+    sc = min(1.0, (ah / aw) * (iw / ih))
+    y = (sc * aw * ih / iw) / ah / 2 if top else 0.5
+    return [{"id": image_id, "x": 0.5, "y": round(y, 4), "scale": round(sc, 4), "angle": 0}]
+
+
+def print_areas(image_id, image, variant_ids, entry, measured=None):
     """print_areas for a product spec.
 
-    With recorded print sizes, variants are grouped by size and each group
-    gets its own layout - a 13" and an 18" tote are different sheets, and
-    one set of numbers for both would cover one and gap the other. Without
-    them, the old single centred image, which is right for everything that
-    is not an all-over print and is what those products have always had.
+    With recorded print sizes (an all-over sheet, measured by `layout`),
+    variants are grouped by size and each group gets its own layout - a 13"
+    and an 18" tote are different sheets, and one set of numbers for both
+    would cover one and gap the other. With sizes `measured` at draft time,
+    the art is fitted inside each area (fit_images). With neither, the old
+    single centred image.
     """
     sizes = {int(k): tuple(v) for k, v in (entry.get("print_sizes") or {}).items()}
+    if not sizes and measured and image and all(v in measured for v in variant_ids):
+        groups = {}
+        for v in variant_ids:
+            groups.setdefault(tuple(measured[v]), []).append(v)
+        top = is_garment(entry)
+        return [{"variant_ids": vids, "placeholders": [{
+                    "position": "front",
+                    "images": fit_images(image_id, image, area, top)}]}
+                for area, vids in sorted(groups.items())]
     if not sizes:
         return [{"variant_ids": list(variant_ids), "placeholders": [{
             "position": "front",
@@ -1547,6 +1580,24 @@ def blank_warning(build_dir, cat_key, cat, product_type):
     return lines
 
 
+def proofread(design):
+    """(problems, note) for the text drawn in a design. emily-assets.py owns
+    the proofread; this only asks it. ([], why) when it could not be asked."""
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "emily_assets_proof", Path(__file__).resolve().parent / "emily-assets.py")
+        ea = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ea)
+        ea.load_credentials()
+        key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+        if not key:
+            return [], "NOT PROOFREAD - no OpenRouter key"
+        problems, lines = ea.proof(design, key)
+    except Exception as exc:
+        return [], f"NOT PROOFREAD - {type(exc).__name__}: {str(exc)[:100]}"
+    return problems, ("proofread, reads: " + " / ".join(lines)) if lines else "proofread, no text"
+
+
 # The price a draft carries until the owner sets one in Printify. Not a price.
 PLACEHOLDER_CENTS = 599
 
@@ -1672,6 +1723,21 @@ def cmd_draft(a):
               f"for flat art on a plain background.", file=sys.stderr)
         sys.exit(1)
 
+    # THE WORDS ARE READ BEFORE ANYTHING IS UPLOADED. emily-assets.py proofreads
+    # as it draws and redraws on a mistake, but a file can reach here other
+    # ways, and a misspelled shirt in the shop is worse than no draft. So the
+    # same proofread, imported, has the last word. An unread proof is said out
+    # loud and the draft goes ahead - a dead proofreader must not stop the shop.
+    problems, note = proofread(design)
+    if problems:
+        print(f"\nnot drafting: the artwork's text is wrong -", file=sys.stderr)
+        for p in problems:
+            print(f"  - {p}", file=sys.stderr)
+        print(f"  Regenerate the art: emily-assets.py proofreads and redraws.",
+              file=sys.stderr)
+        sys.exit(1)
+    print(f"text: {note}")
+
     # Apparel needs that background actually removed before it goes anywhere
     # near a garment: an opaque file prints its background as a visible
     # rectangle - a white box on a black hoodie.
@@ -1721,9 +1787,19 @@ def cmd_draft(a):
               f"${fallback/100:.2f} placeholder.\n  Set the real price in Printify "
               f"before you publish.")
 
+    # The print area of each variant, read now, so the art can be fitted
+    # inside it. A failed read is the old centred placement, said out loud.
+    measured = None
+    if not cat.get("print_sizes"):
+        try:
+            measured = front_sizes(call(f"/catalog/blueprints/{cat['blueprint_id']}"
+                                        f"/print_providers/{cat['provider_id']}/variants.json"))
+        except (Exception, SystemExit) as exc:
+            print(f"note: print area not read ({type(exc).__name__}) - placing the "
+                  f"art centred at full width")
     try:
         areas = print_areas(image_id, _knockout().size(upload_from),
-                            variant_ids, cat)
+                            variant_ids, cat, measured)
     except KeyError as exc:
         print(f"variant {exc} has no recorded print size. Re-measure:\n"
               f"  emily-printify.py layout --product {cat_key}", file=sys.stderr)

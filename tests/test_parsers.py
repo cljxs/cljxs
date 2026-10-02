@@ -11143,7 +11143,7 @@ class AnAllOverPrintHasNoBackground(unittest.TestCase):
         src = (SCRIPTS / "emily-assets.py").read_text()
         self.assertIn('ap.add_argument("--product"', src)
         gen = src.split("def main(", 1)[1]
-        self.assertIn("generate(a.out, a.prompt, key, model, a.product)", gen,
+        self.assertIn("generate(a.out, prompt, key, model, a.product)", gen,
                       "parsed and never passed is not passed")
 
 
@@ -16505,3 +16505,203 @@ class ScoutsProductIsEmilysProduct(unittest.TestCase):
     def test_propose_files_the_key(self):
         src = (SCRIPTS / "scout-ideas.py").read_text().split("def cmd_propose(", 1)[1].split("\ndef ", 1)[0]
         self.assertIn('"product": emily_key(a.product) or a.product.strip()', src)
+
+
+class TheFirstTestDraftsPrintRight(unittest.TestCase):
+    """The owner's first end-to-end run (2026-10-02) drafted two products and
+    both were wrong in ways no check caught:
+
+      * "Cozy Bookish Merch Sweat" read "I'M JUST HE HER FOR THE BOOKISH
+        MERCH" and sat small and low on the front.
+      * "Threaded Spine Chest Emblem" carried that day's date, 2026-10-02,
+        and was drafted as a sticker - Scout proposed an embroidered emblem,
+        which Emily has no product for.
+
+    So: a cut-out is trimmed to its art and fitted to the measured print
+    area, top of the chest on a garment; the words are proofread as the art
+    is drawn and again before upload; and Scout cannot propose a product
+    Emily has not been set up for."""
+
+    def setUp(self):
+        self.k = load("knockout_trim", "knockout.py")
+        self.ep = load("emily_printify_fit", "emily-printify.py")
+        self.ea = load("emily_assets_proof", "emily-assets.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+
+    # --- placement ---------------------------------------------------------
+
+    def art_in_a_corner(self):
+        """A 120x120 cream square with a 60x40 red block low and to the left -
+        where the bookish text sat in its frame."""
+        w = h = 120
+        px = bytearray()
+        for y in range(h):
+            for x in range(w):
+                inside = 10 <= x < 70 and 70 <= y < 110
+                px += bytes([200, 30, 30, 255]) if inside else bytes([245, 240, 225, 255])
+        src = self.dir / "design.png"
+        self.k.encode(src, w, h, px)
+        return src
+
+    def test_a_cutout_is_trimmed_to_its_art(self):
+        src, out = self.art_in_a_corner(), self.dir / "cut.png"
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knockout.py"), str(src), str(out)],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        w, h = self.k.size(out)
+        self.assertTrue(w < 70 and h < 50, f"the empty frame around the art is gone: {w}x{h}")
+        self.assertTrue(w >= 60 and h >= 40, f"and none of the art: {w}x{h}")
+
+    def test_nothing_visible_is_left_alone(self):
+        self.assertEqual(self.k.trim(10, 10, bytearray(400))[:2], (10, 10))
+
+    def test_a_garments_art_goes_to_the_top_of_its_area(self):
+        crew = {"variant_titles": ["S / White", "M / White"]}
+        img = self.ep.print_areas("I", (900, 420), [1, 2], crew,
+                                  {1: (3600, 4200), 2: (3600, 4200)})[0]["placeholders"][0]["images"][0]
+        self.assertEqual((img["x"], img["scale"]), (0.5, 1.0), "centred across, full width")
+        top = img["y"] - img["scale"] * 3600 * 420 / 900 / 4200 / 2
+        self.assertAlmostEqual(top, 0.0, places=3)
+
+    def test_tall_art_is_shrunk_to_fit_not_cropped(self):
+        img = self.ep.print_areas("I", (400, 900), [1], {"variant_titles": ["L / Ash"]},
+                                  {1: (3600, 4200)})[0]["placeholders"][0]["images"][0]
+        self.assertLessEqual(img["scale"] * 3600 * 900 / 400, 4200 + 1)
+
+    def test_anything_not_worn_is_centred(self):
+        img = self.ep.print_areas("I", (900, 420), [1], {"variant_titles": ["11oz"]},
+                                  {1: (2700, 1050)})[0]["placeholders"][0]["images"][0]
+        self.assertEqual(img["y"], 0.5)
+
+    def test_without_a_measurement_nothing_moves(self):
+        self.assertEqual(self.ep.print_areas("I", (900, 420), [1], {"variant_titles": ["S"]}),
+                         self.ep.print_areas("I", (900, 420), [1], {}, None))
+        self.assertEqual(self.ep.print_areas("I", (900, 420), [1, 2], {}, {1: (10, 10)})[0]
+                         ["placeholders"][0]["images"][0]["scale"], 1, "a variant unmeasured: as before")
+
+    # --- the words -----------------------------------------------------------
+
+    def test_the_two_real_mistakes_are_caught(self):
+        sweat = self.ea.read_proof('```json\n{"lines": ["I\'M JUST HE HER", "FOR THE BOOKISH MERCH.", '
+                                   '"EST. 2026"], "errors": ["HE HER -> HERE"]}\n```')
+        self.assertEqual(self.ea.proof_problems(sweat), ["text error: HE HER -> HERE"])
+        emblem = self.ea.read_proof('{"lines": ["2026-10-02"], "errors": []}')
+        self.assertEqual(self.ea.proof_problems(emblem), ["prints a date: '2026-10-02'"])
+
+    def test_a_year_is_a_style_and_a_date_is_not(self):
+        ok = {"lines": ["EST. 2026", "Since May 2020", "Book Club"], "errors": []}
+        self.assertEqual(self.ea.proof_problems(ok), [])
+        for d in ("10/02/2026", "Oct 2", "2 October", "2026.10.02"):
+            self.assertTrue(self.ea.proof_problems({"lines": [d]}), d)
+
+    def test_an_unreadable_reply_is_not_a_pass(self):
+        self.assertIsNone(self.ea.read_proof("Looks great!"))
+        self.assertIsNone(self.ea.read_proof("{not json}"))
+
+    def test_a_mistake_is_drawn_again(self):
+        calls, prompts = [], []
+
+        def generate(path, prompt, key, model=None, product=""):
+            prompts.append(prompt)
+            Path(path).write_bytes(b"x" * 3000)
+            return 3000, {}
+
+        def proof(path, key, model=None):
+            calls.append(1)
+            return (["text error: HE HER -> HERE"], ["I'M JUST HE HER"]) if len(calls) == 1 \
+                else ([], ["I'M JUST HERE"])
+
+        self.ea.generate, self.ea.proof = generate, proof
+        self.ea.load_credentials = lambda: None
+        real = sys.argv
+        sys.argv = ["emily-assets.py", "--prompt", "bookish", "--out", str(self.dir / "d.png")]
+        os.environ["OPENROUTER_API_KEY"] = "test-not-a-key"
+        self.addCleanup(os.environ.pop, "OPENROUTER_API_KEY", None)
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                self.ea.main()
+        finally:
+            sys.argv = real
+        rep = json.loads(out.getvalue())
+        self.assertEqual((rep["attempts"], rep["proof"]), (2, "clean"))
+        self.assertIn("HE HER -> HERE", prompts[1], "told what went wrong")
+
+    def test_the_draft_reads_the_words_before_uploading(self):
+        body = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("proofread(design)", body)
+        self.assertLess(body.index("proofread(design)"), body.index("/uploads/images.json"))
+        self.assertIn("measured", body.split("print_areas(image_id", 1)[1][:120])
+
+    def test_the_art_direction_forbids_dates(self):
+        self.assertIn("Never draw a date", self.ea.PRINT_DIRECTION)
+
+    # --- the product ---------------------------------------------------------
+
+    def test_scout_cannot_propose_what_emily_cannot_make(self):
+        root = self.dir / "eco"
+        state = root / "agents/scout/state"
+        (state / "scans").mkdir(parents=True)
+        (state / "ideas.json").write_text('{"ideas":[]}')
+        (state / "scans/s.json").write_text(json.dumps({
+            "seed": "bookish sweatshirt", "scanned_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "rows": [{"phrase": "bookish sweatshirt embroidered", "supply": 5000, "heat": 0.05, "pull": 0.04,
+                      "price": 40.0, "match": 1.0, "selling": 8, "sales_n": 10, "reviews": 60,
+                      "returned": 25, "heat_n": 25, "pull_n": 25, "score": 0.02}], "excluded": []}))
+        (root / "agents/emily/state").mkdir(parents=True)
+        (root / "agents/emily/state/printify-catalog.json").write_text(json.dumps({
+            "sticker": {"blueprint_id": 400, "blueprint_title": "Round Vinyl Stickers"},
+            "sweatshirt": {"blueprint_id": 49, "blueprint_title": "Unisex Heavy Blend™ Crewneck Sweatshirt"}}))
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(root))
+
+        def propose(product):
+            return subprocess.run([sys.executable, str(SCRIPTS / "scout-ideas.py"), "propose",
+                                   "--phrase", "bookish sweatshirt embroidered",
+                                   "--title", "Threaded Spine Chest Emblem", "--product", product],
+                                  capture_output=True, text=True, env=env)
+        r = propose("embroidered chest emblem")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("She can make: sticker, sweatshirt", r.stderr)
+        r = propose("crewneck sweatshirt")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        filed = json.loads((state / "proposals.json").read_text())["proposals"][0]
+        self.assertEqual(filed["product"], "sweatshirt")
+        brief = subprocess.run([sys.executable, str(SCRIPTS / "scout-ideas.py"), "brief"],
+                               capture_output=True, text=True, env=env)
+        self.assertIn("products Emily can make (anything else is refused): sticker, sweatshirt", brief.stdout)
+
+    def listing(self, *extra, order=None):
+        m = load("emily_listing_order", "emily-listing.py")
+        m.ROOT = self.dir
+        b = self.dir / "agents/emily/builds/emblem"
+        b.mkdir(parents=True, exist_ok=True)
+        if order:
+            (b / "order.json").write_text(json.dumps({"product": order}))
+        real, err = sys.argv, io.StringIO()
+        sys.argv = ["emily-listing.py", "listing", "emblem", "--title", "Threaded Spine",
+                    "--description", "D", "--tag", "bookish", *extra]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                code = m.main()
+        finally:
+            sys.argv = real
+        got = b / "listing.json"
+        return code, (json.loads(got.read_text())["product_type"] if got.exists() else None), err.getvalue()
+
+    def test_a_listing_without_a_product_is_the_product_ordered(self):
+        code, product, _ = self.listing(order="sweatshirt")
+        self.assertEqual((code, product), (0, "sweatshirt"), "not the old sticker default")
+
+    def test_a_listing_for_another_product_is_refused(self):
+        code, product, err = self.listing("--product", "sticker", order="sweatshirt")
+        self.assertEqual((code, product), (2, None))
+        self.assertIn("ordered as 'sweatshirt'", err)
+
+    def test_the_build_records_what_was_ordered(self):
+        src = (SCRIPTS / "emily-new-build.py").read_text()
+        self.assertIn('"order.json"', src)
+        self.assertIn('{"product": a.product}', src)
+        h = (ROOT / "agents/emily/_emily-agents-header.md").read_text()
+        self.assertNotIn("--product sticker", h, "no product in the example to copy")
