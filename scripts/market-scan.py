@@ -242,10 +242,7 @@ def measure(data, now=None, phrase=""):
         # What each of those listings says about itself - title, description,
         # materials - for blanks.py to read which shirt/mug/poster it is on.
         # Kept in memory for the scan, never saved: it is sellers' copy.
-        "texts": {r["listing_id"]: " ".join(
-                      str(r.get(k) or "") if k != "materials" else " ".join(map(str, r.get(k) or []))
-                      for k in ("title", "description", "materials"))
-                  for r in rows[:SALES_LISTINGS]
+        "texts": {r["listing_id"]: listing_text(r) for r in rows[:SALES_LISTINGS]
                   if isinstance(r.get("listing_id"), int) and not isinstance(r.get("listing_id"), bool)},
         "dropped": [],
     }
@@ -305,6 +302,44 @@ def opportunity(m):
     return m["heat"] / math.log10(max(m["supply"], 10))
 
 
+def listing_text(r):
+    """Title, description and materials - what blanks.py reads."""
+    return " ".join(str(r.get(k) or "") if k != "materials" else " ".join(map(str, r.get(k) or []))
+                    for k in ("title", "description", "materials"))
+
+
+# WHICH listings sales are asked about (2026-10-02, from the first droplet
+# sales-check). The API's own top 10 for 'dog mom mug' were 2 to 8 years old
+# with 0-10 favourites and almost no reviews ever - from shops with 6,000 to
+# 40,000 sales. sort_on=score is not the website's ranking, and nothing sorts
+# by popularity. So: take SALES_POOL results (the API's maximum) and ask
+# about the SALES_LISTINGS most-favourited of them - favourites are the
+# public signal that tracks sales.
+SALES_POOL = 100
+
+
+def most_favourited(results):
+    """The SALES_LISTINGS listings with the most favourites - the one ranking
+    both the scan and sales-check use."""
+    rows = [r for r in results or []
+            if isinstance(r.get("listing_id"), int) and not isinstance(r.get("listing_id"), bool)]
+    rows.sort(key=lambda r: -(r.get("num_favorers") if isinstance(r.get("num_favorers"), int) else -1))
+    return rows[:SALES_LISTINGS]
+
+
+def top_by_favs(key, phrase, call=None):
+    """(ids, texts) of the most-favourited SALES_LISTINGS of the first
+    SALES_POOL results for a phrase, or (None, error)."""
+    import urllib.parse
+    call = call or ep.call
+    q = urllib.parse.urlencode({"keywords": phrase, "limit": SALES_POOL, "sort_on": "score"})
+    data, _h, err = call(f"/listings/active?{q}", key)
+    if err:
+        return None, err
+    top = most_favourited((data or {}).get("results"))
+    return [r["listing_id"] for r in top], {r["listing_id"]: listing_text(r) for r in top}
+
+
 def sales(key, ids, now=None, call=None):
     """Recent sales evidence for a market's top listings, or None when no
     listing could be asked about.
@@ -338,7 +373,7 @@ def sales(key, ids, now=None, call=None):
     return {"reviews": reviews, "selling": selling, "sales_n": asked, "sold_ids": sold}
 
 
-def sales_check(key, phrase, call=None, now=None):
+def sales_check(key, phrase, call=None, now=None, by_favs=False):
     """The raw numbers behind a phrase's sales line, one row per top listing:
     age, favourites, reviews in the last SALES_DAYS, reviews ever, and its
     shop's lifetime sales. Asked because the first droplet run read 0 of 10
@@ -347,13 +382,17 @@ def sales_check(key, phrase, call=None, now=None):
     import urllib.parse
     call = call or ep.call
     now = now if now is not None else time.time()
-    q = urllib.parse.urlencode({"keywords": phrase, "limit": SALES_LISTINGS, "sort_on": "score"})
+    q = urllib.parse.urlencode({"keywords": phrase, "limit": SALES_POOL if by_favs else SALES_LISTINGS,
+                                "sort_on": "score"})
     data, _h, err = call(f"/listings/active?{q}", key)
     if err:
         return None, err
     since = int(now - SALES_DAYS * 86400)
     out = []
-    for r in (data or {}).get("results") or []:
+    found = (data or {}).get("results") or []
+    if by_favs:
+        found = most_favourited(found)
+    for r in found:
         lid, shop = r.get("listing_id"), r.get("shop_id")
         recent, _h, e1 = call(f"/listings/{lid}/reviews?limit=1&min_created={since}", key)
         ever, _h, e2 = call(f"/listings/{lid}/reviews?limit=1", key)
@@ -370,12 +409,23 @@ def sales_check(key, phrase, call=None, now=None):
 
 def cmd_sales_check(key, words):
     phrase = " ".join(words)
-    rows, err = sales_check(key, phrase)
+    for by_favs in (False, True):
+        code = _sales_table(key, phrase, by_favs)
+        if code:
+            return code
+    print(f"\n  The scan asks about the second table: the {SALES_LISTINGS} most-favourited "
+          f"of the first {SALES_POOL}.")
+    return 0
+
+
+def _sales_table(key, phrase, by_favs):
+    rows, err = sales_check(key, phrase, by_favs=by_favs)
     if err:
         print(f"Etsy refused: {err}", file=sys.stderr)
         return 1
     f = lambda v, w: ("?" if v is None else f"{v:,.0f}").rjust(w)
-    print(f"\n  {phrase} - top {len(rows)} listings as the API ranks them\n")
+    print(f"\n  {phrase} - " + (f"the {len(rows)} most-favourited of the first {SALES_POOL}"
+                               if by_favs else f"top {len(rows)} listings as the API ranks them") + "\n")
     print(f"  {'listing':>11} {'age d':>6} {'favs':>6} {'rev 90d':>8} {'rev ever':>9} {'shop sold':>10}  title")
     for r in rows:
         print(f"  {r['listing_id']:>11} {f(r['age_days'], 6)} {f(r['favs'], 6)} {f(r['recent'], 8)} "
@@ -529,7 +579,11 @@ def cmd_scan(key, words):
     # Sales evidence for the strongest phrases. Every other number here is
     # favourites; these are purchases.
     for cand, m in ranked[:SALES_PHRASES]:
-        got = sales(key, m.get("ids"))
+        ids, texts = top_by_favs(key, cand)
+        if ids is None:                      # the wider search failed: the scan's own top
+            ids, texts = m.get("ids"), m.get("texts")
+        m["texts"] = texts
+        got = sales(key, ids)
         if got:
             m.update(got)
             # Which blank the listings that SOLD are printed on (blanks.py).

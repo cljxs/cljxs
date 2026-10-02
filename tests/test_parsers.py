@@ -16290,3 +16290,43 @@ class TheFirstRealNicheRun(unittest.TestCase):
                          {"recent": 0, "ever": 12, "shop_sold": 5400, "favs": 40})
         self.assertAlmostEqual(rows[0]["age_days"], 400, places=0)
         self.assertIn("sales-check", (SCRIPTS / "market-scan.py").read_text().split("def main(", 1)[1])
+
+
+class SalesAreAskedOfTheListingsPeopleWant(unittest.TestCase):
+    """2026-10-02, the first sales-check on the droplet: the API's top 10 for
+    'dog mom mug' were 609 to 3,058 days old with 0-10 favourites and 5
+    reviews between them - from shops with 6,270 to 40,012 sales. The count
+    was right; the listings were the wrong ones. Sales are now asked of the
+    most-favourited 10 of the API's first 100."""
+
+    def setUp(self):
+        self.ms = load("market_scan_favs", "market-scan.py")
+        self.asked = []
+        rows = [{"listing_id": i, "num_favorers": f, "title": f"mug {i}", "description": "11oz ceramic"}
+                for i, f in enumerate([0, 9, 0, 263, 4, 0, 10, 1, 5000, 120, 77, 3, 41, 900], start=1)]
+        rows.append({"listing_id": "bad", "num_favorers": 99999})
+        def call(path, key):
+            self.asked.append(path)
+            if path.startswith("/listings/active"):
+                return {"results": rows}, {}, None
+            if "/reviews" in path:
+                return {"count": 2}, {}, None
+            return {"transaction_sold_count": 1}, {}, None
+        self.call = call
+
+    def test_the_most_favourited_of_the_pool(self):
+        ids, texts = self.ms.top_by_favs("k", "dog mom mug", call=self.call)
+        self.assertEqual(ids, [9, 14, 4, 10, 11, 13, 7, 2, 5, 12])
+        self.assertIn("limit=100", self.asked[0])
+        self.assertIn("11oz ceramic", texts[9])
+
+    def test_sales_check_shows_the_favourite_order_too(self):
+        rows, _ = self.ms.sales_check("k", "dog mom mug", call=self.call, by_favs=True)
+        self.assertEqual([r["listing_id"] for r in rows][:3], [9, 14, 4])
+        rows, _ = self.ms.sales_check("k", "dog mom mug", call=self.call)
+        self.assertEqual([r["listing_id"] for r in rows][:3], [1, 2, 3], "and the API's own order")
+
+    def test_the_scan_uses_the_favourite_order(self):
+        src = (SCRIPTS / "market-scan.py").read_text().split("def cmd_scan(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("ids, texts = top_by_favs(key, cand)", src)
+        self.assertIn("got = sales(key, ids)", src)
