@@ -57,8 +57,9 @@ BRANDS = {
     "lane seven": "Lane Seven",
 }
 # A model is letters-optional then 3-5 digits, close after the brand:
-# "1717", "C1717", "SS4500", "3001CVC".
-MODEL = r"(?:[A-Za-z]{0,3}\d{3,5}[A-Za-z]{0,3})"
+# "1717", "C1717", "SS4500", "3001CVC". Never a percentage: the droplet read
+# "Comfort Colors 100% cotton" as a model 100.
+MODEL = r"(?:[A-Za-z]{0,3}\d{3,5}[A-Za-z]{0,3}(?!\s?%|\d))"
 _BRAND_RE = re.compile(
     r"\b(" + "|".join(re.escape(b) for b in sorted(BRANDS, key=len, reverse=True)) + r")\b"
     r"(?:\s*(?:®|™|co\.?|brand))*[\s:#\-–,]{0,4}(?:style\s*#?\s*)?(" + MODEL + r")?",

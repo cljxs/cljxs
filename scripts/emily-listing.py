@@ -3,7 +3,7 @@
 emily-listing.py — write Emily's two JSON files, so she never hand-writes JSON.
 
     emily-listing.py listing builds/<slug> --title "..." --description "..."
-                     --tag fall --tag autumn --product sticker --price 5.99
+                     --tag fall --tag autumn --product sticker
 
     emily-listing.py build builds/<slug> --status ready_local --art generated
 
@@ -104,8 +104,6 @@ def cmd_listing(a):
         "tags": a.tag,
         "product_type": a.product,
     }
-    if a.price is not None:
-        listing["price_suggestion"] = a.price
     if a.materials:
         listing["materials"] = a.materials
 
@@ -124,8 +122,6 @@ def cmd_listing(a):
     print(f"  title       {listing['title']}")
     print(f"  product     {listing['product_type']}")
     print(f"  tags        {len(a.tag)}: {', '.join(a.tag)}")
-    if a.price is not None:
-        print(f"  suggests    ${a.price:.2f}")
     return 0
 
 
@@ -196,7 +192,6 @@ def main():
     p.add_argument("--tag", action="append", default=[],
                    help="repeat for each tag: --tag fall --tag autumn")
     p.add_argument("--product", default="sticker")
-    p.add_argument("--price", type=float, default=None)
     p.add_argument("--materials", default="")
     p.set_defaults(fn=cmd_listing)
 

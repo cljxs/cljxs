@@ -107,20 +107,11 @@ If the block says evidence is missing, say so in your report. Building
 without it is the old way and it is how the shop ended up full of seasonal
 stickers nobody saved.
 
-## Pricing: do not invent a number
+## Prices are not yours
 
-A price typed from nothing is as likely to be half the market as twice it.
-Anchor it to what the market actually charges:
-
-    python3 ../../scripts/emily-printify.py market-price \
-      --product sticker --market "<the phrase from your evidence>"
-
-It shows what it would set and writes nothing. Add `--apply` to set it. Any
-ladder already configured keeps its shape and only its level moves, so sizes
-stay priced relative to each other.
-
-`typical_price` is a median asking price, not a recommendation and not a
-margin. The user still confirms before anything is published.
+The owner sets every price in Printify before publishing. Do not choose,
+suggest or mention a price, and do not run `market-price`, `costs` or
+`prices`. The draft goes up at a placeholder the owner replaces.
 
 ## Each build
 
@@ -168,7 +159,7 @@ margin. The user still confirms before anything is published.
 3. **Write the listing copy** — with this command, never by hand:
 
    ```
-   python3 ../../scripts/emily-listing.py listing builds/<slug> --title "..." --description "..." --tag fall --tag autumn --product sticker --price 5.99
+   python3 ../../scripts/emily-listing.py listing builds/<slug> --title "..." --description "..." --tag fall --tag autumn --product sticker
    ```
 
    Repeat `--tag` for each tag. Quotes, apostrophes and line breaks in your

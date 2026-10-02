@@ -1547,6 +1547,10 @@ def blank_warning(build_dir, cat_key, cat, product_type):
     return lines
 
 
+# The price a draft carries until the owner sets one in Printify. Not a price.
+PLACEHOLDER_CENTS = 599
+
+
 def cmd_draft(a):
     """Turn a finished build folder into an UNPUBLISHED Printify product.
 
@@ -1703,17 +1707,19 @@ def cmd_draft(a):
 
     variant_ids = cat["variant_ids"]
 
-    # Per-variant prices if they have been set for this product type, and a
-    # single fallback price if not. Sizes are priced differently - putting one
-    # number against all five was the bug this replaces.
+    # Prices are the owner's (2026-10-02: "I will set the prices myself on
+    # printify, Emily doesn't need to worry about it"). Per-variant prices if
+    # they were saved for this product type; otherwise a placeholder, because
+    # Printify will not create a product without one. Emily's own number is no
+    # longer read - a model's price is the number this repo least trusts.
     saved = cat.get("prices") or {}
-    fallback = int(round(float(listing.get("price_suggestion") or 0) * 100)) or 599
+    fallback = PLACEHOLDER_CENTS
     price_of = {v: int(saved.get(str(v), fallback)) for v in variant_ids}
     unset = [v for v in variant_ids if str(v) not in saved]
     if unset:
-        print(f"note: {len(unset)} of {len(variant_ids)} variants have no price set, "
-              f"so they go up at ${fallback/100:.2f}. Set them properly with:\n"
-              f"  emily-printify.py prices --product {product_type}")
+        print(f"PRICE NOT SET: {len(unset)} of {len(variant_ids)} variants go up at a "
+              f"${fallback/100:.2f} placeholder.\n  Set the real price in Printify "
+              f"before you publish.")
 
     try:
         areas = print_areas(image_id, _knockout().size(upload_from),

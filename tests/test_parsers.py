@@ -16098,6 +16098,13 @@ class TheSameBlankTheSellersUse(unittest.TestCase):
                          "the same brand twice is one blank")
         self.assertEqual(self.names("Cute frog shirt, soft and comfy", "tshirt"), [], "nothing named, nothing guessed")
 
+    def test_a_percentage_is_not_a_model(self):
+        # Bug: the droplet warned 'bookish sweatshirt embroidered' sells on
+        # "Comfort Colors 100" - believed to be "Comfort Colors 100% cotton".
+        self.assertEqual(self.names("Comfort Colors 100% ring-spun cotton"), ["Comfort Colors"])
+        self.assertEqual(self.names("Comfort Colors 100 % cotton"), ["Comfort Colors"])
+        self.assertEqual(self.names("Comfort Colors 1566, 100% cotton"), ["Comfort Colors 1566"])
+
     def test_attributes_where_no_model_is_named(self):
         self.assertEqual(self.names("Cat Mug, 11 oz white ceramic coffee cup", "mug"), ["mug 11oz ceramic"])
         self.assertEqual(self.names("Botanical 18x24 inch matte print", "poster"), ["poster 18x24 matte"])
@@ -16373,3 +16380,46 @@ class SalesAreAskedOfTheListingsPeopleWant(unittest.TestCase):
         src = (SCRIPTS / "market-scan.py").read_text().split("def cmd_scan(", 1)[1].split("\ndef ", 1)[0]
         self.assertIn("ids, texts = top_by_favs(key, cand)", src)
         self.assertIn("got = sales(key, ids)", src)
+
+
+class TheOwnerSetsThePrices(unittest.TestCase):
+    """"I will set the prices myself on printify, Emily doesn't need to worry
+    about it" (owner, 2026-10-02). So Emily has no price to give: her listing
+    command refuses one, the draft never reads one, and her instructions say
+    the prices are not hers. A sweatshirt drafted at a sticker's $5.99 because
+    she typed it would be the old failure - a model's number reaching a shop."""
+
+    def setUp(self):
+        self.m = load("emily_listing_np", "emily-listing.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.m.ROOT = Path(self.tmp.name)
+        (self.m.ROOT / "agents/emily/builds/b").mkdir(parents=True)
+
+    def invoke(self, *extra):
+        real = sys.argv
+        sys.argv = ["emily-listing.py", "listing", "b", "--title", "T", "--description", "D",
+                    "--tag", "x", "--product", "tshirt"] + list(extra)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                return self.m.main()
+        except SystemExit as e:
+            return e.code
+        finally:
+            sys.argv = real
+
+    def test_emily_cannot_give_a_price(self):
+        self.assertEqual(self.invoke("--price", "5.99"), 2, "argparse refuses an unknown option")
+        self.assertFalse((self.m.ROOT / "agents/emily/builds/b/listing.json").exists())
+        self.assertEqual(self.invoke(), 0)
+
+    def test_the_draft_reads_no_price_of_hers(self):
+        draft = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
+        self.assertNotIn("price_suggestion", draft)
+        self.assertIn("PRICE NOT SET", draft)
+
+    def test_her_instructions_say_so(self):
+        h = (ROOT / "agents/emily/_emily-agents-header.md").read_text()
+        self.assertIn("## Prices are not yours", h)
+        self.assertNotIn("--price", h)
+        self.assertNotIn("emily-printify.py market-price", h)
