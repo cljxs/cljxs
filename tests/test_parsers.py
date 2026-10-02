@@ -16157,6 +16157,24 @@ class TheSameBlankTheSellersUse(unittest.TestCase):
         self.assertEqual(near[0]["id"], 1257, "the same brand's crewneck before another brand's")
         self.assertEqual(self.b.brand_key("Bella+Canvas"), self.b.brand_key("BELLA + CANVAS™"))
 
+    def test_the_zippered_canvas_tote(self):
+        # Bug: 'teacher tote bag with zipper' (2 of 3 selling on a zipper tote)
+        # and 'library tote bag pattern' (canvas cotton zipper) never suggested
+        # Printify's "Zippered Canvas Tote" - "zippered" is not "zipper", and
+        # "canvas" was read as a plural ("canva") on the title side only.
+        # Titles as Printify returned them on the droplet, 2026-10-02.
+        totes = [{"id": 507, "title": "Canvas Tote Bag, 5-Color Straps", "brand": "Generic brand", "model": ""},
+                 {"id": 553, "title": "Cotton Tote Bag", "brand": "AS Colour", "model": "1001"},
+                 {"id": 1990, "title": "Zippered Canvas Tote", "brand": None, "model": None}]
+        zipper = {"blank": "tote zipper", "brand": None, "model": None, "attrs": ["zipper"]}
+        got = self.b.closest(zipper, "tote", totes)
+        self.assertEqual((got[0]["id"], got[0]["why"]), (1990, "same kind and the same attributes"))
+        library = {"blank": "tote canvas cotton zipper", "brand": None, "model": None,
+                   "attrs": ["canvas", "cotton", "zipper"]}
+        got = self.b.closest(library, "tote", totes)
+        self.assertEqual((got[0]["id"], got[0]["why"]), (1990, "same kind, shares: canvas, zipper"))
+        self.assertEqual(got[1]["why"], "same kind, shares: canvas")
+
     def test_a_kids_or_womens_cut_is_not_the_same_model(self):
         # Bug: the droplet's 'best cat mom shirt' (Gildan 5000) listed Kids Heavy
         # Cotton Tee 5000B and Women's Midweight 5000L as "same brand and model";

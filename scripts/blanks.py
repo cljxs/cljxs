@@ -141,6 +141,22 @@ def _words(s):
     return out
 
 
+def shared_attrs(attrs, title_words):
+    """The attributes a blueprint title carries. A title word answers to an
+    attribute exactly or with -ed on it: Printify sells the zipper tote the
+    sellers use as "Zippered Canvas Tote" (blueprint 1990), and exact words
+    alone left it out of every suggestion on the droplet."""
+    out = set()
+    for a in attrs or []:
+        a = a.replace("-", "")
+        # The attribute goes through the same plural rule as the title, or
+        # "canvas" (read as a plural, "canva") matched no title at all.
+        w = min(_words(a) or {a})
+        if w in title_words or w + "ed" in title_words:
+            out.add(a)
+    return out
+
+
 # Emily's product words, grouped into the families a blueprint title uses.
 FAMILIES = {
     "tshirt": {"tshirt", "tee", "shirt", "t"},
@@ -192,7 +208,7 @@ def matches(blank, entry):
     if not b_brand and blank.get("attrs"):
         title = _words(entry.get("blueprint_title") or entry.get("title"))
         want = {a.replace("-", "") for a in blank["attrs"]}
-        return "attrs" if want <= title else None
+        return "attrs" if want <= shared_attrs(want, title) else None
     return None
 
 
@@ -244,7 +260,7 @@ def closest(blank, kind, blueprints, keep=3):
         # Within a rank, the most attributes in common first: "40oz stainless
         # travel" put the plain "Mug 11oz" ahead of "Stainless Steel Travel
         # Mug" on the first real run, because ties went to the lower id.
-        shared = sorted({a.replace("-", "") for a in blank.get("attrs") or []} & title)
+        shared = sorted(shared_attrs(blank.get("attrs"), title))
         if rank == 3 and shared:
             why += f", shares: {', '.join(shared)}"
         scored.append((rank, -len(shared), bp.get("id") or 0, bp, why))
