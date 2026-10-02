@@ -222,6 +222,46 @@ def proposable():
     return out
 
 
+def emily_key(product):
+    """The key of the product Emily has set up that this text names, or None.
+
+    Scout writes products in its own words, and Emily's catalogue is keyed by
+    the owner's: "tote bag with zipper" would reach her as a product nothing
+    answers to, or fall to the plain all-over-print tote - so the zipper tote
+    the owner set up for the zipper-tote niches (2026-10-02) would never be
+    used. Emily's own resolve() decides first - one resolver, imported; only
+    when it finds nothing does the entry whose every word appears in the
+    text win, the longest such entry first ("zipper tote" over "tote").
+    """
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "emily_printify_key", SCRIPTS / "emily-printify.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        cat = mod.read_catalog()
+        try:
+            key, _entry = mod.resolve(cat, str(product or ""))
+        except mod.Ambiguous:
+            return None
+        if key:
+            return key
+        have = set(mod.words(product))
+        hits = sorted((k for k, _e in mod.products(cat)
+                       if mod.words(k) and set(mod.words(k)) <= have),
+                      key=lambda k: -len(mod.words(k)))
+        if hits and not (len(hits) > 1 and len(mod.words(hits[0])) == len(mod.words(hits[1]))):
+            return hits[0]
+        # Last, the product family blanks.py keeps: "comfort colors tee" ->
+        # tee -> tshirt, when Emily has a tshirt.
+        spec = importlib.util.spec_from_file_location("blanks_key", SCRIPTS / "blanks.py")
+        bl = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bl)
+        fam = bl.family(mod.product_word(str(product or "")))
+        return fam if fam and fam in dict(mod.products(cat)) else None
+    except Exception:
+        return None
+
+
 def catalogue_word(product):
     """'all-over-print canvas tote bag' -> 'tote'.
 
@@ -708,7 +748,7 @@ def cmd_propose(argv):
                   f"already in it. Fix or delete it first.", file=sys.stderr)
             return 1
 
-    entry = {"title": a.title.strip(), "product": a.product.strip()}
+    entry = {"title": a.title.strip(), "product": emily_key(a.product) or a.product.strip()}
     if a.angle.strip():
         entry["angle"] = a.angle.strip()
     if a.brief.strip():

@@ -16464,3 +16464,44 @@ class TheOwnerSetsThePrices(unittest.TestCase):
         self.assertIn("## Prices are not yours", h)
         self.assertNotIn("--price", h)
         self.assertNotIn("emily-printify.py market-price", h)
+
+
+class ScoutsProductIsEmilysProduct(unittest.TestCase):
+    """Scout writes products in its own words; Emily's catalogue is keyed by
+    the owner's. Before this, "tote bag with zipper" reached Emily as a
+    product nothing answered to, or fell to the all-over-print tote - so the
+    zipper tote set up for the zipper-tote niches (2026-10-02) could never be
+    used. Entries as `pick` saved them on the droplet that day."""
+
+    CAT = {"_fees": {"x": 1},
+           "tote": {"blueprint_id": 1389, "blueprint_title": "Tote Bag (AOP)"},
+           "zipper-tote": {"blueprint_id": 1990, "blueprint_title": "Zippered Canvas Tote"},
+           "tshirt": {"blueprint_id": 706, "blueprint_title": "Unisex Garment-Dyed T-shirt"},
+           "sweatshirt": {"blueprint_id": 49, "blueprint_title": "Unisex Heavy Blend™ Crewneck Sweatshirt"},
+           "hoodie": {"blueprint_id": 77, "blueprint_title": "Unisex Heavy Blend™ Hooded Sweatshirt"},
+           "mug": {"blueprint_id": 478, "blueprint_title": "Ceramic Mug, (11oz, 15oz)"}}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        (root / "agents/emily/state").mkdir(parents=True)
+        (root / "agents/emily/state/printify-catalog.json").write_text(json.dumps(self.CAT))
+        os.environ["ECOSYSTEM_ROOT"] = str(root)
+        self.addCleanup(os.environ.pop, "ECOSYSTEM_ROOT", None)
+        self.m = load("scout_ideas_key", "scout-ideas.py")
+
+    def test_scouts_words_land_on_the_owners_products(self):
+        for said, key in [("tote bag with zipper", "zipper-tote"), ("zipper tote", "zipper-tote"),
+                          ("tote", "tote"), ("canvas tote bag", "tote"),
+                          ("t-shirt", "tshirt"), ("comfort colors tee", "tshirt"),
+                          ("hooded sweatshirt", "hoodie"), ("crewneck", "sweatshirt"),
+                          ("coffee mug", "mug")]:
+            self.assertEqual(self.m.emily_key(said), key, said)
+
+    def test_nothing_set_up_is_left_as_written(self):
+        self.assertIsNone(self.m.emily_key("poster"))
+
+    def test_propose_files_the_key(self):
+        src = (SCRIPTS / "scout-ideas.py").read_text().split("def cmd_propose(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn('"product": emily_key(a.product) or a.product.strip()', src)
