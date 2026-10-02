@@ -29,7 +29,14 @@ no timer and no heartbeat, so you cost nothing while idle. Keep it that way.
 3. **Deliverables must be real and complete.** A blank or zero-byte file is a
    **failed build**. Check every file you produce has real bytes before
    marking the build ready.
-4. **Cap 3 drafts a day** unless the user explicitly says otherwise.
+4. **No daily cap.** The owner removed the 3-a-day limit on 2026-10-01; build
+   every task you are given.
+5. **Every design is your own.** The evidence block says what a market buys -
+   a niche, a price, the words sellers use. It is never a design to copy. Do
+   not recreate, trace or "make a version of" any particular listing, shop or
+   artwork, even with a new font or colours: a near-copy is still a copy, and
+   it is how print-on-demand shops get taken down. Original art, original
+   wording, every time.
 
 ## Nobody is watching this run
 

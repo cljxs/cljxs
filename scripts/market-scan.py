@@ -70,6 +70,17 @@ SCANS = ROOT / "agents" / "scout" / "state" / "scans"
 LOOSE = 0.5                       # below this share of matching titles,
                                   # a phrase is not comparable at all
 
+# SALES, NOT JUST FAVOURITES (2026-10-02). Favourites say people liked
+# something; a review can only be left by somebody who bought it. Etsy's
+# getReviewsByListing takes min_created, and its reply carries `count` - so
+# one call says how many reviews a listing has had in the last SALES_DAYS,
+# which is a floor on its sales (most buyers never review). Checked on the
+# top SALES_LISTINGS listings of the best SALES_PHRASES phrases of a scan:
+# 50 calls, against a daily budget of thousands.
+SALES_DAYS = 90
+SALES_LISTINGS = 10
+SALES_PHRASES = 5
+
 
 def age_days(row, now=None):
     """How long this listing has been up, or None if the field cannot be
@@ -212,6 +223,10 @@ def measure(data, now=None, phrase=""):
         "age": age,
         "match": title_match(rows, phrase),
         "tags": common_tags(rows),
+        # Etsy's own order (sort_on=score), so these are the listings a
+        # shopper sees first - the ones whose sales say what this market buys.
+        "ids": [r["listing_id"] for r in rows[:SALES_LISTINGS]
+                if isinstance(r.get("listing_id"), int) and not isinstance(r.get("listing_id"), bool)],
         "dropped": [],
     }
     checks = [("supply", "count"), ("heat", "original_creation_timestamp "
@@ -268,6 +283,36 @@ def opportunity(m):
     if m.get("heat") is None or not m.get("supply"):
         return None
     return m["heat"] / math.log10(max(m["supply"], 10))
+
+
+def sales(key, ids, now=None, call=None):
+    """Recent sales evidence for a market's top listings, or None when no
+    listing could be asked about.
+
+        reviews   reviews left in the last SALES_DAYS, all listings together
+        selling   how many of the listings had at least one
+        sales_n   how many listings were asked about successfully
+
+    A review is a purchase; the reverse is not true, so every figure here is
+    a floor, and it is said that way wherever it is shown. A listing whose
+    call failed is left out of sales_n rather than counted as zero - "did
+    not sell" and "could not ask" are different answers.
+    """
+    call = call or ep.call
+    since = int((now if now is not None else time.time()) - SALES_DAYS * 86400)
+    reviews = selling = asked = 0
+    for lid in ids or []:
+        data, _headers, err = call(f"/listings/{lid}/reviews?limit=1&min_created={since}", key)
+        n = (data or {}).get("count") if not err else None
+        if not isinstance(n, int) or isinstance(n, bool) or n < 0:
+            continue
+        asked += 1
+        reviews += n
+        selling += n > 0
+        time.sleep(0.25 if call is ep.call else 0)
+    if not asked:
+        return None
+    return {"reviews": reviews, "selling": selling, "sales_n": asked}
 
 
 def fetch(key, phrase):
@@ -405,6 +450,17 @@ def cmd_scan(key, words):
               file=sys.stderr)
         ranked, loose = usable, []
 
+    # Sales evidence for the strongest phrases. Every other number here is
+    # favourites; these are purchases.
+    for cand, m in ranked[:SALES_PHRASES]:
+        got = sales(key, m.get("ids"))
+        if got:
+            m.update(got)
+        print(f"  sales: {cand} - " + (
+            f"{got['selling']} of the top {got['sales_n']} listings sold in the "
+            f"last {SALES_DAYS} days ({got['reviews']} reviews)" if got
+            else "no listing could be asked about"), flush=True)
+
     print(f"\n  RANKED - most demand per unit of competition first\n")
     # The match column is ALWAYS shown, never only when it trips a
     # threshold. A warning that appears below 50% and is silent above it
@@ -540,7 +596,10 @@ def save_scan(seed, ranked, loose):
                   "pull": m["pull"], "price": m["price"], "match": m["match"],
                   "returned": m["returned"], "heat_n": m["heat_n"],
                   "pull_n": m["pull_n"], "score": opportunity(m),
-                  "tags": m.get("tags") or []}
+                  "tags": m.get("tags") or [],
+                  **({"reviews": m["reviews"], "selling": m["selling"],
+                      "sales_n": m["sales_n"], "sales_days": SALES_DAYS}
+                     if "sales_n" in m else {})}
                  for c, m in ranked],
         "excluded": [{"phrase": c, "match": m["match"], "supply": m["supply"],
                       "why": "fewer than half the listings Etsy returned "
@@ -681,14 +740,15 @@ def cmd_compare(_words):
     seen.sort(key=lambda dr: -dr[1]["score"])
     print(f"\n  {len(seen)} market(s) measured. Best phrase in each:\n")
     print(f"  {'market':<22}{'best phrase':<28}{'supply':>9}{'price':>8}"
-          f"{'favs/day':>10}{'favs/view':>11}{'score':>9}")
+          f"{'favs/day':>10}{'favs/view':>11}{'score':>9}{'sold 90d':>10}")
     for doc, row in seen:
         price = row.get("price")
         print(f"  {str(doc.get('seed'))[:21]:<22}{str(row['phrase'])[:27]:<28}"
               f"{row.get('supply') or 0:>9,}"
               f"{('$%.2f' % price) if price is not None else '?':>8}"
               f"{(row.get('heat') or 0):>10.3f}"
-              f"{(row.get('pull') or 0):>11.4f}{row['score']:>9.4f}")
+              f"{(row.get('pull') or 0):>11.4f}{row['score']:>9.4f}"
+              f"{(str(row['selling']) + '/' + str(row['sales_n'])) if row.get('sales_n') else '-':>10}")
 
     dearest = max(seen, key=lambda dr: dr[1].get("price") or 0)
     hottest = max(seen, key=lambda dr: dr[1].get("heat") or 0)
@@ -711,7 +771,9 @@ def cmd_compare(_words):
           f"    emily-printify.py costs --product <type>\n"
           f"    emily-printify.py market-price --product <type> --market "
           f"\"<phrase>\"\n\n"
-          f"  Favourites are not sales. Nothing here is multiplied by "
+          f"  Favourites are not sales. 'sold 90d' is: of the top listings, how "
+          f"many had a\n  review in the last {SALES_DAYS} days - a review means a "
+          f"purchase, so it is a floor.\n  Nothing here is multiplied by "
           f"anything else.")
     return 0
 

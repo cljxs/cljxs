@@ -216,6 +216,9 @@ def proposable():
             if problem or not (best or {}).get("score"):
                 continue
             out.append((phrase, best))
+    # Best-selling first: the most top listings with a recent sale, then the
+    # most reviews. What Scout reads first is what it proposes into.
+    out.sort(key=lambda pr: (-(pr[1].get("selling") or 0), -(pr[1].get("reviews") or 0)))
     return out
 
 
@@ -442,6 +445,11 @@ def measured(phrase):
                 verdict = _market_scan().verdicts(scan).get(row.get("phrase"))
                 if verdict and verdict[0] != "check":
                     return None, scan, f"{phrase!r} is measured, but {verdict[1]}."
+                # A zero score is the plainer reason, and every caller gives
+                # it; sales are asked of a market that is alive at all.
+                why = no_sales(row) if row.get("score") else None
+                if why:
+                    return None, scan, f"{phrase!r} is measured, but {why}."
                 return row, scan, None
         for row in scan.get("excluded") or []:
             if str(row.get("phrase", "")).strip().lower() == want:
@@ -453,6 +461,30 @@ def measured(phrase):
     return None, None, (
         f"{phrase!r} has not been measured. Propose only phrases that have:\n"
         f"    python3 ../../scripts/scout-ideas.py evidence")
+
+
+def no_sales(row):
+    """Why a measured phrase has no sales behind it, or None.
+
+    The owner asked for "a well selling niche" (2026-10-02). Favourites are
+    liking; a review is a purchase. A phrase whose top listings had no
+    review in the last 90 days, or whose sales were never measured (only the
+    best phrases of each scan are - the daily niche scan keeps them fresh),
+    is not a niche anybody has shown is selling.
+    """
+    if not row.get("sales_n"):
+        return ("its sales were never measured - only the strongest phrases of "
+                "a scan are, and the daily niche scan (niche-scan.py) re-measures them")
+    if not row.get("selling"):
+        return (f"none of its top {row['sales_n']} listings had a review in the "
+                f"last {row.get('sales_days') or 90} days - nothing shows it is selling")
+    return None
+
+
+def sales_line(row):
+    """'7 of top 10 sold in 90 days, 41 reviews' - said as a floor."""
+    return (f"{row.get('selling')} of top {row.get('sales_n')} sold in "
+            f"{row.get('sales_days') or 90} days, {row.get('reviews')} reviews")
 
 
 def drafts_lines():
@@ -691,6 +723,10 @@ def cmd_propose(argv):
         "typical_price": row.get("price"),
         "tags": row.get("tags") or [],
         "measured_at": scan.get("scanned_at"), "from_scan": scan.get("seed"),
+        # Sales, copied like the rest: top listings with a review (a purchase)
+        # in the window, and how many reviews. What the owner reads at review.
+        "sold": row.get("selling"), "sold_of": row.get("sales_n"),
+        "reviews": row.get("reviews"), "sales_days": row.get("sales_days"),
     }
     if tier == "check":
         entry["evidence"]["ip_flag"] = f"{what}: {why}"
@@ -704,6 +740,7 @@ def cmd_propose(argv):
           f"{ev['favs_per_day']:.3f} favs/day,")
     print(f"            {(ev['favs_per_view'] or 0):.4f} favs/view, score "
           f"{ev['score']:.4f}, measured {ev['measured_at']}")
+    print(f"            {sales_line(row)} (a review is a purchase - a floor)")
     if entry["evidence"].get("ip_flag"):
         print(f"  FLAGGED for a human: {entry['evidence']['ip_flag']}")
     print(f"  [{len(rows)} waiting to merge]")
@@ -763,8 +800,9 @@ def should_run():
                        f"those first; a run now only adds to the pile")
     if not proposable():
         where = f"{focus()} " if focus() else ""
-        return False, (f"no measured {where}phrase is left to propose into - "
-                       f"run market-scan.py scan ... --save first")
+        return False, (f"no measured {where}phrase with recent sales is left to "
+                       f"propose into - the daily niche scan (niche-scan.py) "
+                       f"adds more, or by hand: market-scan.py scan ... --save")
     return True, None
 
 
@@ -799,9 +837,13 @@ def cmd_brief(_argv):
     for phrase, row in proposable():
         have = used.get(phrase.lower())
         tail = f"  - already has: {'; '.join(have)[:90]}" if have else ""
-        print(f"    {phrase}  ({row.get('supply') or 0:,} listings){tail}")
+        print(f"    {phrase}  ({row.get('supply') or 0:,} listings; {sales_line(row)}){tail}")
+    print("- Best-selling first. 'sold' counts top listings with a review in the "
+          "window - a\n  review is a purchase, so it is a floor on sales, never a forecast.")
     print("- An idea on a phrase that already has one must be a clearly "
           "different design,\n  not a rewording of it.")
+    print("- Every design is original. The numbers say WHAT sells; never describe, "
+          "copy or\n  imitate a particular listing, shop or design.")
     return 0
 
 

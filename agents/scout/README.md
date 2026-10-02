@@ -76,7 +76,13 @@ Approving the same idea twice is refused rather than queued twice.
 
 | | Schedule | Costs |
 |---|---|---|
-| `scout-cycle.timer` | 08:00 ET, once a day | **fuel** - about 9p a month |
+| `scout-niches.timer` | 06:30 CT, daily | **nothing** - re-measures 6 niches on Etsy (favourites, price, recent sales), adds new niches from what sells |
+| `scout-cycle.timer` | 08:00 CT, once a day | **fuel** - about 9p a month |
+
+Check the niches any time: `python3 scripts/niche-scan.py list`. Scout may
+only propose into a phrase whose top listings show recent sales (a review is
+a purchase); every design is original - the niche is the market, not a design
+to copy.
 
 Once a day is deliberate. Ideas do not go stale in hours, and this is the
 only part of Scout that spends anything.

@@ -1416,7 +1416,7 @@ class ScoutCannotDestroyTheIdeaLog(unittest.TestCase):
             .strftime("%Y-%m-%dT%H:%M:%SZ"),
             "rows": [{"phrase": "trail map hoodie", "supply": 1000,
                       "heat": 0.05, "pull": 0.04, "price": 30.0, "match": 1.0,
-                      "returned": 25, "heat_n": 25, "pull_n": 25,
+                      "selling": 6, "sales_n": 10, "reviews": 30, "returned": 25, "heat_n": 25, "pull_n": 25,
                       "score": 0.017}], "excluded": []}))
 
     def evidenced(self, rows):
@@ -1595,7 +1595,7 @@ class ScoutDoesNotHandWriteJson(unittest.TestCase):
             .strftime("%Y-%m-%dT%H:%M:%SZ"),
             "rows": [{"phrase": "cosy hoodie", "supply": 1000, "heat": 0.05,
                       "pull": 0.04, "price": 30.0, "match": 1.0,
-                      "returned": 25, "heat_n": 25, "pull_n": 25,
+                      "selling": 6, "sales_n": 10, "reviews": 30, "returned": 25, "heat_n": 25, "pull_n": 25,
                       "score": 0.017}], "excluded": []}))
 
     def tearDown(self):
@@ -8623,7 +8623,7 @@ class AnIdeaWithNoMeasurementIsAnOpinion(unittest.TestCase):
                "rows": rows if rows is not None else [
                    {"phrase": "water bottle stickers", "supply": 436862,
                     "heat": 0.066, "pull": 0.1497, "price": 4.99,
-                    "match": 1.0, "returned": 25, "heat_n": 25,
+                    "match": 1.0, "selling": 6, "sales_n": 10, "reviews": 30, "returned": 25, "heat_n": 25,
                     "pull_n": 25, "score": 0.0117}],
                "excluded": excluded or []}
         (self.scans / "scan.json").write_text(json.dumps(doc))
@@ -9522,7 +9522,7 @@ class PricingRunsEndToEndOrNotAtAll(unittest.TestCase):
                         .strftime("%Y-%m-%dT%H:%M:%SZ"),
                         "rows": [{"phrase": "water bottle stickers",
                                   "supply": 436800, "heat": 0.066, "pull": 0.1497,
-                                  "price": 3.99, "match": 1.0, "returned": 25,
+                                  "price": 3.99, "match": 1.0, "selling": 6, "sales_n": 10, "reviews": 30, "returned": 25,
                                   "heat_n": 25, "pull_n": 25, "score": 0.0049}],
                         "excluded": []}))
         self.env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
@@ -9755,7 +9755,7 @@ class PostageIsTheWholeStoryOnASticker(unittest.TestCase):
                         .strftime("%Y-%m-%dT%H:%M:%SZ"),
                         "rows": [{"phrase": "water bottle stickers", "supply": 1,
                                   "heat": 0.1, "pull": 0.1, "price": 3.99,
-                                  "match": 1.0, "returned": 25, "heat_n": 25,
+                                  "match": 1.0, "selling": 6, "sales_n": 10, "reviews": 30, "returned": 25, "heat_n": 25,
                                   "pull_n": 25, "score": 0.1}], "excluded": []}))
         r = subprocess.run(
             [sys.executable, str(SCRIPTS / "emily-printify.py"), "market-price",
@@ -9827,7 +9827,7 @@ class ThePriceWasComputedAndNeverShown(unittest.TestCase):
             "rows": [
                 {"phrase": "sticker sheet custom", "supply": 17120,
                  "heat": 0.013, "pull": 0.0199, "price": 8.5, "match": 1.0,
-                 "returned": 25, "heat_n": 25, "pull_n": 23, "score": 0.0030},
+                 "selling": 6, "sales_n": 10, "reviews": 30, "returned": 25, "heat_n": 25, "pull_n": 23, "score": 0.0030},
                 {"phrase": "no price here", "supply": 100, "heat": 0.01,
                  "pull": 0.01, "price": None, "match": 1.0, "returned": 25,
                  "heat_n": 25, "pull_n": 25, "score": 0.005}],
@@ -9886,7 +9886,7 @@ class WhichProductIsADifferentQuestion(unittest.TestCase):
 
     def row(self, phrase, supply, heat, price, score, pull=0.05):
         return {"phrase": phrase, "supply": supply, "heat": heat, "pull": pull,
-                "price": price, "match": 1.0, "returned": 25, "heat_n": 25,
+                "price": price, "match": 1.0, "selling": 6, "sales_n": 10, "reviews": 30, "returned": 25, "heat_n": 25,
                 "pull_n": 25, "score": score}
 
     def run_it(self):
@@ -10165,7 +10165,7 @@ class WhatMustICharge(unittest.TestCase):
                         .strftime("%Y-%m-%dT%H:%M:%SZ"),
                         "rows": [{"phrase": "canvas tote bag", "supply": 359529,
                                   "heat": 0.013, "pull": 0.0249, "price": 22.62,
-                                  "match": 1.0, "returned": 25, "heat_n": 25,
+                                  "match": 1.0, "selling": 6, "sales_n": 10, "reviews": 30, "returned": 25, "heat_n": 25,
                                   "pull_n": 23, "score": 0.0024}],
                         "excluded": []}))
         r = subprocess.run(
@@ -10208,7 +10208,7 @@ class ASavedScanIsFrozenAtTheRulesThatWroteIt(unittest.TestCase):
 
     def row(self, phrase, supply, heat, price, score, match=1.0):
         return {"phrase": phrase, "supply": supply, "heat": heat, "pull": 0.05,
-                "price": price, "match": match, "returned": 25, "heat_n": 25,
+                "price": price, "match": match, "selling": 6, "sales_n": 10, "reviews": 30, "returned": 25, "heat_n": 25,
                 "pull_n": 25, "score": score}
 
     def write(self, seed, rows):
@@ -10469,7 +10469,7 @@ class TheGateBelongsWhereTheDataEntersTheLog(unittest.TestCase):
             "scanned_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "rows": [{"phrase": "canvas tote bag", "supply": 359529,
                       "heat": 0.013, "pull": 0.0249, "price": 22.62,
-                      "match": 1.0, "returned": 25, "heat_n": 25,
+                      "match": 1.0, "selling": 6, "sales_n": 10, "reviews": 30, "returned": 25, "heat_n": 25,
                       "pull_n": 23, "score": 0.0024},
                      {"phrase": "canvas tote bag kids", "supply": 31184,
                       "heat": 0.0, "pull": 0.0, "price": 19.99, "match": 1.0,
@@ -10604,7 +10604,7 @@ class TheModelCannotRunTheScript(unittest.TestCase):
             "scanned_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "rows": [{"phrase": "canvas tote bag", "supply": 359529,
                       "heat": 0.013, "pull": 0.0249, "price": 22.62,
-                      "match": 1.0, "returned": 25, "heat_n": 25,
+                      "match": 1.0, "selling": 6, "sales_n": 10, "reviews": 30, "returned": 25, "heat_n": 25,
                       "pull_n": 23, "score": 0.0024},
                      {"phrase": "canvas tote bag kids", "supply": 31184,
                       "heat": 0.0, "pull": 0.0, "price": 19.99, "match": 1.0,
@@ -10779,11 +10779,11 @@ class ARefusalThatIsADeadEndLosesTheWork(unittest.TestCase):
             "scanned_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "rows": [
                 {"phrase": "canvas tote bag", "supply": 359529, "heat": 0.013,
-                 "pull": 0.02, "price": 22.62, "match": 1.0, "returned": 25,
+                 "pull": 0.02, "price": 22.62, "match": 1.0, "selling": 6, "sales_n": 10, "reviews": 30, "returned": 25,
                  "heat_n": 25, "pull_n": 23, "score": 0.0024},
                 {"phrase": "canvas tote bag embroidered", "supply": 18149,
                  "heat": 0.062, "pull": 0.035, "price": 23.84, "match": 1.0,
-                 "returned": 25, "heat_n": 25, "pull_n": 23, "score": 0.0145}],
+                 "selling": 6, "sales_n": 10, "reviews": 30, "returned": 25, "heat_n": 25, "pull_n": 23, "score": 0.0145}],
             "excluded": []}))
         self.env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root))
 
@@ -12074,7 +12074,7 @@ class TheStandingFocusAndTheCountAreCode(unittest.TestCase):
     def scan(self, seed, when, rows):
         doc = {"seed": seed, "scanned_at": when, "excluded": [], "rows": [
             {"phrase": p, "supply": 1000, "heat": 1, "pull": 0.01, "price": 20.0,
-             "match": 0.9, "returned": 100, "heat_n": 10, "pull_n": 10,
+             "match": 0.9, "selling": 6, "sales_n": 10, "reviews": 30, "returned": 100, "heat_n": 10, "pull_n": 10,
              "score": sc, "tags": []} for p, sc in rows]}
         (self.state / "scans" / (seed.replace(" ", "-") + ".json")).write_text(json.dumps(doc))
 
@@ -12295,7 +12295,7 @@ class TheGateJudgesAScanTheWayCompareDoes(unittest.TestCase):
         self.doc = {"seed": "tote bag", "excluded": [],
                     "scanned_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "rows": [{"phrase": p, "supply": s, "heat": 0.01, "pull": 0.02, "price": pr,
-                              "match": m, "returned": 25, "heat_n": 25, "pull_n": 25,
+                              "match": m, "selling": 6, "sales_n": 10, "reviews": 30, "returned": 25, "heat_n": 25, "pull_n": 25,
                               "score": sc, "tags": []} for p, s, pr, m, sc in self.ROWS]}
         (scans / "tote-bag.json").write_text(json.dumps(self.doc))
         self.old = os.environ.get("ECOSYSTEM_ROOT")
@@ -15871,3 +15871,181 @@ class TheNoAIBettorsAndTheBlindScore(unittest.TestCase):
         self.assertIn(f"| Max open bets | {b.MAX_OPEN_BETS}, one per game |", pre)
         self.assertIn(f"{j.EVIDENCE_MIN_BETS} settled bets with an average CLV", pre)
         self.assertIn(f"reach {b.FAULT_STOP_PCT:g}% of the starting bankroll", pre)
+
+
+class AWellSellingNicheIsMeasuredInSales(unittest.TestCase):
+    """"Build that version ... only that it's a well selling niche" (2026-10-02).
+
+    Scout's scans measured favourites - liking - and only happened when
+    somebody typed a command, so the data went stale and Scout had nothing to
+    propose. Now each scan's strongest phrases carry sales evidence (reviews
+    in the last 90 days on the top listings; a review is a purchase), Scout
+    may only propose where that evidence exists, a morning job keeps every
+    niche measured and finds new ones in the tags of listings that sell, and
+    both headers say the niche is the market, never a design to copy."""
+
+    SPEC = json.loads((FIXTURES / "etsy-oas-getReviewsByListing.json").read_text())
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.state = self.root / "agents/scout/state"
+        (self.state / "scans").mkdir(parents=True)
+        (self.state / "ideas.json").write_text(json.dumps({"ideas": []}))
+        os.environ["ECOSYSTEM_ROOT"] = str(self.root)
+        self.addCleanup(os.environ.pop, "ECOSYSTEM_ROOT", None)
+        self.ms = load("market_scan_sales", "market-scan.py")
+        self.now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def scan(self, seed, rows, when=None):
+        (self.state / "scans" / f"{self.ms.slug(seed)}.json").write_text(json.dumps(
+            {"seed": seed, "scanned_at": when or self.now, "excluded": [], "rows": rows}))
+
+    def row(self, phrase, score=0.01, selling=None, reviews=None, sales_n=10, tags=()):
+        r = {"phrase": phrase, "supply": 5000, "heat": 0.05, "pull": 0.02, "price": 18.0, "match": 1.0,
+             "returned": 25, "heat_n": 25, "pull_n": 25, "score": score, "tags": list(tags)}
+        if selling is not None:
+            r.update(selling=selling, sales_n=sales_n, reviews=reviews or 0, sales_days=90)
+        return r
+
+    # --- the measurement ---------------------------------------------------
+
+    def test_the_spec_says_what_the_code_reads(self):
+        # Etsy's published spec: the call needs only the API key, takes
+        # min_created and limit, and its reply carries an integer count.
+        op = self.SPEC["operation"]
+        self.assertEqual(op["operationId"], "getReviewsByListing")
+        # No security of its own: the spec-wide default, the API key alone -
+        # exactly what the listing search Scout already runs has.
+        self.assertIsNone(op["security"])
+        self.assertEqual(self.SPEC["global_security"], [{"api_key": []}])
+        self.assertIsNone(self.SPEC["findAllListingsActive_security"])
+        self.assertTrue({"limit", "min_created"} <= {p["name"] for p in op["parameters"]})
+        self.assertEqual(self.SPEC["ListingReviews"]["properties"]["count"]["type"], "integer")
+        self.assertEqual(self.SPEC["ShopListing_fields"]["listing_id"]["type"], "integer")
+
+    def test_sales_counts_recent_reviews_and_leaves_failures_out(self):
+        asked = []
+        replies = {11: ({"count": 4}, {}, None), 12: ({"count": 0}, {}, None),
+                   13: (None, {}, "HTTP 500: x"), 14: ({"count": 2}, {}, None)}
+        def call(path, key):
+            asked.append(path)
+            return replies[int(path.split("/")[2])]
+        got = self.ms.sales("k", [11, 12, 13, 14], now=1_800_000_000, call=call)
+        self.assertEqual(got, {"reviews": 6, "selling": 2, "sales_n": 3}, "the failed call is not a zero")
+        self.assertEqual(asked[0], f"/listings/11/reviews?limit=1&min_created={1_800_000_000 - 90 * 86400}")
+        self.assertIsNone(self.ms.sales("k", [13], call=lambda p, k: (None, {}, "HTTP 500")))
+
+    def test_measure_keeps_the_top_listing_ids_in_etsys_order(self):
+        rows = [{"listing_id": i, "num_favorers": 1} for i in range(1, 14)] + [{"listing_id": "x"}]
+        self.assertEqual(self.ms.measure({"results": rows, "count": 14})["ids"], list(range(1, 11)))
+
+    def test_a_saved_scan_carries_the_sales(self):
+        m = {"supply": 100, "heat": 0.1, "pull": 0.02, "price": 9.0, "match": 1.0, "returned": 25,
+             "heat_n": 25, "pull_n": 25, "tags": [], "selling": 7, "sales_n": 10, "reviews": 41}
+        self.ms.SCANS = self.state / "scans"
+        with contextlib.redirect_stdout(io.StringIO()):
+            path = self.ms.save_scan("frog sticker", [("frog sticker", m)], [])
+        row = json.loads(path.read_text())["rows"][0]
+        self.assertEqual((row["selling"], row["sales_n"], row["reviews"], row["sales_days"]), (7, 10, 41, 90))
+
+    # --- Scout's gate ----------------------------------------------------------
+
+    def test_only_a_selling_phrase_can_be_proposed(self):
+        self.scan("frog sticker", [self.row("frog sticker", selling=6, reviews=31),
+                                   self.row("frog sticker cute", selling=0),
+                                   self.row("frog sticker pack"),
+                                   self.row("frog sticker dead", score=0.0, selling=0)])
+        si = load("scout_ideas_sales", "scout-ideas.py")
+        self.assertIsNone(si.measured("frog sticker")[2])
+        self.assertIn("none of its top 10 listings had a review in the last 90 days",
+                      si.measured("frog sticker cute")[2])
+        self.assertIn("its sales were never measured", si.measured("frog sticker pack")[2])
+        self.assertEqual([p for p, _ in si.proposable()], ["frog sticker"])
+
+    def test_the_brief_is_best_selling_first_and_says_original(self):
+        self.scan("mug", [self.row("cat lover mug", selling=3, reviews=50),
+                          self.row("teacher gift mug", selling=8, reviews=12),
+                          self.row("nurse gift mug", selling=8, reviews=40)])
+        si = load("scout_ideas_brief", "scout-ideas.py")
+        self.assertEqual([p for p, _ in si.proposable()], ["nurse gift mug", "teacher gift mug", "cat lover mug"])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            si.cmd_brief([])
+        self.assertIn("nurse gift mug  (5,000 listings; 8 of top 10 sold in 90 days, 40 reviews)", out.getvalue())
+        self.assertIn("never describe, copy or\n  imitate a particular listing", out.getvalue())
+
+    def test_the_idea_carries_its_sales_to_the_owner(self):
+        self.scan("frog sticker", [self.row("frog sticker", selling=6, reviews=31)])
+        r = subprocess.run([sys.executable, str(SCRIPTS / "scout-ideas.py"), "propose", "--phrase", "frog sticker",
+                            "--title", "Pond Frog Sticker", "--product", "sticker"],
+                           capture_output=True, text=True, env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("6 of top 10 sold in 90 days, 31 reviews (a review is a purchase - a floor)", r.stdout)
+        ev = json.loads((self.state / "proposals.json").read_text())["proposals"][0]["evidence"]
+        self.assertEqual((ev["sold"], ev["sold_of"], ev["reviews"], ev["sales_days"]), (6, 10, 31, 90))
+
+    # --- the morning niche scan ------------------------------------------------
+
+    def test_oldest_first_never_scanned_first_and_fresh_ones_left(self):
+        ns = load("niche_scan_due", "niche-scan.py")
+        ns.STARTER = ["frog sticker", "cat lover mug", "dog mom mug"]
+        old = (datetime.now(timezone.utc) - timedelta(days=9)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        older = (datetime.now(timezone.utc) - timedelta(days=12)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.scan("frog sticker", [], when=old)
+        self.scan("cat lover mug", [], when=older)
+        self.assertEqual(ns.due(n=5), ["dog mom mug", "cat lover mug", "frog sticker"])
+        self.scan("frog sticker", [], when=self.now)
+        self.assertEqual(ns.due(n=5), ["dog mom mug", "cat lover mug"], "scanned today: not due")
+        self.assertEqual(ns.due(n=1), ["dog mom mug"])
+
+    def test_somebody_elses_property_is_never_scanned(self):
+        ns = load("niche_scan_ip", "niche-scan.py")
+        ns.STARTER = ["disney sticker", "frog sticker"]
+        self.assertEqual(ns.due(n=5), ["frog sticker"])
+
+    def test_new_niches_come_from_the_tags_of_listings_that_sell(self):
+        ns = load("niche_scan_find", "niche-scan.py")
+        ns.STARTER = ["cat lover mug"]
+        self.scan("cat lover mug", [
+            self.row("cat lover mug", selling=6, reviews=20,
+                     tags=["cat mom gift", "Coffee Mug", "cat", "disney cat", "funny cat mug", "x1!"]),
+            self.row("cat lover mug cheap", selling=2, reviews=3, tags=["sad cat"])])
+        d = {"niches": {}}
+        added = ns.discover(d)
+        self.assertEqual(added, ["cat mom mug", "coffee mug", "funny cat mug"])
+        self.assertTrue(d["niches"]["cat mom mug"]["source"].startswith("tag on cat lover mug"))
+        self.assertEqual(ns.discover(d), [], "nothing twice")
+        ns.DISCOVER_PER_RUN = 1
+        self.assertEqual(len(ns.discover({"niches": {}})), 1)
+
+    def test_a_run_scans_with_market_scan_and_saves(self):
+        ns = load("niche_scan_run", "niche-scan.py")
+        ns.STARTER, ran = ["frog sticker"], []
+        def fake(cmd, **k):
+            ran.append(cmd)
+            return types.SimpleNamespace(returncode=0, stdout="  sales: frog sticker - 6 of the top 10\n  saved 3", stderr="")
+        with unittest.mock.patch.object(ns.subprocess, "run", fake), contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(ns.main(["run"]), 0)
+        self.assertEqual(ran[0][1:], [str(SCRIPTS / "market-scan.py"), "scan", "frog", "sticker", "--save"])
+        self.assertIn("sales: frog sticker", out.getvalue())
+        self.assertTrue((self.state / "niches.json").exists())
+
+    def test_the_morning_timer_runs_before_scout(self):
+        timer = (ROOT / "deploy" / "scout-niches.timer").read_text()
+        self.assertIn("OnCalendar=*-*-* 06:30 America/Chicago", timer)
+        self.assertIn("OnCalendar=*-*-* 08:00 America/Chicago", (ROOT / "deploy" / "scout-cycle.timer").read_text())
+        self.assertIn("scripts/niche-scan.py run", (ROOT / "deploy" / "scout-niches.service").read_text())
+        ns = load("niche_scan_budget", "niche-scan.py")
+        self.assertLessEqual(ns.MAX_NICHES / ns.RUN_N, load("scout_ideas_stale", "scout-ideas.py").STALE_DAYS,
+                             "every niche re-measured before Scout calls it stale")
+
+    def test_both_headers_say_original_never_a_copy(self):
+        scout = (ROOT / "agents/scout/_scout-agents-header.md").read_text()
+        emily = (ROOT / "agents/emily/_emily-agents-header.md").read_text()
+        self.assertIn("**You may only propose into a phrase with recent sales.**", scout)
+        self.assertIn("**The niche is the market, not the design.**", scout)
+        self.assertIn("**Every design is your own.**", emily)
+        self.assertIn("a near-copy is still a copy", emily)
+        self.assertNotIn("Cap 3 drafts a day", emily, "the owner removed the cap on 2026-10-01")

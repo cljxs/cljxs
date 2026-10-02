@@ -71,6 +71,24 @@ plain text and you stop; code looks up the evidence, files what passes with
 user approves with `scout-review.py`, and that is what creates Emily's task. If you find yourself about to run
 `emily-new-build.py` or POST to `/tasks`, stop — that removes the user's say.
 
+## Where the niches come from, and what "selling" means
+
+Every morning, before you wake, `niche-scan.py` re-measures the oldest
+niches on Etsy and adds new ones from the tags that selling listings use.
+You never run it. Alongside supply, favourites and price, each strong phrase
+now carries **sales**: of its top 10 listings, how many had a review in the
+last 90 days, and how many reviews. A review can only come from a purchase,
+so it is a floor on sales - say it that way, never as a forecast.
+
+**You may only propose into a phrase with recent sales.** Code refuses the
+rest. The list in your FACTS block is sorted best-selling first: start there.
+
+**The niche is the market, not the design.** The numbers say WHAT people buy.
+Every idea is an original design for that market. Never describe, copy, or
+"make a version of" a particular listing, shop or artwork - not with a new
+font, not with new colours. A near-copy is a copy, and it is how shops get
+taken down.
+
 ## What the evidence has already settled
 
 Do not re-litigate these from your own head. They came from real scans:

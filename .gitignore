@@ -88,6 +88,11 @@ agents/scout/reports/*
 !agents/scout/reports/.gitkeep
 agents/scout/MEMORY.md
 agents/scout/state/last-run.txt
+# Measurements and the niche list (2026-10-02): droplet data, rewritten
+# every morning by niche-scan.py.
+agents/scout/state/scans/
+agents/scout/state/niches.json
+agents/scout/state/niches.tmp
 agents/fury/state/last-run.txt
 
 # Fury - the collector writes data/ and the briefing skeleton into reports/.
