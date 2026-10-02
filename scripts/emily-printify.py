@@ -1580,14 +1580,21 @@ def blank_warning(build_dir, cat_key, cat, product_type):
     return lines
 
 
+def _assets():
+    """emily-assets.py as a module - it owns drawing, proofreading and the
+    placeholder's mark."""
+    spec = importlib.util.spec_from_file_location(
+        "emily_assets_mod", Path(__file__).resolve().parent / "emily-assets.py")
+    ea = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ea)
+    return ea
+
+
 def proofread(design):
     """(problems, note) for the text drawn in a design. emily-assets.py owns
     the proofread; this only asks it. ([], why) when it could not be asked."""
     try:
-        spec = importlib.util.spec_from_file_location(
-            "emily_assets_proof", Path(__file__).resolve().parent / "emily-assets.py")
-        ea = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(ea)
+        ea = _assets()
         ea.load_credentials()
         key = os.environ.get("OPENROUTER_API_KEY", "").strip()
         if not key:
@@ -1728,6 +1735,13 @@ def cmd_draft(a):
     # ways, and a misspelled shirt in the shop is worse than no draft. So the
     # same proofread, imported, has the last word. An unread proof is said out
     # loud and the draft goes ahead - a dead proofreader must not stop the shop.
+    if _assets().is_placeholder(design):
+        print(f"\nnot drafting: {design.name} is the PLACEHOLDER, not artwork - "
+              f"drawing the real\n  art failed. Regenerate it:\n"
+              f"  python3 scripts/emily-assets.py --prompt \"...\" --out {design} "
+              f"--product {cat_key}", file=sys.stderr)
+        sys.exit(1)
+
     problems, note = proofread(design)
     if problems:
         print(f"\nnot drafting: the artwork's text is wrong -", file=sys.stderr)

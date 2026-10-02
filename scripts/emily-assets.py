@@ -25,6 +25,7 @@ import os
 import re
 import struct
 import sys
+import time
 import urllib.request
 import zlib
 from pathlib import Path
@@ -86,7 +87,20 @@ def image_model(override=None):
 
 # ---------------------------------------------------------------- PNG writer
 
-def write_png(path, width, height, rows):
+# Written into every placeholder, and refused by draft. A placeholder is flat
+# geometric art on a plain background, so every check for "is this artwork"
+# passes it - and on 2026-10-02 one went to Printify as a nurse tee.
+PLACEHOLDER_MARK = b"emily-assets placeholder - not artwork"
+
+
+def is_placeholder(path):
+    try:
+        return PLACEHOLDER_MARK in Path(path).read_bytes()[:4096]
+    except OSError:
+        return False
+
+
+def write_png(path, width, height, rows, mark=None):
     """rows: iterable of bytes objects, each width*3 long (RGB)."""
     raw = b"".join(b"\x00" + bytes(r) for r in rows)
     def chunk(typ, data):
@@ -94,6 +108,8 @@ def write_png(path, width, height, rows):
                 + struct.pack(">I", zlib.crc32(typ + data) & 0xFFFFFFFF))
     png = b"\x89PNG\r\n\x1a\n"
     png += chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+    if mark:
+        png += chunk(b"tEXt", b"Comment\x00" + mark)
     png += chunk(b"IDAT", zlib.compress(raw, 6))
     png += chunk(b"IEND", b"")
     Path(path).write_bytes(png)
@@ -126,7 +142,7 @@ def placeholder(path, prompt, size):
                 c = bg
             row += bytes(c)
         rows.append(row)
-    return write_png(path, size, size, rows)
+    return write_png(path, size, size, rows, mark=PLACEHOLDER_MARK)
 
 
 # ------------------------------------------------------------- OpenRouter
@@ -412,6 +428,9 @@ def generate(path, prompt, key, model=None, product="", direction=None,
 # that model - decides what counts as a problem.
 DEFAULT_PROOF_MODEL = "google/gemini-2.5-flash"
 PROOF_TRIES = 3
+# No redraw starts after this many seconds. emily-new-build gives the whole art
+# step 180, and a step killed half way leaves no art at all.
+REDRAW_BUDGET_S = 100
 
 PROOF_ASK = (
     "This is a print file for a product. Read every piece of text drawn in it, "
@@ -631,7 +650,11 @@ def main():
         try:
             model = image_model(a.model)
             prompt, problems, lines, note = a.prompt, [], [], None
+            began = time.monotonic()
             for attempt in range(1, PROOF_TRIES + 1):
+                if attempt > 1 and time.monotonic() - began > REDRAW_BUDGET_S:
+                    note = f"out of time after {attempt - 1} drawing(s): " + "; ".join(problems)
+                    break
                 n, usage = generate(a.out, prompt, key, model, a.product)
                 try:
                     problems, lines = proof(a.out, key)

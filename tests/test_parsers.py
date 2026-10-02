@@ -16705,3 +16705,62 @@ class TheFirstTestDraftsPrintRight(unittest.TestCase):
         self.assertIn('{"product": a.product}', src)
         h = (ROOT / "agents/emily/_emily-agents-header.md").read_text()
         self.assertNotIn("--product sticker", h, "no product in the example to copy")
+
+
+class APlaceholderIsNeverDrafted(unittest.TestCase):
+    """2026-10-02: "Shift-Ready Nurse Tee" went to Printify as the geometric
+    placeholder - concentric bands on a dark field - because drawing the real
+    art failed and every "is this artwork" check passes flat geometry on a
+    plain background. knockout --check called it "fit to print". The
+    placeholder now carries a mark, and draft refuses anything carrying it."""
+
+    def setUp(self):
+        self.ea = load("emily_assets_ph", "emily-assets.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.png = Path(self.tmp.name) / "design.png"
+
+    def test_the_placeholder_is_marked_and_real_art_is_not(self):
+        r = subprocess.run([sys.executable, str(SCRIPTS / "emily-assets.py"), "--prompt", "Night Shift RN",
+                            "--out", str(self.png), "--placeholder-only"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(self.ea.is_placeholder(self.png))
+        k = load("knockout_ph", "knockout.py")
+        art = Path(self.tmp.name) / "art.png"
+        k.encode(art, 4, 4, bytearray([10, 20, 30, 255] * 16))
+        self.assertFalse(self.ea.is_placeholder(art))
+        self.assertFalse(self.ea.is_placeholder(Path(self.tmp.name) / "missing.png"))
+
+    def test_draft_refuses_it_before_anything_else_is_asked(self):
+        body = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("is_placeholder(design)", body)
+        self.assertLess(body.index("is_placeholder(design)"), body.index("/uploads/images.json"))
+
+    def test_redrawing_stops_before_the_art_step_is_killed(self):
+        clock = iter([0, 0, 200, 200, 400])
+        # A stand-in for this module's `time` only - patching time.monotonic
+        # itself would move the clock for every test after this one.
+        self.ea.time = types.SimpleNamespace(monotonic=lambda: next(clock))
+        n = []
+
+        def generate(path, prompt, key, model=None, product=""):
+            n.append(1)
+            Path(path).write_bytes(b"x" * 3000)
+            return 3000, {}
+        self.ea.generate = generate
+        self.ea.proof = lambda path, key, model=None: (["text error: HE HER -> HERE"], ["HE HER"])
+        self.ea.load_credentials = lambda: None
+        real = sys.argv
+        sys.argv = ["emily-assets.py", "--prompt", "p", "--out", str(self.png)]
+        os.environ["OPENROUTER_API_KEY"] = "test-not-a-key"
+        self.addCleanup(os.environ.pop, "OPENROUTER_API_KEY", None)
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                self.ea.main()
+        finally:
+            sys.argv = real
+        rep = json.loads(out.getvalue())
+        self.assertLess(len(n), self.ea.PROOF_TRIES, "no third drawing past the budget")
+        self.assertIn("out of time", rep["proof"])
+        self.assertLess(self.ea.REDRAW_BUDGET_S, 180, "inside emily-new-build's limit")
