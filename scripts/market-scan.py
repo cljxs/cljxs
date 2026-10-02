@@ -56,6 +56,17 @@ def _load(name, filename):
     return mod
 
 
+bl = _load("blanks", "blanks.py")
+
+
+def blank_kind(phrase):
+    """The product word of a phrase (emily-printify's list), for blanks.py."""
+    try:
+        return _load("emily_printify_kind", "emily-printify.py").product_word(phrase)
+    except Exception:
+        return None
+
+
 # Both probes, imported. The rate-limit handling, the credential parsing, the
 # intent labels and the trademark list all live in one place each.
 ep = _load("etsy_probe", "etsy-probe.py")
@@ -227,6 +238,14 @@ def measure(data, now=None, phrase=""):
         # shopper sees first - the ones whose sales say what this market buys.
         "ids": [r["listing_id"] for r in rows[:SALES_LISTINGS]
                 if isinstance(r.get("listing_id"), int) and not isinstance(r.get("listing_id"), bool)],
+        # What each of those listings says about itself - title, description,
+        # materials - for blanks.py to read which shirt/mug/poster it is on.
+        # Kept in memory for the scan, never saved: it is sellers' copy.
+        "texts": {r["listing_id"]: " ".join(
+                      str(r.get(k) or "") if k != "materials" else " ".join(map(str, r.get(k) or []))
+                      for k in ("title", "description", "materials"))
+                  for r in rows[:SALES_LISTINGS]
+                  if isinstance(r.get("listing_id"), int) and not isinstance(r.get("listing_id"), bool)},
         "dropped": [],
     }
     checks = [("supply", "count"), ("heat", "original_creation_timestamp "
@@ -301,6 +320,7 @@ def sales(key, ids, now=None, call=None):
     call = call or ep.call
     since = int((now if now is not None else time.time()) - SALES_DAYS * 86400)
     reviews = selling = asked = 0
+    sold = []
     for lid in ids or []:
         data, _headers, err = call(f"/listings/{lid}/reviews?limit=1&min_created={since}", key)
         n = (data or {}).get("count") if not err else None
@@ -309,10 +329,12 @@ def sales(key, ids, now=None, call=None):
         asked += 1
         reviews += n
         selling += n > 0
+        if n > 0:
+            sold.append(lid)
         time.sleep(0.25 if call is ep.call else 0)
     if not asked:
         return None
-    return {"reviews": reviews, "selling": selling, "sales_n": asked}
+    return {"reviews": reviews, "selling": selling, "sales_n": asked, "sold_ids": sold}
 
 
 def fetch(key, phrase):
@@ -456,6 +478,12 @@ def cmd_scan(key, words):
         got = sales(key, m.get("ids"))
         if got:
             m.update(got)
+            # Which blank the listings that SOLD are printed on (blanks.py).
+            m["blanks"] = bl.tally(m.get("texts"), set(got["sold_ids"]), blank_kind(cand))
+            if m["blanks"]:
+                b = m["blanks"][0]
+                print(f"  blank: {cand} - {b['blank']} ({b['selling']} of {got['selling']} "
+                      f"selling listings name it)", flush=True)
         print(f"  sales: {cand} - " + (
             f"{got['selling']} of the top {got['sales_n']} listings sold in the "
             f"last {SALES_DAYS} days ({got['reviews']} reviews)" if got
@@ -598,7 +626,9 @@ def save_scan(seed, ranked, loose):
                   "pull_n": m["pull_n"], "score": opportunity(m),
                   "tags": m.get("tags") or [],
                   **({"reviews": m["reviews"], "selling": m["selling"],
-                      "sales_n": m["sales_n"], "sales_days": SALES_DAYS}
+                      "sales_n": m["sales_n"], "sales_days": SALES_DAYS,
+                      "blanks": [{k: b[k] for k in ("blank", "brand", "model", "attrs", "selling", "mentions")}
+                                 for b in m.get("blanks") or []]}
                      if "sales_n" in m else {})}
                  for c, m in ranked],
         "excluded": [{"phrase": c, "match": m["match"], "supply": m["supply"],

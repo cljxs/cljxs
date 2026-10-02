@@ -15933,7 +15933,8 @@ class AWellSellingNicheIsMeasuredInSales(unittest.TestCase):
             asked.append(path)
             return replies[int(path.split("/")[2])]
         got = self.ms.sales("k", [11, 12, 13, 14], now=1_800_000_000, call=call)
-        self.assertEqual(got, {"reviews": 6, "selling": 2, "sales_n": 3}, "the failed call is not a zero")
+        self.assertEqual(got, {"reviews": 6, "selling": 2, "sales_n": 3, "sold_ids": [11, 14]},
+                         "the failed call is not a zero")
         self.assertEqual(asked[0], f"/listings/11/reviews?limit=1&min_created={1_800_000_000 - 90 * 86400}")
         self.assertIsNone(self.ms.sales("k", [13], call=lambda p, k: (None, {}, "HTTP 500")))
 
@@ -16049,3 +16050,180 @@ class AWellSellingNicheIsMeasuredInSales(unittest.TestCase):
         self.assertIn("**Every design is your own.**", emily)
         self.assertIn("a near-copy is still a copy", emily)
         self.assertNotIn("Cap 3 drafts a day", emily, "the owner removed the cap on 2026-10-01")
+
+
+class TheSameBlankTheSellersUse(unittest.TestCase):
+    """"Recreate the product as much as possible, so using the same shirt, mug
+    or poster. If we don't have that product available to Emily yet, set some
+    type of signal to find the closest thing to it" (owner, 2026-10-02).
+
+    The listing text a scan already downloads names the blank on most
+    apparel ("Comfort Colors 1717"); Printify's blueprints carry `brand` and
+    `model` (its docs). blanks.py is the one matcher; the morning scan warns
+    when Emily lacks a selling blank and names the closest Printify product;
+    Emily's draft repeats the warning. A signal, never a refusal. The listing
+    wording here is believed, not captured - Etsy's site refuses this session -
+    and the first droplet scan is where it is checked."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "agents/scout/state/scans").mkdir(parents=True)
+        (self.root / "agents/emily/state").mkdir(parents=True)
+        os.environ["ECOSYSTEM_ROOT"] = str(self.root)
+        self.addCleanup(os.environ.pop, "ECOSYSTEM_ROOT", None)
+        self.b = load("blanks_t", "blanks.py")
+        self.BPS = [{"id": 706, "title": "Unisex Garment-Dyed T-shirt", "brand": "Comfort Colors", "model": "1717"},
+                    {"id": 6, "title": "Unisex Heavy Cotton Tee", "brand": "Gildan", "model": "5000"},
+                    {"id": 49, "title": "Unisex Heavy Blend Crewneck Sweatshirt", "brand": "Gildan", "model": "18000"},
+                    {"id": 68, "title": "Ceramic Mug 11oz", "brand": "Generic", "model": "Mug"}]
+
+    def names(self, text, kind=None):
+        return [x["blank"] for x in self.b.identify(text, kind)]
+
+    # --- reading a listing -----------------------------------------------------
+
+    def test_brand_and_model_as_sellers_write_them(self):
+        self.assertEqual(self.names("Bookish Tee | Comfort Colors® C1717 garment dyed"), ["Comfort Colors 1717"])
+        self.assertEqual(self.names("printed on a Gildan 18000 crewneck"), ["Gildan 18000"])
+        self.assertEqual(self.names("Bella + Canvas 3001 unisex"), ["Bella+Canvas 3001"])
+        self.assertEqual(self.names("Independent Trading Co. SS4500 hoodie"), ["Independent Trading Co. 4500"])
+        self.assertEqual(self.names("soft Comfort Colors shirt"), ["Comfort Colors"], "brand alone still says something")
+        self.assertEqual(self.names("Comfort Colors 1717. Our Comfort Colors shirts run big"), ["Comfort Colors 1717"],
+                         "the same brand twice is one blank")
+        self.assertEqual(self.names("Cute frog shirt, soft and comfy", "tshirt"), [], "nothing named, nothing guessed")
+
+    def test_attributes_where_no_model_is_named(self):
+        self.assertEqual(self.names("Cat Mug, 11 oz white ceramic coffee cup", "mug"), ["mug 11oz ceramic"])
+        self.assertEqual(self.names("Botanical 18x24 inch matte print", "poster"), ["poster 18x24 matte"])
+        self.assertEqual(self.names("18x24 unframed poster", "poster"), ["poster 18x24 unframed"],
+                         "unframed is not framed")
+        self.assertEqual(self.names("Frog sticker, kiss-cut vinyl", "sticker"), ["sticker kiss-cut vinyl"])
+
+    def test_counted_among_the_listings_that_sold(self):
+        texts = {1: "Comfort Colors 1717 tee", 2: "Comfort Colors 1717", 3: "Gildan 5000 tee",
+                 4: "Gildan 5000", 5: "Gildan 5000 shirt"}
+        top = self.b.tally(texts, sold_ids={1, 2, 3}, kind="tshirt")
+        self.assertEqual([(t["blank"], t["selling"], t["mentions"]) for t in top],
+                         [("Comfort Colors 1717", 2, 2), ("Gildan 5000", 1, 3)],
+                         "what the sellers who SELL use wins over what is mentioned most")
+
+    # --- Emily's products and Printify's ---------------------------------------
+
+    def test_a_gap_says_what_emily_would_print_on_instead(self):
+        top = [{"blank": "Comfort Colors 1717", "brand": "Comfort Colors", "model": "1717", "attrs": [], "selling": 5}]
+        tee = {"key": "tshirt", "blueprint_title": "Unisex Heavy Cotton Tee", "brand": "Gildan", "model": "5000"}
+        g = self.b.gap(top, "shirt", [tee])
+        self.assertEqual((g["blank"], g["have"]), ("Comfort Colors 1717", ["Unisex Heavy Cotton Tee"]))
+        same = dict(tee, brand="Comfort Colors", model="C1717")
+        self.assertIsNone(self.b.gap(top, "tshirt", [same]), "the same blank, written differently")
+
+    def test_the_closest_printify_product(self):
+        exact = self.b.closest({"brand": "Comfort Colors", "model": "1717", "attrs": []}, "tee", self.BPS)
+        self.assertEqual((exact[0]["id"], exact[0]["why"]), (706, "same brand and model"))
+        near = self.b.closest({"brand": "Comfort Colors", "model": "1566", "attrs": []}, "crewneck", self.BPS)
+        self.assertEqual((near[0]["id"], near[0]["why"]), (49, "same kind, different brand"))
+        mug = self.b.closest({"brand": None, "model": None, "attrs": ["11oz", "ceramic"]}, "mug", self.BPS)
+        self.assertEqual((mug[0]["id"], mug[0]["why"]), (68, "same kind and the same attributes"))
+        self.assertEqual(self.b.closest({"brand": "Gildan", "model": "18500", "attrs": []}, "poster", self.BPS), [],
+                         "nothing of the same kind is not a suggestion")
+
+    # --- the scan, the warning, the draft --------------------------------------
+
+    def test_the_scan_reads_the_text_and_notes_who_sold(self):
+        ms = load("market_scan_blank", "market-scan.py")
+        m = ms.measure({"count": 2, "results": [
+            {"listing_id": 7, "title": "Frog Tee", "description": "On a Comfort Colors 1717.", "materials": ["cotton"]},
+            {"listing_id": 8, "title": "Frog Tee 2"}]})
+        self.assertIn("Comfort Colors 1717", m["texts"][7])
+        self.assertIn("cotton", m["texts"][7])
+        got = ms.sales("k", [7, 8], call=lambda p, k: ({"count": 3 if "/7/" in p else 0}, {}, None))
+        self.assertEqual(got["sold_ids"], [7])
+        ms.SCANS = self.root / "agents/scout/state/scans"
+        row = {"supply": 10, "heat": 0.1, "pull": 0.1, "price": 25.0, "match": 1.0, "returned": 2, "heat_n": 2,
+               "pull_n": 2, "tags": [], "selling": 1, "sales_n": 2, "reviews": 3,
+               "blanks": self.b.tally(m["texts"], {7}, "tshirt")}
+        with contextlib.redirect_stdout(io.StringIO()):
+            saved = json.loads(ms.save_scan("frog shirt", [("frog shirt", row)], []).read_text())
+        self.assertEqual(saved["rows"][0]["blanks"][0]["blank"], "Comfort Colors 1717")
+        self.assertNotIn("texts", saved["rows"][0], "sellers' copy is never saved")
+
+    def write_scan(self, blank="Comfort Colors 1717", brand="Comfort Colors", model="1717"):
+        (self.root / "agents/scout/state/scans/frog-shirt.json").write_text(json.dumps({
+            "seed": "frog shirt", "scanned_at": "2026-10-02T10:00:00Z", "rows": [
+                {"phrase": "frog shirt", "score": 0.01, "selling": 6, "sales_n": 10,
+                 "blanks": [{"blank": blank, "brand": brand, "model": model, "attrs": [], "selling": 5, "mentions": 6}]}]}))
+
+    def test_the_morning_warning_names_the_closest_product(self):
+        ns = load("niche_scan_gap", "niche-scan.py")
+        self.write_scan()
+        ns.catalogue = lambda: [{"key": "tshirt", "blueprint_title": "Unisex Heavy Cotton Tee", "brand": "Gildan", "model": "5000"}]
+        [g] = ns.gaps(bps=self.BPS)
+        lines = ns.gap_lines(g)
+        self.assertIn("WARNING: 'frog shirt' sells on Comfort Colors 1717 (5 of its 6 selling listings name it). "
+                      "Emily has: Unisex Heavy Cotton Tee.", lines[0])
+        self.assertIn("closest on Printify: blueprint 706 Unisex Garment-Dyed T-shirt", lines[1])
+        self.assertIn("pick --product tshirt --blueprint 706", lines[-1])
+        self.assertEqual(json.loads((self.root / "agents/scout/state/blank-gaps.json").read_text())["gaps"][0]["blank"],
+                         "Comfort Colors 1717")
+        doc = json.loads((self.root / "agents/scout/state/scans/frog-shirt.json").read_text())
+        doc["rows"].append(dict(doc["rows"][0], phrase="frog shirt funny"))
+        (self.root / "agents/scout/state/scans/frog-shirt.json").write_text(json.dumps(doc))
+        self.assertEqual(len(ns.gaps(bps=self.BPS)), 1, "one warning a blank, however many phrases sell on it")
+        ns.catalogue = lambda: [{"key": "tshirt", "blueprint_title": "Garment-Dyed T-shirt", "brand": "Comfort Colors", "model": "1717"}]
+        self.assertEqual(ns.gaps(bps=self.BPS), [], "Emily has it: no warning")
+
+    def test_printify_is_read_once_a_week_and_a_failure_is_not_fatal(self):
+        ns = load("niche_scan_bps", "niche-scan.py")
+        calls = []
+        ns.printify = lambda: types.SimpleNamespace(call=lambda path: calls.append(path) or [
+            {"id": 1, "title": "T", "brand": "B", "model": "M", "images": ["x"]}])
+        self.assertEqual(ns.blueprints(), [{"id": 1, "title": "T", "brand": "B", "model": "M"}])
+        ns.blueprints()
+        self.assertEqual(calls, ["/catalog/blueprints.json"], "cached")
+        later = datetime.now(timezone.utc) + timedelta(days=8)
+        def boom(path):
+            raise SystemExit(2)                     # token() exits when there is no token
+        ns.printify = lambda: types.SimpleNamespace(call=boom)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(ns.blueprints(now=later), [])
+
+    def test_emilys_draft_repeats_the_warning(self):
+        ep = load("emily_printify_blank", "emily-printify.py")
+        self.write_scan()
+        build = self.root / "build"
+        build.mkdir()
+        self.assertEqual(ep.blank_warning(build, "tshirt", {"blueprint_title": "Unisex Heavy Cotton Tee"}, "tshirt"), [],
+                         "no evidence with the build: nothing to say")
+        (build / "evidence.json").write_text(json.dumps({"phrase": "frog shirt"}))
+        lines = ep.blank_warning(build, "tshirt", {"blueprint_title": "Unisex Heavy Cotton Tee",
+                                                    "brand": "Gildan", "model": "5000"}, "tshirt")
+        self.assertIn("WARNING: the selling 'frog shirt' listings are on Comfort Colors 1717", lines[0])
+        self.assertIn("Drafting anyway", lines[-1])
+        same = ep.blank_warning(build, "tshirt", {"blueprint_title": "T", "brand": "Comfort Colors", "model": "1717"}, "tee")
+        self.assertEqual(same, ["blank: Comfort Colors 1717 - the same one the selling 'frog shirt' listings use"])
+        src = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_draft(", 1)[1]
+        self.assertIn("blank_warning(d, cat_key, cat, product_type)", src.split("\ndef ", 1)[0])
+
+    def test_the_build_keeps_its_evidence(self):
+        nb = load("emily_new_build_ev", "emily-new-build.py")
+        nb.generate_artwork = lambda *a, **k: (True, "ok")
+        nb.call = lambda method, path, body=None: (201, {"id": 1})
+        argv = ["emily-new-build.py", "Frog Tee", "--product", "tshirt", "--evidence", json.dumps({"phrase": "frog shirt"})]
+        with unittest.mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(nb.main(), 0)
+        self.assertEqual(json.loads((self.root / "agents/emily/builds/frog-tee/evidence.json").read_text()),
+                         {"phrase": "frog shirt"})
+
+    def test_pick_and_refresh_keep_brand_and_model(self):
+        ep = load("emily_printify_refresh", "emily-printify.py")
+        ep.CATALOG = self.root / "agents/emily/state/printify-catalog.json"
+        ep.CATALOG.write_text(json.dumps({"tshirt": {"blueprint_id": 706, "blueprint_title": "Garment-Dyed T-shirt"}}))
+        ep.call = lambda path, *a, **k: {"title": "Unisex Garment-Dyed T-shirt", "brand": "Comfort Colors", "model": "1717"}
+        with contextlib.redirect_stdout(io.StringIO()):
+            ep.cmd_refresh(types.SimpleNamespace())
+        e = json.loads(ep.CATALOG.read_text())["tshirt"]
+        self.assertEqual((e["brand"], e["model"]), ("Comfort Colors", "1717"))
+        pick = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_pick(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn('"brand": bp.get("brand")', pick)

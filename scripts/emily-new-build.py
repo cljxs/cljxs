@@ -157,6 +157,17 @@ def main():
 
     # Do the art before queueing, so the task Emily receives already has real
     # pixels sitting in its build folder.
+    if evidence:
+        # Kept with the build, so the draft step can say whether Emily's
+        # product is the blank this market's selling listings use.
+        root = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
+        bdir = root / "agents" / "emily" / "builds" / slug
+        try:
+            bdir.mkdir(parents=True, exist_ok=True)
+            (bdir / "evidence.json").write_text(json.dumps(evidence, indent=1) + "\n")
+        except OSError as exc:
+            print(f"  evidence not saved with the build ({exc})", file=sys.stderr)
+
     print(f"generating artwork for '{slug}' ...")
     art_ok, art_msg = generate_artwork(slug, a.idea, a.brief, a.product,
                                        evidence)

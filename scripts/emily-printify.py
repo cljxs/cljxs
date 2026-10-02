@@ -430,7 +430,9 @@ def cmd_refresh(a):
         return 0
     filled, already, failed = [], [], []
     for key, entry in sorted(products(cat)):
-        if entry.get("blueprint_title"):
+        # Brand and model were added later than the title; an entry missing
+        # either is read again, once.
+        if entry.get("blueprint_title") and "brand" in entry and "model" in entry:
             already.append(key)
             continue
         bid = entry.get("blueprint_id")
@@ -438,14 +440,16 @@ def cmd_refresh(a):
             failed.append((key, "no blueprint_id"))
             continue
         try:
-            title = call(f"/catalog/blueprints/{bid}.json").get("title") or ""
+            bp = call(f"/catalog/blueprints/{bid}.json") or {}
         except Exception as exc:
             failed.append((key, f"{type(exc).__name__}"))
             continue
+        title = bp.get("title") or ""
         if not title:
             failed.append((key, "blueprint has no title"))
             continue
         entry["blueprint_title"] = title
+        entry["brand"], entry["model"] = bp.get("brand"), bp.get("model")
         filled.append((key, title))
 
     if filled:
@@ -593,15 +597,20 @@ def cmd_pick(a):
     # The blueprint's own title, so resolve() can match a word Emily used
     # against the garment's real name without anyone maintaining a synonym
     # list. One extra read, once, at the only moment a human is here anyway.
+    # Brand and model too (2026-10-02): blanks.py matches what selling
+    # listings are printed on - "Comfort Colors 1717" - against these.
     try:
-        blueprint_title = call(f"/catalog/blueprints/{a.blueprint}.json").get("title") or ""
+        bp = call(f"/catalog/blueprints/{a.blueprint}.json") or {}
     except Exception:
-        blueprint_title = ""
+        bp = {}
+    blueprint_title = bp.get("title") or ""
 
     cat = read_catalog()
     cat[a.product] = {
         "blueprint_id": int(a.blueprint),
         "blueprint_title": blueprint_title,
+        "brand": bp.get("brand"),
+        "model": bp.get("model"),
         "aliases": [w.strip() for w in (a.alias or "").split(",") if w.strip()],
         "provider_id": int(a.provider),
         "variant_ids": [v["id"] for v in chosen],
@@ -1491,6 +1500,53 @@ def cmd_layout(a):
     return 0
 
 
+def blank_warning(build_dir, cat_key, cat, product_type):
+    """Lines warning that this build is about to go on a different blank from
+    the one its market's selling listings use - or [] when it is the same,
+    or nothing is known. A signal, never a refusal: the owner decides
+    (2026-10-02, "set some type of signal to find the closest thing").
+
+    The market comes from the build's evidence.json (emily-new-build.py),
+    the selling blanks from that phrase's scan, the closest Printify product
+    from niche-scan.py's blank-gaps.json, and the comparison from blanks.py -
+    the one matcher."""
+    try:
+        phrase = str(json.loads((Path(build_dir) / "evidence.json").read_text()).get("phrase") or "").lower()
+    except Exception:
+        return []
+    if not phrase:
+        return []
+    scans_dir = ROOT / "agents" / "scout" / "state" / "scans"
+    row = None
+    for f in sorted(scans_dir.glob("*.json")) if scans_dir.is_dir() else []:
+        try:
+            rows = json.loads(f.read_text()).get("rows") or []
+        except Exception:
+            continue
+        row = next((r for r in rows if str(r.get("phrase") or "").lower() == phrase), None) or row
+    top = (row or {}).get("blanks") or []
+    if not top:
+        return []
+    spec = importlib.util.spec_from_file_location("blanks_draft", Path(__file__).resolve().parent / "blanks.py")
+    bl = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bl)
+    g = bl.gap(top, bl.family(product_type), [dict(cat, key=cat_key)])
+    if not g:
+        return [f"blank: {top[0]['blank']} - the same one the selling '{phrase}' listings use"]
+    lines = [f"WARNING: the selling '{phrase}' listings are on {g['blank']} "
+             f"({top[0].get('selling')} of {row.get('selling')} name it); this draft goes on "
+             f"'{cat_key}' ({cat.get('blueprint_title') or 'blueprint ' + str(cat.get('blueprint_id'))})."]
+    try:
+        known = json.loads((ROOT / "agents" / "scout" / "state" / "blank-gaps.json").read_text()).get("gaps") or []
+    except Exception:
+        known = []
+    near = next((k.get("closest") for k in known if k.get("blank") == g["blank"] and k.get("closest")), None)
+    for c in near or []:
+        lines.append(f"  closest on Printify: blueprint {c['id']} {c['title']} - {c['why']}")
+    lines.append("  Drafting anyway; set the closer product up with emily-printify.py pick if you want it.")
+    return lines
+
+
 def cmd_draft(a):
     """Turn a finished build folder into an UNPUBLISHED Printify product.
 
@@ -1548,6 +1604,8 @@ def cmd_draft(a):
         # Say it out loud. A listing that says "sweatshirt" drafted against the
         # "hoodie" entry is right, but only if nobody has to guess that it was.
         print(f"'{product_type}' -> catalogue entry '{cat_key}'")
+    for line in blank_warning(d, cat_key, cat, product_type):
+        print(line)
 
     # An all-over print is placed from its real print-area size, and there is
     # no safe default: scale 1 centred is what put a wildflower field on the

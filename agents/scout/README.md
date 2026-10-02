@@ -79,7 +79,9 @@ Approving the same idea twice is refused rather than queued twice.
 | `scout-niches.timer` | 06:30 CT, daily | **nothing** - re-measures 6 niches on Etsy (favourites, price, recent sales), adds new niches from what sells |
 | `scout-cycle.timer` | 08:00 CT, once a day | **fuel** - about 9p a month |
 
-Check the niches any time: `python3 scripts/niche-scan.py list`. Scout may
+Check the niches any time: `python3 scripts/niche-scan.py list`. Which blank
+(shirt, mug, poster) the selling listings use, where Emily is not set up for
+it, and the closest Printify product: `python3 scripts/niche-scan.py blanks`. Scout may
 only propose into a phrase whose top listings show recent sales (a review is
 a purchase); every design is original - the niche is the market, not a design
 to copy.

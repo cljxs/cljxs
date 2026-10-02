@@ -6,6 +6,7 @@ morning, with no model involved.
     python3 scripts/niche-scan.py run            scan the most out-of-date niches (the timer)
     python3 scripts/niche-scan.py run --n 2      fewer
     python3 scripts/niche-scan.py list           every niche, how old its scan is, what it sold
+    python3 scripts/niche-scan.py blanks         selling blanks Emily lacks, and the closest Printify product
 
 WHY (2026-10-02). The owner wants Scout working on "a well selling niche",
 with no preference which. Two things stood in the way:
@@ -49,6 +50,11 @@ ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", SCRIPTS.parent))
 STATE = ROOT / "agents" / "scout" / "state"
 NICHES = STATE / "niches.json"
 SCANS = STATE / "scans"
+# THE SIGNAL (owner, 2026-10-02): when the sellers who sell print on a blank
+# Emily is not set up for, say so, and say the closest thing Printify has.
+GAPS = STATE / "blank-gaps.json"
+BLUEPRINTS = ROOT / "agents" / "emily" / "state" / "printify-blueprints.json"
+BLUEPRINTS_DAYS = 7      # Printify's catalogue changes slowly; one read a week
 
 RUN_N = 6                 # scans a morning: MAX_NICHES at 6/day is ~13 days, inside Scout's 14
 FRESH_DAYS = 7            # a niche scanned this recently is not re-scanned
@@ -204,6 +210,101 @@ def cmd_run(a):
     for seed in added:
         log(f"new niche from what sells: '{seed}' ({d['niches'][seed]['source']})")
     save(d)
+    for g in gaps():
+        for line in gap_lines(g):
+            log(line)
+    return 0
+
+
+def printify():
+    return _load("emily_printify_gap", "emily-printify.py")
+
+
+def blueprints(now=None):
+    """Printify's whole catalogue (id, title, brand, model), cached for a week.
+    [] when Printify cannot be asked - the warning still says what is
+    missing, it just cannot name the nearest product."""
+    now = now or datetime.now(timezone.utc)
+    try:
+        d = json.loads(BLUEPRINTS.read_text())
+        age = (now - datetime.strptime(d["fetched_at"], "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc)).total_seconds() / 86400
+        if age < BLUEPRINTS_DAYS:
+            return d["blueprints"]
+    except Exception:
+        pass
+    try:
+        raw = printify().call("/catalog/blueprints.json")
+    except (Exception, SystemExit) as exc:
+        log(f"Printify catalogue not read ({type(exc).__name__}) - warnings will not name the closest product")
+        return []
+    rows = [{k: b.get(k) for k in ("id", "title", "brand", "model")} for b in raw or [] if isinstance(b, dict)]
+    BLUEPRINTS.parent.mkdir(parents=True, exist_ok=True)
+    BLUEPRINTS.write_text(json.dumps({"fetched_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                      "blueprints": rows}, indent=1) + "\n")
+    return rows
+
+
+def catalogue():
+    """Emily's chosen products as [{key, blueprint_id, blueprint_title, brand, model}]."""
+    try:
+        p = printify()
+        return [dict(e, key=k) for k, e in p.products(p.read_catalog())]
+    except (Exception, SystemExit):
+        return []
+
+
+def gaps(bps=None):
+    """[warning] - one per scanned phrase whose selling listings name a blank
+    Emily does not have, with the closest Printify products. Written to
+    blank-gaps.json for the Deck and Emily, and logged."""
+    bl = _load("blanks_gap", "blanks.py")
+    have = catalogue()
+    out, seen = [], set()
+    for f in sorted(SCANS.glob("*.json")) if SCANS.is_dir() else []:
+        try:
+            doc = json.loads(f.read_text())
+        except Exception:
+            continue
+        for row in doc.get("rows") or []:
+            top = row.get("blanks") or []
+            kind = bl.family(product_of(row.get("phrase") or doc.get("seed") or ""))
+            g = bl.gap(top, kind, have)
+            if not g or (g["blank"], kind) in seen:
+                continue
+            seen.add((g["blank"], kind))
+            if bps is None:
+                bps = blueprints()
+            g.update(phrase=row.get("phrase"), sold=row.get("selling"), sold_of=row.get("sales_n"),
+                     closest=bl.closest(top[0], kind, bps))
+            out.append(g)
+    GAPS.parent.mkdir(parents=True, exist_ok=True)
+    GAPS.write_text(json.dumps({"checked_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                "gaps": out}, indent=1) + "\n")
+    return out
+
+
+def gap_lines(g):
+    have = ", ".join(g["have"]) if g["have"] else f"no {g['kind'] or 'product'} at all"
+    lines = [f"WARNING: '{g['phrase']}' sells on {g['blank']} ({g['selling']} of its "
+             f"{g['sold']} selling listings name it). Emily has: {have}."]
+    for c in g.get("closest") or []:
+        lines.append(f"  closest on Printify: blueprint {c['id']} {c['title']} "
+                     f"({c.get('brand') or '?'} {c.get('model') or ''}) - {c['why']}")
+    if g.get("closest"):
+        lines.append(f"  set it up once: python3 scripts/emily-printify.py providers {g['closest'][0]['id']}"
+                     f"  then  emily-printify.py pick --product {g['kind']} --blueprint "
+                     f"{g['closest'][0]['id']} --provider <id>")
+    return lines
+
+
+def cmd_blanks(_a):
+    found = gaps()
+    if not found:
+        print("No gaps: wherever selling listings name a blank, Emily has it (or none was named yet).")
+        return 0
+    for g in found:
+        print("\n".join(gap_lines(g)) + "\n")
     return 0
 
 
@@ -218,6 +319,8 @@ def cmd_list(_a):
                    key=lambda r: (r.get("selling") or 0, r.get("reviews") or 0), default=None)
         sold = (f"best: {best['phrase']} - {best['selling']}/{best['sales_n']} sold, "
                 f"{best['reviews']} reviews" if best else "no sales measured yet")
+        if best and best.get("blanks"):
+            sold += f", on {best['blanks'][0]['blank']}"
         when = "never" if age is None else f"{age:.0f}d ago"
         print(f"  {seed:<30} {when:>9}  {sold}")
     return 0
@@ -230,6 +333,7 @@ def main(argv=None):
     r.add_argument("--n", type=int, default=RUN_N)
     r.set_defaults(fn=cmd_run)
     sub.add_parser("list").set_defaults(fn=cmd_list)
+    sub.add_parser("blanks", help="selling blanks Emily is not set up for, and the closest Printify product").set_defaults(fn=cmd_blanks)
     a = ap.parse_args(argv)
     return a.fn(a)
 

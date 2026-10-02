@@ -93,6 +93,8 @@ agents/scout/state/last-run.txt
 agents/scout/state/scans/
 agents/scout/state/niches.json
 agents/scout/state/niches.tmp
+agents/scout/state/blank-gaps.json
+agents/emily/state/printify-blueprints.json
 agents/fury/state/last-run.txt
 
 # Fury - the collector writes data/ and the briefing skeleton into reports/.

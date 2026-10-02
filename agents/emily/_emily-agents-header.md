@@ -96,6 +96,13 @@ The artwork already in your build folder was generated from those numbers -
 they go in again automatically. Do not water that down with a vaguer prompt
 of your own.
 
+**The blank.** When `emily-printify.py draft` prints `WARNING: the selling ...
+listings are on <blank>`, the market's selling listings are printed on a
+different shirt, mug or poster than the one you are about to use. The draft
+still goes ahead - copy the warning lines into your report, word for word, so
+the owner can set up the closer product. Never pick a different product
+yourself.
+
 If the block says evidence is missing, say so in your report. Building
 without it is the old way and it is how the shop ended up full of seasonal
 stickers nobody saved.
