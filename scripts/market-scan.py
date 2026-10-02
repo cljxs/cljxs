@@ -89,7 +89,12 @@ LOOSE = 0.5                       # below this share of matching titles,
 # which is a floor on its sales (most buyers never review). Checked on the
 # top SALES_LISTINGS listings of the best SALES_PHRASES phrases of a scan:
 # 50 calls, against a daily budget of thousands.
-SALES_DAYS = 90
+# A year, not 90 days (2026-10-02). On the droplet the ten most-favourited
+# 'dog mom mug' listings - from shops with 9,000 to 54,000 sales - had 52
+# reviews between them in years, the newest four months old: most buyers
+# never review, so a single listing shows one every few months even when
+# its shop sells daily. Ninety days read every niche as dead.
+SALES_DAYS = 365
 SALES_LISTINGS = 10
 SALES_PHRASES = 5
 
@@ -448,11 +453,11 @@ def _sales_table(key, phrase, by_favs):
         print(f"Etsy refused: {err}", file=sys.stderr)
         return 1
     f = lambda v, w: ("?" if v is None else f"{v:,.0f}").rjust(w)
-    print(f"\n  today on this machine: {datetime.now(timezone.utc):%Y-%m-%d} - the 90 days "
+    print(f"\n  today on this machine: {datetime.now(timezone.utc):%Y-%m-%d} - the {SALES_DAYS} days "
           f"count back from here")
     print(f"\n  {phrase} - " + (f"the {len(rows)} most-favourited of the first {SALES_POOL}"
                                if by_favs else f"top {len(rows)} listings as the API ranks them") + "\n")
-    print(f"  {'listing':>11} {'age d':>6} {'favs':>6} {'rev 90d':>8} {'rev ever':>9} "
+    print(f"  {'listing':>11} {'age d':>6} {'favs':>6} {'rev year' if SALES_DAYS == 365 else f'rev {SALES_DAYS}d':>8} {'rev ever':>9} "
           f"{'last review':>12} {'shop sold':>10}  title")
     for r in rows:
         print(f"  {r['listing_id']:>11} {f(r['age_days'], 6)} {f(r['favs'], 6)} {f(r['recent'], 8)} "

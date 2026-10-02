@@ -77,7 +77,7 @@ Every morning, before you wake, `niche-scan.py` re-measures the oldest
 niches on Etsy and adds new ones from the tags that selling listings use.
 You never run it. Alongside supply, favourites and price, each strong phrase
 now carries **sales**: of its top 10 listings, how many had a review in the
-last 90 days, and how many reviews. A review can only come from a purchase,
+last year, and how many reviews. A review can only come from a purchase,
 so it is a floor on sales - say it that way, never as a forecast.
 
 **You may only propose into a phrase with recent sales.** Code refuses the

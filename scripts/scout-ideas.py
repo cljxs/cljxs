@@ -468,7 +468,7 @@ def no_sales(row):
 
     The owner asked for "a well selling niche" (2026-10-02). Favourites are
     liking; a review is a purchase. A phrase whose top listings had no
-    review in the last 90 days, or whose sales were never measured (only the
+    review in the window (a year since 2026-10-02 - reviews are rare), or whose sales were never measured (only the
     best phrases of each scan are - the daily niche scan keeps them fresh),
     is not a niche anybody has shown is selling.
     """
@@ -482,7 +482,7 @@ def no_sales(row):
 
 
 def sales_line(row):
-    """'7 of top 10 sold in 90 days, 41 reviews' - said as a floor."""
+    """'7 of top 10 sold in 365 days, 41 reviews' - said as a floor."""
     return (f"{row.get('selling')} of top {row.get('sales_n')} sold in "
             f"{row.get('sales_days') or 90} days, {row.get('reviews')} reviews")
 

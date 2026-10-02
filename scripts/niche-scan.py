@@ -141,8 +141,10 @@ def niches(d=None, now=None):
     return out
 
 
-def due(d=None, n=RUN_N, now=None):
-    return [s for s, _src, age in niches(d, now) if (age is None or age >= FRESH_DAYS)
+def due(d=None, n=RUN_N, now=None, force=False):
+    """The niches to scan now, oldest first. force: scanned this week too -
+    for when the measuring itself changed and the recent scans are wrong."""
+    return [s for s, _src, age in niches(d, now) if (force or age is None or age >= FRESH_DAYS)
             and not blocked(s)][:n]
 
 
@@ -203,7 +205,7 @@ def scan(seed):
 
 def cmd_run(a):
     d = load()
-    todo = due(d, a.n)
+    todo = due(d, a.n, force=a.force)
     if not todo:
         log("every niche was scanned within the last week - nothing due")
     for seed in todo:
@@ -338,6 +340,7 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")
     r.add_argument("--n", type=int, default=RUN_N)
+    r.add_argument("--force", action="store_true", help="re-scan even niches measured this week")
     r.set_defaults(fn=cmd_run)
     sub.add_parser("list").set_defaults(fn=cmd_list)
     sub.add_parser("blanks", help="selling blanks Emily is not set up for, and the closest Printify product").set_defaults(fn=cmd_blanks)

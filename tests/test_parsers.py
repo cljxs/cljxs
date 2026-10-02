@@ -15928,13 +15928,14 @@ class AWellSellingNicheIsMeasuredInSales(unittest.TestCase):
     def test_sales_counts_recent_reviews_and_leaves_failures_out(self):
         asked, now = [], 1_800_000_000
         rv = lambda *days: {"count": len(days), "results": [{"create_timestamp": now - d * 86400} for d in days]}
-        replies = {11: (rv(1, 30, 89, 200), {}, None), 12: (rv(91, 400), {}, None),
-                   13: (None, {}, "HTTP 500: x"), 14: (rv(10, 60), {}, None)}
+        # A year's window: reviews are rare (2026-10-02, the dog mom mug check).
+        replies = {11: (rv(1, 30, 89, 200), {}, None), 12: (rv(366, 400), {}, None),
+                   13: (None, {}, "HTTP 500: x"), 14: (rv(10, 364), {}, None)}
         def call(path, key):
             asked.append(path)
             return replies[int(path.split("/")[2])]
         got = self.ms.sales("k", [11, 12, 13, 14], now=now, call=call)
-        self.assertEqual(got, {"reviews": 5, "selling": 2, "sales_n": 3, "sold_ids": [11, 14]},
+        self.assertEqual(got, {"reviews": 6, "selling": 2, "sales_n": 3, "sold_ids": [11, 14]},
                          "counted from the review dates; the failed call is not a zero")
         self.assertEqual(asked[0], "/listings/11/reviews?limit=100", "no min_created: it read 0 on the droplet")
         self.assertIsNone(self.ms.sales("k", [13], call=lambda p, k: (None, {}, "HTTP 500")))
@@ -15950,7 +15951,7 @@ class AWellSellingNicheIsMeasuredInSales(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             path = self.ms.save_scan("frog sticker", [("frog sticker", m)], [])
         row = json.loads(path.read_text())["rows"][0]
-        self.assertEqual((row["selling"], row["sales_n"], row["reviews"], row["sales_days"]), (7, 10, 41, 90))
+        self.assertEqual((row["selling"], row["sales_n"], row["reviews"], row["sales_days"]), (7, 10, 41, 365))
 
     # --- Scout's gate ----------------------------------------------------------
 
@@ -16001,6 +16002,8 @@ class AWellSellingNicheIsMeasuredInSales(unittest.TestCase):
         self.scan("frog sticker", [], when=self.now)
         self.assertEqual(ns.due(n=5), ["dog mom mug", "cat lover mug"], "scanned today: not due")
         self.assertEqual(ns.due(n=1), ["dog mom mug"])
+        self.assertEqual(ns.due(n=5, force=True), ["dog mom mug", "cat lover mug", "frog sticker"],
+                         "--force: re-scan this week's too, when the measuring changed")
 
     def test_somebody_elses_property_is_never_scanned(self):
         ns = load("niche_scan_ip", "niche-scan.py")
@@ -16281,14 +16284,14 @@ class TheFirstRealNicheRun(unittest.TestCase):
                                      "original_creation_timestamp": now - 400 * 86400}]}, {}, None
             if path.startswith("/listings/1/reviews"):
                 return {"count": 12, "results": [{"create_timestamp": now - d * 86400}
-                                                 for d in (100, 150, 300)]}, {}, None
+                                                 for d in (100, 400, 700)]}, {}, None
             if path == "/shops/9":
                 return {"transaction_sold_count": 5400}, {}, None
             raise AssertionError(path)
         rows, err = ms.sales_check("k", "dog mom mug", call=call, now=now)
         self.assertIsNone(err)
         self.assertEqual({k: rows[0][k] for k in ("recent", "ever", "shop_sold", "favs")},
-                         {"recent": 0, "ever": 12, "shop_sold": 5400, "favs": 40})
+                         {"recent": 1, "ever": 12, "shop_sold": 5400, "favs": 40})
         self.assertEqual(rows[0]["last"], "2026-10-07", "the newest review's date, for a person to check")
         self.assertAlmostEqual(rows[0]["age_days"], 400, places=0)
         self.assertIn("sales-check", (SCRIPTS / "market-scan.py").read_text().split("def main(", 1)[1])
