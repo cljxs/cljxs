@@ -225,12 +225,17 @@ def gap(top, kind, catalog_entries):
     if not best.get("selling"):
         return None
     entries = list(catalog_entries or [])
-    # A variant is a different garment (kids', women's), so it does not count.
-    if any(matches(best, e) not in (None, "variant") for e in entries):
-        return None
     fw = family_words(kind)
-    have = [e.get("blueprint_title") or e.get("key") for e in entries
-            if fw & (_words(e.get("key")) | _words(e.get("blueprint_title")))]
+    same_kind = [e for e in entries if fw & (_words(e.get("key")) | _words(e.get("blueprint_title")))]
+    # A model number names one garment, so an exact match counts whatever the
+    # kind. A brand alone or an attribute does not: Emily's Comfort Colors
+    # 1717 TEE answered for "bookish sweatshirt ... Comfort Colors" and the
+    # sweatshirt warning vanished on the droplet. Those count only on a
+    # product of the same kind. A variant (kids', women's) never counts.
+    if any(matches(best, e) == "exact" for e in entries) or \
+            any(matches(best, e) in ("brand", "attrs") for e in same_kind):
+        return None
+    have = [e.get("blueprint_title") or e.get("key") for e in same_kind]
     return {"blank": best["blank"], "kind": kind, "selling": best.get("selling"),
             "mentions": best.get("mentions"), "have": have}
 

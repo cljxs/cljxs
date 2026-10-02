@@ -16157,6 +16157,29 @@ class TheSameBlankTheSellersUse(unittest.TestCase):
         self.assertEqual(near[0]["id"], 1257, "the same brand's crewneck before another brand's")
         self.assertEqual(self.b.brand_key("Bella+Canvas"), self.b.brand_key("BELLA + CANVAS™"))
 
+    def test_a_brand_alone_counts_only_on_the_same_kind(self):
+        # Bug: after the owner set up Comfort Colors 1717 as Emily's tee, the
+        # 'bookish sweatshirt' warning (sellers naming only "Comfort Colors")
+        # disappeared - a tee answered for a sweatshirt. Entries as saved by
+        # pick on the droplet, 2026-10-02.
+        tee = {"key": "tshirt", "blueprint_title": "Unisex Garment-Dyed T-shirt",
+               "brand": "Comfort Colors®", "model": "1717"}
+        crew = {"key": "sweatshirt", "blueprint_title": "Unisex Heavy Blend™ Crewneck Sweatshirt",
+                "brand": "Gildan", "model": "18000"}
+        cc = [{"blank": "Comfort Colors", "brand": "Comfort Colors", "model": None, "attrs": [], "selling": 3}]
+        g = self.b.gap(cc, "sweatshirt", [tee, crew])
+        self.assertIsNotNone(g, "a Comfort Colors tee is not a Comfort Colors sweatshirt")
+        self.assertEqual(g["have"], ["Unisex Heavy Blend™ Crewneck Sweatshirt"])
+        self.assertIsNone(self.b.gap(cc, "tshirt", [tee, crew]), "on a tee it is the same brand")
+        exact = [{"blank": "Comfort Colors 1717", "brand": "Comfort Colors", "model": "1717", "attrs": [], "selling": 3}]
+        self.assertIsNone(self.b.gap(exact, "shirt", [tee, crew]), "a model number names the garment")
+        zipper = [{"blank": "tote zipper", "brand": None, "model": None, "attrs": ["zipper"], "selling": 2}]
+        zt = {"key": "zipper-tote", "blueprint_title": "Zippered Canvas Tote", "brand": "Q-Tees", "model": "Q1300"}
+        self.assertIsNone(self.b.gap(zipper, "tote", [tee, zt]))
+        canvas = [{"blank": "tote canvas", "brand": None, "model": None, "attrs": ["canvas"], "selling": 2}]
+        wall = {"key": "canvas", "blueprint_title": "Matte Canvas, Stretched, 1.25\"", "brand": None, "model": None}
+        self.assertIsNotNone(self.b.gap(canvas, "tote", [wall]), "a wall canvas is not a canvas tote")
+
     def test_the_zippered_canvas_tote(self):
         # Bug: 'teacher tote bag with zipper' (2 of 3 selling on a zipper tote)
         # and 'library tote bag pattern' (canvas cotton zipper) never suggested
