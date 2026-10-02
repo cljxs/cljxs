@@ -153,11 +153,18 @@ def product_of(seed):
         return None
 
 
+def same(phrase):
+    """One niche however it is pluralised: 'cat stickers' is 'cat sticker'
+    (the first droplet run added both)."""
+    return " ".join(w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w
+                    for w in str(phrase or "").lower().split())
+
+
 def discover(d, now=None):
     """New niches from the tags of phrases that are SELLING: the words sellers
     who are making sales use for their own work. A tag with no product word
     takes its scan's product ("dog mom gift" in a mug scan -> "dog mom mug")."""
-    known = {s.lower() for s, _src, _age in niches(d, now)}
+    known = {same(s) for s, _src, _age in niches(d, now)}
     added = []
     for f in sorted(SCANS.glob("*.json")) if SCANS.is_dir() else []:
         try:
@@ -174,11 +181,11 @@ def discover(d, now=None):
                     continue
                 seed = tag if product_of(tag) else (f"{tag.removesuffix(' gift').strip()} {product}"
                                                     if product else None)
-                if not seed or seed in known or blocked(seed):
+                if not seed or same(seed) in known or blocked(seed):
                     continue
                 if len(known) >= MAX_NICHES or len(added) >= DISCOVER_PER_RUN:
                     return added
-                known.add(seed)
+                known.add(same(seed))
                 d["niches"][seed] = {"source": f"tag on {row.get('phrase')}",
                                      "added": (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d")}
                 added.append(seed)

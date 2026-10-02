@@ -187,6 +187,11 @@ def gap(top, kind, catalog_entries):
     if not top:
         return None
     best = top[0]
+    # Only a blank that listings which SOLD are printed on. A blank merely
+    # mentioned is not what buyers chose - the first droplet run warned
+    # "(0 of its 0 selling listings name it)" for nine of nine, which is noise.
+    if not best.get("selling"):
+        return None
     entries = list(catalog_entries or [])
     if any(matches(best, e) for e in entries):
         return None
@@ -217,10 +222,16 @@ def closest(blank, kind, blueprints, keep=3):
             rank, why = 3, ("same kind, different brand" if blank.get("brand") else "same kind")
         else:
             continue
-        scored.append((rank, bp.get("id") or 0, bp, why))
-    scored.sort(key=lambda s: (s[0], s[1]))
+        # Within a rank, the most attributes in common first: "40oz stainless
+        # travel" put the plain "Mug 11oz" ahead of "Stainless Steel Travel
+        # Mug" on the first real run, because ties went to the lower id.
+        shared = sorted({a.replace("-", "") for a in blank.get("attrs") or []} & title)
+        if rank == 3 and shared:
+            why += f", shares: {', '.join(shared)}"
+        scored.append((rank, -len(shared), bp.get("id") or 0, bp, why))
+    scored.sort(key=lambda s: (s[0], s[1], s[2]))
     return [{"id": bp.get("id"), "title": bp.get("title"), "brand": bp.get("brand"),
-             "model": bp.get("model"), "why": why} for _r, _i, bp, why in scored[:keep]]
+             "model": bp.get("model"), "why": why} for _r, _o, _i, bp, why in scored[:keep]]
 
 
 if __name__ == "__main__":

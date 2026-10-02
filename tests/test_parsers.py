@@ -16227,3 +16227,66 @@ class TheSameBlankTheSellersUse(unittest.TestCase):
         self.assertEqual((e["brand"], e["model"]), ("Comfort Colors", "1717"))
         pick = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_pick(", 1)[1].split("\ndef ", 1)[0]
         self.assertIn('"brand": bp.get("brand")', pick)
+
+
+class TheFirstRealNicheRun(unittest.TestCase):
+    """2026-10-02, the first droplet run of niche-scan.py. Nine warnings, all
+    "(0 of its 0 selling listings name it)" - blanks merely mentioned, not
+    what buyers chose; "40oz stainless travel" pointed at a plain 11oz mug
+    ahead of Printify's Stainless Steel Travel Mug; 'cat stickers' was added
+    as a niche beside 'cat sticker'; and nearly every mug phrase read 0 of 10
+    sold, which needs the raw numbers to tell real from a fault."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "agents/scout/state/scans").mkdir(parents=True)
+        os.environ["ECOSYSTEM_ROOT"] = str(self.root)
+        self.addCleanup(os.environ.pop, "ECOSYSTEM_ROOT", None)
+        self.b = load("blanks_run1", "blanks.py")
+
+    def test_a_blank_nobody_bought_on_is_no_warning(self):
+        mentioned = [{"blank": "mug 11oz ceramic", "attrs": ["11oz", "ceramic"], "selling": 0, "mentions": 3}]
+        self.assertIsNone(self.b.gap(mentioned, "mug", []))
+        sold = [dict(mentioned[0], selling=1)]
+        self.assertEqual(self.b.gap(sold, "mug", [])["blank"], "mug 11oz ceramic")
+
+    def test_the_closest_shares_the_most_attributes(self):
+        bps = [{"id": 68, "title": "Mug 11oz"}, {"id": 70, "title": "Stainless Steel Travel Mug"},
+               {"id": 289, "title": "Latte Mug"}, {"id": 479, "title": "Black Mug (11oz, 15oz)"}]
+        travel = self.b.closest({"attrs": ["40oz", "stainless", "travel"]}, "mug", bps)
+        self.assertEqual((travel[0]["id"], travel[0]["why"]), (70, "same kind, shares: stainless, travel"))
+        black = self.b.closest({"attrs": ["11oz", "black", "ceramic"]}, "mug", bps)
+        self.assertEqual(black[0]["id"], 479)
+
+    def test_a_plural_is_the_same_niche(self):
+        ns = load("niche_scan_plural", "niche-scan.py")
+        ns.STARTER = ["cat sticker"]
+        (self.root / "agents/scout/state/scans/x.json").write_text(json.dumps({"seed": "cat sticker meme", "rows": [
+            {"phrase": "cat sticker meme", "selling": 6, "sales_n": 10,
+             "tags": ["cat stickers", "cute cat sticker", "cute cat stickers"]}]}))
+        self.assertEqual(ns.discover({"niches": {}}), ["cute cat sticker"])
+        self.assertEqual(ns.same("glass mugs"), "glass mug")
+        self.assertEqual(ns.same("class pass"), "class pass", "ss is not a plural")
+
+    def test_sales_check_shows_the_raw_numbers(self):
+        ms = load("market_scan_check", "market-scan.py")
+        now = 1_800_000_000
+        def call(path, key):
+            if path.startswith("/listings/active"):
+                return {"results": [{"listing_id": 1, "shop_id": 9, "num_favorers": 40, "title": "Dog Mom Mug",
+                                     "original_creation_timestamp": now - 400 * 86400}]}, {}, None
+            if path.startswith("/listings/1/reviews") and "min_created" in path:
+                return {"count": 0}, {}, None
+            if path.startswith("/listings/1/reviews"):
+                return {"count": 12}, {}, None
+            if path == "/shops/9":
+                return {"transaction_sold_count": 5400}, {}, None
+            raise AssertionError(path)
+        rows, err = ms.sales_check("k", "dog mom mug", call=call, now=now)
+        self.assertIsNone(err)
+        self.assertEqual({k: rows[0][k] for k in ("recent", "ever", "shop_sold", "favs")},
+                         {"recent": 0, "ever": 12, "shop_sold": 5400, "favs": 40})
+        self.assertAlmostEqual(rows[0]["age_days"], 400, places=0)
+        self.assertIn("sales-check", (SCRIPTS / "market-scan.py").read_text().split("def main(", 1)[1])

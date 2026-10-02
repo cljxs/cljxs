@@ -6,6 +6,7 @@ market-scan.py — put the two halves together.
     market-scan.py scan fall sticker        expand, then score the candidates
     market-scan.py scan laptop sticker --save   ...and file it for Scout
     market-scan.py compare                  every market measured, side by side
+    market-scan.py sales-check dog mom mug  the raw numbers behind a sales line
 
 trend-probe.py says what people SEARCH for. etsy-probe.py says what is
 already SOLD. The number that matters is neither one:
@@ -335,6 +336,59 @@ def sales(key, ids, now=None, call=None):
     if not asked:
         return None
     return {"reviews": reviews, "selling": selling, "sales_n": asked, "sold_ids": sold}
+
+
+def sales_check(key, phrase, call=None, now=None):
+    """The raw numbers behind a phrase's sales line, one row per top listing:
+    age, favourites, reviews in the last SALES_DAYS, reviews ever, and its
+    shop's lifetime sales. Asked because the first droplet run read 0 of 10
+    on nearly every mug phrase - real (the API's ranking surfacing new,
+    unsold listings) or a counting fault, and these numbers tell which."""
+    import urllib.parse
+    call = call or ep.call
+    now = now if now is not None else time.time()
+    q = urllib.parse.urlencode({"keywords": phrase, "limit": SALES_LISTINGS, "sort_on": "score"})
+    data, _h, err = call(f"/listings/active?{q}", key)
+    if err:
+        return None, err
+    since = int(now - SALES_DAYS * 86400)
+    out = []
+    for r in (data or {}).get("results") or []:
+        lid, shop = r.get("listing_id"), r.get("shop_id")
+        recent, _h, e1 = call(f"/listings/{lid}/reviews?limit=1&min_created={since}", key)
+        ever, _h, e2 = call(f"/listings/{lid}/reviews?limit=1", key)
+        sh, _h, e3 = call(f"/shops/{shop}", key) if shop else (None, None, "no shop_id")
+        out.append({"listing_id": lid, "age_days": age_days(r, now), "favs": r.get("num_favorers"),
+                    "recent": None if e1 else (recent or {}).get("count"),
+                    "ever": None if e2 else (ever or {}).get("count"),
+                    "shop_sold": None if e3 else (sh or {}).get("transaction_sold_count"),
+                    "title": str(r.get("title") or "")[:40]})
+        if call is ep.call:
+            time.sleep(0.6)
+    return out, None
+
+
+def cmd_sales_check(key, words):
+    phrase = " ".join(words)
+    rows, err = sales_check(key, phrase)
+    if err:
+        print(f"Etsy refused: {err}", file=sys.stderr)
+        return 1
+    f = lambda v, w: ("?" if v is None else f"{v:,.0f}").rjust(w)
+    print(f"\n  {phrase} - top {len(rows)} listings as the API ranks them\n")
+    print(f"  {'listing':>11} {'age d':>6} {'favs':>6} {'rev 90d':>8} {'rev ever':>9} {'shop sold':>10}  title")
+    for r in rows:
+        print(f"  {r['listing_id']:>11} {f(r['age_days'], 6)} {f(r['favs'], 6)} {f(r['recent'], 8)} "
+              f"{f(r['ever'], 9)} {f(r['shop_sold'], 10)}  {r['title']}")
+    ever = [r["ever"] for r in rows if r["ever"]]
+    recent = [r["recent"] for r in rows if r["recent"]]
+    if ever and not recent:
+        print(f"\n  Reviews exist ({sum(ever)} ever) but none in {SALES_DAYS} days: these listings "
+              f"sold before, not lately.")
+    elif not ever:
+        print(f"\n  No reviews ever on any of them: the API's top results here are listings "
+              f"that have not sold - new or obscure - whatever their shops sell.")
+    return 0
 
 
 def fetch(key, phrase):
@@ -812,7 +866,7 @@ def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "compare":
         return cmd_compare(sys.argv[2:])
-    if cmd not in ("phrase", "scan") or len(sys.argv) < 3:
+    if cmd not in ("phrase", "scan", "sales-check") or len(sys.argv) < 3:
         print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
         return 2
     key, why = ep.api_key()
@@ -820,6 +874,8 @@ def main():
         print(why, file=sys.stderr)
         return 2
     words = [a for a in sys.argv[2:] if not a.startswith("--")]
+    if cmd == "sales-check":
+        return cmd_sales_check(key, words)
     return (cmd_phrase if cmd == "phrase" else cmd_scan)(key, words)
 
 
