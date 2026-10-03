@@ -1590,7 +1590,7 @@ def _assets():
     return ea
 
 
-def proofread(design):
+def proofread(design, name=None):
     """(problems, note) for the text drawn in a design. emily-assets.py owns
     the proofread; this only asks it. ([], why) when it could not be asked."""
     try:
@@ -1599,7 +1599,7 @@ def proofread(design):
         key = os.environ.get("OPENROUTER_API_KEY", "").strip()
         if not key:
             return [], "NOT PROOFREAD - no OpenRouter key"
-        problems, lines = ea.proof(design, key)
+        problems, lines = ea.proof(design, key, name=name)
     except Exception as exc:
         return [], f"NOT PROOFREAD - {type(exc).__name__}: {str(exc)[:100]}"
     return problems, ("proofread, reads: " + " / ".join(lines)) if lines else "proofread, no text"
@@ -1742,7 +1742,11 @@ def cmd_draft(a):
               f"--product {cat_key}", file=sys.stderr)
         sys.exit(1)
 
-    problems, note = proofread(design)
+    try:
+        name = json.loads((d / "order.json").read_text()).get("name")
+    except (OSError, ValueError, AttributeError):
+        name = None
+    problems, note = proofread(design, name or listing.get("title"))
     if problems:
         print(f"\nnot drafting: the artwork's text is wrong -", file=sys.stderr)
         for p in problems:

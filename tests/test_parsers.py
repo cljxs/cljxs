@@ -16608,7 +16608,7 @@ class TheFirstTestDraftsPrintRight(unittest.TestCase):
             Path(path).write_bytes(b"x" * 3000)
             return 3000, {}
 
-        def proof(path, key, model=None):
+        def proof(path, key, model=None, name=None):
             calls.append(1)
             return (["text error: HE HER -> HERE"], ["I'M JUST HE HER"]) if len(calls) == 1 \
                 else ([], ["I'M JUST HERE"])
@@ -16631,8 +16631,8 @@ class TheFirstTestDraftsPrintRight(unittest.TestCase):
 
     def test_the_draft_reads_the_words_before_uploading(self):
         body = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
-        self.assertIn("proofread(design)", body)
-        self.assertLess(body.index("proofread(design)"), body.index("/uploads/images.json"))
+        self.assertIn("proofread(design, ", body)
+        self.assertLess(body.index("proofread(design, "), body.index("/uploads/images.json"))
         self.assertIn("measured", body.split("print_areas(image_id", 1)[1][:120])
 
     def test_the_art_direction_forbids_dates(self):
@@ -16702,7 +16702,7 @@ class TheFirstTestDraftsPrintRight(unittest.TestCase):
     def test_the_build_records_what_was_ordered(self):
         src = (SCRIPTS / "emily-new-build.py").read_text()
         self.assertIn('"order.json"', src)
-        self.assertIn('{"product": a.product}', src)
+        self.assertIn('{"product": a.product, "name": a.idea}', src)
         h = (ROOT / "agents/emily/_emily-agents-header.md").read_text()
         self.assertNotIn("--product sticker", h, "no product in the example to copy")
 
@@ -16748,7 +16748,7 @@ class APlaceholderIsNeverDrafted(unittest.TestCase):
             Path(path).write_bytes(b"x" * 3000)
             return 3000, {}
         self.ea.generate = generate
-        self.ea.proof = lambda path, key, model=None: (["text error: HE HER -> HERE"], ["HE HER"])
+        self.ea.proof = lambda path, key, model=None, name=None: (["text error: HE HER -> HERE"], ["HE HER"])
         self.ea.load_credentials = lambda: None
         real = sys.argv
         sys.argv = ["emily-assets.py", "--prompt", "p", "--out", str(self.png)]
@@ -16806,3 +16806,37 @@ class AceWakesBeforeTheEarlyKickoffs(unittest.TestCase):
             when = datetime(2026, 10, 3, minute // 60, minute % 60, tzinfo=timezone(timedelta(hours=-4)))
             self.assertIn(et.slot("ace", when), ("afternoon", "night"))
         self.assertIn(11 * 60 + 30, self.wakes())
+
+
+class TheDesignDoesNotPrintItsOwnName(unittest.TestCase):
+    """2026-10-03: a mug came back reading "TEACHER'S COFFEE PLOT MUG" - its
+    own product name, every word spelled right, so the proofread passed it.
+    The idea title went into the art prompt bare, and the image model drew
+    it. Now it is labelled as a name never to draw, and the proofread refuses
+    art whose words spell out the name."""
+
+    def setUp(self):
+        self.ea = load("emily_assets_name", "emily-assets.py")
+
+    def test_the_real_mug_is_refused(self):
+        lines = ["TEACHER'S", "COFFEE PLOT MUG"]          # as drawn
+        got = self.ea.proof_problems({"lines": lines, "errors": []}, "Teacher's Coffee Plot Mug")
+        self.assertEqual(len(got), 1)
+        self.assertIn("product's own name", got[0])
+
+    def test_a_design_that_shares_a_word_is_fine(self):
+        for lines in (["Coffee & Plot Twists"], ["This Is My Reading Shirt"], []):
+            self.assertEqual(self.ea.proof_problems({"lines": lines}, "Teacher's Coffee Plot Mug"), [], lines)
+        self.assertEqual(self.ea.proof_problems({"lines": ["COFFEE PLOT MUG"]}), [], "no name, no check")
+
+    def test_the_prompt_says_the_name_is_not_text(self):
+        said = self.ea.compose("Teacher's Coffee Plot Mug", "", "mug", None)
+        self.assertIn("NEVER text on the design: Teacher's Coffee Plot Mug", said)
+
+    def test_the_name_reaches_both_proofreads(self):
+        nb = (SCRIPTS / "emily-new-build.py").read_text()
+        self.assertIn('"--name", str(idea or "")', nb)
+        main = (SCRIPTS / "emily-assets.py").read_text().split("def main(", 1)[1]
+        self.assertIn("proof(a.out, key, name=a.name or None)", main)
+        draft = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn('proofread(design, name or listing.get("title"))', draft)

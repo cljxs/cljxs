@@ -332,7 +332,13 @@ def compose(idea, brief="", product="", evidence=None, already=()):
     Two pieces of code deciding one thing always drift, and these two were
     already disagreeing about whether text was allowed.
     """
-    parts = [str(idea or "").strip()]
+    # The idea's title is the product's working name. Handed over bare, the
+    # image model drew it: a mug read "TEACHER'S COFFEE PLOT MUG" (2026-10-03),
+    # every word spelled right and nothing anyone would buy. So it is labelled.
+    parts = [f"Working name of this product, to tell you what it is - NEVER "
+             f"text on the design: {str(idea or '').strip()}" if str(idea or "").strip() else "",
+             "If the design has words, they are a short phrase a buyer would want "
+             "to wear or use - never the product's name or a description of it."]
     if brief and brief.strip():
         parts.append(brief.strip())
     if product and product.strip():
@@ -472,16 +478,33 @@ def read_proof(content):
     return d if isinstance(d, dict) else None
 
 
-def proof_problems(reading):
+def _name_words(s):
+    return [w for w in re.findall(r"[a-z0-9]+", str(s or "").lower().replace("'", ""))
+            if len(w) > 2 and w not in ("the", "and", "for", "with")]
+
+
+def prints_name(lines, name):
+    """Does the drawn text spell out the product's own name? Three quarters of
+    its words is enough: the mug printed all four of 'Teacher's Coffee Plot
+    Mug', and a design that merely shares a word with its name is fine."""
+    want = _name_words(name)
+    have = set(_name_words(" ".join(lines)))
+    return len(want) >= 2 and sum(w in have for w in want) >= 0.75 * len(want)
+
+
+def proof_problems(reading, name=None):
     """[problem] from what the proofreader read. A year alone is allowed -
-    "EST. 2026" is a style - a calendar date never is."""
+    "EST. 2026" is a style - a calendar date never is. Nor is the product's
+    own name, spelled however well."""
     lines = [str(x) for x in (reading or {}).get("lines") or [] if str(x).strip()]
     out = [f"prints a date: {m.group(0)!r}" for m in DATE_RE.finditer(" / ".join(lines))]
+    if name and prints_name(lines, name):
+        out.append(f"prints the product's own name ({name!r}) instead of a design")
     out += [f"text error: {e}" for e in (reading or {}).get("errors") or [] if str(e).strip()]
     return out
 
 
-def proof(path, key, model=None):
+def proof(path, key, model=None, name=None):
     """(problems, lines) for the text drawn in an image. Raises if the
     proofreader cannot be asked or its answer cannot be read - an unread
     proof is not a passed one, and the caller says which happened."""
@@ -505,7 +528,7 @@ def proof(path, key, model=None):
     if reading is None:
         raise RuntimeError("the proofreader's reply was not JSON: "
                            + str(msg.get("content"))[:120])
-    return proof_problems(reading), [str(x) for x in reading.get("lines") or []]
+    return proof_problems(reading, name), [str(x) for x in reading.get("lines") or []]
 
 
 def cost_of(usage):
@@ -634,6 +657,8 @@ def main():
                     help="the catalogue product this art is for. An all-over "
                          "print gets the opposite art direction - edge to "
                          "edge, no background field.")
+    ap.add_argument("--name", default="",
+                    help="the product's working name, which the art must not print")
     ap.add_argument("--compare", default="",
                     help="comma-separated models: draw the SAME prompt with "
                          "each, into a build folder the Deck already shows")
@@ -657,7 +682,7 @@ def main():
                     break
                 n, usage = generate(a.out, prompt, key, model, a.product)
                 try:
-                    problems, lines = proof(a.out, key)
+                    problems, lines = proof(a.out, key, name=a.name or None)
                 except Exception as exc:
                     note = f"text not proofread: {str(exc)[:120]}"
                     break

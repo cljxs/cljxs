@@ -109,7 +109,9 @@ def generate_artwork(slug, idea, brief, product, evidence=None):
              # with the prompt. Without it an all-over tote is drawn with
              # PRINT_DIRECTION's plain background and prints a blob in the
              # middle of an even field.
-             "--product", str(product or "")],
+             "--product", str(product or ""),
+             # The proofread refuses art that prints this.
+             "--name", str(idea or "")],
             capture_output=True, text=True, timeout=180,
         )
     except Exception as exc:
@@ -175,7 +177,7 @@ def main():
     try:
         (root / "agents" / "emily" / "builds" / slug).mkdir(parents=True, exist_ok=True)
         (root / "agents" / "emily" / "builds" / slug / "order.json").write_text(
-            json.dumps({"product": a.product}, indent=1) + "\n")
+            json.dumps({"product": a.product, "name": a.idea}, indent=1) + "\n")
     except OSError as exc:
         print(f"  the ordered product was not saved with the build ({exc})", file=sys.stderr)
 
