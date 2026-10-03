@@ -88,7 +88,9 @@ def generate_artwork(slug, idea, brief, product, evidence=None):
     queued, and the verifier will reject the build if no real art appears.
     """
     here = Path(__file__).resolve().parent
-    out = here.parent / "agents" / "emily" / "builds" / slug / "design.png"
+    # ECOSYSTEM_ROOT like everything else here - the redraw calls this too.
+    root = Path(os.environ.get("ECOSYSTEM_ROOT", here.parent))
+    out = root / "agents" / "emily" / "builds" / slug / "design.png"
     out.parent.mkdir(parents=True, exist_ok=True)
 
     # THE prompt is composed in emily-assets.py, imported rather than built
@@ -177,7 +179,7 @@ def main():
     try:
         (root / "agents" / "emily" / "builds" / slug).mkdir(parents=True, exist_ok=True)
         (root / "agents" / "emily" / "builds" / slug / "order.json").write_text(
-            json.dumps({"product": a.product, "name": a.idea}, indent=1) + "\n")
+            json.dumps({"product": a.product, "name": a.idea, "brief": a.brief}, indent=1) + "\n")
     except OSError as exc:
         print(f"  the ordered product was not saved with the build ({exc})", file=sys.stderr)
 

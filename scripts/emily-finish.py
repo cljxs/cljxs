@@ -95,6 +95,8 @@ def note_draft(d, blocked):
 
 
 def main():
+    if sys.argv[1:2] == ["--redraw"]:
+        return redraw()
     if len(sys.argv) < 2:
         print("usage: emily-finish.py <build_dir>")
         return 0
@@ -117,6 +119,11 @@ def main():
               f"{build['printify_product_id']} - leaving it alone")
         return 0
 
+    return draft(d)
+
+
+def draft(d):
+    """Run the drafter on one build and record the outcome on it."""
     res = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "emily-printify.py"), "draft", str(d)],
         capture_output=True, text=True, timeout=300,
@@ -138,6 +145,77 @@ def main():
               f"(exit {res.returncode}). The build stays 'ready_local', and "
               "the reason is now\non the build so the gallery can show it "
               "instead of an unexplained LOCAL ONLY.")
+    return 0
+
+
+# THE REDRAW. Drafts are attempted once, when Emily finishes. On 2026-10-02 the
+# day's OpenRouter money ran out mid-build, the art step fell back to its
+# placeholder, and draft rightly refused it - and there the build stayed,
+# LOCAL ONLY, until somebody typed the redraw by hand. This finds those
+# builds and redraws them, hourly (deploy/redraw-art.timer).
+REDRAW_PER_RUN = 3
+
+
+def _module(name, file):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / file)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _json(path):
+    try:
+        d = json.loads(Path(path).read_text())
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def stuck(builds_root):
+    """Builds with no Printify draft whose art is still the placeholder, and a
+    listing to draft from. Oldest first - they have waited longest."""
+    ea = _module("emily_assets_redraw", "emily-assets.py")
+    out = []
+    for d in sorted(Path(builds_root).iterdir() if Path(builds_root).is_dir() else []):
+        if not d.is_dir() or d.name.startswith("_"):
+            continue
+        if _json(d / "build.json").get("printify_product_id"):
+            continue
+        if (d / "listing.json").is_file() and ea.is_placeholder(d / "design.png"):
+            out.append(d)
+    return sorted(out, key=lambda d: (d / "design.png").stat().st_mtime)
+
+
+def generate(d):
+    """Draw a build's art again, through the same step a new build uses, from
+    what it was ordered as. Builds from before order.json fall back to
+    Emily's own listing."""
+    order, listing = _json(d / "order.json"), _json(d / "listing.json")
+    idea = order.get("name") or _json(d / "build.json").get("idea") or listing.get("title") or d.name
+    brief = order.get("brief") or str(listing.get("description") or "")[:600]
+    product = order.get("product") or listing.get("product_type") or ""
+    nb = _module("emily_new_build_redraw", "emily-new-build.py")
+    evidence = _json(d / "evidence.json") or None
+    return nb.generate_artwork(d.name, idea, brief, product, evidence)
+
+
+def redraw(limit=REDRAW_PER_RUN):
+    """Redraw and draft up to `limit` stuck builds. Stops at the first redraw
+    that is still a placeholder: the money or the model is still out, and the
+    rest would fail the same way at a cost."""
+    ea = _module("emily_assets_redraw2", "emily-assets.py")
+    todo = stuck(ROOT / "agents" / "emily" / "builds")
+    print(f"emily-finish: {len(todo)} build(s) waiting on real art")
+    for d in todo[:limit]:
+        ok, msg = generate(d)
+        print(f"  {d.name}: {msg}")
+        if not ok or ea.is_placeholder(d / "design.png"):
+            note_draft(d, {"reason": f"redraw still failing: {msg}"[:REASON_CHARS], "exit": 1,
+                           "when_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")})
+            print("  still no real art - stopping until the next run")
+            return 0
+        draft(d)
     return 0
 
 

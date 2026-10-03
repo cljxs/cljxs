@@ -16702,7 +16702,7 @@ class TheFirstTestDraftsPrintRight(unittest.TestCase):
     def test_the_build_records_what_was_ordered(self):
         src = (SCRIPTS / "emily-new-build.py").read_text()
         self.assertIn('"order.json"', src)
-        self.assertIn('{"product": a.product, "name": a.idea}', src)
+        self.assertIn('{"product": a.product, "name": a.idea, "brief": a.brief}', src)
         h = (ROOT / "agents/emily/_emily-agents-header.md").read_text()
         self.assertNotIn("--product sticker", h, "no product in the example to copy")
 
@@ -16840,3 +16840,78 @@ class TheDesignDoesNotPrintItsOwnName(unittest.TestCase):
         self.assertIn("proof(a.out, key, name=a.name or None)", main)
         draft = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
         self.assertIn('proofread(design, name or listing.get("title"))', draft)
+
+
+class StuckBuildsAreRedrawn(unittest.TestCase):
+    """2026-10-03: "Library Stacks Linework Tote" sat LOCAL ONLY - the day's
+    image money had run out, the art step fell back to the placeholder, and
+    draft rightly refused it. Nothing ever tried again. emily-finish.py
+    --redraw (hourly, redraw-art.timer) redraws such builds from what they
+    were ordered as and drafts the ones that come back as real art."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        os.environ["ECOSYSTEM_ROOT"] = str(self.root)
+        self.addCleanup(os.environ.pop, "ECOSYSTEM_ROOT", None)
+        self.builds = self.root / "agents/emily/builds"
+        self.fin = load("emily_finish_redraw", "emily-finish.py")
+        self.fin.ROOT = self.root
+        (self.root / "scripts").symlink_to(SCRIPTS)
+        self.drafted, self.drawn = [], []
+        self.fin.draft = lambda d: self.drafted.append(d.name) or 0
+
+    def build(self, name, placeholder=True, drafted=False, age=0):
+        d = self.builds / name
+        d.mkdir(parents=True)
+        (d / "listing.json").write_text(json.dumps({"title": "Library Tote", "product_type": "tote"}))
+        (d / "order.json").write_text(json.dumps({"product": "zipper-tote", "name": "Library Stacks Linework Tote",
+                                                  "brief": "clean linear shelves"}))
+        (d / "build.json").write_text(json.dumps({"printify_product_id": "p1"} if drafted else {}))
+        if placeholder:
+            subprocess.run([sys.executable, str(SCRIPTS / "emily-assets.py"), "--prompt", name,
+                            "--out", str(d / "design.png"), "--placeholder-only"], capture_output=True)
+        else:
+            (d / "design.png").write_bytes(b"\x89PNG real art" + b"x" * 3000)
+        os.utime(d / "design.png", (1000 + age, 1000 + age))
+        return d
+
+    def fake_art(self, real):
+        def generate_artwork(slug, idea, brief, product, evidence=None):
+            self.drawn.append((slug, idea, brief, product))
+            if real:
+                (self.builds / slug / "design.png").write_bytes(b"\x89PNG real art" + b"x" * 3000)
+            return True, "design.png (generated)" if real else "design.png (placeholder)"
+        nb = types.SimpleNamespace(generate_artwork=generate_artwork)
+        real_module = self.fin._module
+        self.fin._module = lambda name, file: nb if file == "emily-new-build.py" else real_module(name, file)
+
+    def test_a_placeholder_build_is_redrawn_and_drafted(self):
+        self.build("library-stacks-linework-tote")
+        self.build("already-drafted", drafted=True)
+        self.build("real-art", placeholder=False)
+        self.fake_art(real=True)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.fin.redraw()
+        self.assertEqual(self.drawn, [("library-stacks-linework-tote", "Library Stacks Linework Tote",
+                                       "clean linear shelves", "zipper-tote")], "as ordered, only the stuck one")
+        self.assertEqual(self.drafted, ["library-stacks-linework-tote"])
+
+    def test_still_failing_stops_the_run_and_says_so(self):
+        self.build("oldest", age=0)
+        self.build("newer", age=50)
+        self.fake_art(real=False)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.fin.redraw()
+        self.assertEqual([x[0] for x in self.drawn], ["oldest"], "one attempt, not one per build")
+        self.assertEqual(self.drafted, [])
+        blocked = json.loads((self.builds / "oldest/build.json").read_text())["draft_blocked"]
+        self.assertIn("redraw still failing", blocked["reason"])
+
+    def test_the_timer_runs_it(self):
+        self.assertIn("emily-finish.py --redraw", (ROOT / "deploy/redraw-art.service").read_text())
+        self.assertIn("OnCalendar=", (ROOT / "deploy/redraw-art.timer").read_text())
+        nb = (SCRIPTS / "emily-new-build.py").read_text()
+        self.assertIn('"brief": a.brief', nb)
+        self.assertIn('root = Path(os.environ.get("ECOSYSTEM_ROOT", here.parent))', nb)
