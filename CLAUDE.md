@@ -105,6 +105,15 @@ parser bug here was a format assumption, not a logic error.
     python3 -m unittest discover -s tests -v      # no dependencies, runs anywhere
     python3 -m unittest discover -s tests -b 2>&1 | tail -3    # just the verdict
 
+Which to run before a push (owner's choice, 2026-10-03 - the full suite
+takes 8-10 minutes and was most of every reply's wait):
+
+* **Small change** - a schedule, wording, a setting, one function: the fast
+  suite (`python3 -B -m unittest tests.test_parsers -b`, about a minute), the
+  new test, and `scripts/check-secrets.py`.
+* **Bigger code change** - several files, new behaviour, anything touching
+  money or Printify: the full `discover` run as well.
+
 Use `-b` for the short form. Tests print to stdout and unittest reports to
 stderr; through a pipe those two are buffered differently, so `| tail -3`
 without it can hand you three lines of a catalogue listing and no verdict at
