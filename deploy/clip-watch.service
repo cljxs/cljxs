@@ -1,0 +1,20 @@
+[Unit]
+Description=Clip's Twitch watcher: while a watched channel is live, clip where its chat explodes
+Documentation=https://github.com/cljxs/cljxs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Started every few minutes by clip-watch.timer. Offline: it asks Twitch once
+# and exits. Live: it reads chat (anonymously, read-only) until the stream
+# ends. A timer never starts a second copy while one is running, so a long
+# stream is one run. No model is woken: the spike rule is arithmetic.
+Type=simple
+User=root
+Environment=HOME=/root
+WorkingDirectory=/root/ecosystem
+ExecStart=/root/ecosystem/clipper/.venv/bin/python -m clipper watch
+# A stream longer than this is cut off and picked up again by the next tick.
+RuntimeMaxSec=16h
+StandardOutput=journal
+StandardError=journal

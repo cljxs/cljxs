@@ -1,0 +1,15 @@
+[Unit]
+Description=Redraw Emily's builds stuck on placeholder art, and draft them (no AI model; image calls only)
+Documentation=https://github.com/cljxs/cljxs
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+WorkingDirectory=/root/ecosystem
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/emily-finish.py --redraw
+# Three redraws at up to 180s each, plus a draft each at up to 300s.
+TimeoutStartSec=1800
+StandardOutput=journal
+StandardError=journal

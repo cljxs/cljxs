@@ -1,0 +1,19 @@
+[Unit]
+Description=Belfort's midday check: the sell rules on both books, no AI, no buys
+Documentation=https://github.com/cljxs/cljxs
+After=network-online.target
+
+[Service]
+# Added 2026-10-01 between the 9:35 and 3:55 wake-ups, so a stop crossed in
+# the morning is not left until the close. Code only - stop loss, take
+# profit, protect a gain, dead money - on Belfort's book and the no-AI book.
+# Nothing is bought, and no model is woken.
+Type=oneshot
+User=root
+Environment=HOME=/root
+WorkingDirectory=/root/ecosystem
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/belfort-trade.py exits --apply
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/belfort-trade.py shadow --exits-only
+TimeoutStartSec=120
+StandardOutput=journal
+StandardError=journal

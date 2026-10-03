@@ -1,0 +1,12 @@
+{
+  "mode": "paper",
+  "note": "Simulated money. No real brokerage is connected to this file.",
+  "currency": "USD",
+  "starting_cash": 10000.0,
+  "cash": 10000.0,
+  "positions": [],
+  "trades": [],
+  "cycle_count": 0,
+  "created_utc": "2026-09-11 14:52:36",
+  "last_cycle_utc": null
+}

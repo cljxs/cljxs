@@ -1,0 +1,18 @@
+[Unit]
+Description=Paul website run (costs fuel - once a day)
+Documentation=https://github.com/cljxs/cljxs
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WorkingDirectory=/root/ecosystem/agents/paul
+# Paul writes work/ and state/last-run.txt; paul.py finish does everything
+# else - checks, deploy, live verification, records, report, MEMORY line.
+# Until `paul.py go-live`, a scheduled run holds without waking a model.
+ExecStart=/root/ecosystem/scripts/paul-cycle.sh
+# 30 minutes for the model, then deploy, verification and screenshots.
+TimeoutStartSec=2700
+StandardOutput=journal
+StandardError=journal

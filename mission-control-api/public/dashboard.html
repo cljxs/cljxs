@@ -1,0 +1,828 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Added to the home screen from Safari this opens without browser
+     chrome and keeps the dark background through the launch. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Command Deck">
+<meta name="theme-color" content="#0a0c13">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Command Deck</title>
+<style>
+  :root{
+    --bg:#0a0c13; --card:#12151f; --line:rgba(255,255,255,.06);
+    --line2:rgba(255,255,255,.10);
+    --ink:#e8ecf5; --mute:#8791a8; --dim:#5b6478;
+    --up:#34d399; --down:#fb7185; --warn:#fbbf24;
+    --c1:#22d3ee; --c2:#a78bfa; --c3:#f472b6;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Inter,Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    padding-bottom:48px;
+  }
+  .num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+  a{color:inherit}
+
+  /* top bar */
+  .topbar{
+    position:sticky;top:0;z-index:20;
+    display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+    padding:14px 22px;
+    background:rgba(10,12,19,.86);backdrop-filter:blur(12px);
+    border-bottom:1px solid var(--line);
+  }
+  .brand{display:flex;align-items:center;gap:10px;font-weight:640;letter-spacing:-.01em;font-size:15px}
+  .mark{width:22px;height:22px;border-radius:7px;background:linear-gradient(135deg,var(--c1),var(--c2) 55%,var(--c3))}
+  .live{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--mute)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--up);box-shadow:0 0 0 0 rgba(52,211,153,.6);animation:pulse 2.4s infinite}
+  .dot.warn{background:var(--warn);animation:none}
+  .dot.off{background:var(--dim);animation:none}
+  @keyframes pulse{70%{box-shadow:0 0 0 7px rgba(52,211,153,0)}100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}}
+  .spacer{flex:1}
+  .chip{
+    font-size:12px;color:var(--mute);padding:5px 11px;border:1px solid var(--line);
+    border-radius:999px;background:rgba(255,255,255,.02);white-space:nowrap;
+  }
+
+  .wrap{max-width:1360px;margin:0 auto;padding:22px}
+
+  /* cards */
+  .card{
+    background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:18px;transition:border-color .18s ease, transform .18s ease;
+  }
+  .card:hover{border-color:var(--line2)}
+  .card h3{
+    margin:0 0 14px;font-size:12px;font-weight:600;letter-spacing:.07em;
+    text-transform:uppercase;color:var(--mute);
+  }
+
+  /* kpis */
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:16px}
+  .kpi .label{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute)}
+  .kpi .val{font-size:29px;font-weight:640;letter-spacing:-.025em;margin:7px 0 3px;line-height:1.15}
+  .kpi .sub{font-size:12.5px;color:var(--dim)}
+  .delta{font-size:12.5px;font-weight:560}
+  .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--dim)}
+
+  /* layout */
+  .body{display:grid;grid-template-columns:1.45fr 1fr;gap:16px;align-items:start}
+  .col{display:flex;flex-direction:column;gap:16px}
+
+  /* agents */
+  .agent{
+    display:flex;gap:12px;padding:13px 0;border-bottom:1px solid var(--line);
+  }
+  .agent:last-child{border-bottom:0;padding-bottom:0}
+  .agent:first-of-type{padding-top:0}
+  .astat{width:8px;height:8px;border-radius:50%;margin-top:6px;flex:0 0 8px}
+  .s-active{background:var(--up)} .s-idle{background:var(--c1)}
+  .s-stale{background:var(--warn)} .s-waiting{background:var(--dim)}
+  .aname{font-weight:600;letter-spacing:-.01em;text-transform:capitalize}
+  .ameta{font-size:12px;color:var(--dim);margin-top:2px}
+  .aline{font-size:12.5px;color:var(--mute);margin-top:6px;line-height:1.45}
+  .tag{
+    font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--mute);
+    border:1px solid var(--line2);border-radius:5px;padding:1px 6px;margin-left:8px;vertical-align:2px;
+  }
+
+  /* tables */
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{
+    text-align:right;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--dim);font-weight:600;padding:0 0 9px;border-bottom:1px solid var(--line);
+  }
+  th:first-child,td:first-child{text-align:left}
+  td{padding:10px 0;border-bottom:1px solid var(--line);text-align:right}
+  tr:last-child td{border-bottom:0}
+  .sym{font-weight:600}
+
+  /* spend bars */
+  .bar{display:flex;align-items:center;gap:11px;padding:8px 0}
+  .bar .nm{width:86px;font-size:13px;text-transform:capitalize;flex:0 0 86px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .track{flex:1;height:7px;background:rgba(255,255,255,.05);border-radius:999px;overflow:hidden}
+  .fill{height:100%;border-radius:999px;background:linear-gradient(90deg,var(--c1),var(--c2));transition:width .5s ease}
+  .bar .vl{width:72px;text-align:right;font-size:12.5px;color:var(--mute)}
+
+  .idea{padding:12px 0;border-bottom:1px solid var(--line)}
+  .idea:last-child{border-bottom:0;padding-bottom:0}
+  .idea .t{font-weight:600;letter-spacing:-.01em}
+  .idea .p{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute);
+    border:1px solid var(--line2);border-radius:5px;padding:1px 6px;margin-left:7px;vertical-align:1px}
+  .idea .d{font-size:12.5px;color:var(--mute);margin-top:5px;line-height:1.5}
+  .idea .w{font-size:12px;color:var(--dim);margin-top:5px;line-height:1.5;font-style:italic}
+  .acts{display:flex;gap:8px;margin-top:10px}
+  .acts button{flex:1;padding:8px;border-radius:9px;font-size:12.5px;font-weight:600;
+    border:1px solid var(--line2);background:rgba(255,255,255,.05);color:var(--ink);cursor:pointer;
+    transition:background .15s,border-color .15s}
+  .acts button:hover:not(:disabled){background:rgba(255,255,255,.10)}
+  .acts button:disabled{opacity:.45;cursor:default}
+  .acts .yes{border-color:rgba(52,211,153,.45);color:var(--up)}
+  .acts .no{border-color:rgba(251,113,133,.40);color:var(--down)}
+  .empty{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:28px 16px;text-align:center;color:var(--dim);font-size:13px;gap:5px;
+  }
+  .empty .big{font-size:22px;opacity:.4}
+
+  /* Emily's builds gallery */
+  .gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(184px,1fr));gap:14px}
+.bact{margin-top:6px}
+.build .rm{font:inherit;font-size:11px;padding:3px 9px;border-radius:5px;cursor:pointer;
+  background:transparent;border:1px solid var(--line,#2a3140);color:var(--dim,#8b94a7)}
+.build .rm:hover{border-color:#a04040;color:#ff9a9a}
+.rmlist{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:10px;
+  padding-top:10px;border-top:1px solid var(--line,#2a3140)}
+.rmh{font-size:11px;color:var(--dim,#8b94a7);text-transform:uppercase;letter-spacing:.06em}
+.rmlist button{font:inherit;font-size:11px;padding:3px 9px;border-radius:5px;cursor:pointer;
+  background:transparent;border:1px dashed var(--line,#2a3140);color:var(--dim,#8b94a7)}
+.rmlist button:hover{color:#9ad3a0;border-color:#3f7a46}
+  .build{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:rgba(255,255,255,.02)}
+  .build .shot{
+    display:block;width:100%;aspect-ratio:1;object-fit:cover;background:rgba(255,255,255,.04);
+    border:0;padding:0;cursor:zoom-in;
+  }
+  .build .meta{padding:10px 11px 11px}
+  .build .bt{font-size:12.5px;font-weight:600;line-height:1.35;letter-spacing:-.01em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+  .build .bs{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+  .pill{font-size:10px;letter-spacing:.05em;text-transform:uppercase;border-radius:5px;
+    padding:2px 6px;border:1px solid var(--line2);color:var(--mute)}
+  .pill.ok{border-color:rgba(52,211,153,.45);color:var(--up)}
+  .pill.warn{border-color:rgba(245,158,11,.45);color:var(--warn)}
+  .build .bd{font-size:11.5px;color:var(--dim);margin-top:7px;line-height:1.45}
+  /* The drafter's own refusal. Monospace because it usually quotes a file
+     path and a parser error, and pre-line because some of them run to two
+     lines and folding them into one loses where the error was. */
+  .build .bwhy{margin-top:7px;padding:6px 8px;border-radius:6px;font-size:11px;
+        line-height:1.45;white-space:pre-line;word-break:break-word;
+        color:#fbbf24;background:rgba(251,191,36,.08);
+        border:1px solid rgba(251,191,36,.22);
+        font-family:ui-monospace,Menlo,monospace}
+  .noart{display:flex;align-items:center;justify-content:center;width:100%;aspect-ratio:1;
+    color:var(--dim);font-size:11.5px;background:rgba(255,255,255,.03)}
+  .lightbox{
+    position:fixed;inset:0;background:rgba(5,6,10,.93);z-index:50;display:none;
+    align-items:center;justify-content:center;flex-direction:column;gap:14px;padding:20px;
+  }
+  .lightbox.on{display:flex}
+  .lightbox img{max-width:min(100%,900px);max-height:74vh;border-radius:10px;
+    border:1px solid var(--line2);background:#000}
+  .lbbar{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;max-width:100%}
+  .lbbar button{padding:7px 12px;border-radius:9px;font-size:12px;font-weight:600;cursor:pointer;
+    border:1px solid var(--line2);background:rgba(255,255,255,.06);color:var(--ink)}
+  .lbbar button.sel{border-color:var(--c2);color:#fff}
+  .lbcap{font-size:12.5px;color:var(--mute);text-align:center}
+
+  /* report reader */
+  .doclink{cursor:pointer;color:var(--c2);text-decoration:none;border-bottom:1px dotted rgba(255,255,255,.25)}
+  .doclink:hover{border-bottom-style:solid}
+  #doc{position:fixed;inset:0;z-index:60;display:none;align-items:flex-start;justify-content:center;
+    background:rgba(5,6,10,.93);padding:20px;overflow:auto}
+  #doc.on{display:flex}
+  #docbox{background:var(--card);border:1px solid var(--line2);border-radius:14px;
+    width:min(760px,100%);margin:auto;padding:0;box-shadow:0 24px 70px rgba(0,0,0,.6)}
+  #dochead{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line);
+    position:sticky;top:0;background:var(--card);border-radius:14px 14px 0 0;flex-wrap:wrap}
+  #dochead .who{font-weight:650;text-transform:capitalize;letter-spacing:-.01em}
+  #dochead .when{font-size:12px;color:var(--dim)}
+  #dochead button{margin-left:auto;padding:7px 13px;border-radius:9px;font-size:12.5px;font-weight:600;
+    border:1px solid var(--line2);background:rgba(255,255,255,.06);color:var(--ink);cursor:pointer}
+  #docdays{display:flex;gap:6px;flex-wrap:wrap;padding:10px 18px 0}
+  #docdays button{padding:4px 9px;border-radius:7px;font-size:11.5px;cursor:pointer;
+    border:1px solid var(--line);background:rgba(255,255,255,.04);color:var(--mute)}
+  #docdays button.sel{border-color:var(--c2);color:#fff}
+  #docbody{padding:6px 22px 24px;font-size:14px;line-height:1.65;color:var(--ink)}
+  #docbody h1{font-size:20px;margin:18px 0 10px;letter-spacing:-.02em}
+  #docbody h2{font-size:15px;margin:22px 0 8px;color:var(--c2);letter-spacing:-.01em}
+  #docbody h3{font-size:13.5px;margin:16px 0 6px;color:var(--mute);text-transform:none}
+  #docbody h4{font-size:13px;margin:14px 0 6px;color:var(--mute)}
+  #docbody p{margin:9px 0}
+  #docbody ul,#docbody ol{margin:9px 0;padding-left:22px}
+  #docbody li{margin:5px 0}
+  #docbody code{background:rgba(255,255,255,.07);border-radius:4px;padding:1px 5px;font-size:12.5px}
+  #docbody blockquote{margin:12px 0;padding:9px 14px;border-left:2px solid var(--c1);
+    background:rgba(255,255,255,.03);border-radius:0 8px 8px 0;color:var(--mute)}
+  #docbody hr{border:0;border-top:1px solid var(--line);margin:18px 0}
+  #docbody .tw{overflow-x:auto;margin:12px 0}
+  #docbody table{width:100%;font-size:13px}
+  #docbody em{color:var(--mute)}
+  .note{font-size:11.5px;color:var(--dim);margin-top:12px;line-height:1.5}
+  .foot{text-align:center;color:var(--dim);font-size:11.5px;padding:24px 0 0}
+
+  @media(max-width:1080px){
+    .body{grid-template-columns:1fr}
+    .kpis{grid-template-columns:repeat(2,1fr)}
+  }
+  @media(max-width:560px){
+    .kpis{grid-template-columns:1fr}
+    .wrap{padding:14px}
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand"><div class="mark"></div>Command Deck</div>
+  <div class="live"><span class="dot" id="livedot"></span><span id="livetext">connecting…</span></div>
+  <div class="spacer"></div>
+  <div class="chip" id="chipAgents">— agents</div>
+  <div class="chip" id="chipHealth">—</div>
+  <div class="chip" id="chipTime">—</div>
+</div>
+
+<div class="wrap">
+  <div class="card" id="briefingCard" style="margin-bottom:16px;display:none">
+    <h3>Today's briefing <span id="briefingWhen" style="text-transform:none;letter-spacing:0;color:var(--dim);font-weight:400"></span></h3>
+    <div id="briefing" style="font-size:13.5px;line-height:1.65;white-space:pre-wrap"></div>
+  </div>
+  <div class="kpis" id="kpis"></div>
+  <div class="body">
+    <div class="col">
+      <div class="card">
+        <h3>Value history</h3>
+        <div id="chartValue"></div>
+      </div>
+      <div class="card">
+        <h3>Open positions</h3>
+        <div id="positions"></div>
+      </div>
+      <div class="card">
+        <h3>Activity · last 14 days</h3>
+        <div id="chartDaily"></div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card" id="ideasCard" style="display:none">
+        <h3>Scout ideas <span id="ideasCount" style="text-transform:none;letter-spacing:0;color:var(--dim);font-weight:400"></span></h3>
+        <div id="ideas"></div>
+      </div>
+      <div class="card">
+        <h3>Agents</h3>
+        <div id="agents"></div>
+      </div>
+      <div class="card">
+        <h3>Fuel &amp; spend</h3>
+        <div id="spend"></div>
+      </div>
+      <div class="card">
+        <h3>Task queue</h3>
+        <div id="queue"></div>
+      </div>
+    </div>
+  </div>
+  <div class="card" id="buildsCard" style="margin-top:16px;display:none">
+    <h3>Emily&rsquo;s builds <span id="buildsCount" style="text-transform:none;letter-spacing:0;color:var(--dim);font-weight:400"></span></h3>
+    <div id="builds"></div>
+    <div id="removed"></div>
+    <div class="note">Tap any image to see it full size. Publishing still happens in Printify &mdash; nothing here puts a product on sale.</div>
+  </div>
+  <div class="foot" id="foot">&mdash;</div>
+</div>
+
+<div id="doc" onclick="if(event.target===this)closeDoc()">
+  <div id="docbox">
+    <div id="dochead">
+      <span class="who" id="docwho"></span>
+      <span class="when" id="docwhen"></span>
+      <button onclick="closeDoc()">Close</button>
+    </div>
+    <div id="docdays"></div>
+    <div id="docbody"></div>
+  </div>
+</div>
+
+<div class="lightbox" id="lb" onclick="if(event.target===this)closeLb()">
+  <img id="lbimg" alt="">
+  <div class="lbbar" id="lbbar"></div>
+  <div class="lbcap" id="lbcap"></div>
+  <div class="lbbar"><button onclick="closeLb()">Close</button></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const money = (v, d=2) => v===null||v===undefined ? '—' :
+  (v<0?'-':'') + '$' + Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+const pct = v => v===null||v===undefined ? '' : (v>=0?'+':'') + v.toFixed(2) + '%';
+const cls = v => v===null||v===undefined ? 'flat' : v>0 ? 'up' : v<0 ? 'down' : 'flat';
+const esc = s => String(s??'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ago = m => m===null||m===undefined ? 'never' : m<1 ? 'just now' : m<60 ? m+'m ago'
+  : m<1440 ? Math.floor(m/60)+'h ago' : Math.floor(m/1440)+'d ago';
+
+function emptyState(icon, title, sub){
+  return `<div class="empty"><div class="big">${icon}</div><div>${esc(title)}</div>${sub?`<div style="font-size:11.5px">${esc(sub)}</div>`:''}</div>`;
+}
+
+function lineChart(series, h=190){
+  if(!series || series.length < 2){
+    const only = series && series.length === 1 ? money(series[0].v) : null;
+    return emptyState('📈','Collecting history',
+      only ? `Current value ${only} · the line appears once there are two snapshots` : 'A snapshot is taken every 15 minutes');
+  }
+  const w=680, pad={t:12,r:10,b:22,l:52};
+  const xs=series.map((_,i)=>i), ys=series.map(p=>p.v);
+  let lo=Math.min(...ys), hi=Math.max(...ys);
+  if(hi===lo){hi=lo+1;lo=lo-1;}
+  const padY=(hi-lo)*0.12; lo-=padY; hi+=padY;
+  const X=i=>pad.l+(i/(xs.length-1))*(w-pad.l-pad.r);
+  const Y=v=>pad.t+(1-(v-lo)/(hi-lo))*(h-pad.t-pad.b);
+  const pts=series.map((p,i)=>[X(i),Y(p.v)]);
+  const line=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
+  const area=line+` L ${X(xs.length-1).toFixed(1)} ${h-pad.b} L ${pad.l} ${h-pad.b} Z`;
+  const rising = ys[ys.length-1] >= ys[0];
+  const grid=[0,.5,1].map(f=>{
+    const v=lo+(hi-lo)*(1-f), y=pad.t+f*(h-pad.t-pad.b);
+    return `<line x1="${pad.l}" y1="${y}" x2="${w-pad.r}" y2="${y}" stroke="rgba(255,255,255,.05)"/>
+            <text x="${pad.l-9}" y="${y+4}" text-anchor="end" font-size="10" fill="#5b6478" class="num">${money(v,0)}</text>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none" style="display:block">
+    <defs>
+      <linearGradient id="ga" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${rising?'#22d3ee':'#fb7185'}" stop-opacity=".28"/>
+        <stop offset="100%" stop-color="${rising?'#22d3ee':'#fb7185'}" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="gl" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0%" stop-color="#22d3ee"/><stop offset="60%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#f472b6"/>
+      </linearGradient>
+    </defs>
+    ${grid}
+    <path d="${area}" fill="url(#ga)"/>
+    <path d="${line}" fill="none" stroke="url(#gl)" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${pts[pts.length-1][0].toFixed(1)}" cy="${pts[pts.length-1][1].toFixed(1)}" r="3.6" fill="#f472b6"/>
+  </svg>`;
+}
+
+function barChart(daily){
+  if(!daily || !daily.length || daily.every(d=>!d.n))
+    return emptyState('▁▃▅','No activity yet','Cycles and completed tasks appear here');
+  const w=680,h=130,pad={t:10,r:8,b:20,l:8};
+  const max=Math.max(...daily.map(d=>d.n),1);
+  const bw=(w-pad.l-pad.r)/daily.length;
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" style="display:block">
+    <defs><linearGradient id="gb" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#22d3ee" stop-opacity=".55"/>
+    </linearGradient></defs>
+    ${daily.map((d,i)=>{
+      const bh=Math.max(3,(d.n/max)*(h-pad.t-pad.b));
+      const cw=Math.min(bw*0.62, 30);            // never let one bar become a slab
+      const x=pad.l+i*bw+(bw-cw)/2, y=h-pad.b-bh;
+      return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${cw.toFixed(1)}" height="${bh.toFixed(1)}" rx="3" fill="url(#gb)"><title>${d.d}: ${d.n}</title></rect>
+              <text x="${(x+bw*0.3).toFixed(1)}" y="${h-6}" text-anchor="middle" font-size="9" fill="#5b6478">${d.d.slice(8)}</text>`;
+    }).join('')}
+  </svg>`;
+}
+
+function render(d){
+  $('livedot').className = 'dot' + (d.health.status==='healthy' ? '' : ' warn');
+  $('livetext').textContent = d.health.status==='healthy' ? 'live' : 'degraded';
+  $('chipHealth').title = d.health.market_open ? 'US market open' : 'US market closed';
+  $('chipAgents').textContent = d.health.agents_total + (d.health.agents_total===1?' agent':' agents');
+  $('chipHealth').textContent = 'queue ' + d.queue.total + ' · api up';
+  $('chipTime').textContent = d.generated_at.slice(11) + ' UTC';
+
+  const k = d.kpis;
+  $('kpis').innerHTML = [
+    // A blank here used to mean 'no portfolio yet' whatever the reason. Now
+    // it says WHOSE starting capital is missing, because that is the thing
+    // you would have to go and fix - and because a combined percentage
+    // computed without it is how this tile reported +101.93% on a profit of
+    // $193.49.
+    {l:'Portfolio value', v:money(k.total_value),
+     d:k.total_pnl!==null?`${pct(k.total_pnl_pct)} all time`:'', c:cls(k.total_pnl),
+     s:k.total_pnl!==null
+        ? `${k.total_pnl>=0?'+':''}${money(k.total_pnl)} vs ${money(k.total_start)} in`
+        : ((k.start_unknown_for||[]).length
+            ? `no combined figure — ${k.start_unknown_for.join(', ')} ${k.start_unknown_for.length>1?'have':'has'} no recorded starting capital`
+            : 'no portfolio yet')},
+    {l:'Open positions', v:k.open_positions ?? 0, d:'', c:'flat',
+     s:k.open_positions?'marked to live prices':'no positions yet'},
+    {l:'Spend today', v:k.has_cost_data?money(k.spend_today,2):'—', d:'', c:'flat',
+     s:k.has_cost_data?'from queue cost_actual':'no queue-reported costs'},
+    {l:'Total runs', v:k.runs_total ?? 0, d:'', c:'flat', s:'agent cycles completed'},
+  ].map(t=>`<div class="card kpi">
+      <div class="label">${t.l}</div>
+      <div class="val num">${t.v}</div>
+      <div class="sub">${t.d?`<span class="delta ${t.c}">${t.d}</span> · `:''}${esc(t.s)}</div>
+    </div>`).join('');
+
+  // briefing
+  const bf = d.briefing;
+  if (bf) {
+    $('briefingCard').style.display = 'block';
+    $('briefingWhen').textContent = ' · ' + ago(bf.age_min);
+    $('briefing').innerHTML = esc(bf.body)
+      .replace(/^#+\s*(.+)$/gm, '<b>$1</b>')
+      .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+      .replace(/^[-*]\s+/gm, '· ')
+      .replace(/⚠️/g, '<span style="color:var(--warn)">⚠️</span>');
+  } else {
+    $('briefingCard').style.display = 'none';
+  }
+
+  $('chartValue').innerHTML = lineChart(d.charts.value_series);
+  $('chartDaily').innerHTML = barChart(d.charts.daily);
+
+  // agents
+  $('agents').innerHTML = d.agents.length ? d.agents.map(a=>`
+    <div class="agent">
+      <div class="astat s-${a.status}"></div>
+      <div style="flex:1;min-width:0">
+        <div><span class="aname">${esc(a.name)}</span>${a.mode?`<span class="tag">${esc(a.mode)}</span>`:''}</div>
+        <div class="ameta">${a.status} · last run ${ago(a.last_run_age_min)} · ${a.runs ?? 0} cycles${
+          a.data_age_min!==null?` · data ${ago(a.data_age_min)}`:''}</div>
+        ${a.value!==null?`<div class="ameta num">${money(a.value)} <span class="${cls(a.pnl)}">${pct(a.pnl_pct)}</span></div>`:''}
+        <div class="aline">${a.headline?esc(a.headline):'<span style="color:#5b6478">waiting for first cycle</span>'}</div>
+        ${a.latest_report?`<div class="ameta">📄 <span class="doclink" onclick="openDoc('${esc(a.name)}','${esc(a.latest_report)}')">${esc(a.latest_report)}</span></div>`:`<div class="ameta"><span class="doclink" onclick="openDoc('${esc(a.name)}')">reports…</span></div>`}
+      </div>
+    </div>`).join('')
+    : emptyState('🤖','No agents yet','Add a folder under agents/ and it appears here automatically');
+
+  // positions
+  const rows = d.agents.flatMap(a=>a.positions.map(p=>({...p, agent:a.name})));
+  $('positions').innerHTML = rows.length ? `<table>
+      <thead><tr><th>Symbol</th><th>Shares</th><th>Entry</th><th>Last</th><th>Value</th><th>P&amp;L</th></tr></thead>
+      <tbody>${rows.map(p=>`<tr>
+        <td><span class="sym">${esc(p.symbol)}</span></td>
+        <td class="num">${p.shares ?? '—'}</td>
+        <td class="num">${money(p.entry)}</td>
+        <td class="num">${p.priced?money(p.price):'<span style="color:#5b6478">stale</span>'}</td>
+        <td class="num">${money(p.value)}</td>
+        <td class="num ${cls(p.pnl)}">${p.pnl===null?'—':money(p.pnl)+' <span style="opacity:.75">'+pct(p.pnl_pct)+'</span>'}</td>
+      </tr>`).join('')}</tbody></table>`
+    : emptyState('◎','No open positions','Positions appear here once an agent opens one');
+
+  // spend
+  const sp = d.spend.by_agent.filter(r=>r.agent!=='unassigned' || r.runs>0);
+  if(d.spend.has_cost_data && sp.length){
+    const max = Math.max(...sp.map(r=>r.cost),0.0001);
+    $('spend').innerHTML = sp.map(r=>`<div class="bar">
+        <div class="nm">${esc(r.agent)}</div>
+        <div class="track"><div class="fill" style="width:${(r.cost/max*100).toFixed(1)}%"></div></div>
+        <div class="vl num">${money(r.cost,2)}</div>
+      </div>`).join('') +
+      `<div class="note">Total today ${money(d.spend.total_today,2)} · caps: ${money(d.limits.single_task_cost_max,2)}/task, ${money(d.limits.daily_total_spend_cap,2)}/day</div>`;
+  } else {
+    const runs = d.agents.filter(a=>(a.runs ?? 0) > 0);
+    const max = Math.max(...runs.map(a=>a.runs),1);
+    $('spend').innerHTML = (runs.length ? runs.map(a=>`<div class="bar">
+        <div class="nm">${esc(a.name)}</div>
+        <div class="track"><div class="fill" style="width:${(a.runs/max*100).toFixed(1)}%"></div></div>
+        <div class="vl num">${a.runs} runs</div>
+      </div>`).join('') : emptyState('⛽','No runs yet','Spend appears once agents report costs')) +
+      `<div class="note">Showing <b>run counts</b>, not dollars. Timer-driven agents don't
+       write to the task queue, so no <code>cost_actual</code> is reported. Per-agent dollar
+       figures appear once a task-driven agent runs, or once an agent posts its own cost.</div>`;
+  }
+
+  // queue
+  const bs = d.queue.byStatus, keys = Object.keys(bs);
+  $('queue').innerHTML = keys.length ? `<table><tbody>${keys.map(s=>`<tr>
+      <td style="text-transform:capitalize">${esc(s.replace('_',' '))}</td>
+      <td class="num">${bs[s]}</td></tr>`).join('')}</tbody></table>
+      <div class="note">${d.queue.total} tasks total</div>`
+    : emptyState('☰','Queue empty','Task-driven agents will populate this');
+
+  $('foot').textContent = `updated ${d.generated_at} UTC · refreshes every 5s`;
+}
+
+let busy = false;
+
+async function actOnIdea(id, verb) {
+  if (busy) return;
+  let reason = '';
+  if (verb === 'reject') {
+    reason = (window.prompt('Why are you rejecting it? Scout reads this so it does not propose the same thing again.') || '').trim();
+    if (!reason) return;
+  } else {
+    reason = (window.prompt('Note for the record (optional):', 'approved from the dashboard') || 'approved from the dashboard').trim();
+  }
+  busy = true;
+  document.querySelectorAll('.acts button').forEach(b => b.disabled = true);
+  try {
+    const r = await fetch(`/api/scout/ideas/${id}/${verb}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+    const j = await r.json();
+    if (!r.ok || j.ok === false) {
+      alert((j.error || j.stderr || 'That did not work').slice(0, 300));
+    } else if (verb === 'approve') {
+      alert('Approved and queued to Emily.\n\n' + (j.stdout || ''));
+    }
+  } catch (e) {
+    alert('Could not reach the API: ' + e.message);
+  } finally {
+    busy = false;
+    loadIdeas();
+  }
+}
+
+async function loadIdeas() {
+  try {
+    const r = await fetch('/api/scout/ideas', { cache: 'no-store' });
+    const d = await r.json();
+    const pending = (d.ideas || []).filter(i => i.status === 'pending');
+    if (!d.available || !pending.length) {
+      $('ideasCard').style.display = d.available ? 'block' : 'none';
+      if (d.available) {
+        $('ideasCount').textContent = ' · none pending';
+        $('ideas').innerHTML = emptyState('\u2713', 'All caught up', 'Scout proposes again tomorrow morning');
+      }
+      return;
+    }
+    $('ideasCard').style.display = 'block';
+    $('ideasCount').textContent = ` \u00b7 ${pending.length} pending`;
+    $('ideas').innerHTML = pending.map(i => `<div class="idea">
+        <div><span class="t">${esc(i.title)}</span><span class="p">${esc(i.product || '')}</span></div>
+        ${i.angle ? `<div class="d">${esc(i.angle)}</div>` : ''}
+        ${i.brief ? `<div class="d">${esc(i.brief)}</div>` : ''}
+        ${i.why_now ? `<div class="w">${esc(i.why_now)}</div>` : ''}
+        <div class="acts">
+          <button class="yes" onclick="actOnIdea(${Number(i.id)},'approve')">\u2713 Approve</button>
+          <button class="no"  onclick="actOnIdea(${Number(i.id)},'reject')">\u2717 Reject</button>
+        </div>
+      </div>`).join('');
+  } catch { /* the main poll already reports connectivity */ }
+}
+
+// ---------------------------------------------------------- Emily's builds
+let lbFiles = [], lbSlug = '', lbIdx = 0;
+
+function buildUrl(slug, name){
+  return `/api/emily/builds/${encodeURIComponent(slug)}/file/${encodeURIComponent(name)}`;
+}
+
+function openLb(slug, start){
+  const b = (window.__builds || []).find(x => x.slug === slug);
+  if (!b || !b.images.length) return;
+  lbFiles = b.images; lbSlug = slug; lbIdx = Math.max(0, lbFiles.findIndex(f => f.name === start));
+  $('lbbar').innerHTML = lbFiles.map((f,i) =>
+    `<button class="${i===lbIdx?'sel':''}" onclick="showLb(${i})">${esc(f.name)}</button>`).join('');
+  $('lbcap').textContent = b.title;
+  showLb(lbIdx);
+  $('lb').classList.add('on');
+}
+function showLb(i){
+  lbIdx = i;
+  $('lbimg').src = lbFiles[i].url || buildUrl(lbSlug, lbFiles[i].name);
+  $('lbimg').alt = lbFiles[i].name;
+  [...$('lbbar').children].forEach((b,n) => b.className = n===i ? 'sel' : '');
+}
+function closeLb(){ $('lb').classList.remove('on'); $('lbimg').src = ''; }
+
+const kb = n => n >= 1048576 ? (n/1048576).toFixed(1)+' MB' : Math.round(n/1024)+' KB';
+
+// What the user actually needs to know at a glance: is this finished, and is
+// the art real? A placeholder build looks fine as a thumbnail and is not
+// sellable, so it gets said out loud rather than left to be discovered.
+function buildPills(b){
+  const p = [];
+  // `published` is read back from Printify, so it outranks whatever status
+  // the build file happens to carry.
+  // The words come from the API (emily.js statusWords), so this page and the
+  // village cannot disagree about a build again.
+  const w = b.status_words || { label: String(b.status).replace(/_/g,' ') };
+  if (b.published)                      p.push(['ok','on sale']);
+  else if (b.status === 'ready_for_review')  p.push(['ok', w.label]);
+  else p.push([w.warn ? 'warn' : '', w.label]);
+  if (b.art_mode === 'placeholder') p.push(['warn','placeholder art']);
+  // The listing file is where the title, the product type and the price all
+  // come from, so when it will not parse the card goes blank in three places
+  // at once. Said out loud rather than left to be worked out from what is
+  // missing.
+  if (b.listing_error) p.push(['warn','listing unreadable']);
+  if (b.product_type) p.push(['', b.product_type]);
+  if (b.price_low != null){
+    const hi = (b.price_high != null && b.price_high !== b.price_low)
+      ? `–$${Number(b.price_high).toFixed(2)}` : '';
+    p.push(['', `$${Number(b.price_low).toFixed(2)}${hi}`]);
+  }
+  // A drafted product with nothing but the default price is the one state
+  // that looks finished and is not.
+  if (!b.published && b.printify && b.price_low != null && b.price_low < 1)
+    p.push(['warn','prices not set']);
+  return p.map(([c,t]) => `<span class="pill ${c}">${esc(t)}</span>`).join('');
+}
+
+// Why a build has no Printify draft, in one line, from whichever of the two
+// sources actually knows. The drafter's own words win when it has any: it
+// tried and was refused, which is a stronger fact than the API noticing it
+// cannot parse a file. Only shown when there is nothing to buy yet - a
+// drafted build carrying a stale reason from an earlier failed attempt would
+// be worse than saying nothing.
+function blockedReason(b){
+  if (b.published || b.printify) return '';
+  if (b.status_words && b.status_words.note) return b.status_words.note;
+  if (b.draft_blocked && b.draft_blocked.reason) return b.draft_blocked.reason;
+  if (b.listing_error) return `listing.json will not parse — ${b.listing_error}`;
+  return '';
+}
+
+async function loadBuilds(){
+  try{
+    const r = await fetch('/api/emily/builds', {cache:'no-store'});
+    const d = await r.json();
+    const builds = d.builds || [];
+    window.__builds = builds;
+    if (!d.available || !builds.length){
+      $('buildsCard').style.display = d.available ? 'block' : 'none';
+      if (d.available){
+        $('buildsCount').textContent = '';
+        $('builds').innerHTML = emptyState('▦','Nothing built yet','Approve one of Scout’s ideas and Emily starts a build');
+      }
+      return;
+    }
+    $('buildsCard').style.display = 'block';
+    const c = d.counts || {};
+    $('buildsCount').textContent = ` · ${c.total} build${c.total===1?'':'s'}`
+      + (c.published ? `, ${c.published} on sale` : '')
+      + (c.ready_for_review ? `, ${c.ready_for_review} ready for review` : '');
+    $('builds').innerHTML = `<div class="gal">` + builds.map(b => {
+      const cover = b.images[0];
+      const shot = cover
+        ? `<img class="shot" loading="lazy" src="${cover.url || buildUrl(b.slug, cover.name)}" alt="${esc(b.title)}"
+             onclick="openLb('${esc(b.slug)}','${esc(cover.name)}')">`
+        : `<div class="noart">no image yet</div>`;
+      return `<div class="build">${shot}<div class="meta">
+        <div class="bt">${esc(b.title)}</div>
+        <div class="bs">${buildPills(b)}</div>
+        <div class="bd">${b.images.length} image${b.images.length===1?'':'s'} · ${kb(b.bytes)}${
+          b.price_suggestion ? ' · suggests ' + money(b.price_suggestion) : ''}</div>
+        ${blockedReason(b) ? `<div class="bwhy">${esc(blockedReason(b))}</div>` : ''}
+        <div class="bact"><button class="rm" onclick="removeBuild('${esc(b.slug)}')"
+          title="Archive this build">Remove</button></div>
+      </div></div>`;
+    }).join('') + `</div>`;
+    loadRemoved();
+  }catch{ /* the main poll already reports connectivity */ }
+}
+
+// ------------------------------------------------- removing a build
+//
+// "Remove" archives. The artwork cost a model call and "I do not like it" and
+// "destroy it" are different intentions, so the folder moves to _removed/ and
+// the list below puts it back. Nothing here knows what removing means - the
+// endpoint runs scripts/emily-build.py, which owns that.
+
+async function removeBuild(slug, force){
+  const b = (window.__builds || []).find(x => x.slug === slug);
+  const title = b ? b.title : slug;
+  if (!force && !confirm(`Remove “${title}”?\n\nIt is archived, not deleted - `
+      + `you can put it back from the list under the gallery.`)) return;
+  try{
+    const r = await fetch(`/api/emily/builds/${encodeURIComponent(slug)}`
+      + (force ? '?force=1' : ''), { method:'DELETE' });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok){ await loadBuilds(); return; }
+
+    // The script refused because a Printify product still points at it. That
+    // is worth a second, explicit yes rather than a button that quietly wins.
+    if (d.blocked){
+      if (confirm(`${d.error}\n\nRemove it here anyway?\n\n`
+          + `The Printify product stays where it is - nothing here will point `
+          + `at it afterwards.`)) return removeBuild(slug, true);
+      return;
+    }
+    alert(d.error || 'Could not remove that build.');
+  }catch{ alert('Could not reach the Command Deck.'); }
+}
+
+async function restoreBuild(slug){
+  try{
+    const r = await fetch(`/api/emily/builds/${encodeURIComponent(slug)}/restore`,
+                          { method:'POST' });
+    if (r.ok){ await loadBuilds(); return; }
+    const d = await r.json().catch(() => ({}));
+    alert(d.error || 'Could not restore that build.');
+  }catch{ alert('Could not reach the Command Deck.'); }
+}
+
+async function loadRemoved(){
+  const el = $('removed');
+  if (!el) return;
+  try{
+    const r = await fetch('/api/emily/removed', {cache:'no-store'});
+    const names = (await r.json()).removed || [];
+    if (!names.length){ el.innerHTML = ''; return; }
+    el.innerHTML = `<div class="rmlist"><span class="rmh">Removed</span>`
+      + names.map(n => `<button onclick="restoreBuild('${esc(n)}')"
+          title="Put this build back">${esc(n)} ↩</button>`).join('')
+      + `</div>`;
+  }catch{ el.innerHTML = ''; }
+}
+
+// ------------------------------------------------------- report reader
+// Reports are written by agents. Escape first, then apply markdown, so any
+// HTML in a report is inert text rather than markup.
+function mdToHtml(src){
+  const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const inline = s => esc(s)
+    .replace(/`([^`]+)`/g,'<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g,'$1<em>$2</em>')
+    .replace(/(^|\s)_([^_\n]+)_(?=\s|$|[.,;:!?])/g,'$1<em>$2</em>');
+  const out=[]; let list=null, table=null;
+  const closeList=()=>{ if(list){out.push(`</${list}>`); list=null;} };
+  const closeTable=()=>{ if(table){out.push('</tbody></table></div>'); table=null;} };
+  for(const raw of String(src||'').split('\n')){
+    const line=raw.replace(/\s+$/,'');
+    const row=line.match(/^\|(.+)\|$/);
+    if(row){
+      const cells=row[1].split('|').map(c=>c.trim());
+      if(cells.every(c=>/^:?-{2,}:?$/.test(c))) continue;      // separator row
+      if(!table){ closeList();
+        out.push('<div class="tw"><table><thead><tr>'+cells.map(c=>`<th>${inline(c)}</th>`).join('')+'</tr></thead><tbody>');
+        table=1; continue; }
+      out.push('<tr>'+cells.map(c=>`<td>${inline(c)}</td>`).join('')+'</tr>'); continue;
+    }
+    closeTable();
+    if(!line.trim()){ closeList(); continue; }
+    let m;
+    if((m=line.match(/^(#{1,4})\s+(.*)$/))){ closeList(); const n=m[1].length; out.push(`<h${n}>${inline(m[2])}</h${n}>`); continue; }
+    if(/^(-{3,}|\*{3,}|_{3,})$/.test(line.trim())){ closeList(); out.push('<hr>'); continue; }
+    if((m=line.match(/^\s*[-*]\s+(.*)$/))){ if(list!=='ul'){closeList(); out.push('<ul>'); list='ul';} out.push(`<li>${inline(m[1])}</li>`); continue; }
+    if((m=line.match(/^\s*\d+[.)]\s+(.*)$/))){ if(list!=='ol'){closeList(); out.push('<ol>'); list='ol';} out.push(`<li>${inline(m[1])}</li>`); continue; }
+    if((m=line.match(/^>\s?(.*)$/))){ closeList(); out.push(`<blockquote>${inline(m[1])}</blockquote>`); continue; }
+    closeList(); out.push(`<p>${inline(line)}</p>`);
+  }
+  closeList(); closeTable();
+  return out.join('\n');
+}
+
+let docAgent = null, docFiles = [];
+
+async function openDoc(agent, file){
+  docAgent = agent;
+  $('docwho').textContent = agent;
+  $('docwhen').textContent = 'loading\u2026';
+  $('docbody').innerHTML = '';
+  $('doc').classList.add('on');
+  try{
+    const r = await fetch(`/api/reports/${encodeURIComponent(agent)}`, {cache:'no-store'});
+    const d = await r.json();
+    docFiles = d.reports || [];
+  }catch{ docFiles = []; }
+  if(!docFiles.length){
+    $('docwhen').textContent = '';
+    $('docbody').innerHTML = emptyState('\u{1F4C4}','No reports yet',`${agent} writes one each time it runs`);
+    $('docdays').innerHTML = '';
+    return;
+  }
+  // Only a handful of buttons - the rest are reachable by opening again.
+  $('docdays').innerHTML = docFiles.slice(0,8).map(f =>
+    `<button data-f="${esc(f.name)}" onclick="showDoc('${esc(f.name)}')">${esc(f.name.replace(/\.md$/,''))}</button>`).join('');
+  showDoc(file && docFiles.some(f=>f.name===file) ? file : docFiles[0].name);
+}
+
+async function showDoc(file){
+  [...$('docdays').children].forEach(b => b.className = b.dataset.f === file ? 'sel' : '');
+  $('docbody').innerHTML = '<p class="note">loading\u2026</p>';
+  try{
+    const r = await fetch(`/api/reports/${encodeURIComponent(docAgent)}/${encodeURIComponent(file)}`, {cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const d = await r.json();
+    $('docwhen').textContent = new Date(d.written_at).toLocaleString() + ` \u00b7 ${Math.round(d.bytes/102.4)/10} KB`;
+    $('docbody').innerHTML = mdToHtml(d.markdown) +
+      (d.truncated ? '<p class="note">\u2026truncated, the file is larger than 512KB</p>' : '');
+    $('docbody').scrollIntoView({block:'start'});
+  }catch(e){
+    $('docbody').innerHTML = `<p class="note">Could not load that report: ${esc(e.message)}</p>`;
+  }
+}
+
+function closeDoc(){ $('doc').classList.remove('on'); }
+document.addEventListener('keydown', e => {
+  if(e.key !== 'Escape') return;
+  // Peel one layer: the enlarged image first, then a report, then nothing.
+  if($('lb').classList.contains('on')) closeLb();
+  else if($('doc').classList.contains('on')) closeDoc();
+});
+
+let fails = 0;
+async function tick(){
+  try{
+    const r = await fetch('/api/dashboard', {cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    render(await r.json());
+    fails = 0;
+  }catch(e){
+    if(++fails > 2){
+      $('livedot').className='dot off';
+      $('livetext').textContent='disconnected';
+      $('foot').textContent='cannot reach /api/dashboard — is mission-control-api running?';
+    }
+  }
+}
+tick(); loadIdeas(); loadBuilds();
+setInterval(tick, 5000);
+setInterval(() => { if (!busy) loadIdeas(); }, 15000);
+setInterval(() => { if (!$('lb').classList.contains('on')) loadBuilds(); }, 20000);
+</script>
+</body>
+</html>

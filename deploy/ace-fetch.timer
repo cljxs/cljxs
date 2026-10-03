@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the Ace fetcher every 30 minutes while games are on
+
+[Timer]
+# Every day (sport doesn't take weekends off), every 30 minutes, 09:00-23:30 ET.
+# Plain Python with no AI, so running it often is free.
+OnCalendar=*-*-* 09..23:00/30 America/New_York
+Persistent=false
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

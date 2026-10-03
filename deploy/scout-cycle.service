@@ -1,0 +1,25 @@
+[Unit]
+Description=Scout idea run (costs fuel - once a day)
+Documentation=https://github.com/cljxs/cljxs
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WorkingDirectory=/root/ecosystem/agents/scout
+# Scout writes ONE line to state/last-run.txt; this appends it to MEMORY.md.
+#
+# Scout was asked twice, in two wordings, at the top of its instructions, to
+# append to MEMORY.md rather than replace it. It replaced it both times and
+# destroyed the log. Appending a line is deterministic work, so it belongs in
+# code - the same reason the fetchers compute the indicators instead of the
+# agent. Scout now owns a scratch file it is free to overwrite, and plain code
+# does the append it kept getting wrong.
+#
+# "Wrote no ideas" and "did nothing" stay different things: Scout is told to
+# propose nothing when ideas are already piling up, and those runs pass.
+ExecStart=/root/ecosystem/scripts/scout-cycle.sh
+TimeoutStartSec=900
+StandardOutput=journal
+StandardError=journal

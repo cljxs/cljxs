@@ -1,0 +1,6 @@
+{
+  "single_task_cost_max": 5,
+  "daily_total_spend_cap": 10,
+  "daily_new_tasks_cap": 50,
+  "daily_ai_budget": 1
+}

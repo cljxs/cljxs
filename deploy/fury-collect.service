@@ -1,0 +1,11 @@
+[Unit]
+Description=Fury system state collector (no AI, costs nothing)
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+WorkingDirectory=/root/ecosystem
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/fury-collect.py
+StandardOutput=journal
+StandardError=journal
