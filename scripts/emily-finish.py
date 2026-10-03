@@ -173,8 +173,9 @@ def _json(path):
 
 
 def stuck(builds_root):
-    """Builds with no Printify draft whose art is still the placeholder, and a
-    listing to draft from. Oldest first - they have waited longest."""
+    """Builds with no Printify draft whose art is still the placeholder, and
+    either a listing to draft from or an order to send to Emily (a build
+    held at approval because the art failed). Oldest first."""
     ea = _module("emily_assets_redraw", "emily-assets.py")
     out = []
     for d in sorted(Path(builds_root).iterdir() if Path(builds_root).is_dir() else []):
@@ -182,7 +183,8 @@ def stuck(builds_root):
             continue
         if _json(d / "build.json").get("printify_product_id"):
             continue
-        if (d / "listing.json").is_file() and ea.is_placeholder(d / "design.png"):
+        if ((d / "listing.json").is_file() or (d / "order.json").is_file()) \
+                and ea.is_placeholder(d / "design.png"):
             out.append(d)
     return sorted(out, key=lambda d: (d / "design.png").stat().st_mtime)
 
@@ -215,8 +217,26 @@ def redraw(limit=REDRAW_PER_RUN):
                            "when_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")})
             print("  still no real art - stopping until the next run")
             return 0
-        draft(d)
+        if (d / "listing.json").is_file():
+            draft(d)
+        else:
+            send_to_emily(d)
     return 0
+
+
+def send_to_emily(d):
+    """A held build has real art now: queue Emily's task, through
+    emily-new-build's own queue(), and stop saying it is waiting."""
+    order = _json(d / "order.json")
+    nb = _module("emily_new_build_queue", "emily-new-build.py")
+    code = nb.queue(d.name, order.get("name") or d.name, order.get("brief") or "",
+                    order.get("product") or "", _json(d / "evidence.json") or None)
+    build = _json(d / "build.json")
+    if code == 0 and (build.get("status") == "waiting_for_art" or "draft_blocked" in build):
+        build.pop("status", None)
+        build.pop("draft_blocked", None)
+        (d / "build.json").write_text(json.dumps(build, indent=1) + "\n")
+    return code
 
 
 if __name__ == "__main__":

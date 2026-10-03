@@ -123,6 +123,10 @@ function statusWords(status, task) {
     case 'in_progress':
       return { label: mins === null ? 'building…' : `building ${mins} min`, warn: false, note: null };
     case 'queued': return { label: 'queued', warn: false, note: null };
+    case 'waiting_for_art':
+      return { label: 'waiting for art', warn: false,
+               note: 'The image money ran out when this was approved, so Emily was not '
+                 + 'woken. The hourly redraw tries again and sends it to her once the art is real.' };
     case 'failed':
       return { label: 'failed', warn: true,
                note: `Emily's run ended without finishing it${task && task.result

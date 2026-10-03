@@ -187,25 +187,52 @@ def main():
     art_ok, art_msg = generate_artwork(slug, a.idea, a.brief, a.product,
                                        evidence)
     print(("  ok: " if art_ok else "  FAILED: ") + art_msg)
-    if not art_ok:
-        print("  queueing anyway - Emily can run emily-assets.py herself, and "
-              "the verifier will reject the build if no real art appears.")
 
+    # NO REAL ART, NO EMILY. Her run needs the same OpenRouter money the
+    # picture did: on 2026-10-03 the money was out, the art came back as the
+    # placeholder, Emily was woken anyway and her run ended at once - a FAILED
+    # card and nothing retrying it. So the build waits, and the hourly redraw
+    # (emily-finish.py --redraw) draws it and sends it to her once the art is
+    # real. The approval still counts: the idea is not lost.
+    if not art_ok or _assets().is_placeholder(root / "agents" / "emily" / "builds" / slug / "design.png"):
+        hold(root / "agents" / "emily" / "builds" / slug)
+        print("  no real art - most likely the day's image money is out. The build is\n"
+              "  WAITING FOR ART: the hourly redraw will draw it and then send it to Emily.")
+        return 0
+    return queue(slug, a.idea, a.brief, a.product, evidence, a.priority, a.cost_estimate)
+
+
+WAITING = "waiting_for_art"
+
+
+def hold(bdir):
+    """Mark a build as waiting for its art, keeping anything already in build.json."""
+    path = bdir / "build.json"
+    try:
+        build = json.loads(path.read_text())
+        build = build if isinstance(build, dict) else {}
+    except Exception:
+        build = {}
+    build["status"] = WAITING
+    path.write_text(json.dumps(build, indent=1) + "\n")
+
+
+def queue(slug, idea, brief, product, evidence, priority=0, cost_estimate=COST_ESTIMATE):
+    """Hand a build with real art to Emily. 0 when she has it."""
     status, task = call("POST", "/tasks", {
         "created_by": "you",
         "assignee": "emily",
         "type": "product-build",
-        "priority": a.priority,
-        "cost_estimate": a.cost_estimate,
+        "priority": priority,
+        "cost_estimate": cost_estimate,
         "dedupe_key": f"emily-build-{slug}",
         "payload": {
-            "idea": a.idea,
-            "brief": a.brief,
-            "product": a.product,
+            "idea": idea,
+            "brief": brief,
+            "product": product,
             "slug": slug,
             "build_dir": f"builds/{slug}",
-            "artwork": "already generated at builds/%s/design.png - do NOT create it" % slug
-                       if art_ok else "NOT generated - you must run emily-assets.py",
+            "artwork": "already generated at builds/%s/design.png - do NOT create it" % slug,
             "evidence": evidence,
             "approved_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         },
@@ -226,7 +253,6 @@ def main():
         return 1
     print(f"unexpected response {status}: {task}", file=sys.stderr)
     return 1
-
 
 if __name__ == "__main__":
     sys.exit(main())

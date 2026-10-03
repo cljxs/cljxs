@@ -16915,3 +16915,77 @@ class StuckBuildsAreRedrawn(unittest.TestCase):
         nb = (SCRIPTS / "emily-new-build.py").read_text()
         self.assertIn('"brief": a.brief', nb)
         self.assertIn('root = Path(os.environ.get("ECOSYSTEM_ROOT", here.parent))', nb)
+
+
+class NoRealArtNoEmily(unittest.TestCase):
+    """2026-10-03: "dad s little boss tee" - the OpenRouter money was out, the
+    art came back as the placeholder, Emily was woken anyway, her run ended
+    at once, and the card said FAILED with nothing retrying it (the redraw
+    only knew builds Emily had already listed). Now the build waits for its
+    art, and the redraw sends it to Emily once the art is real."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        os.environ["ECOSYSTEM_ROOT"] = str(self.root)
+        self.addCleanup(os.environ.pop, "ECOSYSTEM_ROOT", None)
+        self.nb = load("emily_new_build_hold", "emily-new-build.py")
+        self.posted = []
+        self.nb.call = lambda method, path, body=None: (self.posted.append(body) or (201, {"id": 7}))
+
+    def approve(self, real_art):
+        def generate_artwork(slug, idea, brief, product, evidence=None):
+            out = self.root / "agents/emily/builds" / slug / "design.png"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            if real_art:
+                out.write_bytes(b"\x89PNG real" + b"x" * 3000)
+            else:
+                subprocess.run([sys.executable, str(SCRIPTS / "emily-assets.py"), "--prompt", idea,
+                                "--out", str(out), "--placeholder-only"], capture_output=True)
+            return True, "design.png"
+        self.nb.generate_artwork = generate_artwork
+        real = sys.argv
+        sys.argv = ["emily-new-build.py", "Dad's Little Boss Tee", "--product", "tshirt", "--brief", "bold"]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                return self.nb.main()
+        finally:
+            sys.argv = real
+
+    def test_a_placeholder_holds_the_build_and_wakes_nobody(self):
+        self.assertEqual(self.approve(real_art=False), 0, "the approval still counts")
+        self.assertEqual(self.posted, [], "Emily is not woken")
+        b = json.loads((self.root / "agents/emily/builds/dad-s-little-boss-tee/build.json").read_text())
+        self.assertEqual(b["status"], "waiting_for_art")
+
+    def test_real_art_goes_to_emily_as_before(self):
+        self.assertEqual(self.approve(real_art=True), 0)
+        self.assertEqual(len(self.posted), 1)
+        self.assertEqual(self.posted[0]["assignee"], "emily")
+
+    def test_the_redraw_sends_a_held_build_to_emily(self):
+        self.approve(real_art=False)
+        fin = load("emily_finish_hold", "emily-finish.py")
+        fin.ROOT = self.root
+        (self.root / "scripts").symlink_to(SCRIPTS)
+        sent = []
+
+        def generate_artwork(slug, idea, brief, product, evidence=None):
+            (self.root / "agents/emily/builds" / slug / "design.png").write_bytes(b"\x89PNG real" + b"x" * 3000)
+            return True, "design.png (generated)"
+        fake = types.SimpleNamespace(generate_artwork=generate_artwork,
+                                     queue=lambda *a: sent.append(a) or 0)
+        real_module = fin._module
+        fin._module = lambda name, file: fake if file == "emily-new-build.py" else real_module(name, file)
+        fin.draft = lambda d: self.fail("nothing to draft before Emily has listed it")
+        with contextlib.redirect_stdout(io.StringIO()):
+            fin.redraw()
+        self.assertEqual(sent[0][:4], ("dad-s-little-boss-tee", "Dad's Little Boss Tee", "bold", "tshirt"))
+        b = json.loads((self.root / "agents/emily/builds/dad-s-little-boss-tee/build.json").read_text())
+        self.assertNotIn("status", b, "no longer waiting - the queue says what happens next")
+
+    def test_the_card_says_waiting_not_failed(self):
+        js = (ROOT / "mission-control-api/emily.js").read_text()
+        self.assertIn("case 'waiting_for_art':", js)
+        self.assertIn("label: 'waiting for art'", js)
