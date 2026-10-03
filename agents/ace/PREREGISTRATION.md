@@ -81,3 +81,7 @@ fresh-news bettor matches Ace, the model adds nothing.
   24 hours (owner's decision). On a real board 1 of 8 bettable games had
   news inside six hours, so the six-hour rule allowed almost no bets. The
   price-not-moved check is unchanged and is what keeps priced news out.
+* 2026-10-03 — schedule, not a rule: the betting wake moved from 15:00 to
+  11:30 ET (owner's decision), so noon ET college kickoffs and Sunday's 13:00
+  NFL games are inside the 12-hour betting window at some wake. Every number
+  in the table above is unchanged.

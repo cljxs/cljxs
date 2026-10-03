@@ -3,11 +3,14 @@ Description=Wake Ace twice a day
 
 [Timer]
 # Times are US/Eastern because they track US sports schedules, not the user's
-# clock. In US/Central these fire at 14:00 and 22:30.
+# clock. In US/Central these fire at 10:30 and 22:30.
 #
-# 15:00 is the betting wake: lineups and injuries have firmed up and the bulk
-# of the slate has not started. 23:30 is the grading wake: the day's games are
-# final.
+# 11:30 is the betting wake. It was 15:00 until 2026-10-03, when the owner
+# moved it: college football's noon ET (11:00 Central) kickoffs had already
+# started by 15:00, and NFL Sunday's 13:00 ET games were 13.5 hours past the
+# 23:30 wake - outside BET_WINDOW_HOURS (12) - so no wake could ever bet them.
+# At 11:30 everything to 23:30 ET is inside the window. 23:30 is the grading
+# wake: the day's games are final.
 #
 # There used to be a 09:00 wake as well. It was dropped because nothing it
 # could see was actionable - the earliest first pitch is around 13:00 ET and
@@ -15,7 +18,7 @@ Description=Wake Ace twice a day
 # is known. Ace's own bar requires "real information the market has not priced
 # yet", and at 09:00 there is none. It is a third of the fuel for the wake
 # least able to clear the bar.
-OnCalendar=*-*-* 15:00 America/New_York
+OnCalendar=*-*-* 11:30 America/New_York
 OnCalendar=*-*-* 23:30 America/New_York
 Persistent=false
 RandomizedDelaySec=120

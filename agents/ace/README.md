@@ -33,7 +33,7 @@ Check the agents.list index with `openclaw agents list` before running the
 |---|---|---|
 | `ace-fetch.timer` | every 30 min, 09:00-23:30 ET, daily | **nothing** - plain Python. Also grades finished bets, runs the no-AI bettors, writes the blind sheet |
 | `ace-close.timer` | every 5 min, 10:00-23:55 ET | **nothing** - re-prices games starting within 2 hours |
-| `ace-cycle.timer` | 15:00, 23:30 ET, daily | **fuel** - 2 AI wakes per day |
+| `ace-cycle.timer` | 11:30, 23:30 ET, daily | **fuel** - 2 AI wakes per day |
 
 ## Since 2026-10-01 (an outside review, items 1-10)
 
@@ -71,7 +71,9 @@ bet. A number that can only ever be misused is not context, it is bait.
 
 ## Why two wakes, not three
 
-**15:00 ET** is the betting wake and **23:30 ET** is the grading wake. A 09:00
+**11:30 ET** (10:30 Central) is the betting wake and **23:30 ET** is the grading
+wake. It was 15:00 until 2026-10-03; at 15:00 college football's noon kickoffs
+had started and NFL Sunday's 13:00 games could never be bet. A 09:00
 wake was dropped: the earliest first pitch is around 13:00 ET and most of the
 slate is evening, so at 09:00 no lineup is posted and no scratch is known.
 Ace's bar requires *real information the market has not priced yet*, and that

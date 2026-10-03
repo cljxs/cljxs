@@ -34,7 +34,7 @@ except Exception:                                   # no tzdata on the host
 def eastern_now():
     """Real Eastern time where the host has tzdata, otherwise UTC-4.
 
-    The fallback is deliberately the summer offset: the wakes are at 15:00 and
+    The fallback is deliberately the summer offset: the wakes are at 11:30 and
     23:30 (09:35 and 15:55 for Belfort), and each slot boundary below is hours
     away from all of them, so an hour of drift cannot land on the wrong one. The only case it
     would get wrong is a 23:30 wake in winter, which lands at 04:30 UTC the
@@ -77,7 +77,9 @@ def day(now=None):
 # Each agent's wakes, as (hour it stops applying, what that slot is called).
 # Boundaries sit hours away from every actual wake, so an hour of drift in the
 # fallback offset can never select the wrong one.
-ACE = ((20, "afternoon"), (24, "night"))                         # 15:00 23:30
+# Ace's day wake moved to 11:30 on 2026-10-03 and keeps the name "afternoon":
+# every saved report, ledger and check already uses it.
+ACE = ((20, "afternoon"), (24, "night"))                         # 11:30 23:30
 BELFORT = ((12, "open"), (24, "close"))                          # 09:35 15:55
 
 SLOTS = {"ace": ACE, "belfort": BELFORT}
@@ -171,7 +173,7 @@ def expected_report(agent_dir, agent_name, now=None, started=None):
 
     `started` is the cycle-start epoch the wrapper passes to the verifier, used
     in preference to the wall clock so a long cycle cannot drift into the next
-    slot while it runs. Belfort wakes at 09:35 and 15:55 and ace at 15:00 and
+    slot while it runs. Belfort wakes at 09:35 and 15:55 and ace at 11:30 and
     23:30, all hours from a boundary, so this is belt and braces.
 
     Agents with no slots - scout, emily, fury - choose their own filenames, and

@@ -16777,3 +16777,32 @@ class TheDeckWaitsForTheArt(unittest.TestCase):
         art = int(re.search(r"timeout=(\d+)", (SCRIPTS / "emily-new-build.py").read_text()
                             .split("def generate_artwork(", 1)[1]).group(1))
         self.assertGreater(ms / 1000, art)
+
+
+class AceWakesBeforeTheEarlyKickoffs(unittest.TestCase):
+    """The betting wake was 15:00 ET. College football's noon ET (11:00
+    Central) kickoffs had started by then, and NFL Sunday's 13:00 games were
+    13.5 hours after the 23:30 wake - outside BET_WINDOW_HOURS - so no wake
+    could ever bet them. Moved to 11:30 ET on 2026-10-03 (owner)."""
+
+    def wakes(self):
+        timer = (ROOT / "deploy" / "ace-cycle.timer").read_text()
+        return [int(h) * 60 + int(m) for h, m in
+                re.findall(r"^OnCalendar=\*-\*-\* (\d\d):(\d\d) America/New_York", timer, re.M)]
+
+    def test_every_usual_kickoff_is_inside_some_wakes_window(self):
+        window = load("ace_fetch_window", "ace-fetch.py").BET_WINDOW_HOURS * 60
+        wakes = self.wakes()
+        # today's wakes, and yesterday's (a minus-one-day offset)
+        every = [w for w in wakes] + [w - 24 * 60 for w in wakes]
+        for name, kick in [("college noon", 12 * 60), ("NFL early", 13 * 60),
+                           ("college afternoon", 15 * 60 + 30), ("NFL late", 16 * 60 + 25),
+                           ("night games", 19 * 60 + 30)]:
+            self.assertTrue(any(0 < kick - w <= window for w in every), f"{name} is never bettable")
+
+    def test_the_wake_keeps_its_slot_name(self):
+        et = load("et_time_ace", "et_time.py")
+        for minute in self.wakes():
+            when = datetime(2026, 10, 3, minute // 60, minute % 60, tzinfo=timezone(timedelta(hours=-4)))
+            self.assertIn(et.slot("ace", when), ("afternoon", "night"))
+        self.assertIn(11 * 60 + 30, self.wakes())
