@@ -127,6 +127,8 @@ ROLES = {
     "belfort": "paper-trades stocks on its own schedule.",
     "ace":     "places paper sports bets on its own schedule.",
     "fury":    "writes the morning briefing, in plain code.",
+    "paul":    "builds a preview website for one local business a day and drafts a "
+               "pitch for the owner to send. Never contacts anyone.",
 }
 
 # THE ONLY JOBS AN APPROVED PROPOSAL CAN SEND. Each is a command that already

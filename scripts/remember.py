@@ -46,12 +46,16 @@ def memory_path(agent_dir):
     return Path(agent_dir) / "MEMORY.md"
 
 
-def remember(agent_dir, text, now=None):
+def remember(agent_dir, text, now=None, archive=None):
     """Append one dated line, trimming the oldest to stay under the cap.
 
     Returns (path, trimmed_lines). The line just added is never trimmed, no
     matter how long it is - losing the thing you were asked to record would be
     a worse failure than exceeding the cap.
+
+    `archive`, when given, is a file the trimmed lines are appended to instead
+    of being lost. Paul keeps one (memory-archive.md): the cap is about what is
+    re-sent on every wake, not about what is worth keeping.
     """
     text = " ".join(str(text).split())
     if not text:
@@ -62,15 +66,22 @@ def remember(agent_dir, text, now=None):
     existing = p.read_text().rstrip("\n").splitlines() if p.is_file() else []
     lines = existing + [line]
 
-    trimmed = 0
+    dropped = []
     # Drop from the top, oldest first, but never the new line.
     while len(lines) > 1 and len("\n".join(lines).encode()) > MAX_BYTES:
-        lines.pop(0)
-        trimmed += 1
+        dropped.append(lines.pop(0))
+
+    if archive and dropped:
+        # Written before MEMORY.md shrinks, so a crash between the two leaves a
+        # line in both places rather than in neither.
+        a = Path(archive)
+        a.parent.mkdir(parents=True, exist_ok=True)
+        with open(a, "a") as f:
+            f.write("\n".join(dropped) + "\n")
 
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("\n".join(lines) + "\n")
-    return p, trimmed
+    return p, len(dropped)
 
 
 def written_this_cycle(path, started):

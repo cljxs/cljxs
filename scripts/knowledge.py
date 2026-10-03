@@ -66,6 +66,7 @@ DEPARTMENTS = {
     "betting":  ["ace"],
     "props":    [],
     "ops":      ["fury"],
+    "websites": ["paul"],
 }
 
 KINDS = {

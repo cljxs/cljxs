@@ -146,3 +146,17 @@ agents/ace/state/sharp-usage.json
 # Clipper - runtime data (sources, clips, database, credentials) and its venv.
 clipper/var/
 clipper/.venv/
+
+# Paul - every business, site, pitch and record stays on the droplet. The
+# sender details hold the owner's mailing address, and this repo is public.
+agents/paul/state/*
+!agents/paul/state/credentials.env.example
+agents/paul/work/
+agents/paul/sites/*
+!agents/paul/sites/.gitkeep
+agents/paul/outbox/*
+!agents/paul/outbox/.gitkeep
+agents/paul/reports/*
+!agents/paul/reports/.gitkeep
+agents/paul/MEMORY.md
+agents/paul/memory-archive.md

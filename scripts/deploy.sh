@@ -148,6 +148,16 @@ if bad or (null and len(null) == len(rows)):
 PY
 fi
 
+if printf '%s\n' "${AGENTS[@]}" | grep -qx paul; then
+  step "paul: state files and readiness"
+  python3 "$ROOT/scripts/paul.py" init || warn "paul.py init failed"
+  # Informational: before go-live a missing Vercel token or browser is
+  # expected, so only a dry-cycle blocker is marked !! here.
+  python3 "$ROOT/scripts/paul.py" preflight | sed 's/^/   /'
+  [ "${PIPESTATUS[0]}" -eq 0 ] \
+    || warn "paul cannot run even a dry cycle yet - the lines above say why"
+fi
+
 step "next wakes"
 wake_report
 
