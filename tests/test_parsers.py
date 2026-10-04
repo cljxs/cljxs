@@ -12939,7 +12939,7 @@ class TheBudgetIsTheMonthsRealBill(unittest.TestCase):
                 self.assertIsNone(self.b.daily_budget(f), bad)
         # And the tracked file carries the owner's number, so a fresh
         # checkout is not silently uncapped.
-        self.assertEqual(self.b.daily_budget(ROOT / "tasks" / "limits.json"), 1.0)
+        self.assertEqual(self.b.daily_budget(ROOT / "tasks" / "limits.json"), 1.5)  # owner, 2026-10-04
 
     def run_main(self, data, argv, key="placeholder-test-token-7c1f"):
         """main() with OpenRouter replaced by `data`; returns (code, stdout)."""
