@@ -96,9 +96,90 @@ def note_draft(d, blocked):
     path.write_text(json.dumps(build, indent=1) + "\n")
 
 
+def find_build(raw):
+    agent_dir = ROOT / "agents" / "emily"
+    return next((c for c in ([Path(raw)] if Path(raw).is_absolute() else
+                             [agent_dir / raw, agent_dir / "builds" / raw, ROOT / raw])
+                 if c.is_dir()), None)
+
+
+# THE REDO. The first test drafts (2026-10-02/03) went to Printify with a
+# misspelled slogan, a date, the product's own name and a placeholder - before
+# the proofread, the name check, the trim and the placeholder refusal existed.
+# A draft is made once, so nothing ever re-made them. This deletes the old
+# UNPUBLISHED draft, draws the art again through today's pipeline, and drafts
+# again. Anything Printify says is live on Etsy is refused, never deleted.
+def redo(raw, product=None):
+    d = find_build(raw)
+    if d is None:
+        print(f"emily-finish: no build folder for {raw}")
+        return 1
+    build, listing, order = _json(d / "build.json"), _json(d / "listing.json"), _json(d / "order.json")
+    if build.get("published"):
+        print(f"emily-finish: {d.name} is published - not touching a live listing")
+        return 1
+    ep = _module("emily_printify_redo", "emily-printify.py")
+    ep.load_credentials()
+    shop = build.get("printify_shop_id") or os.environ.get("PRINTIFY_SHOP_ID")
+    pids = [p for p in dict.fromkeys([build.get("printify_product_id")] +
+            [x.get("product_id") for x in build.get("printify_drafts") or []]) if p]
+    for pid in pids:
+        try:
+            live = ep._live_state(shop, pid)
+        except ep.ApiError as exc:
+            if getattr(exc, "code", None) == 404:
+                continue                                 # already gone
+            print(f"emily-finish: could not read product {pid} ({exc}) - not deleting blind")
+            return 1
+        if live["published"] or live["locked"]:
+            print(f"emily-finish: product {pid} is live on Etsy - refusing to delete it")
+            return 1
+    for pid in pids:
+        try:
+            ep.call(f"/shops/{shop}/products/{pid}.json", method="DELETE", soft=True)
+            print(f"  deleted the old draft {pid}")
+        except ep.ApiError as exc:
+            if getattr(exc, "code", None) != 404:
+                print(f"emily-finish: could not delete {pid} ({exc})")
+                return 1
+    for k in ("printify_product_id", "printify_url", "printify_drafts", "published",
+              "drafted_at", "draft_blocked", "printify_shop_id"):
+        build.pop(k, None)
+    build["status"] = "ready_local"
+    (d / "build.json").write_text(json.dumps(build, indent=1) + "\n")
+    # What to draw it as: the order, or - for builds from before order.json -
+    # what Emily listed. --product moves it (the emblem drafted as a sticker).
+    order = {"product": product or order.get("product") or listing.get("product_type") or "",
+             "name": order.get("name") or build.get("idea") or listing.get("title") or d.name,
+             "brief": order.get("brief") or str(listing.get("description") or "")[:600]}
+    (d / "order.json").write_text(json.dumps(order, indent=1) + "\n")
+    if product and listing:
+        listing["product_type"] = product
+        (d / "listing.json").write_text(json.dumps(listing, indent=1) + "\n")
+    ok, msg = generate(d)
+    print(f"  {d.name}: {msg}")
+    ea = _module("emily_assets_redo", "emily-assets.py")
+    if not ok or ea.is_placeholder(d / "design.png"):
+        print("  no real art yet - the hourly redraw will finish it")
+        return 1
+    return draft(d)
+
+
 def main():
     if sys.argv[1:2] == ["--redraw"]:
         return redraw()
+    if sys.argv[1:2] == ["--redo"]:
+        args = sys.argv[2:]
+        product = None
+        if "--product" in args:
+            i = args.index("--product")
+            product = args[i + 1]
+            args = args[:i] + args[i + 2:]
+        for raw in args:
+            if redo(raw, product):
+                print("emily-finish: stopping - the rest wait")
+                return 1
+        return 0
     if len(sys.argv) < 2:
         print("usage: emily-finish.py <build_dir>")
         return 0

@@ -17133,3 +17133,71 @@ class ImageCallsFitTheDailyCap(unittest.TestCase):
             self.ea.urllib.request.urlopen = old
         self.assertIn("HTTP 402: This request requires more credits", str(ctx.exception))
         self.assertIn("can only afford 5294", str(ctx.exception))
+
+
+class TheEarlyDraftsAreRedone(unittest.TestCase):
+    """The first test drafts went to Printify before the proofread, the name
+    check, the trim and the placeholder refusal existed: "I'M JUST HE HER",
+    a date, "TEACHER'S COFFEE PLOT MUG", a placeholder nurse tee, and an
+    emblem drafted as a sticker. emily-finish.py --redo deletes the old
+    UNPUBLISHED draft, draws again through today's pipeline and drafts again;
+    anything live on Etsy is refused."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.fin = load("emily_finish_redo", "emily-finish.py")
+        self.fin.ROOT = self.root
+        (self.root / "scripts").symlink_to(SCRIPTS)
+        self.d = self.root / "agents/emily/builds/threaded-spine-chest-emblem"
+        self.d.mkdir(parents=True)
+        (self.d / "build.json").write_text(json.dumps({"idea": "Threaded Spine Chest Emblem",
+            "printify_product_id": "p1", "printify_shop_id": "s1", "status": "ready_for_review",
+            "printify_drafts": [{"product_id": "p1"}]}))
+        (self.d / "listing.json").write_text(json.dumps({"title": "Threaded Spine Emblem",
+                                                         "product_type": "sticker", "description": "d"}))
+        (self.d / "design.png").write_bytes(b"\x89PNG old" + b"x" * 3000)
+        self.deleted, self.drafted, self.drawn = [], [], []
+        self.live = {"published": False, "locked": False}
+
+        class ApiError(Exception):
+            def __init__(self, code): self.code = code
+        ep = types.SimpleNamespace(
+            ApiError=ApiError, load_credentials=lambda: None,
+            _live_state=lambda shop, pid: dict(self.live),
+            call=lambda path, body=None, method=None, soft=False: self.deleted.append((method, path)) or {})
+
+        def generate_artwork(slug, idea, brief, product, evidence=None):
+            self.drawn.append((idea, product))
+            (self.d / "design.png").write_bytes(b"\x89PNG new" + b"x" * 3000)
+            return True, "design.png (generated)"
+        nb = types.SimpleNamespace(generate_artwork=generate_artwork)
+        real = self.fin._module
+        self.fin._module = lambda name, file: {"emily-printify.py": ep, "emily-new-build.py": nb}.get(file) \
+            or real(name, file)
+        self.fin.draft = lambda d: self.drafted.append(d.name) or 0
+
+    def redo(self, *argv):
+        real = sys.argv
+        sys.argv = ["emily-finish.py", "--redo", *argv]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                return self.fin.main()
+        finally:
+            sys.argv = real
+
+    def test_a_live_product_is_never_deleted(self):
+        self.live["published"] = True
+        self.assertEqual(self.redo("threaded-spine-chest-emblem"), 1)
+        self.assertEqual((self.deleted, self.drawn, self.drafted), ([], [], []))
+
+    def test_an_unpublished_draft_is_replaced_on_the_right_product(self):
+        self.assertEqual(self.redo("threaded-spine-chest-emblem", "--product", "sweatshirt"), 0)
+        self.assertEqual(self.deleted, [("DELETE", "/shops/s1/products/p1.json")])
+        self.assertEqual(self.drawn, [("Threaded Spine Chest Emblem", "sweatshirt")])
+        self.assertEqual(self.drafted, ["threaded-spine-chest-emblem"])
+        b = json.loads((self.d / "build.json").read_text())
+        self.assertNotIn("printify_product_id", b)
+        self.assertEqual(json.loads((self.d / "listing.json").read_text())["product_type"], "sweatshirt")
+        self.assertEqual(json.loads((self.d / "order.json").read_text())["product"], "sweatshirt")
