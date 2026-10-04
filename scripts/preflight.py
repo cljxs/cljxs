@@ -267,18 +267,31 @@ def check_credit():
         print("credit     unreadable")
         return
 
+    # The KEY's cap, not the account balance - and on this key it resets
+    # daily (budget.py's hard stop). This used to print `limit - usage`, with
+    # usage the key's LIFETIME spend: "$-16.13 left of $1.00" on 2026-10-04,
+    # with $12.88 in the account, and advice to top up money that was there.
+    # OpenRouter reports what is left of the cap as limit_remaining.
     limit, usage = d.get("limit"), d.get("usage") or 0
     if limit is None:
-        print(f"credit     ${usage:.2f} used, no cap set")
+        print(f"key cap    none set - ${usage:.2f} spent in all")
         return
-    left = limit - usage
-    print(f"credit     ${left:.2f} left of ${limit:.2f}")
+    left = d.get("limit_remaining")
+    if not isinstance(left, (int, float)):
+        left = limit - usage
+    reset = d.get("limit_reset")
+    per = {"daily": " a day", "weekly": " a week", "monthly": " a month"}.get(reset, "")
+    print(f"key cap    ${max(left, 0):.2f} left of ${limit:.2f}{per}"
+          f" (this key's limit - your account balance is separate)")
     if left <= 0:
-        BLOCK.append(("-", "OpenRouter credit is exhausted - every wake will fail "
-                           "instantly and the agents will look idle",
-                      "top up at openrouter.ai/credits"))
-    elif left < 2:
-        warn("-", f"OpenRouter credit is down to ${left:.2f}")
+        when = {"daily": " until midnight UTC (7pm Central)", "weekly": " until the week resets",
+                "monthly": " until the month resets"}.get(reset, "")
+        BLOCK.append(("-", f"this key has spent its ${limit:.2f}{per} cap - every AI call "
+                           f"fails{when} and the agents will look idle",
+                      "wait for the reset, or raise the key's limit at openrouter.ai/settings/keys "
+                      "and daily_ai_budget in tasks/limits.json together"))
+    elif left < min(2, limit / 4):
+        warn("-", f"this key's cap is down to ${left:.2f}{per}")
 
 
 _catalogue = None

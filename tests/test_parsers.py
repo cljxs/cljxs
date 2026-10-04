@@ -17041,3 +17041,36 @@ class ARedrawSaysWhyTheArtFailed(unittest.TestCase):
     def test_the_message_carries_it(self):
         src = (SCRIPTS / "emily-new-build.py").read_text().split("def generate_artwork(", 1)[1].split("\ndef ", 1)[0]
         self.assertIn("why_failed(res.stderr)", src)
+
+
+class PreflightReadsTheKeysCapNotTheAccount(unittest.TestCase):
+    """2026-10-04: preflight said "credit $-16.13 left of $1.00" while the
+    account held $12.88, and advised topping up. It subtracted the key's
+    LIFETIME spend from its $1 DAILY cap. OpenRouter reports what is left of
+    the cap as limit_remaining, and the period as limit_reset (its docs)."""
+
+    def run_check(self, data):
+        pf = load("preflight_cap", "preflight.py")
+        pf.openrouter_key = lambda: "test-not-a-key"
+        pf.key_status = lambda key, timeout=20: data
+        pf.BLOCK.clear()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            pf.check_credit()
+        return out.getvalue(), list(pf.BLOCK)
+
+    def test_the_real_numbers(self):
+        out, block = self.run_check({"limit": 1.0, "limit_remaining": 0.0, "limit_reset": "daily",
+                                     "usage": 17.13, "usage_daily": 1.02})
+        self.assertIn("$0.00 left of $1.00 a day", out)
+        self.assertNotIn("-16.13", out)
+        self.assertIn("account balance is separate", out)
+        self.assertEqual(len(block), 1)
+        self.assertIn("midnight UTC", block[0][1])
+        self.assertNotIn("top up", block[0][2], "the account had money; the cap was the stop")
+
+    def test_a_cap_with_room_left_blocks_nothing(self):
+        out, block = self.run_check({"limit": 1.0, "limit_remaining": 0.62, "limit_reset": "daily",
+                                     "usage": 17.13})
+        self.assertIn("$0.62 left of $1.00 a day", out)
+        self.assertEqual(block, [])
