@@ -17201,3 +17201,54 @@ class TheEarlyDraftsAreRedone(unittest.TestCase):
         self.assertNotIn("printify_product_id", b)
         self.assertEqual(json.loads((self.d / "listing.json").read_text())["product_type"], "sweatshirt")
         self.assertEqual(json.loads((self.d / "order.json").read_text())["product"], "sweatshirt")
+
+
+class ARoundStickerKeepsItsArtInsideTheCut(unittest.TestCase):
+    """2026-10-04: the "Keep Going" sticker - a round badge with ONE DAY AT A
+    TIME across the bottom - was placed as a full-width square on Printify's
+    Round Vinyl Stickers, and the circular cut took the ends off "AT A TIME"
+    at every size. On a round product the art's farthest visible pixel must
+    sit inside the circle; a round badge is not shrunk for empty corners."""
+
+    def setUp(self):
+        self.ep = load("emily_printify_round", "emily-printify.py")
+        self.k = load("knockout_round", "knockout.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.round = {"blueprint_title": "Round Vinyl Stickers", "variant_titles": ['2" × 2"']}
+
+    def art(self, name, inside):
+        w = h = 120
+        px = bytearray(w * h * 4)
+        for y in range(h):
+            for x in range(w):
+                if inside(x, y):
+                    px[(y * w + x) * 4:(y * w + x) * 4 + 4] = bytes([30, 60, 90, 255])
+        p = Path(self.tmp.name) / f"{name}.png"
+        self.k.encode(p, w, h, px)
+        return p
+
+    def placed(self, path, entry):
+        reach = self.ep.round_reach(path, step=1)
+        img = self.ep.print_areas("I", (120, 120), [1], entry, {1: (1800, 1800)}, reach)
+        return img[0]["placeholders"][0]["images"][0]["scale"], reach
+
+    def test_the_badge_with_text_across_the_bottom_stays_inside(self):
+        badge = self.art("badge", lambda x, y: (x - 60) ** 2 + (y - 60) ** 2 <= 50 ** 2 or y >= 100)
+        scale, reach = self.placed(badge, self.round)
+        self.assertLessEqual(scale * reach, self.ep.ROUND_SAFE + 1e-6, "its farthest pixel is inside the cut")
+        self.assertLess(scale, 0.9)
+
+    def test_a_round_badge_is_not_shrunk_for_empty_corners(self):
+        disc = self.art("disc", lambda x, y: (x - 60) ** 2 + (y - 60) ** 2 <= 59 ** 2)
+        scale, _ = self.placed(disc, self.round)
+        self.assertGreater(scale, 0.9)
+
+    def test_a_square_cut_product_is_untouched(self):
+        full = self.art("full", lambda x, y: True)
+        scale, _ = self.placed(full, {"blueprint_title": "Kiss-Cut Stickers", "variant_titles": ['3" × 3"']})
+        self.assertEqual(scale, 1.0)
+
+    def test_draft_measures_it(self):
+        body = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("round_reach(upload_from) if is_round(cat) else None", body)

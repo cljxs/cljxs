@@ -777,7 +777,42 @@ def is_garment(entry):
     return any(size_of(t) for t in (entry or {}).get("variant_titles") or [])
 
 
-def fit_images(image_id, image, area, top):
+# A round product cuts a circle out of its square print area. The art's
+# CORNERS must fit inside it, not just its edges: the "Keep Going" sticker
+# (2026-10-04) was placed as a full-width square and the circular cut took the
+# ends off "AT A TIME" at every size. A little inside the circle, for the
+# dashed safe line Printify draws.
+ROUND_SAFE = 0.92
+
+
+def is_round(entry):
+    """Is this product cut round? Read from Printify's own blueprint title -
+    "Round Vinyl Stickers" - like is_all_over, not from a flag to remember."""
+    return bool(re.search(r"\bround\b|\bcircle\b|\bcircular\b",
+                          str((entry or {}).get("blueprint_title") or ""), re.I))
+
+
+def round_reach(path, step=4):
+    """How far the visible art reaches from the image's centre, in half-widths.
+
+    A round badge reaches about 1.0; a square full of art reaches its corners,
+    1.41. Sizing a round sticker by the image's square would shrink a round
+    badge by a third to keep empty corners in. Every `step`th pixel is enough.
+    None if the file cannot be read - the caller then assumes the corners."""
+    try:
+        w, h, px = _knockout().decode(path)
+    except Exception:
+        return None
+    cx, cy, far = w / 2.0, h / 2.0, 0.0
+    for y in range(0, h, step):
+        row = y * w * 4
+        for x in range(0, w, step):
+            if px[row + x * 4 + 3]:
+                far = max(far, (x - cx) ** 2 + (y - cy) ** 2)
+    return math.sqrt(far) / (w / 2.0) if far else None
+
+
+def fit_images(image_id, image, area, top, round_cut=False, reach=None):
     """One image, as large as fits inside the print area, centred across.
 
     For a print that sits ON a product - a chest print, a mug, a tote face -
@@ -791,11 +826,18 @@ def fit_images(image_id, image, area, top):
     iw, ih = image
     aw, ah = area
     sc = min(1.0, (ah / aw) * (iw / ih))
+    if round_cut:
+        # The art reaches `reach` half-widths from its centre (the corners,
+        # hypot(1, ih/iw), when unmeasured); at scale sc a half-width is
+        # sc*aw/2, and it must stay inside the safe circle.
+        r = reach or math.hypot(1.0, ih / iw)
+        sc = min(sc, ROUND_SAFE * min(aw, ah) / aw / r)
+        sc = math.floor(sc * 10000) / 10000     # rounded down: never past the line
     y = (sc * aw * ih / iw) / ah / 2 if top else 0.5
     return [{"id": image_id, "x": 0.5, "y": round(y, 4), "scale": round(sc, 4), "angle": 0}]
 
 
-def print_areas(image_id, image, variant_ids, entry, measured=None):
+def print_areas(image_id, image, variant_ids, entry, measured=None, reach=None):
     """print_areas for a product spec.
 
     With recorded print sizes (an all-over sheet, measured by `layout`),
@@ -810,10 +852,10 @@ def print_areas(image_id, image, variant_ids, entry, measured=None):
         groups = {}
         for v in variant_ids:
             groups.setdefault(tuple(measured[v]), []).append(v)
-        top = is_garment(entry)
+        top, rnd = is_garment(entry), is_round(entry)
         return [{"variant_ids": vids, "placeholders": [{
                     "position": "front",
-                    "images": fit_images(image_id, image, area, top)}]}
+                    "images": fit_images(image_id, image, area, top, rnd, reach)}]}
                 for area, vids in sorted(groups.items())]
     if not sizes:
         return [{"variant_ids": list(variant_ids), "placeholders": [{
@@ -1817,7 +1859,8 @@ def cmd_draft(a):
                   f"art centred at full width")
     try:
         areas = print_areas(image_id, _knockout().size(upload_from),
-                            variant_ids, cat, measured)
+                            variant_ids, cat, measured,
+                            round_reach(upload_from) if is_round(cat) else None)
     except KeyError as exc:
         print(f"variant {exc} has no recorded print size. Re-measure:\n"
               f"  emily-printify.py layout --product {cat_key}", file=sys.stderr)
