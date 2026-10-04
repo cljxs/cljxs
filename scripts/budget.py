@@ -7,7 +7,10 @@ budget.py — what today's AI has cost, against the daily cap.
     python3 scripts/budget.py check      # exit 4 when today's AI allowance is spent
 
 THE CAP is `daily_ai_budget` in tasks/limits.json, next to the other spend
-caps: dollars of AI a day. The owner set it at $1 a day (2026-09-25),
+caps: dollars of AI a day. The owner set it at $1 a day (2026-09-25) and
+raised it to $1.50 on 2026-10-04, because OpenRouter refuses an image request
+unless the key has $1.00 of room left - at a $1 cap, any spend that day
+blocked every drawing. It was $1 a day,
 replacing a $25-a-month-all-in budget that left nine cents a day for AI once
 the droplet came off the top. The month is shown too, as what it can cost at
 most - the cap times the days, plus the fixed bills - so the bigger number is
