@@ -17074,3 +17074,62 @@ class PreflightReadsTheKeysCapNotTheAccount(unittest.TestCase):
                                      "usage": 17.13})
         self.assertIn("$0.62 left of $1.00 a day", out)
         self.assertEqual(block, [])
+
+
+class ImageCallsFitTheDailyCap(unittest.TestCase):
+    """2026-10-04: every drawing was refused with 402 while the key still had
+    $0.64 of its $1.00 day. OpenRouter prices a request at its worst case -
+    input plus max_tokens - before running it (its docs), and the image call
+    set no max_tokens, so its worst case was the model's whole allowance. And
+    the error kept only "Payment Required", not OpenRouter's explanation."""
+
+    def setUp(self):
+        self.ea = load("emily_assets_cap", "emily-assets.py")
+
+    def capture(self, fn):
+        sent = {}
+
+        class Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return b'{"choices": [{"message": {"content": "{\\"lines\\": []}"}}]}'
+
+        def urlopen(req, timeout=None):
+            sent["body"] = json.loads(req.data)
+            return Resp()
+        old = self.ea.urllib.request.urlopen
+        self.ea.urllib.request.urlopen = urlopen
+        try:
+            try:
+                fn()
+            except RuntimeError:
+                pass                                  # no image in the stub reply
+        finally:
+            self.ea.urllib.request.urlopen = old
+        return sent["body"]
+
+    def test_both_requests_say_how_much_they_may_write(self):
+        body = self.capture(lambda: self.ea.generate("/dev/null", "p", "k", model="m"))
+        self.assertEqual(body["max_tokens"], self.ea.IMAGE_MAX_TOKENS)
+        png = Path(tempfile.mkdtemp()) / "a.png"
+        png.write_bytes(b"\x89PNG")
+        body = self.capture(lambda: self.ea.proof(png, "k"))
+        self.assertEqual(body["max_tokens"], self.ea.PROOF_MAX_TOKENS)
+
+    def test_a_refusal_keeps_openrouters_reason(self):
+        import urllib.error
+        msg = ("This request requires more credits, or fewer max_tokens. You requested up to "
+               "32768 tokens, but can only afford 5294.")
+
+        def urlopen(req, timeout=None):
+            raise urllib.error.HTTPError(OR := "https://openrouter.ai", 402, "Payment Required", {},
+                                         io.BytesIO(json.dumps({"error": {"code": 402, "message": msg}}).encode()))
+        old = self.ea.urllib.request.urlopen
+        self.ea.urllib.request.urlopen = urlopen
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                self.ea.generate("/dev/null", "p", "k", model="m")
+        finally:
+            self.ea.urllib.request.urlopen = old
+        self.assertIn("HTTP 402: This request requires more credits", str(ctx.exception))
+        self.assertIn("can only afford 5294", str(ctx.exception))

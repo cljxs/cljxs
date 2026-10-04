@@ -69,6 +69,34 @@ def load_credentials():
 
 
 OR_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+# THE MOST A REQUEST MAY WRITE. OpenRouter prices every request at its WORST
+# case before running it - input plus max_tokens of output - and refuses with
+# 402 if that does not fit what the key has left, even when the real cost
+# would (its docs, 2026-10-04). Unset, the worst case of a premium image model
+# is the model's whole output allowance: on 2026-10-04 every drawing was
+# refused with $0.64 of a $1.00 day still unspent. One square image is about
+# 1,100-1,300 output tokens on Gemini's image models (believed, from their
+# docs); these leave room for that and a little text, and no more.
+IMAGE_MAX_TOKENS = 3000
+PROOF_MAX_TOKENS = 1000
+
+
+def post(req, timeout=120):
+    """urlopen, with OpenRouter's own reason kept when it refuses. A bare
+    "HTTP Error 402: Payment Required" said nothing about WHICH limit; the
+    body says how much the request was priced at and how much is left."""
+    import urllib.error
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        try:
+            body = json.loads(e.read() or b"{}")
+            msg = (body.get("error") or {}).get("message") or ""
+        except Exception:
+            msg = ""
+        raise RuntimeError(f"HTTP {e.code}: {msg or e.reason}"[:300]) from None
 DEFAULT_IMAGE_MODEL = "google/gemini-2.5-flash-image"
 
 
@@ -395,6 +423,7 @@ def generate(path, prompt, key, model=None, product="", direction=None,
         "model": model or image_model(),
         "messages": [{"role": "user", "content": content}],
         "modalities": ["image", "text"],
+        "max_tokens": IMAGE_MAX_TOKENS,
         "usage": {"include": True},
     }
     ratio = aspect or shape(product)
@@ -410,8 +439,7 @@ def generate(path, prompt, key, model=None, product="", direction=None,
         "HTTP-Referer": "https://github.com/cljxs/cljxs",
         "X-Title": "emily-assets",
     })
-    with urllib.request.urlopen(req, timeout=120) as r:
-        data = json.loads(r.read())
+    data = post(req)
 
     usage = data.get("usage") or {}
     msg = (data.get("choices") or [{}])[0].get("message") or {}
@@ -514,6 +542,7 @@ def proof(path, key, model=None, name=None):
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": PROOF_ASK},
             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{data}"}}]}],
+        "max_tokens": PROOF_MAX_TOKENS,
     }).encode()
     req = urllib.request.Request(OR_URL, data=body, headers={
         "Authorization": f"Bearer {key}",
@@ -521,8 +550,7 @@ def proof(path, key, model=None, name=None):
         "HTTP-Referer": "https://github.com/cljxs/cljxs",
         "X-Title": "emily-proof",
     })
-    with urllib.request.urlopen(req, timeout=120) as r:
-        data = json.loads(r.read())
+    data = post(req)
     msg = (data.get("choices") or [{}])[0].get("message") or {}
     reading = read_proof(msg.get("content"))
     if reading is None:
