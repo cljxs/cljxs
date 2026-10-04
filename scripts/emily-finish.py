@@ -78,7 +78,9 @@ def note_draft(d, blocked):
     """
     path = d / "build.json"
     try:
-        build = json.loads(path.read_text())
+        # A build Emily never reached has no build.json yet; that is not a
+        # file to protect, so the reason starts one (2026-10-04, dad tee).
+        build = json.loads(path.read_text()) if path.exists() else {}
         if not isinstance(build, dict):
             raise ValueError("build.json is not an object")
     except Exception as exc:

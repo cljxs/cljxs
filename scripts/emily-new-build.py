@@ -127,7 +127,26 @@ def generate_artwork(slug, idea, brief, product, evidence=None):
         "placeholder" if "placeholder" in res.stdout else "unknown")
     if size < 2000:
         return False, f"wrote only {size} bytes - that is not artwork"
-    return True, f"{out.name} {size // 1024} KB ({mode})"
+    msg = f"{out.name} {size // 1024} KB ({mode})"
+    if mode == "placeholder":
+        # WHY the real drawing failed. emily-assets says so on stderr and this
+        # used to keep only "(placeholder)": on 2026-10-04 the redraw reported
+        # two failures and not one word of the reason.
+        msg += f" - the image call failed: {why_failed(res.stderr)}"
+    return True, msg
+
+
+def why_failed(stderr):
+    """The error emily-assets printed when the image call failed, or what it
+    said instead if that line is not there."""
+    for line in reversed(str(stderr or "").splitlines()):
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(d, dict) and d.get("error"):
+            return str(d["error"])[:200]
+    return (str(stderr or "").strip()[-200:]) or "no reason given"
 
 
 def main():

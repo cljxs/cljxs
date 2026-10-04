@@ -16989,3 +16989,55 @@ class NoRealArtNoEmily(unittest.TestCase):
         js = (ROOT / "mission-control-api/emily.js").read_text()
         self.assertIn("case 'waiting_for_art':", js)
         self.assertIn("label: 'waiting for art'", js)
+
+
+class ARedrawSaysWhyTheArtFailed(unittest.TestCase):
+    """2026-10-04: the redraw reported "design.png 17 KB (placeholder)" for two
+    builds and not one word of why - emily-assets puts the reason on stderr
+    and generate_artwork kept only the mode. And the dad tee, never reached
+    by Emily, had no build.json, so its card could not say anything either."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+
+    def test_the_reason_is_read_from_what_emily_assets_really_prints(self):
+        ea = load("emily_assets_why", "emily-assets.py")
+        ea.load_credentials = lambda: None
+
+        def generate(*a, **k):
+            raise RuntimeError("HTTP Error 402: Payment Required")
+        ea.generate = generate
+        os.environ["OPENROUTER_API_KEY"] = "test-not-a-key"
+        self.addCleanup(os.environ.pop, "OPENROUTER_API_KEY", None)
+        real, err = sys.argv, io.StringIO()
+        sys.argv = ["emily-assets.py", "--prompt", "p", "--out", str(self.dir / "d.png")]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                ea.main()
+        finally:
+            sys.argv = real
+        nb = load("emily_new_build_why", "emily-new-build.py")
+        self.assertEqual(nb.why_failed(err.getvalue()), "HTTP Error 402: Payment Required")
+        self.assertEqual(nb.why_failed(""), "no reason given")
+
+    def test_a_build_with_no_record_gets_one_for_the_reason(self):
+        fin = load("emily_finish_why", "emily-finish.py")
+        (self.dir / "dad-s-little-boss-tee").mkdir()
+        with contextlib.redirect_stdout(io.StringIO()):
+            fin.note_draft(self.dir / "dad-s-little-boss-tee", {"reason": "redraw still failing: 402"})
+        b = json.loads((self.dir / "dad-s-little-boss-tee/build.json").read_text())
+        self.assertEqual(b["draft_blocked"]["reason"], "redraw still failing: 402")
+
+    def test_an_unreadable_record_is_still_left_alone(self):
+        fin = load("emily_finish_why2", "emily-finish.py")
+        (self.dir / "b").mkdir()
+        (self.dir / "b/build.json").write_text("{ broken")
+        with contextlib.redirect_stdout(io.StringIO()):
+            fin.note_draft(self.dir / "b", {"reason": "x"})
+        self.assertEqual((self.dir / "b/build.json").read_text(), "{ broken")
+
+    def test_the_message_carries_it(self):
+        src = (SCRIPTS / "emily-new-build.py").read_text().split("def generate_artwork(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("why_failed(res.stderr)", src)
