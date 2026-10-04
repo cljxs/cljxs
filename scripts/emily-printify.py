@@ -1737,9 +1737,9 @@ def cmd_draft(a):
     # loud and the draft goes ahead - a dead proofreader must not stop the shop.
     if _assets().is_placeholder(design):
         print(f"\nnot drafting: {design.name} is the PLACEHOLDER, not artwork - "
-              f"drawing the real\n  art failed. Regenerate it:\n"
-              f"  python3 scripts/emily-assets.py --prompt \"...\" --out {design} "
-              f"--product {cat_key}", file=sys.stderr)
+              f"drawing the real art failed\n  (usually the day's image money ran out). "
+              f"The hourly redraw tries again and\n  drafts it once the art is real; "
+              f"to try now: python3 scripts/emily-finish.py --redraw", file=sys.stderr)
         sys.exit(1)
 
     try:
