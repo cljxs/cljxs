@@ -1973,6 +1973,30 @@ def cmd_options(a):
     # A Printify product id (24 hex characters, the end of the product's URL)
     # works too: a build's own draft can have been deleted by hand, and the
     # first one tried on the droplet answered 404.
+    if a.build_dir == "any":
+        # The first draft that still exists - drafts get deleted by hand, and
+        # any product with colours shows how Printify writes them.
+        shop = os.environ.get("PRINTIFY_SHOP_ID")
+        for f in sorted(_builds_root().glob("*/build.json"), key=lambda f: -f.stat().st_mtime):
+            try:
+                pid = json.loads(f.read_text()).get("printify_product_id")
+            except Exception:
+                continue
+            if not pid:
+                continue
+            try:
+                prod = call(f"/shops/{shop}/products/{pid}.json", soft=True)
+            except ApiError:
+                continue
+            if any(o.get("type") == "color" or "color" in str(o.get("name", "")).lower()
+                   for o in prod.get("options") or []) or len(prod.get("options") or []) > 1:
+                print(f"# {f.parent.name} ({pid})")
+                print(json.dumps({"options": prod.get("options"),
+                                  "first_variants": [{k: v.get(k) for k in ("id", "title", "options", "is_enabled")}
+                                                     for v in (prod.get("variants") or [])[:2]]}, indent=1))
+                return 0
+        print("no build has a draft with colour options left in Printify", file=sys.stderr)
+        return 1
     if re.fullmatch(r"[0-9a-f]{24}", a.build_dir):
         build = {"printify_product_id": a.build_dir}
     else:
