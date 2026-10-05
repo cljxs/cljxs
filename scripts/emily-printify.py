@@ -1964,6 +1964,26 @@ def _live_state(shop_id, pid):
     }
 
 
+def cmd_options(a):
+    """emily-printify.py options <build> - a draft's colour options exactly as
+    Printify sends them. The catalogue names a colour and gives no code
+    ("color": "Black", seen 2026-10-05), so a contrast check needs the
+    product's own payload - captured here before anything is written to
+    read it. No credential is in it."""
+    d = _resolve_build(a.build_dir)
+    build = json.loads((d / "build.json").read_text()) if d and (d / "build.json").is_file() else {}
+    pid = build.get("printify_product_id")
+    shop = build.get("printify_shop_id") or os.environ.get("PRINTIFY_SHOP_ID")
+    if not pid or not shop:
+        print("that build has no Printify draft to read", file=sys.stderr)
+        return 1
+    prod = call(f"/shops/{shop}/products/{pid}.json")
+    print(json.dumps({"options": prod.get("options"),
+                      "first_variants": [{k: v.get(k) for k in ("id", "title", "options", "is_enabled")}
+                                         for v in (prod.get("variants") or [])[:2]]}, indent=1))
+    return 0
+
+
 def cmd_status(a):
     """Ask Printify what actually happened to each drafted product, and record
     it. Nothing here is a judgement call, so nothing here asks anyone."""
@@ -2129,6 +2149,7 @@ def main():
                    help="one cost for every variant")
     p.set_defaults(fn=cmd_costs)
 
+    p = sub.add_parser("options"); p.add_argument("build_dir"); p.set_defaults(fn=cmd_options)
     p = sub.add_parser("status"); p.add_argument("build_dir", nargs="?")
     p.set_defaults(fn=cmd_status)
 
