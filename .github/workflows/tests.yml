@@ -40,6 +40,13 @@ jobs:
         working-directory: mission-control-api
         run: npm ci --ignore-scripts
 
+      # Clipper probes video with ffprobe, as it does on the droplet; one of
+      # its tests makes a real file and reads it back. The runner has no
+      # ffmpeg, and that test was the last red one once the Deck's packages
+      # went in (the annotations above named it).
+      - name: ffmpeg, for Clipper
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
       - name: tests
         shell: bash
         run: python3 -m unittest discover -s tests -v 2>&1 | tee test-output.txt
