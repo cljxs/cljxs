@@ -17373,3 +17373,36 @@ class OnlyColoursTheDesignCanBeReadOn(unittest.TestCase):
         self.assertIn('readable(variant_ids, titles, cat["colour_hex"], ink)', body)
         self.assertIn('whole[cat_key]["colour_hex"] = hexes', body)
         self.assertIn("ink_sample(upload_from) if is_garment(cat) else None", body)
+
+
+class LastRunReadsTheWrappedRun(unittest.TestCase):
+    """Bug, Paul's first dry cycle 2026-10-05: openclaw 2026.9.2 prints the
+    run wrapped - {"runId", "status", "summary", "result": {"payloads",
+    "meta": {..., "agentMeta": {model, usage, costUsd, assistantTurns}}}} -
+    and last-run.py read it flat: "model None", "tool calls None", the whole
+    result dict on the model line, and no cost. Expected values are read from
+    the fixture's own nesting, never restated (fixtures/README.md)."""
+
+    FIXTURE = ROOT / "tests" / "fixtures" / "openclaw-agent-json-2026.9.log"
+
+    def test_model_tools_turns_and_cost_come_through(self):
+        spec = importlib.util.spec_from_file_location("last_run", ROOT / "scripts" / "last-run.py")
+        lr = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(lr)
+        raw = self.FIXTURE.read_text()
+        lr.fetch = lambda unit: raw
+        run = lr.json_blocks(raw)[-1]
+        meta = run["result"]["meta"]
+        agent = meta["agentMeta"]
+        out = io.StringIO()
+        with unittest.mock.patch.object(sys, "argv", ["last-run.py", "paul"]), contextlib.redirect_stdout(out):
+            lr.main()
+        said = out.getvalue()
+        lines = {l.split()[0]: l for l in said.splitlines() if l.strip() and not l.startswith(" ")}
+        self.assertIn(agent["model"], lines["model"])
+        self.assertIn(f"tool calls   {meta['toolSummary']['calls']}", said)
+        self.assertIn(f"failures={meta['toolSummary']['failures']}", said)
+        self.assertIn(f"turns {agent['assistantTurns']}", said)
+        self.assertIn(f"${agent['costUsd']:.4f}", lines["cost"])
+        self.assertNotIn("payloads", lines["model"], "the whole result was printed as the model")
+

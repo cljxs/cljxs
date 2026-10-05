@@ -77,6 +77,26 @@ def dig(node, want, out, path=""):
             dig(v, want, out, f"{path}[{n}]")
 
 
+def run_view(d):
+    """The run as one flat dict, whichever shape openclaw printed it in.
+
+    openclaw 2026.9.2 wraps it - {"runId", "status", "summary", "result":
+    {"payloads", "meta"}} - with the completion, tool summary and closing
+    words in result.meta, and the model, usage, cost and turn count one level
+    further in, at meta.agentMeta. Read flat, Paul's first dry cycle
+    (2026-10-05) printed "model None", "tool calls None" and the whole result
+    on the model line, and no cost at all. A block already flat - the older
+    shape - comes back unchanged."""
+    res = d.get("result")
+    meta = res.get("meta") if isinstance(res, dict) else None
+    if not isinstance(meta, dict):
+        return d
+    flat = {**(meta.get("agentMeta") or {}), **meta}
+    flat.pop("agentMeta", None)
+    flat["result"] = d.get("status")
+    return flat
+
+
 def main():
     if len(sys.argv) < 2:
         print("usage: last-run.py <agent>    e.g. last-run.py ace", file=sys.stderr)
@@ -96,6 +116,7 @@ def main():
     # The LAST agent block, not the biggest. Picking the biggest showed the
     # previous night's cycle - it listed more games, so its JSON was longer -
     # while the run being investigated sat further down, unread.
+    blocks = [run_view(b) for b in blocks]
     agent_blocks = [b for b in blocks if "toolSummary" in b or "completion" in b]
     d = (agent_blocks or blocks)[-1]
 
@@ -127,7 +148,9 @@ def main():
                           ("input", u.get("input") or 0),
                           ("output", (u.get("output") or 0) * 4),  # weighted: output bills dearer
                           key=lambda t: t[1])[0]
-            print(f"cost         ${cost:.4f} this cycle   (~${cost * 60:.2f}/month at 2 wakes a day)")
+            # Per daily wake, not "at 2 a day": Paul wakes once, Belfort and
+            # Ace twice. The reader multiplies; a fixed guess was wrong for half.
+            print(f"cost         ${cost:.4f} this cycle   (~${cost * 30:.2f}/month for each daily wake)")
             print(f"             dominated by {biggest}")
 
     # How big is the toolset the agent was handed? This is the number that
