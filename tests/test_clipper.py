@@ -336,6 +336,7 @@ if __name__ == "__main__":
 
 from datetime import datetime, timezone  # noqa: E402
 import urllib.parse  # noqa: E402
+import urllib.request  # noqa: E402
 
 from clipper import report, trends  # noqa: E402
 
@@ -1095,10 +1096,24 @@ class RemoteFootage(EndToEnd):
         self.addCleanup(self.server.shutdown)
         self.url = f"https://127.0.0.1:{self.server.server_address[1]}/talk.mp4?rlkey=k&st=one&dl=0"
         old = os.environ.get("SSL_CERT_FILE")
-        os.environ["SSL_CERT_FILE"] = str(self.cert)
-        self.addCleanup(lambda: os.environ.__setitem__("SSL_CERT_FILE", old) if old
-                        else os.environ.pop("SSL_CERT_FILE", None))
+        self.trust(self.cert)
+        self.addCleanup(lambda: self.trust(old))
         self.cli("source", "add", "mike", "--rights", "permission", "--evidence", "campaign page")
+
+    @staticmethod
+    def trust(cert):
+        """Trust only this certificate for the rest of the process. From
+        Python 3.12 urllib's shared opener builds its TLS context once and
+        keeps it, so changing SSL_CERT_FILE alone left the previous test's
+        certificate in force: CI failed test_clipped_without_a_copy with
+        "self-signed certificate" straight after the untrusted-certificate
+        test. Each Clip command on the droplet is a fresh process, so this
+        is the tests' problem, not Clip's; dropping the opener fixes it."""
+        if cert:
+            os.environ["SSL_CERT_FILE"] = str(cert)
+        else:
+            os.environ.pop("SSL_CERT_FILE", None)
+        urllib.request.install_opener(None)
 
     def test_clipped_without_a_copy(self):
         code, said = self.cli("ingest", "mike", self.url, "--remote")
@@ -1122,7 +1137,7 @@ class RemoteFootage(EndToEnd):
         subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
                         "-subj", "/CN=someone-else", "-keyout", str(Path(self.tmp.name) / "k2.pem"),
                         "-out", str(other)], check=True, capture_output=True)
-        os.environ["SSL_CERT_FILE"] = str(other)
+        self.trust(other)
         # ffmpeg itself, not only the range check before it: ffmpeg checks no
         # certificate unless told to, and every clip is read through it.
         with self.assertRaises(media.MediaError):
