@@ -214,6 +214,12 @@ def cmd_providers(a):
 
 def cmd_variants(a):
     d = call(f"/catalog/blueprints/{a.blueprint_id}/print_providers/{a.provider_id}/variants.json")
+    if a.raw:
+        # Printify's own words for a variant, untouched: what a colour or a
+        # size actually looks like in the payload, captured before any code
+        # is written to read it. No credential is in a catalogue reply.
+        print(json.dumps((d.get("variants") or [])[:a.raw], indent=1))
+        return
     for v in (d.get("variants") or [])[:a.limit]:
         print(f"  {v['id']:>8}  {v.get('title')}")
     print(f"\n{len(d.get('variants') or [])} variant(s) total.")
@@ -1806,7 +1812,8 @@ def cmd_draft(a):
         cut = d / "design-cutout.png"
         print(f"cutting the background out of {design.name} so the print has "
               f"none ...")
-        r = subprocess.run([sys.executable, str(ko), str(design), str(cut)],
+        r = subprocess.run([sys.executable, str(ko), str(design), str(cut)]
+                           + (["--holes"] if is_garment(cat) else []),
                            capture_output=True, text=True)
         sys.stdout.write(r.stdout)
         if r.returncode != 0:
@@ -2060,7 +2067,9 @@ def main():
     p = sub.add_parser("providers"); p.add_argument("blueprint_id"); p.set_defaults(fn=cmd_providers)
 
     p = sub.add_parser("variants"); p.add_argument("blueprint_id"); p.add_argument("provider_id")
-    p.add_argument("--limit", type=int, default=25); p.set_defaults(fn=cmd_variants)
+    p.add_argument("--limit", type=int, default=25)
+    p.add_argument("--raw", type=int, default=0, help="print the first N variants as Printify sent them")
+    p.set_defaults(fn=cmd_variants)
 
     p = sub.add_parser("upload"); p.add_argument("file"); p.add_argument("--name")
     p.set_defaults(fn=cmd_upload)

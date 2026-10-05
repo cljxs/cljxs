@@ -17252,3 +17252,81 @@ class ARoundStickerKeepsItsArtInsideTheCut(unittest.TestCase):
     def test_draft_measures_it(self):
         body = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
         self.assertIn("round_reach(upload_from) if is_round(cat) else None", body)
+
+
+class LettersAndColoursOnAGarment(unittest.TestCase):
+    """2026-10-05, "Trailside Girls Hiking Tee": (1) the holes inside the
+    letters printed as background-coloured blobs - knockout floods from the
+    border and never reaches enclosed background; (2) the lettering was pale
+    cream and vanished on White, Ivory and Butter, because nothing told the
+    model which tee colours it was printing on."""
+
+    BG, RING, NEAR = (245, 240, 225), (40, 50, 60), (225, 220, 205)   # NEAR: 20 off - inside 32, outside 16
+
+    def letter_o(self):
+        """A 60x60 cream square: a dark ring (an O) whose hole is background,
+        with a dot at its centre in a shade close to the background - detail
+        to keep, which only the tight match spares."""
+        w = h = 60
+        k = load("knockout_holes", "knockout.py")
+        px = bytearray()
+        for y in range(h):
+            for x in range(w):
+                d = (x - 30) ** 2 + (y - 26) ** 2
+                c = self.RING if 100 <= d <= 400 else (self.NEAR if d <= 4 else self.BG)
+                px += bytes(c) + b"\xff"
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        src = Path(tmp.name) / "o.png"
+        k.encode(src, w, h, px)
+        return k, src, Path(tmp.name)
+
+    def cut(self, *flags):
+        k, src, d = self.letter_o()
+        out = d / "cut.png"
+        # --keep-specks: the despeckle pass would take the small dot for a
+        # speck; this measures the hole pass alone.
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knockout.py"), str(src), str(out), *flags,
+                            "--keep-specks"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        w, h, px = k.decode(out)
+        return w, px
+
+    def alpha_at(self, w, px, x, y):
+        return px[(y * w + x) * 4 + 3]
+
+    def test_a_garment_cut_clears_the_hole_in_the_o(self):
+        # trimmed output: find the hole as the centre of the ring's bounding box
+        w, px = self.cut("--holes")
+        opaque = [(i % w, i // w) for i in range(len(px) // 4) if px[i * 4 + 3]]
+        xs, ys = [p[0] for p in opaque], [p[1] for p in opaque]
+        cx, cy = (min(xs) + max(xs)) // 2, (min(ys) + max(ys)) // 2
+        self.assertEqual(self.alpha_at(w, px, cx, cy - 6), 0, "the hole is transparent")
+        self.assertNotEqual(self.alpha_at(w, px, cx, cy), 0, "the near-background dot survives")
+
+    def test_without_holes_the_hole_is_kept(self):
+        w, px = self.cut()
+        opaque = [(i % w, i // w) for i in range(len(px) // 4) if px[i * 4 + 3]]
+        xs, ys = [p[0] for p in opaque], [p[1] for p in opaque]
+        self.assertNotEqual(self.alpha_at(w, px, (min(xs) + max(xs)) // 2, (min(ys) + max(ys)) // 2 - 6), 0,
+                            "a sticker keeps its enclosed whites")
+
+    def test_draft_asks_for_holes_on_garments(self):
+        body = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn('(["--holes"] if is_garment(cat) else [])', body)
+
+    def test_the_model_is_told_the_tee_colours(self):
+        ea = load("emily_assets_ink", "emily-assets.py")
+        ep = load("emily_printify_ink", "emily-printify.py")
+        tee = {"variant_titles": ["S / White", "M / White", "S / Ivory", "S / Butter", "S / Moss"]}
+        ea._catalogue_entry = lambda product: (ep, tee)
+        said = ea.directed("a trail marker", "tshirt")
+        self.assertIn("garments in these colours: White, Ivory, Butter, Moss", said)
+        self.assertIn("No white, cream, beige or pale lettering", said)
+        ea._catalogue_entry = lambda product: (ep, {"variant_titles": ["11oz", "15oz"]})
+        self.assertNotIn("garments in these colours", ea.directed("x", "mug"))
+
+    def test_the_raw_variants_dump_exists(self):
+        src = (SCRIPTS / "emily-printify.py").read_text()
+        self.assertIn('p.add_argument("--raw"', src)

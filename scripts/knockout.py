@@ -469,6 +469,28 @@ def all_over_verdict(w, h, px):
     return True, facts, None
 
 
+def holes(w, h, px, bg, tolerance=DEFAULT_TOLERANCE):
+    """Clear background left ENCLOSED by the art. Returns pixels cleared.
+
+    knockout() floods inward from the border, so background it cannot reach -
+    the holes in O, A, D and R, the gaps between flower stems - stays opaque.
+    On a garment that prints the background colour as blobs inside the
+    letters: "WILD & FREE ON THE TRAIL" (2026-10-05) on eight tee colours. Only
+    the closest matches go - half the flood's tolerance - so lettering in a
+    shade near the background is not eaten with it.
+    """
+    br, bg_, bb = bg
+    tight = max(4, tolerance // 2)
+    cleared = 0
+    for i in range(w * h):
+        j = i * 4
+        if px[j + 3] and abs(px[j] - br) <= tight and abs(px[j + 1] - bg_) <= tight \
+                and abs(px[j + 2] - bb) <= tight:
+            px[j + 3] = 0
+            cleared += 1
+    return cleared
+
+
 TRIM_MARGIN_PCT = 2.0       # of the art's own larger side, kept around it
 
 
@@ -502,7 +524,7 @@ def trim(w, h, px, margin_pct=TRIM_MARGIN_PCT):
 
 def main():
     if len(sys.argv) < 3:
-        print("usage: knockout.py <in.png> <out.png> [--tolerance N] [--keep-specks]\n"
+        print("usage: knockout.py <in.png> <out.png> [--tolerance N] [--keep-specks] [--holes]\n"
               "       knockout.py <in.png> --check [--all-over]", file=sys.stderr)
         return 2
     src = sys.argv[1]
@@ -548,6 +570,13 @@ def main():
     # Only after the refusals above: despeckling a file that was never going
     # to be written is work for nothing, and despeckling one whose background
     # was not found would be measuring specks against noise.
+    # A garment prints whatever is opaque, so background the flood could not
+    # reach goes too. Not on a sticker: the white inside a badge can be the
+    # design, and the vinyl under it is white anyway.
+    if "--holes" in sys.argv:
+        n = holes(w, h, px, background_colour(w, h, px), tol)
+        print(f"holes: cleared {n:,} px of background enclosed by the art")
+
     if "--keep-specks" not in sys.argv:
         wiped, parts, why = despeckle(w, h, px)
         print(f"despeckle: {why}")

@@ -392,14 +392,40 @@ def _size_of(path):
         return None
 
 
+def ink_direction(product):
+    """The garment colours this design prints on, and what that asks of it.
+
+    "WILD & FREE ON THE TRAIL" (2026-10-05) was drawn in pale cream and
+    printed on eight tee colours, five of them light: the words vanished on
+    White, Ivory and Butter. Nothing told the model what it was printing on.
+    The colours are the catalogue's own - the ones the owner picked - read
+    from the variant titles. Empty for anything that is not worn."""
+    mod, entry = _catalogue_entry(product)
+    if not entry or not mod.is_garment(entry):
+        return ""
+    colours = []
+    for t in entry.get("variant_titles") or []:
+        c = mod.colour_of(t)
+        if c and c not in colours:
+            colours.append(c)
+    if not colours:
+        return ""
+    return (f"This is printed on garments in these colours: {', '.join(colours)}. "
+            f"Every element - above all any words - must be clearly readable on "
+            f"every one of them: use dark, saturated ink with strong contrast. "
+            f"No white, cream, beige or pale lettering.")
+
+
 def directed(prompt, product=""):
     """The art direction on the end, once, however the prompt already reads.
 
     Which direction depends on the product, because an all-over print wants
     the opposite of a plain background.
     """
+    ink = ink_direction(product)
     return (f"{prompt.strip()}\n\n"
-            f"{ALL_OVER_DIRECTION if all_over(product) else PRINT_DIRECTION}")
+            f"{ALL_OVER_DIRECTION if all_over(product) else PRINT_DIRECTION}"
+            + (f"\n\n{ink}" if ink else ""))
 
 
 def generate(path, prompt, key, model=None, product="", direction=None,
