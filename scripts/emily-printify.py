@@ -1970,8 +1970,14 @@ def cmd_options(a):
     ("color": "Black", seen 2026-10-05), so a contrast check needs the
     product's own payload - captured here before anything is written to
     read it. No credential is in it."""
-    d = _resolve_build(a.build_dir)
-    build = json.loads((d / "build.json").read_text()) if d and (d / "build.json").is_file() else {}
+    # A Printify product id (24 hex characters, the end of the product's URL)
+    # works too: a build's own draft can have been deleted by hand, and the
+    # first one tried on the droplet answered 404.
+    if re.fullmatch(r"[0-9a-f]{24}", a.build_dir):
+        build = {"printify_product_id": a.build_dir}
+    else:
+        d = _resolve_build(a.build_dir)
+        build = json.loads((d / "build.json").read_text()) if d and (d / "build.json").is_file() else {}
     pid = build.get("printify_product_id")
     shop = build.get("printify_shop_id") or os.environ.get("PRINTIFY_SHOP_ID")
     if not pid or not shop:
