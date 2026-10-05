@@ -736,3 +736,37 @@ class TheHeaderKeepsTheHardRules(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PaulSpendsFromHisOwnKey(PaulCase):
+    """Owner, 2026-10-05: Paul gets his own OpenRouter key. A Sonnet-class
+    cycle is $2-4 and Emily's images need $1.00 of room on the shared key, so
+    Paul on the shared $1.50 day would block them. With PAUL_OPENROUTER_KEY
+    saved, his budget is that key's limit_remaining (OpenRouter's own field,
+    read by preflight.key_status); without it, the shared allowance."""
+
+    def setUp(self):
+        super().setUp()
+        self.real_budget_left = self._saved[2]
+        self._old_load = paul._load
+        self.addCleanup(setattr, paul, "_load", self._old_load)
+        self.asked = []
+
+        def fake_load(name, filename):
+            if filename == "preflight.py":
+                return types.SimpleNamespace(key_status=lambda key, timeout=20:
+                                             self.asked.append(key) or {"limit": 5.0, "limit_remaining": 3.214})
+            if filename == "budget.py":
+                return types.SimpleNamespace(read=lambda: {"ai_left_today": 0.42})
+            return self._old_load(name, filename)
+        paul._load = fake_load
+
+    def test_his_own_key_is_what_counts(self):
+        paul.A("state").mkdir(parents=True, exist_ok=True)
+        paul.A("state", "credentials.env").write_text("PAUL_OPENROUTER_KEY=test-not-a-key\n")
+        self.assertEqual(self.real_budget_left(), 3.21)
+        self.assertEqual(self.asked, ["test-not-a-key"])
+
+    def test_without_it_the_shared_allowance(self):
+        self.assertEqual(self.real_budget_left(), 0.42)
+        self.assertEqual(self.asked, [])

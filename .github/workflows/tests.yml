@@ -27,6 +27,19 @@ jobs:
       - name: every script compiles
         run: python3 -m compileall -q scripts/
 
+      # The Deck (mission-control-api) is Node, and its tests load its
+      # packages - better-sqlite3 among them. Nothing installed them, so 12
+      # Deck tests failed on every push and CI was red for reasons unrelated
+      # to the change being tested; a red that is always red stops being read.
+      # --ignore-scripts: the same install the suite is verified with locally.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: the Deck's packages
+        working-directory: mission-control-api
+        run: npm ci --ignore-scripts
+
       - name: tests
         run: python3 -m unittest discover -s tests -v
 

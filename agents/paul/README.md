@@ -28,9 +28,15 @@ split as every agent here, for the same reasons (CLAUDE.md).
 
        python3 /root/ecosystem/scripts/paul.py sender --area "City, ST" --name "Your Name" --studio "Studio Name" --email you@example.com --phone "555 555 5555" --address "PO Box 1, City, ST 00000"
 
-3. The model, the same OpenRouter key the others use, and a gateway restart:
+3. The model, **Paul's own OpenRouter key**, and a gateway restart. Make a new
+   key at openrouter.ai/settings/keys just for Paul, with its own daily limit:
+   his cycles then never touch the shared key's day, where Emily's images need
+   $1.00 of room. The same key goes in twice - once for the model calls, once
+   (as PAUL_OPENROUTER_KEY) so his budget check reads what is left on it:
 
        /root/ecosystem/scripts/set-agent-model.sh paul openrouter/anthropic/claude-sonnet-5.5 --apply && openclaw models auth paste-api-key --provider openrouter --agent paul && openclaw gateway restart
+
+       python3 /root/ecosystem/scripts/set-credential.py paul PAUL_OPENROUTER_KEY
 
 4. A browser for screenshots (Google's .deb - the snap Chromium cannot write
    under /root):

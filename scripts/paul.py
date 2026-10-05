@@ -386,9 +386,19 @@ def min_left():
 
 
 def budget_left():
-    """Today's AI allowance left, from budget.py, or None when unreadable.
-    budget.py owns the reading; unreadable is not "over" (its rule too)."""
+    """Today's AI allowance left, or None when unreadable - unreadable is not
+    "over" (budget.py's rule too).
+
+    Paul has his own OpenRouter key (owner, 2026-10-05), so his cycles cannot
+    eat the shared key's day - Emily's images need $1.00 of room on it. When
+    PAUL_OPENROUTER_KEY is in his credentials.env, what is left is what
+    OpenRouter says is left on THAT key (limit_remaining, read by preflight's
+    one reader). Without it, the shared allowance from budget.py, as before."""
+    own = (credentials().get("PAUL_OPENROUTER_KEY") or "").strip()
     try:
+        if own:
+            left = _load("preflight", "preflight.py").key_status(own).get("limit_remaining")
+            return round(float(left), 2) if isinstance(left, (int, float)) else None
         return _load("budget", "budget.py").read().get("ai_left_today")
     except Exception:
         return None
