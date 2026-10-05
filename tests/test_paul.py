@@ -778,3 +778,21 @@ class PaulSpendsFromHisOwnKey(PaulCase):
         paul.A("state").mkdir(parents=True, exist_ok=True)
         paul.A("state", "credentials.env").write_text("PAUL_OPENROUTER_KEY=test-not-a-key\n")
         self.assertEqual(paul.budget_source(), "Paul's own key")
+
+
+class PreflightNamesTheSearchProvider(PaulCase):
+    """Bug, owner's droplet 2026-10-05: once Brave was configured, preflight
+    asked openclaw for tools.web.search - now an object - and printed its
+    first line, "{". It must ask for the provider, a single value."""
+
+    def test_the_line_names_a_provider(self):
+        asked = []
+        old = paul._openclaw_get
+        self.addCleanup(setattr, paul, "_openclaw_get", old)
+        paul._openclaw_get = lambda key: asked.append(key) or (
+            "brave" if key.endswith(".provider") else "{")
+        paul.vercel_token = lambda: None
+        _, out = self.run_quiet(paul.cmd_preflight, None)
+        line = next(l for l in out.splitlines() if "web search" in l)
+        self.assertIn("brave", line)
+        self.assertNotIn("tools.web.search", asked)

@@ -1239,9 +1239,12 @@ def cmd_preflight(a):
                 print("              !! Hobby is for personal, non-commercial use. Pitching sites")
                 print("                 for paid work is commercial - your call (README, 'Hosting').")
 
-    print(f"  web search  openclaw says: {_openclaw_get('tools.web.search')}")
-    print("              (Paul needs a web search tool to find businesses; if this shows it")
-    print("               unset, send Claude this line)")
+    # The provider, not tools.web.search itself: once anything under it is
+    # set, that is an object, and its first line is "{" (owner's droplet,
+    # 2026-10-05, after openclaw configure --section web). One scalar says it.
+    print(f"  web search  provider: {_openclaw_get('tools.web.search.provider')}")
+    print("              (Paul needs a web search tool to find businesses - this should name")
+    print("               one, e.g. brave; if it says unset, send Claude this line)")
     # Paul must not heartbeat - it is woken by its timer and nothing else.
     # Not set from here: adding a heartbeat block to one agent can change which
     # agents heartbeat at all, which would be touching the others.
