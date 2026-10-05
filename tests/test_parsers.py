@@ -17330,3 +17330,46 @@ class LettersAndColoursOnAGarment(unittest.TestCase):
     def test_the_raw_variants_dump_exists(self):
         src = (SCRIPTS / "emily-printify.py").read_text()
         self.assertIn('p.add_argument("--raw"', src)
+
+
+class OnlyColoursTheDesignCanBeReadOn(unittest.TestCase):
+    """2026-10-05: pale cream lettering ("WILD & FREE ON THE TRAIL") was
+    offered on White, Ivory and Butter, where it vanished. Printify's product
+    payload carries each colour's code (fixture: captured on the droplet), so
+    the draft offers only colours where little of the design's ink is lost."""
+
+    def setUp(self):
+        self.ep = load("emily_printify_colours", "emily-printify.py")
+        self.product = json.loads((ROOT / "tests/fixtures/printify-product-options-cc1717.json").read_text())
+        self.hexes = self.ep.colour_hex_from(self.product)
+
+    def ink(self, cream_share):
+        """A hiking-tee-like design: pale cream lettering and a dark signpost."""
+        cream, dark = self.ep.luminance("#EFE6CF"), self.ep.luminance("#2E2B2A")
+        n = 200
+        return [cream] * int(n * cream_share) + [dark] * (n - int(n * cream_share))
+
+    def test_the_real_payload_is_read(self):
+        self.assertEqual(self.hexes["White"], "#ffffff")
+        self.assertEqual(self.hexes["Ivory"], "#FFF7E7")
+        self.assertEqual(self.hexes["Black"], "#000000")
+
+    def test_pale_lettering_drops_the_pale_shirts_and_dark_ink_the_dark_ones(self):
+        titles = {1: "S / White", 2: "S / Ivory", 3: "S / Butter", 4: "S / Blue Jean", 5: "S / Black", 6: "M / White"}
+        keep, dropped = self.ep.readable(list(titles), titles, self.hexes, self.ink(0.3))
+        self.assertEqual(set(dropped), {"White", "Ivory", "Butter", "Black"})
+        self.assertEqual(keep, [4], "Blue Jean reads both the cream and the dark")
+
+    def test_an_unknown_colour_is_kept_and_all_bad_keeps_the_best(self):
+        titles = {1: "S / White", 2: "S / Chalky Mint"}
+        keep, _ = self.ep.readable(list(titles), titles, self.hexes, self.ink(0.5))
+        self.assertIn(2, keep, "no code known is not unreadable")
+        titles = {1: "S / White", 2: "S / Ivory"}
+        keep, dropped = self.ep.readable(list(titles), titles, self.hexes, self.ink(1.0))
+        self.assertEqual(len(keep), 1, "a draft needs a variant; the least-bad is kept")
+
+    def test_draft_filters_and_learns(self):
+        body = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_draft(", 1)[1].split("\ndef cmd_", 1)[0]
+        self.assertIn('readable(variant_ids, titles, cat["colour_hex"], ink)', body)
+        self.assertIn('whole[cat_key]["colour_hex"] = hexes', body)
+        self.assertIn("ink_sample(upload_from) if is_garment(cat) else None", body)

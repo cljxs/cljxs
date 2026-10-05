@@ -778,6 +778,89 @@ def layout_images(image_id, image, area, folded):
             {"id": image_id, "x": 0.5, "y": 0.75, "scale": sc, "angle": 180}]
 
 
+# WHICH SHIRT COLOURS A DESIGN CAN BE READ ON.
+#
+# "WILD & FREE ON THE TRAIL" (2026-10-05) was pale cream lettering offered on
+# eight tee colours; on White, Ivory and Butter the words were gone, and a
+# dark signpost all but vanished on the darkest. Printify's own product
+# payload gives every colour a code - {"title": "Ivory", "colors": ["#FFF7E7"]}
+# under the option whose type is "color" (captured on the droplet that day) -
+# so the check is arithmetic: how much of the design's ink is within a
+# hair's contrast of the shirt. Past INVISIBLE_MAX of it, that colour is not
+# offered. Both numbers are judgement calls, believed, to be tuned on real
+# drafts.
+INVISIBLE_CONTRAST = 1.5     # WCAG contrast ratio below which ink is lost
+INVISIBLE_MAX = 0.12         # share of the design's ink that may be lost
+
+
+def luminance(colour):
+    """sRGB relative luminance of '#rrggbb' or an (r, g, b) tuple."""
+    if isinstance(colour, str):
+        c = colour.lstrip("#")
+        colour = tuple(int(c[i:i + 2], 16) for i in (0, 2, 4))
+    lin = [(v / 255.0) / 12.92 if v / 255.0 <= 0.04045 else ((v / 255.0 + 0.055) / 1.055) ** 2.4
+           for v in colour[:3]]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def contrast(l1, l2):
+    hi, lo = max(l1, l2), min(l1, l2)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def ink_sample(path, step=3):
+    """Luminance of every `step`th visible pixel of a cut-out, or None."""
+    try:
+        w, h, px = _knockout().decode(path)
+    except Exception:
+        return None
+    out = []
+    for y in range(0, h, step):
+        row = y * w * 4
+        for x in range(0, w, step):
+            j = row + x * 4
+            if px[j + 3] > 127:
+                out.append(luminance((px[j], px[j + 1], px[j + 2])))
+    return out or None
+
+
+def colour_hex_from(product):
+    """{colour title: '#rrggbb'} from a Printify product's option payload."""
+    out = {}
+    for opt in (product or {}).get("options") or []:
+        if opt.get("type") != "color":
+            continue
+        for v in opt.get("values") or []:
+            codes = v.get("colors") or []
+            if v.get("title") and codes:
+                out[v["title"]] = codes[0]
+    return out
+
+
+def lost_share(ink, shirt_hex):
+    """The share of a design's ink that would all but vanish on this shirt."""
+    shirt = luminance(shirt_hex)
+    return sum(1 for l in ink if contrast(l, shirt) < INVISIBLE_CONTRAST) / len(ink)
+
+
+def readable(variant_ids, titles, hex_by_colour, ink):
+    """(variant ids to offer, {colour: share lost} dropped).
+
+    A colour with no known code is kept - unknown is not unreadable. If every
+    colour fails, the one losing least is kept, and the caller says so: a
+    draft with no variants cannot be created, and the owner should see it."""
+    share = {}
+    for v in variant_ids:
+        c = colour_of(titles.get(v))
+        if c and c in hex_by_colour and c not in share:
+            share[c] = lost_share(ink, hex_by_colour[c])
+    bad = {c for c, s in share.items() if s > INVISIBLE_MAX}
+    if share and bad == set(share):
+        bad.discard(min(share, key=share.get))
+    keep = [v for v in variant_ids if colour_of(titles.get(v)) not in bad]
+    return keep, {c: round(share[c], 2) for c in sorted(bad)}
+
+
 def is_garment(entry):
     """Is this something worn - do its variants come in S, M, L?"""
     return any(size_of(t) for t in (entry or {}).get("variant_titles") or [])
@@ -1840,6 +1923,15 @@ def cmd_draft(a):
 
     variant_ids = cat["variant_ids"]
 
+    # Only the colours this design can be read on. The codes are learned from
+    # the first draft of each product type (below) and kept in the catalogue.
+    ink = ink_sample(upload_from) if is_garment(cat) else None
+    titles = dict(zip(cat["variant_ids"], cat.get("variant_titles") or []))
+    if ink and cat.get("colour_hex"):
+        variant_ids, dropped = readable(variant_ids, titles, cat["colour_hex"], ink)
+        for c, sh in dropped.items():
+            print(f"  not offering {c}: {sh:.0%} of the design would all but vanish on it")
+
     # Prices are the owner's (2026-10-02: "I will set the prices myself on
     # printify, Emily doesn't need to worry about it"). Per-variant prices if
     # they were saved for this product type; otherwise a placeholder, because
@@ -1864,34 +1956,62 @@ def cmd_draft(a):
         except (Exception, SystemExit) as exc:
             print(f"note: print area not read ({type(exc).__name__}) - placing the "
                   f"art centred at full width")
-    try:
-        areas = print_areas(image_id, _knockout().size(upload_from),
-                            variant_ids, cat, measured,
-                            round_reach(upload_from) if is_round(cat) else None)
-    except KeyError as exc:
-        print(f"variant {exc} has no recorded print size. Re-measure:\n"
-              f"  emily-printify.py layout --product {cat_key}", file=sys.stderr)
-        sys.exit(2)
-    for area in areas:
-        for img in area["placeholders"][0]["images"]:
-            print(f"  placing at y={img['y']} scale={img['scale']} "
-                  f"angle={img['angle']}  ({len(area['variant_ids'])} variant(s))")
+    def create(ids):
+        try:
+            areas = print_areas(image_id, _knockout().size(upload_from),
+                                ids, cat, measured,
+                                round_reach(upload_from) if is_round(cat) else None)
+        except KeyError as exc:
+            print(f"variant {exc} has no recorded print size. Re-measure:\n"
+                  f"  emily-printify.py layout --product {cat_key}", file=sys.stderr)
+            sys.exit(2)
+        for area in areas:
+            for img in area["placeholders"][0]["images"]:
+                print(f"  placing at y={img['y']} scale={img['scale']} "
+                      f"angle={img['angle']}  ({len(area['variant_ids'])} variant(s))")
+        spec = {
+            "title": str(listing.get("title") or d.name)[:140],
+            "description": str(listing.get("description") or ""),
+            "tags": [str(t)[:20] for t in (listing.get("tags") or [])][:13],
+            "blueprint_id": cat["blueprint_id"],
+            "print_provider_id": cat["provider_id"],
+            "variants": [{"id": v, "price": price_of[v], "is_enabled": True} for v in ids],
+            "print_areas": areas,
+        }
+        lo, hi = min(price_of[v] for v in ids), max(price_of[v] for v in ids)
+        span = f"${lo/100:.2f}" + (f"-${hi/100:.2f}" if hi != lo else "")
+        print(f"creating the product ({len(ids)} variants at {span}) ...")
+        return call(f"/shops/{shop_id}/products.json", spec)
 
-    spec = {
-        "title": str(listing.get("title") or d.name)[:140],
-        "description": str(listing.get("description") or ""),
-        "tags": [str(t)[:20] for t in (listing.get("tags") or [])][:13],
-        "blueprint_id": cat["blueprint_id"],
-        "print_provider_id": cat["provider_id"],
-        "variants": [{"id": v, "price": price_of[v], "is_enabled": True} for v in variant_ids],
-        "print_areas": areas,
-    }
-
-    lo, hi = min(price_of.values()), max(price_of.values())
-    span = f"${lo/100:.2f}" + (f"-${hi/100:.2f}" if hi != lo else "")
-    print(f"creating the product ({len(variant_ids)} variants at {span}) ...")
-    res = call(f"/shops/{shop_id}/products.json", spec)
+    res = create(variant_ids)
     pid = res.get("id")
+
+    # The first draft of a product type teaches the catalogue its colour
+    # codes. If some of this draft's colours turn out unreadable, it is made
+    # again without them - once, on that first draft only.
+    if ink and pid and not cat.get("colour_hex"):
+        try:
+            hexes = colour_hex_from(call(f"/shops/{shop_id}/products/{pid}.json", soft=True))
+        except ApiError:
+            hexes = {}
+        if hexes:
+            whole = read_catalog()
+            if cat_key in whole:
+                whole[cat_key]["colour_hex"] = hexes
+                write_catalog(whole)
+            keep, dropped = readable(variant_ids, titles, hexes, ink)
+            if dropped:
+                for c, sh in dropped.items():
+                    print(f"  not offering {c}: {sh:.0%} of the design would all but vanish on it")
+                try:
+                    call(f"/shops/{shop_id}/products/{pid}.json", method="DELETE", soft=True)
+                    variant_ids = keep
+                    res = create(variant_ids)
+                    pid = res.get("id")
+                except ApiError as exc:
+                    print(f"  could not remake it without them ({exc}) - the draft "
+                          f"offers every colour; switch those off in Printify")
+    lo, hi = min(price_of[v] for v in variant_ids), max(price_of[v] for v in variant_ids)
     url = f"https://printify.com/app/store/products/{pid}" if pid else None
 
     # Record it where the gallery and the verifier will see it.
