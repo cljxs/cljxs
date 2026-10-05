@@ -770,3 +770,11 @@ class PaulSpendsFromHisOwnKey(PaulCase):
     def test_without_it_the_shared_allowance(self):
         self.assertEqual(self.real_budget_left(), 0.42)
         self.assertEqual(self.asked, [])
+
+    def test_preflight_says_which_key_it_read(self):
+        """Bug: preflight printed "$0.67 of today's AI allowance left" either
+        way, so the owner could not tell whether his new key was saved."""
+        self.assertIn("not saved", paul.budget_source())
+        paul.A("state").mkdir(parents=True, exist_ok=True)
+        paul.A("state", "credentials.env").write_text("PAUL_OPENROUTER_KEY=test-not-a-key\n")
+        self.assertEqual(paul.budget_source(), "Paul's own key")

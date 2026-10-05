@@ -385,6 +385,20 @@ def min_left():
     return v
 
 
+def own_key():
+    """Paul's own OpenRouter key from his credentials.env, or "" - the one
+    place that decides which key his budget is read from."""
+    return (credentials().get("PAUL_OPENROUTER_KEY") or "").strip()
+
+
+def budget_source():
+    """Which allowance budget_left() read, for preflight to say. Both read
+    $0.67 or so on a quiet day, and the owner could not tell from preflight
+    whether his new key had been saved (2026-10-05)."""
+    return ("Paul's own key" if own_key()
+            else "the shared key - PAUL_OPENROUTER_KEY not saved")
+
+
 def budget_left():
     """Today's AI allowance left, or None when unreadable - unreadable is not
     "over" (budget.py's rule too).
@@ -394,7 +408,7 @@ def budget_left():
     PAUL_OPENROUTER_KEY is in his credentials.env, what is left is what
     OpenRouter says is left on THAT key (limit_remaining, read by preflight's
     one reader). Without it, the shared allowance from budget.py, as before."""
-    own = (credentials().get("PAUL_OPENROUTER_KEY") or "").strip()
+    own = own_key()
     try:
         if own:
             left = _load("preflight", "preflight.py").key_status(own).get("limit_remaining")
@@ -1240,7 +1254,7 @@ def cmd_preflight(a):
     if left is None:
         print(f"  budget      unreadable - a cycle starts anyway (budget.py's rule)")
     else:
-        print(f"  budget      ${max(left, 0):.2f} of today's AI allowance left; "
+        print(f"  budget      ${max(left, 0):.2f} left on {budget_source()}; "
               f"a cycle needs ${need:.2f} to start")
 
     live = read_json(A("state", "live.json"))
