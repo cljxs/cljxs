@@ -41,7 +41,22 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: tests
-        run: python3 -m unittest discover -s tests -v
+        shell: bash
+        run: python3 -m unittest discover -s tests -v 2>&1 | tee test-output.txt
+
+      # The job log lives on a host the sessions that fix this code cannot
+      # reach; annotations come back through the API. So a red run names its
+      # failing tests and their errors here, instead of only "exit code 1".
+      - name: name the failures
+        if: failure()
+        shell: bash
+        run: |
+          grep -E "^(FAIL|ERROR): " test-output.txt | head -20 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+          grep -E "^[A-Za-z]*(Error|Exception): " test-output.txt | sort | uniq -c | head -15 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
 
       # Fixtures are captured from a live droplet and committed, and a
       # credentials file is one bad `git add -A` from being tracked. Either
