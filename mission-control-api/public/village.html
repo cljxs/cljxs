@@ -310,6 +310,7 @@
 <div id="boot">Loading the village…</div>
 
 <script src="/vendor/phaser.min.js"></script>
+<script src="/shared/md.js"></script>
 <script>
 /* ------------------------------------------------------------------ *
  * Pixel Village — a walkable front-end for the agent ecosystem.
@@ -1875,6 +1876,9 @@ function openPanel(name) {
   if (name === PROPS_DOOR) return openPropsPanel();
   if (name === HALL_DOOR) return openHallPanel();
   if (name === CLIP_DOOR) return openClipPanel();
+  // Belfort's house is his trading desk: the Markets page, the same one
+  // the Deck opens as a tab (owner, 2026-10-06).
+  if (name === 'belfort') return openMarkets();
   const a = (DATA.agents || []).find(x => x.name === name);
   if (!a) return;
   openAgent = name;
@@ -1922,20 +1926,12 @@ function openPanel(name) {
       <div id="emilyBuilds"><div class="muted">loading…</div></div>` : ''}
     ${a.name === 'ace' ? `<div id="aceLedger"><div class="muted">loading the ledger…</div></div>` : ''}`;
 
-  // Belfort's house has two pages: his own book, and the no-AI shadow book -
-  // a separate $10,000 that runs his rules without his judgement.
-  const isBelfort = a.name === 'belfort';
   $('card').innerHTML = `
     <h2>${esc(a.name)}</h2>
     <div class="sub">${esc(a.status)}${a.mode ? ' · ' + esc(a.mode) : ''} ·
       last run ${ago(a.last_run_age_min)} · ${a.runs ?? 0} cycles${
       a.data_age_min !== null ? ' · data ' + ago(a.data_age_min) : ''}</div>
-    ${isBelfort ? `<div id="bfTabs" class="ptabs" style="margin:6px 0 12px">
-        <button class="ptab on" data-page="ai">Belfort (AI)</button>
-        <button class="ptab" data-page="shadow">No-AI book</button></div>
-      <div id="bfAi">${main}<div class="sect">How he is doing</div>
-        <div id="bfAiStats"><div class="muted">loading…</div></div></div>
-      <div id="bfShadow" style="display:none"><div class="muted">loading…</div></div>` : main}
+    ${main}
     <button id="close">Close</button>`;
   $('card').className = isAce ? 'wide' : '';
   $('panel').style.display = 'flex';
@@ -1943,95 +1939,8 @@ function openPanel(name) {
   if (a.name === 'scout') loadScoutIdeas();
   if (a.name === 'emily') { loadEmilyShop(); loadEmilyBuilds(); }
   if (a.name === 'ace') loadAceLedger();
-  if (isBelfort) {
-    $('bfTabs').onclick = e => {
-      const b = e.target.closest('[data-page]');
-      if (!b) return;
-      document.querySelectorAll('#bfTabs .ptab').forEach(x => x.classList.toggle('on', x === b));
-      $('bfAi').style.display = b.dataset.page === 'ai' ? '' : 'none';
-      $('bfShadow').style.display = b.dataset.page === 'shadow' ? '' : 'none';
-    };
-    loadBelfortBooks();
-  }
 }
 
-/* ---------------- Belfort's two books: his, and the no-AI shadow book ----------------
- * Every number comes from belfort-trade.py stats --json; nothing is worked
- * out here. The shadow book's $10,000 is its own account: it is shown only on
- * its own page and is part of no total on the Deck. */
-
-async function loadBelfortBooks(){
-  let j;
-  try { j = await (await fetch('/api/belfort/books', { cache: 'no-store' })).json(); }
-  catch (e) { j = { error: e.message }; }
-  if (openAgent !== 'belfort' || !$('bfShadow')) return;
-  if (j.error) {
-    const msg = `<div class="muted">Could not read the books: ${esc(j.error)}</div>`;
-    $('bfAiStats').innerHTML = msg; $('bfShadow').innerHTML = msg;
-    return;
-  }
-  const books = j.books || [];
-  const mine = books.find(b => b.book === 'belfort'), shadow = books.find(b => b.book === 'shadow');
-  const regime = `<div class="muted" style="margin:4px 0 10px">Market regime: <b>${esc(j.regime)}</b> — ${esc(j.regime_why)}</div>`;
-  $('bfAiStats').innerHTML = regime + (mine ? bookStats(mine) : '');
-  if (!shadow) {
-    $('bfShadow').innerHTML = `<div class="verdict">The no-AI book starts at Belfort's next wake-up (9:35 AM or
-      3:55 PM Eastern, weekdays): a separate $10,000 that follows his rules without his judgement.</div>`;
-    return;
-  }
-  const d = j.same_days;
-  const pnl = shadow.value - shadow.starting_cash;
-  $('bfShadow').innerHTML = `
-    <div class="verdict">A <b>separate $10,000 paper account</b>, not Belfort's money and not in any total on the
-      Deck. It follows his limits, the market check and his sell rules exactly, but buys the top-ranked candidate
-      instead of judging the news — so it shows whether his judgement adds anything.</div>
-    <div class="grid">
-      <div class="stat"><div class="l">Value</div><div class="v num">${money(shadow.value)}</div></div>
-      <div class="stat"><div class="l">P&amp;L</div><div class="v num"><span class="${cls(pnl)}">${money(pnl)}</span></div>
-        <div class="l ${cls(shadow.return_pct)}">${pctTxt(shadow.return_pct)}</div></div>
-      <div class="stat"><div class="l">Cash</div><div class="v num">${money(shadow.cash)}</div></div>
-      <div class="stat"><div class="l">Positions</div><div class="v num">${shadow.positions.length}</div></div>
-    </div>
-    ${d ? `<div class="sect">Same days, side by side</div>
-      <div class="w" style="margin-bottom:12px">Since ${esc(d.since)}: <b>Belfort ${d.belfort_pct === null ? '— (from his next wake-up)' : pctTxt(d.belfort_pct)}</b>
-        · <b>No-AI ${pctTxt(d.shadow_pct)}</b> · QQQ ${d.qqq_pct === null ? '—' : pctTxt(d.qqq_pct)}</div>` : ''}
-    ${bookPositions(shadow)}
-    <div class="sect">How it is doing</div>${regime}${bookStats(shadow)}
-    ${bookTrades(shadow)}`;
-}
-
-function bookPositions(b){
-  if (!b.positions.length) return `<div class="muted" style="margin:8px 0">No open positions.</div>`;
-  return `<table><thead><tr><th>Sym</th><th>Sh</th><th>Entry</th><th>Last</th><th>P&L</th><th>Stop</th></tr></thead><tbody>${
-    b.positions.map(p => `<tr><td><b>${esc(p.symbol)}</b></td><td class="num">${p.shares}</td>
-      <td class="num">${money(p.entry)}</td><td class="num">${money(p.last)}</td>
-      <td class="num ${cls(p.pnl_pct)}">${pctTxt(p.pnl_pct)}</td>
-      <td class="num">${p.stop === null || p.stop === undefined ? '—' : money(p.stop)}</td></tr>`).join('')}</tbody></table>`;
-}
-
-function bookStats(b){
-  const pc = v => v === null || v === undefined ? '—' : pctTxt(v);
-  const rules = Object.entries(b.exits_by_rule || {}).filter(([, n]) => n).map(([r, n]) => `${esc(r)} ${n}`).join(' · ');
-  return `<div class="grid">
-      <div class="stat"><div class="l">Return</div><div class="v num ${cls(b.return_pct)}">${pc(b.return_pct)}</div>
-        <div class="l">QQQ same days ${pc(b.qqq_return_pct)}</div></div>
-      <div class="stat"><div class="l">Biggest drop</div><div class="v num">${b.max_drawdown_pct.toFixed(2)}%</div>
-        <div class="l">from a peak</div></div>
-      <div class="stat"><div class="l">Closed trades</div><div class="v num">${b.closed}</div>
-        <div class="l">win rate ${b.win_rate === null ? '—' : b.win_rate + '%'}</div></div>
-      <div class="stat"><div class="l">Avg win / loss</div><div class="v num">${pc(b.avg_win_pct)} / ${pc(b.avg_loss_pct)}</div>
-        <div class="l">profit factor ${b.profit_factor ?? '—'} · expectancy ${pc(b.expectancy_pct)}</div></div>
-    </div>
-    <div class="muted">Sells by rule: ${rules || 'none yet'}</div>`;
-}
-
-function bookTrades(b){
-  if (!b.trades.length) return '';
-  return `<div class="sect">Recent trades</div>` + b.trades.map(t => `<div class="w">
-    ${esc(String(t.utc || '').slice(0, 10))} · <b>${esc(t.side)} ${t.shares} ${esc(t.symbol)}</b> @ ${money(t.price)}
-    ${t.realised_pnl !== null && t.realised_pnl !== undefined ? `· <span class="${cls(t.realised_pnl)}">${money(t.realised_pnl)}</span>` : ''}
-    <div class="muted">${esc(t.reason || '')}</div></div>`).join('');
-}
 let ideaBusy = false;
 
 async function actOnIdea(id, verb) {
@@ -2361,40 +2270,6 @@ async function loadEmilyBuilds() {
 /* ---------------- report reader ---------------- */
 // Reports are written by agents. Escape first, then apply markdown, so any
 // HTML in a report is inert text rather than markup.
-function mdToHtml(src){
-  const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-  const inline = s => esc(s)
-    .replace(/`([^`]+)`/g,'<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
-    .replace(/(^|[^*])\*([^*\n]+)\*/g,'$1<em>$2</em>')
-    .replace(/(^|\s)_([^_\n]+)_(?=\s|$|[.,;:!?])/g,'$1<em>$2</em>');
-  const out=[]; let list=null, table=null;
-  const closeList=()=>{ if(list){out.push(`</${list}>`); list=null;} };
-  const closeTable=()=>{ if(table){out.push('</tbody></table></div>'); table=null;} };
-  for(const raw of String(src||'').split('\n')){
-    const line=raw.replace(/\s+$/,'');
-    const row=line.match(/^\|(.+)\|$/);
-    if(row){
-      const cells=row[1].split('|').map(c=>c.trim());
-      if(cells.every(c=>/^:?-{2,}:?$/.test(c))) continue;      // separator row
-      if(!table){ closeList();
-        out.push('<div class="tw"><table><thead><tr>'+cells.map(c=>`<th>${inline(c)}</th>`).join('')+'</tr></thead><tbody>');
-        table=1; continue; }
-      out.push('<tr>'+cells.map(c=>`<td>${inline(c)}</td>`).join('')+'</tr>'); continue;
-    }
-    closeTable();
-    if(!line.trim()){ closeList(); continue; }
-    let m;
-    if((m=line.match(/^(#{1,4})\s+(.*)$/))){ closeList(); const n=m[1].length; out.push(`<h${n}>${inline(m[2])}</h${n}>`); continue; }
-    if(/^(-{3,}|\*{3,}|_{3,})$/.test(line.trim())){ closeList(); out.push('<hr>'); continue; }
-    if((m=line.match(/^\s*[-*]\s+(.*)$/))){ if(list!=='ul'){closeList(); out.push('<ul>'); list='ul';} out.push(`<li>${inline(m[1])}</li>`); continue; }
-    if((m=line.match(/^\s*\d+[.)]\s+(.*)$/))){ if(list!=='ol'){closeList(); out.push('<ol>'); list='ol';} out.push(`<li>${inline(m[1])}</li>`); continue; }
-    if((m=line.match(/^>\s?(.*)$/))){ closeList(); out.push(`<blockquote>${inline(m[1])}</blockquote>`); continue; }
-    closeList(); out.push(`<p>${inline(line)}</p>`);
-  }
-  closeList(); closeTable();
-  return out.join('\n');
-}
 
 let docAgent = null, docFiles = [];
 
@@ -3400,7 +3275,29 @@ async function actOnKnowledge(id, verb){
   }
 }
 
-function closePanel() { closeLb(); openAgent = null; $('panel').style.display = 'none'; }
+function closePanel() { closeLb(); closeMarkets(); openAgent = null; $('panel').style.display = 'none'; }
+
+/* Belfort's house: the Markets page in a frame over the village. Removed on
+ * close, not hidden, so it stops polling. Escape inside it, or its close
+ * button, posts 'markets-close' here. */
+function openMarkets() {
+  closeMarkets();
+  openAgent = 'belfort';
+  const f = document.createElement('iframe');
+  f.id = 'marketsFrame';
+  f.src = '/markets?embed=1';
+  f.title = 'Markets';
+  f.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;border:0;z-index:60;background:rgba(5,7,12,.92)';
+  document.body.appendChild(f);
+  f.addEventListener('load', () => { try { f.contentWindow.focus(); } catch (e) {} });
+}
+function closeMarkets() {
+  const f = $('marketsFrame');
+  if (f) { f.remove(); if (openAgent === 'belfort') openAgent = null; }
+}
+window.addEventListener('message', e => {
+  if (e.origin === location.origin && e.data && e.data.type === 'markets-close') closeMarkets();
+});
 $('panel').addEventListener('click', e => { if (e.target.id === 'panel') closePanel(); });
 
 /* ---------------- touch ---------------- */

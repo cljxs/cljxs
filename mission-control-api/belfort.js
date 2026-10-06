@@ -14,6 +14,17 @@ const { ROOT } = require('./db');
 const TRADE = path.join(ROOT, 'scripts', 'belfort-trade.py');
 
 function register(app) {
+  // Everything the Markets page draws, from `belfort-trade.py board` - the
+  // page renders it and works nothing out.
+  app.get('/api/belfort/board', (req, res) => {
+    execFile('python3', [TRADE, 'board'], { cwd: ROOT, timeout: 30000, maxBuffer: 8 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) return res.status(500).json({ error: String(stderr || err.message).trim().slice(0, 400) });
+        try { res.set('Cache-Control', 'no-cache'); res.json(JSON.parse(stdout)); }
+        catch { res.status(500).json({ error: 'belfort-trade.py board printed something that is not JSON' }); }
+      });
+  });
+
   app.get('/api/belfort/books', (req, res) => {
     execFile('python3', [TRADE, 'stats', '--json'], { cwd: ROOT, timeout: 30000 },
       (err, stdout, stderr) => {

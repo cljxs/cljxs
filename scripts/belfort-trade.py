@@ -40,6 +40,7 @@ Standard library only.
 
 import argparse
 import json
+import re
 import os
 import sys
 from datetime import datetime, timezone
@@ -55,6 +56,9 @@ QUOTES = ROOT / "agents" / "belfort" / "data" / "quotes.json"
 NEWS = ROOT / "agents" / "belfort" / "data" / "news.json"
 CANDIDATES = ROOT / "agents" / "belfort" / "data" / "candidates.json"
 EARNINGS = ROOT / "agents" / "belfort" / "data" / "earnings.json"
+BARS = ROOT / "agents" / "belfort" / "data" / "bars.json"
+REPORTS = ROOT / "agents" / "belfort" / "reports"
+BOARD_CANDIDATES = 6        # candidates shown on the Markets page after what he holds
 
 MAX_POSITION_PCT = 25.0
 MIN_CASH_PCT = 5.0          # the owner lowered it from 15% on 2026-10-01
@@ -748,6 +752,132 @@ def cmd_stats(a):
     return 0
 
 
+def _doc(path):
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+
+def _change(closes, back):
+    """Percent from the close `back` trading days ago to the last one."""
+    if len(closes) <= back or not closes[-1 - back]:
+        return None
+    return round((closes[-1] / closes[-1 - back] - 1) * 100, 2)
+
+
+def board():
+    """Everything the Markets page draws (owner, 2026-10-06), worked out
+    here so nothing on the page is arithmetic in JavaScript: the showdown
+    between his book, the no-AI book and QQQ; what he holds and what passed
+    the screens; per name, the price, the candles and lines from bars.json,
+    the gauges, his own exit rules as "what would change his mind", the
+    news, and his reports."""
+    doc = quotes_doc()
+    quotes = doc.get("quotes") or {}
+    charts = _doc(BARS).get("bars") or {}
+    news = _doc(NEWS).get("headlines") or []
+    p = load()
+    books = [book_stats(p, "belfort", doc)]
+    if SHADOW.exists():
+        books.append(book_stats(load(SHADOW), "shadow", doc))
+    same = same_days(books)
+    state, why = regime(doc)
+    qqq = (doc.get("benchmarks") or {}).get("QQQ")
+
+    held = {pos["symbol"].upper(): entry_of(p, pos) for pos in p["positions"]
+            if float(pos.get("shares") or 0) > 0}
+    cands = [c.get("symbol") for c in _doc(CANDIDATES).get("candidates") or []]
+    order = list(held) + [c for c in cands if c and c not in held][:BOARD_CANDIDATES]
+
+    def ticker(sym):
+        q = quotes.get(sym) or {}
+        ch = charts.get(sym) or {}
+        closes = [float(c) for _, c in q.get("history") or []]
+        pos = held.get(sym)
+        flips, row = [], {}
+        if pos:
+            rule, why_now, stop = exit_check(pos, q, qqq)
+            cb = float(pos.get("cost_basis") or 0)
+            verdict = "SELL" if rule else "HOLD"
+            if rule:
+                flips.append(["SELL", f"{why_now} - due at his next check"])
+            if stop is not None:
+                flips.append(["SELL", f"if it closes at or under ${stop:,.2f} - its stop"])
+            if cb:
+                flips.append(["SELL", f"at ${cb * (1 + TAKE_PROFIT / 100):,.2f} - take profit (+{TAKE_PROFIT:g}% from cost)"])
+            row = {"shares": float(pos["shares"]), "entry": cb, "stop": stop, "score": pos.get("score"),
+                   "pnl_pct": round((float(q["price"]) / cb - 1) * 100, 2) if cb and q.get("price") else None,
+                   "catalyst": (pos.get("catalyst") or {}).get("title") if isinstance(pos.get("catalyst"), dict) else None}
+        else:
+            verdict = "WATCH"
+            flips.append(["BUY", "if a headline from its own news names a specific event he scores 7+ of 10"])
+            if state == "unfavorable":
+                flips.append(["WAIT", f"no buys while the market is unfavorable ({why})"])
+            soon = earnings_soon(sym)
+            if soon:
+                flips.append(["WAIT", f"reports earnings {soon[0]}, {soon[1]} trading days away - no buys this close"])
+            r = risk_pct(q)
+            if r:
+                flips.append(["RISK", f"a buy's stop would sit {r:g}% under the price"])
+        price, s20, s50 = q.get("price"), q.get("sma20"), q.get("sma50")
+        return {
+            "symbol": sym, "verdict": verdict, "held": bool(pos), **row,
+            "price": price, "change_pct": q.get("change_pct"),
+            "change_5d": _change(closes, 5), "change_30d": _change(closes, 30),
+            "spark": [round(c, 2) for c in closes[-30:]],
+            "candles": ch.get("bars") or [], "sma20_line": ch.get("sma20") or [], "sma50_line": ch.get("sma50") or [],
+            "sma20": s20, "sma50": s50, "rsi14": q.get("rsi14"),
+            "macd_hist": q.get("macd_hist"), "macd_hist_line": ch.get("macd_hist") or [],
+            "volume": ch.get("volume"), "volume_avg20": ch.get("volume_avg20"), "volume_ratio": ch.get("volume_ratio"),
+            "vs_sma20_pct": round((price / s20 - 1) * 100, 2) if price and s20 else None,
+            "vs_sma50_pct": round((price / s50 - 1) * 100, 2) if price and s50 else None,
+            "mechanical_score": q.get("mechanical_score"), "cluster": cluster_of(sym),
+            "flips": flips,
+            "news": [{k: n.get(k) for k in ("title", "publisher", "published")}
+                     for n in news if str(n.get("symbol", "")).upper() == sym][:8],
+        }
+
+    if same and same.get("belfort_pct") is not None:
+        basis = f"same days, since {same['since']}"
+        race = [("Belfort (AI)", same["belfort_pct"]), ("No-AI book", same["shadow_pct"]), ("QQQ", same["qqq_pct"])]
+    else:
+        mine = books[0]
+        basis = f"since {mine['since'] or 'the start'}"
+        race = [("Belfort (AI)", mine["return_pct"]), ("QQQ", mine["qqq_return_pct"])]
+        if len(books) > 1:
+            race.insert(1, ("No-AI book", books[1]["return_pct"]))
+    vals = [v for _, v in race if v is not None]
+    reports = sorted(REPORTS.glob("*.md"), key=report_order, reverse=True) if REPORTS.is_dir() else []
+    return {
+        "asof_utc": doc.get("asof_utc"), "regime": state, "regime_why": why,
+        "showdown": {"basis": basis, "rows": [{"name": n, "pct": v} for n, v in race],
+                     "spread": round(max(vals) - min(vals), 2) if len(vals) > 1 else None},
+        "books": [{k: b[k] for k in ("book", "value", "return_pct", "open")} for b in books],
+        "watch": [ticker(s) for s in order if s in quotes],
+        "report": {"name": reports[0].name, "text": reports[0].read_text(errors="replace")} if reports else None,
+        "history": [f.name for f in reports[:30]],
+    }
+
+
+def report_order(f):
+    """Newest first means by day, then by wake: "2026-10-05-close" comes after
+    "-open", though by name it sorts before it. The wake order is
+    et_time's, the one place the slots are named."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import et_time
+    wakes = [name for _, name in et_time.SLOTS["belfort"]]
+    m = re.match(r"(\d{4}-\d{2}-\d{2})-([a-z]+)", f.name)
+    if not m:
+        return (f.name[:10], -1, f.name)
+    return (m.group(1), wakes.index(m.group(2)) if m.group(2) in wakes else -1, f.name)
+
+
+def cmd_board(a):
+    print(json.dumps(board(), separators=(",", ":")))
+    return 0
+
+
 def cmd_size(a):
     shares, why = size(load(), a.symbol)
     print(why if shares else f"0 shares of {a.symbol.upper()}: {why}")
@@ -908,6 +1038,7 @@ def main():
     z = sub.add_parser("size", help="the most of a name a buy may take now, and what limits it")
     z.add_argument("symbol")
     z.set_defaults(fn=cmd_size)
+    sub.add_parser("board", help="JSON for the Markets page").set_defaults(fn=cmd_board)
     st = sub.add_parser("stats")
     st.add_argument("--json", action="store_true")
     st.set_defaults(fn=cmd_stats)

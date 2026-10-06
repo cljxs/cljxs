@@ -15212,8 +15212,12 @@ class TheNoAIBookIsItsOwnMoney(unittest.TestCase):
         self.assertNotIn("shadow", js)
 
     def test_the_house_has_the_two_pages(self):
-        html = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
-        self.assertIn('data-page="shadow">No-AI book</button>', html)
+        # Since 2026-10-06 Belfort's house opens the Markets page, and both
+        # books live on its Books tab.
+        village = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        self.assertIn("if (name === 'belfort') return openMarkets();", village)
+        html = (ROOT / "mission-control-api" / "public" / "markets.html").read_text()
+        self.assertIn('data-t="books">Books</button>', html)
         self.assertIn("separate $10,000 paper account</b>, not Belfort's money", html)
         self.assertIn("/api/belfort/books", html)
         self.assertIn("belfortRoutes.register(app)", (ROOT / "mission-control-api" / "server.js").read_text())
@@ -17406,3 +17410,126 @@ class LastRunReadsTheWrappedRun(unittest.TestCase):
         self.assertIn(f"${agent['costUsd']:.4f}", lines["cost"])
         self.assertNotIn("payloads", lines["model"], "the whole result was printed as the model")
 
+
+
+class TheMarketsPageDrawsBelfortsOwnNumbers(unittest.TestCase):
+    """Owner, 2026-10-06: a Markets page for Belfort's house and the Deck.
+    Guards two things. The candles go in bars.json, never quotes.json -
+    Belfort reads quotes.json every wake, and cost scales with what he reads.
+    And the page's numbers are his: the stop it shows is exit_check's stop,
+    and its lines are the same SMA and MACD as the quote he trades on.
+    Real TSM closes from Yahoo, through the real fetcher."""
+
+    TSM = json.loads((ROOT / "tests" / "fixtures" / "belfort-yahoo-chart-tsm.json").read_text())
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.data = self.root / "agents" / "belfort" / "data"
+        old = os.environ.get("ECOSYSTEM_ROOT")
+        os.environ["ECOSYSTEM_ROOT"] = str(self.root)
+        self.addCleanup(lambda: os.environ.__setitem__("ECOSYSTEM_ROOT", old) if old
+                        else os.environ.pop("ECOSYSTEM_ROOT", None))
+        fetch = load("belfort_fetch_board", "belfort-fetch.py")
+        fetch.UNIVERSE, fetch.BENCHMARKS, fetch.REQUEST_GAP = ["TSM", "NVDA"], ["QQQ"], 0
+        fetch.http_get = lambda url, retries=2, ua=None: json.dumps(self.TSM).encode()
+        fetch.fetch_news = lambda symbols, get=None, gap=0: [
+            {"title": "TSMC monthly sales jump", "published": "Mon, 05 Oct 2026 12:00:00 +0000",
+             "id": "abc12345", "publisher": "reuters.com", "symbol": "TSM"}]
+        fetch.fetch_earnings = lambda symbols, today=None, get=None, gap=0: {}
+        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+            fetch.main()
+        self.fetch = fetch
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_candles_stay_out_of_what_belfort_reads(self):
+        quotes = json.loads((self.data / "quotes.json").read_text())
+        for q in list(quotes["quotes"].values()) + list(quotes["benchmarks"].values()):
+            self.assertNotIn("_chart", q)
+            self.assertNotIn("bars", q)
+        cands = json.loads((self.data / "candidates.json").read_text())["candidates"]
+        self.assertFalse(any("_chart" in c for c in cands))
+        bars = json.loads((self.data / "bars.json").read_text())["bars"]
+        self.assertEqual(sorted(bars), ["NVDA", "QQQ", "TSM"])
+
+    def test_the_lines_are_the_quotes_own_arithmetic(self):
+        q = json.loads((self.data / "quotes.json").read_text())["quotes"]["TSM"]
+        ch = json.loads((self.data / "bars.json").read_text())["bars"]["TSM"]
+        self.assertEqual(len(ch["bars"]), self.fetch.CHART_BARS)
+        self.assertEqual(ch["bars"][-1][4], q["price"])
+        self.assertEqual(ch["bars"][-1][0], q["last_bar"])
+        self.assertEqual(ch["sma20"][-1], q["sma20"])
+        self.assertEqual(ch["sma50"][-1], q["sma50"])
+        self.assertEqual(ch["macd_hist"][-1], q["macd_hist"])
+        raw = self.TSM["chart"]["result"][0]["indicators"]["quote"][0]["volume"]
+        vols = [v for v in raw if v is not None]
+        self.assertEqual(ch["volume"], vols[-1])
+        self.assertEqual(ch["volume_avg20"], int(sum(vols[-21:-1]) / 20), "the 20 days BEFORE today")
+        self.assertAlmostEqual(ch["volume_ratio"], vols[-1] / (sum(vols[-21:-1]) / 20), places=2)
+
+    def test_the_board_shows_his_stop_and_his_candidates(self):
+        q = json.loads((self.data / "quotes.json").read_text())["quotes"]["TSM"]
+        state = self.root / "agents" / "belfort" / "state"
+        state.mkdir(parents=True)
+        entry = q["history"][-5][0] + " 13:36:00"
+        cb = round(q["price"] / 1.03, 2)
+        (state / "portfolio.json").write_text(json.dumps({
+            "starting_cash": 10000.0, "cash": 9000.0, "created_utc": "2026-09-01 13:00:00",
+            "positions": [{"symbol": "TSM", "shares": 2, "cost_basis": cb, "entry_utc": entry, "score": 8}],
+            "trades": []}))
+        reports = self.root / "agents" / "belfort" / "reports"
+        reports.mkdir(parents=True)
+        (reports / "2026-10-05-close.md").write_text("# Belfort\nheld TSM\n")
+        r = subprocess.run([sys.executable, str(SCRIPTS / "belfort-trade.py"), "board"],
+                           capture_output=True, text=True, env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        b = json.loads(r.stdout)
+        tsm = b["watch"][0]
+        self.assertEqual((tsm["symbol"], tsm["verdict"], tsm["score"]), ("TSM", "HOLD", 8))
+        trade = load("belfort_trade_board", "belfort-trade.py")
+        stop = trade.exit_check({"symbol": "TSM", "shares": 2, "cost_basis": cb, "entry_utc": entry}, q)[2]
+        self.assertEqual(tsm["stop"], stop)
+        self.assertTrue(any(f"${stop:,.2f}" in text for side, text in tsm["flips"] if side == "SELL"))
+        self.assertEqual(len(tsm["candles"]), self.fetch.CHART_BARS)
+        self.assertEqual(tsm["news"][0]["title"], "TSMC monthly sales jump")
+        self.assertEqual(b["report"]["name"], "2026-10-05-close.md")
+        self.assertIn("Belfort (AI)", [r["name"] for r in b["showdown"]["rows"]])
+
+
+class TheMarketsPageIsWiredInOnePlace(unittest.TestCase):
+    """Owner, 2026-10-06: Belfort's house and the Deck's Markets tab are one
+    page, and the report renderer they share is one file - it was two
+    identical inline copies in dashboard.html and village.html."""
+
+    API = ROOT / "mission-control-api"
+
+    def test_one_page_two_doors(self):
+        server = (self.API / "server.js").read_text()
+        self.assertIn("app.get('/markets'", server)
+        self.assertIn("app.use('/shared'", server)
+        self.assertIn('href="/markets"', (self.API / "public" / "dashboard.html").read_text())
+        village = (self.API / "public" / "village.html").read_text()
+        self.assertIn("f.src = '/markets?embed=1'", village)
+        self.assertIn("'markets-close'", (self.API / "public" / "markets.html").read_text())
+        self.assertIn("app.get('/api/belfort/board'", (self.API / "belfort.js").read_text())
+
+    def test_the_markdown_renderer_is_one_file(self):
+        for page in ("dashboard.html", "village.html", "markets.html"):
+            html = (self.API / "public" / page).read_text()
+            self.assertIn('<script src="/shared/md.js"></script>', html, page)
+            self.assertNotIn("function mdToHtml", html, f"{page} has its own copy again")
+        self.assertIn("function mdToHtml", (self.API / "public" / "shared" / "md.js").read_text())
+
+
+class BelfortsLatestReportIsTheLatestWake(unittest.TestCase):
+    """The Markets page first showed "2026-10-05-open" as the latest report:
+    by name it sorts after "-close", though the close is the later wake."""
+
+    def test_close_after_open_and_days_in_order(self):
+        trade = load("belfort_trade_order", "belfort-trade.py")
+        names = ["2026-10-05-close.md", "2026-10-04-close.md", "2026-10-05-open.md", "2026-10-06-open.md"]
+        got = [f.name for f in sorted((Path(n) for n in names), key=trade.report_order, reverse=True)]
+        self.assertEqual(got, ["2026-10-06-open.md", "2026-10-05-close.md", "2026-10-05-open.md",
+                               "2026-10-04-close.md"])

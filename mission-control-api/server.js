@@ -280,6 +280,17 @@ app.use('/vendor', express.static(path.join(__dirname, 'public', 'vendor'), {
   maxAge: '7d', immutable: true,
 }));
 
+// Scripts the pages share. no-cache, unlike /vendor: these change with the repo.
+app.use('/shared', express.static(path.join(__dirname, 'public', 'shared'), {
+  setHeaders: res => res.set('Cache-Control', 'no-cache'),
+}));
+
+// Markets: Belfort's trading desk. The village opens it inside Belfort's
+// house; the Deck links to it as its own tab.
+app.get('/markets', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'markets.html'));
+});
+
 app.get('/village', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'village.html'));
 });

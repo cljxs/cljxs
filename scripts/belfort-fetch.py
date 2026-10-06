@@ -47,6 +47,12 @@ TIMEOUT = 20
 # Daily closes kept per name: the memory belfort-trade.py's exit rules read
 # (the highest close since entry, trading days held).
 HISTORY_BARS = 90
+# The Markets page's candles (owner, 2026-10-06): open/high/low/close/volume
+# and the indicator lines, in data/bars.json - NOT quotes.json, which
+# Belfort reads every wake. 90 days of five numbers for 32 names would
+# multiply what he reads for nothing he decides with.
+CHART_BARS = 90
+CHART_MACD_BARS = 30
 # News, one request per name. It used to be one request for the first 12 of
 # the 30 names, which Yahoo answers with 20 headlines between them - and 18
 # names, two of them held, had none. Hourly, not every 10 minutes: 30
@@ -125,17 +131,24 @@ def rsi(values, n=14):
     return 100.0 - (100.0 / (1.0 + rs))
 
 
-def macd(values, fast=12, slow=26, signal=9):
+def macd_series(values, fast=12, slow=26, signal=9):
+    """(line, signal, histogram) lists, newest last; the histogram is as
+    long as the signal line. Empty when there is not enough history."""
     if len(values) < slow + signal:
-        return None, None, None
+        return [], [], []
     ema_fast = ema_series(values, fast)
     ema_slow = ema_series(values, slow)
     offset = len(ema_fast) - len(ema_slow)
     line = [f - s for f, s in zip(ema_fast[offset:], ema_slow)]
     sig = ema_series(line, signal)
+    return line, sig, [m - g for m, g in zip(line[len(line) - len(sig):], sig)]
+
+
+def macd(values, fast=12, slow=26, signal=9):
+    line, sig, hist = macd_series(values, fast, slow, signal)
     if not sig:
         return None, None, None
-    return line[-1], sig[-1], line[-1] - sig[-1]
+    return line[-1], sig[-1], hist[-1]
 
 
 def atr(highs, lows, closes, n=14):
@@ -159,12 +172,16 @@ def fetch_one(sym):
     result = payload["chart"]["result"][0]
     bars = result["indicators"]["quote"][0]
     stamps = result["timestamp"]
-    closes, dates, highs, lows = [], [], [], []
-    for ts, c, h, l in zip(stamps, bars["close"], bars.get("high") or [], bars.get("low") or []):
+    closes, dates, highs, lows, opens, vols = [], [], [], [], [], []
+    n = len(stamps)
+    for ts, c, h, l, o, v in zip(stamps, bars["close"], bars.get("high") or [], bars.get("low") or [],
+                                 bars.get("open") or [None] * n, bars.get("volume") or [None] * n):
         if c is not None and h is not None and l is not None:
             closes.append(float(c))
             highs.append(float(h))
             lows.append(float(l))
+            opens.append(float(o) if o is not None else float(c))
+            vols.append(int(v or 0))
             dates.append(datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d"))
     if len(closes) < 60:
         raise ValueError(f"only {len(closes)} usable closes")
@@ -202,6 +219,29 @@ def fetch_one(sym):
         "history": [[d, r2(c)] for d, c in zip(dates[-HISTORY_BARS:], closes[-HISTORY_BARS:])],
         "atr14": r2(a14),
         "atr_pct": r2(a14 / price * 100) if a14 and price else None,
+        "_chart": chart(dates, opens, highs, lows, closes, vols),
+    }
+
+
+def chart(dates, opens, highs, lows, closes, vols):
+    """The Markets page's view of one name, for data/bars.json: candles and
+    the same SMA and MACD arithmetic the quote uses, as lines. Volume today
+    is against the 20 days before it - today's own volume would pull the
+    average toward itself."""
+    k = min(CHART_BARS, len(closes))
+    first = len(closes) - k
+    _, _, hist = macd_series(closes)
+    prior = vols[-21:-1]
+    avg = sum(prior) / len(prior) if prior and any(prior) else None
+    return {
+        "bars": [[d, r2(o), r2(h), r2(lo), r2(c), v] for d, o, h, lo, c, v in
+                 zip(dates[first:], opens[first:], highs[first:], lows[first:], closes[first:], vols[first:])],
+        "sma20": [r2(sma(closes[:i + 1], 20)) for i in range(first, len(closes))],
+        "sma50": [r2(sma(closes[:i + 1], 50)) for i in range(first, len(closes))],
+        "macd_hist": [r2(x) for x in hist[-CHART_MACD_BARS:]],
+        "volume": vols[-1] if vols else None,
+        "volume_avg20": int(avg) if avg else None,
+        "volume_ratio": r2(vols[-1] / avg) if avg and vols else None,
     }
 
 
@@ -338,6 +378,14 @@ def main():
         [q for q in quotes.values() if q["mechanical_score"] == 3],
         key=lambda q: (-q["mechanical_score"], -(q["macd_hist"] or 0)),
     )
+
+    charts = {sym: q.pop("_chart") for sym, q in list(quotes.items()) + list(benchmarks.items())
+              if "_chart" in q}
+    (DATA_DIR / "bars.json").write_text(json.dumps({
+        "asof_utc": started.strftime("%Y-%m-%d %H:%M:%S"),
+        "note": "For the Markets page only. Belfort decides from quotes.json and candidates.json.",
+        "bars": charts,
+    }, separators=(",", ":")) + "\n")
 
     (DATA_DIR / "quotes.json").write_text(json.dumps({
         "asof_utc": started.strftime("%Y-%m-%d %H:%M:%S"),
