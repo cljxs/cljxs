@@ -110,7 +110,16 @@ KEEP_LIVE = ("replied", "won")
 TAKE_DOWN_NOW = ("declined", "do-not-contact")
 CHANNELS = ("email", "facebook", "instagram", "dm", "phone")
 KINDS = ("trade", "food", "salon", "retail", "other")
-SENDER_FIELDS = ("area", "name", "studio", "email", "phone", "address")
+SENDER_FIELDS = ("area", "name", "studio", "email", "phone", "address", "price")
+# The offer, owner's decision 2026-10-06: one flat price, stated in the first
+# message with what it covers. The price is a setting (paul.py sender --price);
+# what it covers is fixed here, so the pitch and the brief cannot disagree.
+# Milkbox's pitch, before there was an offer, gave the site away: "yours to
+# keep, no strings attached".
+OFFER_COVERS = ("the site with their own photos and wording, one round of changes, set up "
+                "on their own web address, and no monthly fees")
+FREEBIE = ("no strings attached", "yours to keep", "for free", "free of charge", "at no cost",
+           "no charge", "on the house", "free website", "free site")
 
 # What makes a business a target. Each one is something a person can check,
 # so "their site looks dated" is not on the list - that is a vibe.
@@ -925,6 +934,29 @@ def parse_draft(text):
     return head, "\n".join(lines[i:]).strip()
 
 
+def offer_problems(body):
+    """The pitch states the owner's price - that exact figure, no other - and
+    what it covers, and never offers the site free."""
+    price = digits(load_sender()[0].get("price") or "")
+    if not price:
+        return []
+    errs, low = [], body.lower()
+    said = {digits(m) for m in re.findall(r"\$\s?(\d[\d,]*)(?:\.\d\d)?", body)}
+    if price not in said:
+        errs.append(f"the pitch must state the price: ${price}, one time")
+    other = sorted(said - {price}, key=int)
+    if other:
+        errs.append(f"the only price is ${price} - remove ${', $'.join(other)}")
+    if "monthly" not in low:
+        errs.append('say there are no monthly fees - it is the selling point')
+    if not any(w in low for w in ("web address", "domain", "own address")):
+        errs.append("say it goes live on their own web address")
+    gave = [f for f in FREEBIE if f in low]
+    if gave:
+        errs.append(f"{', '.join(repr(f) for f in gave)} offers it free - it is ${price}")
+    return errs
+
+
 def check_draft(text, t):
     errs = []
     head, body = parse_draft(text)
@@ -952,6 +984,7 @@ def check_draft(text, t):
         errs.append("the pitch recites their own address back to them - cut it")
     if EM_DASH in body:
         errs.append("em dashes in the pitch read as AI-written - use a comma or a full stop")
+    errs += offer_problems(body)
     me = str(load_sender()[0].get("name") or "").strip().lower()
     tail = [ln.strip() for ln in body.strip().splitlines() if ln.strip()][-3:]
     if any(VALEDICTION.match(ln) or (me and ln.lower().strip(",.") in (me, me.split()[0]))
@@ -1360,6 +1393,12 @@ def cmd_sender(a):
         if "email" in given and not re.match(r"^[^@\s]+@[^@\s]+\.[a-z]{2,}$", given["email"], re.I):
             print(f"refused: {given['email']!r} is not an email address", file=sys.stderr)
             return 2
+        if "price" in given:
+            if not re.fullmatch(r"\$?\s*\d{2,5}", given["price"].strip()):
+                print(f"refused: {given['price']!r} is not a price in whole dollars, e.g. 350",
+                      file=sys.stderr)
+                return 2
+            given["price"] = digits(given["price"])
         if "phone" in given and len(digits(given["phone"])) < 7:
             print(f"refused: {given['phone']!r} is not a phone number", file=sys.stderr)
             return 2
@@ -1373,7 +1412,8 @@ def cmd_sender(a):
     if missing:
         print(f"\nstill needed: {', '.join(missing)}")
         print('  python3 scripts/paul.py sender --area "City, ST" --name "Your Name" '
-              '--studio "Studio" --email you@x.com --phone "555 555 5555" --address "PO Box 1, City, ST 00000"')
+              '--studio "Studio" --email you@x.com --phone "555 555 5555" --address "PO Box 1, City, ST 00000" '
+              '--price 350')
         return 1
     if given:
         print("\nsaved to agents/paul/state/sender.json and USER.md (both stay on this droplet)")
@@ -1752,6 +1792,8 @@ def cmd_brief(a, get=http_get):
     L += [f"today        {today()} (Eastern)",
           f"area         {s.get('area', '?')}",
           f"studio       {s.get('studio', '?')} - code writes the footer and the signature",
+          f"offer        ${s.get('price', '?')}, one time. It covers {OFFER_COVERS}.",
+          "             The pitch states that exact price and what it covers, in your words.",
           f"resume       {resume}",
           f"passes       {MAX_PASSES} - each `paul.py check` that finds problems uses one",
           f"skip         {len(rows)} businesses already contacted or excluded. Check a candidate:",

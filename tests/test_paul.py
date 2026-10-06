@@ -41,7 +41,7 @@ import remember  # noqa: E402
 
 SENDER = {"area": "Austin, TX", "name": "Sam Owner", "studio": "Sam Studio",
           "email": "sam@studio.test", "phone": "512 000 1111",
-          "address": "PO Box 12, Austin, TX 78701"}
+          "address": "PO Box 12, Austin, TX 78701", "price": "350"}
 
 INDEX = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -64,7 +64,9 @@ I'm a designer here in Austin. I couldn't find a website for your shop, so I
 built one to show you what it could look like, with your hours and a photo
 of the work. It's here: [PREVIEW URL]
 
-If you like it, I can put it live under your own name for a flat fee.
+If you like it, it's yours for a flat $350, one time: your own photos and
+wording, one round of changes, and set up on your own web address, with no
+monthly fees.
 """
 
 
@@ -948,3 +950,46 @@ class TextAVisitorCanRead(unittest.TestCase):
         self.assertNotIn("Menu", texts)
         self.assertNotIn("Over a photo", texts)
         self.assertNotIn("Plain text", texts)
+
+
+class TheOfferIsTheOwners(PaulCase):
+    """Owner, 2026-10-06: $350 one time, stated in the first message with
+    what it covers. Milkbox's pitch, written before there was an offer, gave
+    the site away ("yours to keep, no strings attached")."""
+
+    def errs(self, draft):
+        return paul.check_draft(draft, target())[0]
+
+    def has(self, draft, word):
+        errs = self.errs(draft)
+        self.assertTrue(any(word in e for e in errs), f"{word!r} not in {errs}")
+
+    def test_no_price(self):
+        self.has(DRAFT.replace("$350", "a flat fee"), "must state the price")
+
+    def test_a_different_price(self):
+        self.has(DRAFT.replace("$350", "$300"), "must state the price")
+        self.has(DRAFT.replace("one time:", "one time (normally $500):"), "the only price")
+
+    def test_giving_it_away(self):
+        self.has(DRAFT + "\nOr keep it, no strings attached.\n", "offers it free")
+
+    def test_what_it_covers(self):
+        self.has(DRAFT.replace("with no\nmonthly fees", "simple"), "monthly")
+        self.has(DRAFT.replace("set up on your own web address", "set up"), "web address")
+
+    def test_the_price_is_set_with_a_command(self):
+        rc, _ = self.run_quiet(paul.cmd_sender, types.SimpleNamespace(
+            **{k: None for k in paul.SENDER_FIELDS} | {"price": "$ 450"}))
+        self.assertEqual(rc, 0)
+        self.assertEqual(paul.load_sender()[0]["price"], "450")
+        rc, _ = self.run_quiet(paul.cmd_sender, types.SimpleNamespace(
+            **{k: None for k in paul.SENDER_FIELDS} | {"price": "a lot"}))
+        self.assertEqual(rc, 2)
+        self.assertEqual(paul.load_sender()[0]["price"], "450")
+
+    def test_no_price_set_means_no_dry_cycle(self):
+        s = dict(SENDER)
+        del s["price"]
+        paul.write_json(paul.A("state", "sender.json"), s)
+        self.assertIn("price", paul.hold_reason(True) or "")

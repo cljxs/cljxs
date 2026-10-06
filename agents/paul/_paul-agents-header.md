@@ -160,8 +160,10 @@ layout. A stranger should think they paid for this.
 An email if they have a public email; otherwise a DM (`facebook`,
 `instagram` or `dm`, To: the profile URL) or a phone script (`phone`, To: the
 number). Sound like a person: say who you are and that this is an offer, no
-lists, don't recite their address, let the link do the selling. Under 170
-words. No em dashes. **Stop at your last sentence**: no "Best,", no name -
+lists, don't recite their address, let the link do the selling. **State the
+offer from FACTS**: the exact price, one time, and what it covers - their own
+photos and wording, one round of changes, live on their own web address, no
+monthly fees. Never offer it free. Under 170 words. No em dashes. **Stop at your last sentence**: no "Best,", no name -
 code adds the opt-out line and the user's signature, and refuses a draft
 that signs itself.
 

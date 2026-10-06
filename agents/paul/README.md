@@ -26,7 +26,7 @@ split as every agent here, for the same reasons (CLAUDE.md).
 2. Your details - the preview footer and the pitch signature. Stays on the
    droplet (`state/sender.json`, gitignored; this repo is public):
 
-       python3 /root/ecosystem/scripts/paul.py sender --area "City, ST" --name "Your Name" --studio "Studio Name" --email you@example.com --phone "555 555 5555" --address "PO Box 1, City, ST 00000"
+       python3 /root/ecosystem/scripts/paul.py sender --area "City, ST" --name "Your Name" --studio "Studio Name" --email you@example.com --phone "555 555 5555" --address "PO Box 1, City, ST 00000" --price 350
 
 3. The model, **Paul's own OpenRouter key**, and a gateway restart. Make a new
    key at openrouter.ai/settings/keys just for Paul, with its own daily limit:
