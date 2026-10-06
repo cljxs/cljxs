@@ -17603,6 +17603,15 @@ class BelfortWritesHisCallOnEachName(TheMarketsPageDrawsBelfortsOwnNumbers):
             self.assertIn(why, r.stderr)
             self.assertFalse((self.state / "calls.jsonl").exists(), "a refused file records nothing")
 
+    def test_nothing_owed_is_not_an_error(self):
+        self.wake(held=["TSM", "NVDA"])
+        r = self.run_("calls")
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "No candidate is owed a call this wake - nothing to file."))
+        self.write("NVDA | 4 | ANALYST: Jefferies reiterates Buy - no new fact, so it stops at 4\n")
+        old = self.started - 3600
+        os.utime(self.state / "calls.txt", (old, old))
+        self.assertEqual(self.run_("calls").returncode, 0, "last wake's file, nothing owed: still not an error")
+
     def test_a_name_that_screened_in_after_wake_is_not_owed(self):
         trade = self.wake(cands=("TSM", "NVDA"), at_wake=("NVDA",))
         self.assertEqual(trade.calls_missing(), ["NVDA"])

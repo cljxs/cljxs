@@ -990,6 +990,12 @@ def cmd_calls(a):
         print(", ".join(owed) if owed else "none")
         return 0
     started = cycle_started()
+    fresh = CALLS_IN.exists() and not (started and CALLS_IN.stat().st_mtime < started)
+    if not owed and not fresh:
+        # Nothing to file and nothing owed. An error here would send him back
+        # to write a file no one asked for.
+        print("No candidate is owed a call this wake - nothing to file.")
+        return 0
     if not CALLS_IN.exists():
         print(f"state/calls.txt does not exist. Write one line per candidate: SYMBOL | score | reason. "
               f"Owed this wake: {', '.join(owed) or 'none'}", file=sys.stderr)
