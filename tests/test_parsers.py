@@ -17571,3 +17571,20 @@ class BelfortsLatestReportIsTheLatestWake(unittest.TestCase):
         got = [f.name for f in sorted((Path(n) for n in names), key=trade.report_order, reverse=True)]
         self.assertEqual(got, ["2026-10-06-open.md", "2026-10-05-close.md", "2026-10-05-open.md",
                                "2026-10-04-close.md"])
+
+
+class ReportsHideOpenclawReplyTags(unittest.TestCase):
+    """Belfort's 2026-10-06 open report began "[[reply_to_current]]" - an
+    openclaw routing tag, printed on the Markets page as if he wrote it."""
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_the_tag_line_is_dropped_and_the_rest_kept(self):
+        md = ROOT / "mission-control-api" / "public" / "shared" / "md.js"
+        src = "[[reply_to_current]]\n\nMarket open notes.\n[[reply_to:abc123]]\nKeep [[this]] inline."
+        out = subprocess.run(["node", "-e", f"process.stdout.write(require({json.dumps(str(md))}).mdToHtml({json.dumps(src)}))"],
+                             capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("reply_to", out.stdout)
+        self.assertIn("Market open notes.", out.stdout)
+        self.assertIn("Keep [[this]] inline.", out.stdout)
+

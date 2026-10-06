@@ -13,6 +13,10 @@ function mdToHtml(src){
   const closeTable=()=>{ if(table){out.push('</tbody></table></div>'); table=null;} };
   for(const raw of String(src||'').split('\n')){
     const line=raw.replace(/\s+$/,'');
+    // openclaw's reply-routing tags ([[reply_to_current]], [[reply_to:ID]])
+    // leak into reports an agent writes from its reply. Seen at the top of
+    // Belfort's 2026-10-06 open report on the Markets page.
+    if(/^\s*\[\[reply_to[^\]]*\]\]\s*$/.test(line)) continue;
     const row=line.match(/^\|(.+)\|$/);
     if(row){
       const cells=row[1].split('|').map(c=>c.trim());
@@ -35,3 +39,5 @@ function mdToHtml(src){
   closeList(); closeTable();
   return out.join('\n');
 }
+
+if (typeof module !== 'undefined') module.exports = { mdToHtml };
