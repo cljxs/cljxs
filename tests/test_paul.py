@@ -993,3 +993,64 @@ class TheOfferIsTheOwners(PaulCase):
         del s["price"]
         paul.write_json(paul.A("state", "sender.json"), s)
         self.assertIn("price", paul.hold_reason(True) or "")
+
+
+class CheckDoesNotRemeasureAnUnchangedSite(unittest.TestCase):
+    """Droplet, 2026-10-06: with the contrast probe, check took 12.3 s on
+    one CPU - long enough for openclaw to background it - and a Gemini
+    cycle spent 70 tool calls running and polling commands. Chrome is not
+    launched again for a site that has not changed since it was measured."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.site = Path(self.tmp.name) / "site"
+        self.site.mkdir()
+        (self.site / "index.html").write_text("<html><body><p>hi</p></body></html>")
+        self.memo = Path(self.tmp.name) / "shots" / ".measured.json"
+        self.launches = 0
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def fake_chrome(self, cmd, **kw):
+        self.launches += 1
+        return types.SimpleNamespace(stdout='<pre id="paul-contrast">{"checked":1,"fails":[]}</pre>')
+
+    def test_measured_once_until_the_site_changes(self):
+        for _ in range(3):
+            self.assertEqual(paul.measured_contrast(self.site, "chrome", self.memo, run=self.fake_chrome), [])
+        self.assertEqual(self.launches, 1)
+        time.sleep(0.01)
+        (self.site / "index.html").write_text("<html><body><p>changed</p></body></html>")
+        paul.measured_contrast(self.site, "chrome", self.memo, run=self.fake_chrome)
+        self.assertEqual(self.launches, 2)
+
+    def test_no_answer_is_asked_again(self):
+        silent = lambda cmd, **kw: (setattr(self, "launches", self.launches + 1)
+                                    or types.SimpleNamespace(stdout=""))
+        self.assertIsNone(paul.measured_contrast(self.site, "chrome", self.memo, run=silent))
+        self.assertIsNone(paul.measured_contrast(self.site, "chrome", self.memo, run=silent))
+        self.assertEqual(self.launches, 2)
+
+    def test_screenshots_are_not_retaken(self):
+        calls = []
+        old = paul.shoot
+        self.addCleanup(setattr, paul, "shoot", old)
+
+        def fake_shoot(url, folder, browser=None):
+            calls.append(url)
+            Path(folder).mkdir(parents=True, exist_ok=True)
+            out = []
+            for n, _w, _h in paul.SHOTS:
+                (Path(folder) / f"{n}.png").write_bytes(b"png" * 500)
+                out.append((n, Path(folder) / f"{n}.png"))
+            return out
+        paul.shoot = fake_shoot
+        shots = Path(self.tmp.name) / "shots"
+        paul.fresh_shots(self.site / "index.html", shots)
+        paul.fresh_shots(self.site / "index.html", shots)
+        self.assertEqual(len(calls), 1)
+        time.sleep(0.01)
+        (self.site / "index.html").write_text("<html><body>new</body></html>")
+        paul.fresh_shots(self.site / "index.html", shots)
+        self.assertEqual(len(calls), 2)

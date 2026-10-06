@@ -171,6 +171,9 @@ that signs itself.
 
 `python3 ../../scripts/paul.py check` tests everything above and saves
 screenshots to `work/shots/` - read them to see the site as a visitor will.
+It opens a browser, so the first run can take 10-20 seconds. If it is still
+running when the tool returns, wait for that run to finish - never start a
+second one. Running it again on an unchanged site is instant.
 You get **2 passes**: each check that finds problems uses one. Still failing
 after two, or not at the reference bar? Set `"status": "below-bar"` with a
 `why`. Then the two steps at the top: the last-run line, and check.

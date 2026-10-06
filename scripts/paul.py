@@ -39,6 +39,7 @@ budget.py. Nothing else.
 """
 
 import argparse
+import concurrent.futures
 import csv
 import hashlib
 import html
@@ -618,6 +619,21 @@ def screenshot(browser, url, out, w, h, run=subprocess.run):
     return out.is_file() and out.stat().st_size > 1000
 
 
+def fresh_shots(index, folder, browser=None):
+    """shoot(), unless the site is unchanged since these screenshots were
+    taken - the same reasoning as measured_contrast."""
+    folder = Path(folder)
+    memo = folder / ".shots.json"
+    fp = site_fingerprint(Path(index).parent)
+    old = [(n, folder / f"{n}.png") for n, _w, _h in SHOTS]
+    if (read_json(memo, {}) or {}).get("site") == fp and all(p.is_file() for _n, p in old):
+        return old
+    out = shoot(Path(index).as_uri(), folder, browser)
+    if all(p for _n, p in out):
+        write_json(memo, {"site": fp})
+    return out
+
+
 def shoot(url, folder, browser=None):
     """[(name, path or None)] - None where no picture was taken."""
     browser = browser or find_browser()
@@ -1155,6 +1171,39 @@ var pre=document.createElement('pre');pre.id='paul-contrast';pre.textContent=JSO
 })();"""
 
 
+def site_fingerprint(site):
+    """What the site is, for "has it changed since it was last measured":
+    every file's path, size and modified time. The contrast probe's hidden
+    copies are left out - they come and go during a measurement."""
+    site = Path(site)
+    h = hashlib.sha1()
+    for f in sorted(site.rglob("*")):
+        if f.is_file() and not f.name.startswith(f".{CONTRAST_ID}"):
+            st = f.stat()
+            h.update(f"{f.relative_to(site).as_posix()}|{st.st_size}|{st.st_mtime_ns}\n".encode())
+    return h.hexdigest()
+
+
+def measured_contrast(site, browser, memo, run=subprocess.run):
+    """contrast_problems, remembered against the site's fingerprint. Paul
+    runs check again after every fix, and on the droplet's one CPU each
+    Chrome launch is seconds: check went from under 10 s to 12.3 s when the
+    probe arrived (2026-10-06), past the point where openclaw moves a
+    command to the background - and the next Gemini cycle spent 70 tool
+    calls running and polling commands. An unchanged site is not measured
+    twice."""
+    fp = site_fingerprint(site)
+    memo = Path(memo)
+    seen = read_json(memo, {}) or {}
+    # A list is an answer; None (the browser said nothing) is asked again.
+    if seen.get("site") == fp and isinstance(seen.get("contrast"), list):
+        return [tuple(x) for x in seen["contrast"]]
+    bad = contrast_problems(site, browser, run=run)
+    memo.parent.mkdir(parents=True, exist_ok=True)
+    write_json(memo, {**seen, "site": fp, "contrast": bad})
+    return bad
+
+
 def contrast_problems(site, browser, run=subprocess.run, width=1280, height=900):
     """[(page, text, ratio, need)] for text a visitor cannot read, or None
     when the browser gave no answer - unmeasured is not "fine", and it is
@@ -1244,7 +1293,7 @@ def run_checks(t, get=http_get, work=None):
     info.update(sinfo)
     browser = find_browser()
     if browser and (work / "site" / "index.html").is_file():
-        bad = contrast_problems(work / "site", browser)
+        bad = measured_contrast(work / "site", browser, work / "shots" / ".measured.json")
         if bad is None:
             notes.append("text contrast not measured - the browser gave no answer")
         for rel, text, ratio, need in (bad or [])[:6]:
@@ -1846,14 +1895,16 @@ def cmd_check(a, get=http_get):
         print("TARGET: BROKEN - work/target.json must be one JSON object {...}")
         return 1
 
-    errs, notes, info = run_checks(t, get)
+    # The screenshots are taken while the other checks run, not after them:
+    # each is a Chrome launch, seconds apiece on the droplet's one CPU.
     built = t.get("status") == "built"
+    index = A("work", "site", "index.html")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        later = pool.submit(fresh_shots, index, A("work", "shots")) if built and index.is_file() else None
+        errs, notes, info = run_checks(t, get)
+        shots = later.result() if later else []
     if built and not errs and t.get("name") and seen_row(t["name"], t.get("phone", "")):
         errs.append(f"{t['name']} is already in contacted.csv - pick another business")
-
-    shots = []
-    if built and (A("work", "site", "index.html")).is_file():
-        shots = shoot(A("work", "site", "index.html").as_uri(), A("work", "shots"))
 
     ok_line, why = remember.written_this_cycle(A("state", "last-run.txt"), started)
 
