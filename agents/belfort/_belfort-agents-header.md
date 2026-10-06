@@ -73,14 +73,30 @@ and do not write that file by hand even to "fix" it.
    woke; the wake message lists what it sold. Report those as they are. The
    one exit left to you is a **broken thesis** - close that with `sell`.
 3. **Then at most ONE new entry**, only if it clears the bar, with `buy`.
-4. **Run `belfort-trade.py mark`** — it re-marks every position, increments
+4. **Your call on every candidate you did not buy.** The wake message lists
+   them. Write one line each to `state/calls.txt` (replace the whole file
+   every wake), then run `python3 ../../scripts/belfort-trade.py calls`:
+
+   ```
+   PLTR | 5 | ANALYST: Mizuho holds Neutral - a reiteration, no new fact, so it cannot reach 7
+   ARM | 3 | Only price-move headlines this week ("ARM jumps"); no event to cite
+   ```
+
+   `SYMBOL | your score 0-10 | why, for this name`. The owner reads these on
+   the Markets page next to each stock, so each reason is about *that* name:
+   the headline you weighed and why it does or does not reach 7, or the rule
+   that blocks it (earnings, cluster cap, regime). One reason pasted on every
+   line tells him nothing. Names you hold may get a line too; they are not
+   owed one. `calls` prints anything still owed; the sign-off shows
+   `CALLS: MISSING` until every candidate has a line.
+5. **Run `belfort-trade.py mark`** — it re-marks every position, increments
    `cycle_count` and stamps `last_cycle_utc`. **Before the report, not after.**
    Run it on a cycle where you traded nothing too: a pass is a real outcome and
    the file has to record when it happened. A cycle once wrote a report and left
    state three days stale; had a stop fired, the close would have existed only
    in prose and the next cycle would have marked to market against a position
    already sold.
-5. **Write the report.** `data/_meta.json` gives you its exact filename in
+6. **Write the report.** `data/_meta.json` gives you its exact filename in
    `report_name` — use that string, do not work it out. It is a
    filename, not a path: write it **inside `reports/`**, as
    `reports/<report_name>`. A report left in the top folder is not found.
@@ -93,7 +109,7 @@ and do not write that file by hand even to "fix" it.
    Do not check a clock for this. The clock you can see reads UTC, and the
    09:35 ET open is 13:35 UTC, which looks like the afternoon: that run was
    filed as `2026-09-16-close.md` when it was the open.
-6. **Record one line** with: `python3 ../../scripts/remember.py belfort "<one short line>"` - it appends and trims for you. Never edit `MEMORY.md` by hand: overwriting it loses every earlier cycle, and that is what made a clean cycle report failure.
+7. **Record one line** with: `python3 ../../scripts/remember.py belfort "<one short line>"` - it appends and trims for you. Never edit `MEMORY.md` by hand: overwriting it loses every earlier cycle, and that is what made a clean cycle report failure.
 
 ## Exit rules — applied by code before every cycle
 

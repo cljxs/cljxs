@@ -68,12 +68,20 @@ echo "$EXITS"
 # Its refusals while it tries candidates are routine, so stderr is dropped.
 SHADOW_LINE="$(python3 "$ROOT/scripts/belfort-trade.py" shadow 2>/dev/null)" || SHADOW_LINE="  !! the shadow book failed - run belfort-trade.py shadow by hand to see why"
 echo "$SHADOW_LINE"
+
+# The candidates as they stand now are the ones he owes a call on: the
+# fetcher rewrites candidates.json every 10 minutes, and a name that screened
+# in after he wrote his calls must not fail a cycle that did its job.
+cp "$AGENT/data/candidates.json" "$AGENT/state/.candidates-at-wake.json" 2>/dev/null \
+  || rm -f "$AGENT/state/.candidates-at-wake.json"
+OWED="$(python3 "$ROOT/scripts/belfort-trade.py" calls --owed 2>/dev/null)" || OWED="(run belfort-trade.py calls --owed)"
 openclaw agent --agent belfort \
   --message "Scheduled cycle. This wake's report is a NEW file: reports/$REPORT - write it there. Do not edit an earlier report, even one from today.
 
 The exit rules were already applied by code before you woke:
 $EXITS
-Report these sales as they are; do not sell for those rules again. You judge only a broken thesis." \
+Report these sales as they are; do not sell for those rules again. You judge only a broken thesis.
+Candidates owed a call this wake (one line each in state/calls.txt, then belfort-trade.py calls): $OWED" \
   --session-id "wake-belfort-$STARTED" \
   --timeout 600 --json 2>&1 | tee "$LOG"
 # The agent's own exit code is deliberately not checked here. It exits 0 for

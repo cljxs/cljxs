@@ -37,6 +37,8 @@ import remember  # noqa: E402
 import importlib.util as _ilu  # noqa: E402
 _spec = _ilu.spec_from_file_location('ace_judge', Path(__file__).resolve().parent / 'ace-judge.py')
 ace_judge = _ilu.module_from_spec(_spec); _spec.loader.exec_module(ace_judge)
+_spec = _ilu.spec_from_file_location('belfort_trade', Path(__file__).resolve().parent / 'belfort-trade.py')
+belfort_trade = _ilu.module_from_spec(_spec); _spec.loader.exec_module(belfort_trade)
 
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
 CANDIDATES = ROOT / "agents" / "ace" / "data" / "candidates.json"
@@ -58,6 +60,7 @@ AGENTS = {
     ],
     "belfort": [
         ("STATE", "json", "state/portfolio.json", "cycle_count"),
+        ("CALLS", "calls", "state/calls.txt", None),
         ("REPORT", "report", "reports", None),
         ("MEMORY", "memory", "MEMORY.md", None),
     ],
@@ -221,6 +224,20 @@ def main():
             else:
                 lines.append(f"{label}: {total} game(s) estimated blind" if total
                              else f"{label}: no games on {rel} this cycle")
+            continue
+
+        if kind == "calls":
+            # A score and a reason for every candidate he did not buy, so the
+            # Markets page can say per name why he passed. The verifier asks
+            # belfort_trade.calls_missing too: one rule, two readers.
+            owed = belfort_trade.calls_missing(started or None)
+            if owed:
+                lines.append(f"{label}: MISSING - {len(owed)} candidate(s) have no call this wake "
+                             f"({', '.join(owed)}). Add a line for each to {rel} - "
+                             f"SYMBOL | score | reason - and run: python3 ../../scripts/belfort-trade.py calls")
+                missing.append(label)
+            else:
+                lines.append(f"{label}: every candidate has a call this wake")
             continue
 
         if not path.exists():

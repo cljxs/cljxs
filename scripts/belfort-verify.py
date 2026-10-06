@@ -48,6 +48,7 @@ def _shared(name):
 
 
 book_gap = _shared("book_gap")
+calls_missing = _shared("calls_missing")
 
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
 AGENT = ROOT / "agents" / "belfort"
@@ -154,6 +155,13 @@ def main():
                             "to be a real report")
         else:
             notes.append(f"report {report.name}, {words}w")
+
+    # One call per candidate he did not buy - the same function signoff.py
+    # asks, so the two cannot disagree about what is owed.
+    owed = calls_missing(started or None)
+    if owed:
+        problems.append(f"{len(owed)} candidate(s) have no call this wake ({', '.join(owed)}) - "
+                        "each needs a line in state/calls.txt, filed by `belfort-trade.py calls`")
 
     memory = AGENT / "MEMORY.md"
     mem_after = memory.stat().st_size if memory.exists() else 0

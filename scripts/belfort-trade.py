@@ -15,6 +15,7 @@ trading loss was under 4%.
     belfort-trade.py mark        # end of cycle: re-mark, bump cycle_count, stamp the file
     belfort-trade.py shadow      # the no-AI book's turn: same rules, top candidate, no judgement
     belfort-trade.py stats [--json]    # both books against each other and QQQ
+    belfort-trade.py calls       # file state/calls.txt: his score and reason per candidate
 
 Every trade is validated against the rules before it is applied:
   * you cannot spend cash you do not have
@@ -58,6 +59,15 @@ CANDIDATES = ROOT / "agents" / "belfort" / "data" / "candidates.json"
 EARNINGS = ROOT / "agents" / "belfort" / "data" / "earnings.json"
 BARS = ROOT / "agents" / "belfort" / "data" / "bars.json"
 REPORTS = ROOT / "agents" / "belfort" / "reports"
+# His call on each candidate, every wake (owner, 2026-10-06: "I want it to say
+# for each stock why it passed"). He writes CALLS_IN; `calls` files it in CALLS.
+CALLS_IN = ROOT / "agents" / "belfort" / "state" / "calls.txt"
+CALLS = ROOT / "agents" / "belfort" / "state" / "calls.jsonl"
+# The candidates as they stood at wake, copied by belfort-cycle.sh. The
+# fetcher rewrites candidates.json every 10 minutes, so without this a name
+# that screened in after he wrote his calls would fail a cycle that did its job.
+CALLS_OWED = ROOT / "agents" / "belfort" / "state" / ".candidates-at-wake.json"
+CALL_MIN_WORDS = 6
 BOARD_CANDIDATES = 6        # candidates shown on the Markets page after what he holds
 
 MAX_POSITION_PCT = 25.0
@@ -803,6 +813,13 @@ def board():
 
     held = {pos["symbol"].upper(): entry_of(p, pos) for pos in p["positions"]
             if float(pos.get("shares") or 0) > 0}
+    calls = {}                      # wake -> {symbol: call}, the later line winning
+    for c in calls_log():
+        calls.setdefault(c.get("wake"), {})[c.get("symbol")] = {
+            k: c.get(k) for k in ("symbol", "score", "reason", "wake", "utc")}
+    latest = {}
+    for wake in sorted(calls, key=lambda w: report_order(Path(f"{w}.md"))):
+        latest.update(calls[wake])
     cands = [c.get("symbol") for c in _doc(CANDIDATES).get("candidates") or []]
     order = list(held) + [c for c in cands if c and c not in held][:BOARD_CANDIDATES]
 
@@ -837,7 +854,7 @@ def board():
                                   f"old in its feed - a buy must cite one.")
             else:
                 row["why_not"] = (f"Room for {room} shares and {len(fresh)} fresh headline(s) - a buy needs one "
-                                  f"he scores 7+ of 10 at 9:35 or 3:55 ET; his report says why he passed.")
+                                  f"he scores 7+ of 10.")
             flips.append(["BUY", "if a headline from its own news names a specific event he scores 7+ of 10"])
             if state == "unfavorable":
                 flips.append(["WAIT", f"no buys while the market is unfavorable ({why})"])
@@ -849,7 +866,7 @@ def board():
                 flips.append(["RISK", f"a buy's stop would sit {r:g}% under the price"])
         price, s20, s50 = q.get("price"), q.get("sma20"), q.get("sma50")
         return {
-            "symbol": sym, "verdict": verdict, "held": bool(pos), **row,
+            "symbol": sym, "verdict": verdict, "held": bool(pos), **row, "call": latest.get(sym),
             "price": price, "change_pct": q.get("change_pct"),
             "change_5d": _change(closes, 5), "change_30d": _change(closes, 30),
             "spark": [round(c, 2) for c in closes[-30:]],
@@ -884,7 +901,122 @@ def board():
         "watch": [ticker(s) for s in order if s in quotes],
         "report": {"name": reports[0].name, "text": reports[0].read_text(errors="replace")} if reports else None,
         "history": [f.name for f in reports[:30]],
+        "calls": {f.stem: sorted(calls[f.stem].values(), key=lambda c: (-(c["score"] or 0), c["symbol"]))
+                  for f in reports[:30] if f.stem in calls},
     }
+
+
+# ------------------------------------------------------------------ calls
+
+def cycle_started():
+    """When this wake began, written by belfort-cycle.sh. 0 when absent."""
+    try:
+        return int((STATE.parent / ".cycle-started").read_text().strip())
+    except Exception:
+        return 0
+
+
+def wake_name(started=None):
+    """This wake's name, "2026-10-06-open": its report's name without .md,
+    from et_time, so a call and its report can never be filed apart."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import et_time
+    name, _ = et_time.expected_report(STATE.parent.parent, "belfort", started=started or None)
+    return Path(name).stem if name else None
+
+
+def calls_log():
+    out = []
+    try:
+        text = CALLS.read_text()
+    except FileNotFoundError:
+        return out
+    for line in text.splitlines():
+        try:
+            out.append(json.loads(line))
+        except Exception:
+            continue
+    return out
+
+
+def calls_owed():
+    """The candidates owed a call: those at wake if belfort-cycle.sh copied
+    them, else candidates.json as it is now."""
+    started = cycle_started()
+    src = CALLS_OWED if CALLS_OWED.exists() and (not started or CALLS_OWED.stat().st_mtime >= started) \
+        else CANDIDATES
+    return [str(c.get("symbol")).upper() for c in _doc(src).get("candidates") or [] if c.get("symbol")]
+
+
+def calls_missing(since=None):
+    """Candidates with no call from this wake, leaving out what he holds -
+    a name he bought this wake is his call on it. The one rule: signoff.py
+    and belfort-verify.py ask this function."""
+    since = cycle_started() if since is None else since
+    held = {x["symbol"].upper() for x in load()["positions"] if float(x.get("shares") or 0) > 0}
+    done = {c.get("symbol") for c in calls_log() if not since or int(c.get("ts") or 0) >= since}
+    return [s for s in calls_owed() if s not in held and s not in done]
+
+
+def parse_calls(text, known):
+    """`SYMBOL | score | reason` per line -> ({symbol: (score, reason)}, problems)."""
+    got, bad = {}, []
+    for raw in text.splitlines():
+        line = raw.strip().lstrip("-*").strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [x.strip() for x in line.split("|", 2)]
+        if len(parts) < 3:
+            bad.append(f"{line[:60]!r}: write it as SYMBOL | score | reason")
+            continue
+        sym, score, reason = parts[0].upper(), parts[1].split("/")[0].strip(), parts[2]
+        if sym not in known:
+            bad.append(f"{sym}: not one of the names in quotes.json")
+        elif sym in got:
+            bad.append(f"{sym}: two lines - give each name one")
+        elif not score.isdigit() or not 0 <= int(score) <= 10:
+            bad.append(f"{sym}: score {parts[1]!r} - a whole number 0 to 10")
+        elif len(reason.split()) < CALL_MIN_WORDS:
+            bad.append(f"{sym}: {reason!r} is not a reason - say what you weighed for THIS name "
+                       f"(the headline and why it does or does not reach 7, or what your rules block)")
+        else:
+            got[sym] = (int(score), reason)
+    return got, bad
+
+
+def cmd_calls(a):
+    owed = calls_missing()
+    if a.owed:
+        print(", ".join(owed) if owed else "none")
+        return 0
+    started = cycle_started()
+    if not CALLS_IN.exists():
+        print(f"state/calls.txt does not exist. Write one line per candidate: SYMBOL | score | reason. "
+              f"Owed this wake: {', '.join(owed) or 'none'}", file=sys.stderr)
+        return 1
+    if started and CALLS_IN.stat().st_mtime < started:
+        print("state/calls.txt is from an earlier wake - nothing recorded. Rewrite it with this "
+              f"wake's calls. Owed: {', '.join(owed) or 'none'}", file=sys.stderr)
+        return 1
+    known = set((quotes_doc().get("quotes") or {}))
+    got, bad = parse_calls(CALLS_IN.read_text(errors="replace"), known)
+    if bad:
+        print("nothing recorded:\n  " + "\n  ".join(bad), file=sys.stderr)
+        return 1
+    held = {x["symbol"].upper() for x in load()["positions"] if float(x.get("shares") or 0) > 0}
+    now_ = datetime.now(timezone.utc)
+    wake = wake_name(started)
+    CALLS.parent.mkdir(parents=True, exist_ok=True)
+    with CALLS.open("a") as f:
+        for sym, (score, reason) in got.items():
+            f.write(json.dumps({"ts": int(now_.timestamp()), "utc": now_.strftime("%Y-%m-%d %H:%M:%S"),
+                                "wake": wake, "symbol": sym, "score": score, "reason": reason,
+                                "held": sym in held}) + "\n")
+    left = calls_missing()
+    print(f"recorded {len(got)} call(s) for {wake}." + (
+        f" Still owed: {', '.join(left)} - add a line for each and run this again." if left
+        else " Every candidate has a call."))
+    return 0
 
 
 def report_order(f):
@@ -1066,6 +1198,9 @@ def main():
     z.add_argument("symbol")
     z.set_defaults(fn=cmd_size)
     sub.add_parser("board", help="JSON for the Markets page").set_defaults(fn=cmd_board)
+    c = sub.add_parser("calls", help="file state/calls.txt: his score and reason for each candidate")
+    c.add_argument("--owed", action="store_true", help="only list the names still owed a call this wake")
+    c.set_defaults(fn=cmd_calls)
     st = sub.add_parser("stats")
     st.add_argument("--json", action="store_true")
     st.set_defaults(fn=cmd_stats)

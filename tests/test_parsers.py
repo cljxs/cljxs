@@ -17536,6 +17536,121 @@ class SizeKnowsTheEightNameCap(TheMarketsPageDrawsBelfortsOwnNumbers):
             self.assertIn("no headline under 7 days old", self.board_row("NVDA")["why_not"])
 
 
+class BelfortWritesHisCallOnEachName(TheMarketsPageDrawsBelfortsOwnNumbers):
+    """Owner, 2026-10-06, on the Markets page's "his report says why he
+    passed": "I don't see it in the report ... I want it to say it there for
+    each stock on why it passed." The report gave one sentence for all of
+    them. Now each candidate he does not buy gets a score and a reason in
+    state/calls.txt, filed by `calls`, owed by the one rule signoff.py and
+    belfort-verify.py both ask, and drawn per name by the page."""
+
+    def wake(self, held=(), cands=("TSM", "NVDA"), at_wake=None):
+        self.state = self.root / "agents" / "belfort" / "state"
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.state / "portfolio.json").write_text(json.dumps({
+            "starting_cash": 10000.0, "cash": 9000.0, "created_utc": "2026-09-01 13:00:00", "trades": [],
+            "positions": [{"symbol": x, "shares": 1, "cost_basis": 10.0} for x in held]}))
+        (self.data / "candidates.json").write_text(json.dumps({"candidates": [{"symbol": c} for c in cands]}))
+        self.started = int(time.time()) - 60
+        (self.state / ".cycle-started").write_text(f"{self.started}\n")
+        if at_wake is not None:
+            (self.state / ".candidates-at-wake.json").write_text(
+                json.dumps({"candidates": [{"symbol": c} for c in at_wake]}))
+        return load(f"belfort_trade_calls_{id(self)}_{time.time_ns()}", "belfort-trade.py")
+
+    def run_(self, *args, script="belfort-trade.py"):
+        return subprocess.run([sys.executable, str(SCRIPTS / script), *args], capture_output=True, text=True,
+                              env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)), cwd=str(self.root))
+
+    def write(self, text):
+        (self.state / "calls.txt").write_text(text)
+
+    def test_a_name_he_did_not_buy_is_owed_a_call_until_filed(self):
+        trade = self.wake(held=["TSM"])
+        self.assertEqual(trade.calls_missing(), ["NVDA"], "a held name is not owed one; a passed one is")
+        self.write("NVDA | 4 | ANALYST: Jefferies reiterates Buy - no new fact, so it stops at 4\n")
+        r = self.run_("calls")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Every candidate has a call", r.stdout)
+        self.assertEqual(trade.calls_missing(), [])
+        filed = [json.loads(x) for x in (self.state / "calls.jsonl").read_text().splitlines()]
+        self.assertEqual([(c["symbol"], c["score"], c["wake"]) for c in filed],
+                         [("NVDA", 4, trade.wake_name(self.started))])
+
+    def test_a_call_from_an_earlier_wake_is_not_this_wakes(self):
+        trade = self.wake()
+        self.write("NVDA | 4 | ANALYST: Jefferies reiterates Buy - no new fact at all\n")
+        old = self.started - 3600
+        os.utime(self.state / "calls.txt", (old, old))
+        r = self.run_("calls")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("from an earlier wake", r.stderr)
+        self.assertFalse((self.state / "calls.jsonl").exists())
+        (self.state / "calls.jsonl").write_text(json.dumps(
+            {"ts": old, "wake": "x", "symbol": "NVDA", "score": 4, "reason": "r"}) + "\n")
+        self.assertIn("NVDA", trade.calls_missing(), "yesterday's call does not pay today's")
+
+    def test_a_lazy_or_malformed_line_files_nothing(self):
+        self.wake()
+        for text, why in (("NVDA | 4 | no catalyst\nTSM | 3 | only price-move headlines this week, nothing to cite\n",
+                           "is not a reason"),
+                          ("NVDA | 11 | a score that does not exist on the ten point scale\n", "0 to 10"),
+                          ("ZZZZ | 4 | a symbol that is not one of the thirty at all\n", "not one of the names"),
+                          ("NVDA 4 reasons without the separators between them\n", "SYMBOL | score | reason")):
+            self.write(text)
+            r = self.run_("calls")
+            self.assertEqual(r.returncode, 1, text)
+            self.assertIn(why, r.stderr)
+            self.assertFalse((self.state / "calls.jsonl").exists(), "a refused file records nothing")
+
+    def test_a_name_that_screened_in_after_wake_is_not_owed(self):
+        trade = self.wake(cands=("TSM", "NVDA"), at_wake=("NVDA",))
+        self.assertEqual(trade.calls_missing(), ["NVDA"])
+
+    def test_signoff_and_the_verifier_ask_the_same_rule(self):
+        self.wake(held=["TSM"])
+        args = ("0", "-1", str(self.started))
+        self.assertIn("CALLS: MISSING - 1 candidate(s) have no call this wake (NVDA)",
+                      self.run_("belfort", script="signoff.py").stdout)
+        self.assertIn("(NVDA) - each needs a line in state/calls.txt", self.run_(*args, script="belfort-verify.py").stdout)
+        self.write("NVDA | 4 | ANALYST: Jefferies reiterates Buy - no new fact, so it stops at 4\n")
+        self.assertEqual(self.run_("calls").returncode, 0)
+        self.assertIn("CALLS: every candidate has a call", self.run_("belfort", script="signoff.py").stdout)
+        self.assertNotIn("have no call", self.run_(*args, script="belfort-verify.py").stdout)
+
+    def test_the_page_gets_each_names_call_beside_its_report(self):
+        trade = self.wake()
+        reports = self.root / "agents" / "belfort" / "reports"
+        reports.mkdir(parents=True, exist_ok=True)
+        (reports / f"{trade.wake_name(self.started)}.md").write_text("# Belfort\npassed\n")
+        from email.utils import format_datetime
+        (self.data / "news.json").write_text(json.dumps({"headlines": [
+            {"title": "Jefferies reiterates Buy on Nvidia", "published": format_datetime(datetime.now(timezone.utc)),
+             "id": "n1", "publisher": "reuters.com", "symbol": "NVDA"}]}))
+        self.write("TSM | 6 | EARNINGS: September sales up 30% - strong, but priced in after the run\n"
+                   "NVDA | 4 | ANALYST: Jefferies reiterates Buy - no new fact, so it stops at 4\n")
+        self.assertEqual(self.run_("calls").returncode, 0)
+        b = json.loads(self.run_("board").stdout)
+        nvda = next(w for w in b["watch"] if w["symbol"] == "NVDA")
+        self.assertEqual((nvda["call"]["score"], nvda["call"]["wake"]), (4, trade.wake_name(self.started)))
+        self.assertIn("Jefferies", nvda["call"]["reason"])
+        if trade.regime()[0] != "unfavorable":
+            self.assertIn("1 fresh headline(s)", nvda["why_not"])
+        self.assertNotIn("his report says", nvda.get("why_not") or "", "the call says why now, not the report")
+        wake = b["calls"][trade.wake_name(self.started)]
+        self.assertEqual([c["symbol"] for c in wake], ["TSM", "NVDA"], "highest score first")
+        html = (ROOT / "mission-control-api" / "public" / "markets.html").read_text()
+        self.assertIn("(B.calls || {})[String(rep.name).replace(", html)
+        self.assertIn("const c = w.call;", html)
+
+    def test_the_wake_message_names_the_owed_and_freezes_them(self):
+        sh = (SCRIPTS / "belfort-cycle.sh").read_text()
+        self.assertIn('cp "$AGENT/data/candidates.json" "$AGENT/state/.candidates-at-wake.json"', sh)
+        self.assertIn('belfort-trade.py" calls --owed', sh)
+        self.assertLess(sh.index(".candidates-at-wake.json"), sh.index("openclaw agent"))
+        self.assertIn("belfort-trade.py calls", (ROOT / "agents" / "belfort" / "_belfort-agents-header.md").read_text())
+
+
 class TheMarketsPageIsWiredInOnePlace(unittest.TestCase):
     """Owner, 2026-10-06: Belfort's house and the Deck's Markets tab are one
     page, and the report renderer they share is one file - it was two
