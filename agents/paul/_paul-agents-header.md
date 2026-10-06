@@ -88,6 +88,7 @@ candidates at most. None good enough? That is a valid day: write
      "sources": {"name": "url", "address": "url", "phone": "url",
                  "hours": "url", "contact": "url"},
      "photos": [{"file": "img/hero.jpg", "source": "url", "kind": "business|stock"}],
+     "claims": [{"text": "Iowa's oldest barbershop, est. 1911", "source": "url"}],
      "layout": "one line: what this layout is",
      "notes": "anything the user should know"}
 
@@ -121,7 +122,10 @@ layout. A stranger should think they paid for this.
 - **Copy:** specific, human, short. Their real full address and hours. No
   copy about the site itself ("real photo", "our new site"). **Every claim
   needs a source** - "local ingredients", "family-owned", "award-winning"
-  only if one of their own pages says it. No reviews, ratings, counters
+  only if one of their own pages says it. Code finds claim words on the
+  page (certified, licensed, oldest, award, since 1911, 20 years, family-
+  owned, guaranteed...) and refuses any not listed in `claims` with the
+  URL it came from. Can't source it? Cut it. No reviews, ratings, counters
   ("500+ happy customers") or metrics you did not read on a source, and no
   animated number counters at all. The headline says what they sell and
   where - never a slogan that would fit any business. Read it aloud and cut

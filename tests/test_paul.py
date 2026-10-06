@@ -80,6 +80,7 @@ def target(**over):
                      for k in ("name", "address", "phone", "hours", "contact")},
          "photos": [{"file": "img/hero.jpg", "source": "https://images.unsplash.com/photo-1",
                      "kind": "stock"}],
+         "claims": [{"text": "by hand since 1998", "source": "https://maps.google.com/?cid=1"}],
          "layout": "full-bleed photo hero", "notes": "test"}
     t.update(over)
     return t
@@ -1077,3 +1078,32 @@ class StockPhotosAreSaidToBePlaceholders(PaulCase):
                             "kind": "business"}])
         self.assertFalse([e for e in self.errs(draft, t) if "placeholder" in e])
 
+
+
+class EveryClaimHasASource(SiteRules):
+    """College Hill Barbers (2026-10-06) said "Certified Stylists ... stay
+    trained in the latest techniques" - in no source Paul read. Claim words
+    on the page need an entry in target.json "claims" with the URL."""
+
+    def has(self, errs, word):
+        self.assertTrue(any(word in e for e in errs), f"{word!r} not in {errs}")
+
+    def test_an_unsourced_claim(self):
+        self.has(self.errors(index=INDEX.replace("<main>", "<main><p>Certified tailors.</p>")),
+                 '"Certified" is a claim')
+
+    def test_a_sourced_claim_passes(self):
+        t = target(claims=target()["claims"] + [{"text": "certified tailors",
+                                                 "source": "https://rosas.test/about"}])
+        self.assertEqual(self.errors(t=t, index=INDEX.replace("<main>", "<main><p>Certified tailors.</p>")), [])
+
+    def test_a_claim_needs_its_url(self):
+        t = target(claims=[{"text": "by hand since 1998", "source": "their sign"}])
+        self.has(self.errors(t=t), "needs the URL")
+
+    def test_a_founding_year(self):
+        self.has(self.errors(t=target(claims=[])), '"since 1998" is a claim')
+
+    def test_ordinary_copy_is_not_a_claim(self):
+        self.assertEqual(self.errors(index=INDEX.replace(
+            "<main>", "<main><p>Walk-ins welcome. Bring the dress, we will pin it.</p>")), [])

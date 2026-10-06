@@ -192,6 +192,21 @@ FONT_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
 VALEDICTION = re.compile(r"^(best|thanks|thank you|cheers|regards|kind regards|warm regards|"
                          r"best regards|sincerely|all the best|talk soon)\W*$", re.I)
 DOH = "https://dns.google/resolve?type=MX&name="
+# Claims a business can be held to - and a site can get it into trouble for
+# if they are not true. College Hill Barbers' concept (2026-10-06) said
+# "Certified Stylists ... stay trained in the latest techniques", in no
+# source Paul read. Each match must be backed by an entry in target.json
+# "claims" whose text holds the same words, with the URL it came from. A year
+# ("since 1911") is backed by any claim holding that year.
+CLAIM_PATTERNS = (
+    r"\bcertified\b", r"\blicensed\b", r"\binsured\b", r"\baward[- ]winning\b",
+    r"\bawards?\b", r"\boldest\b", r"#\s?1\b", r"\bnumber one\b", r"\btop[- ]rated\b",
+    r"\bfamily[- ]owned\b", r"\blocally[- ]owned\b", r"\bvoted\b", r"\bguarantee[sd]?\b",
+    r"\borganic\b", r"\blocal(?:ly)?[- ](?:sourced|ingredients|farms?)\b", r"\b\d+\+?\s+years\b",
+    r"\bmaster barbers?\b", r"\bbest (?:in|of) \w+",
+)
+CLAIM_YEAR = re.compile(r"\b(?:since|est\.?|established|founded)\s+(?:in\s+)?((?:1[89]|20)\d\d)\b",
+                        re.I)
 BROWSERS = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome")
 SHOTS = (("mobile", 390, 844), ("desktop", 1440, 900))
 
@@ -1076,6 +1091,7 @@ def check_site(site, t, old_page=None):
         errs.append("a 555-01xx number is on the page - that is fiction, not this business")
 
     errs += look_and_law(sc)
+    errs += claim_problems(sc["text"], t)
 
     photos = {str(p.get("file") or "").lstrip("./").removeprefix("site/"): p
               for p in (t.get("photos") or []) if isinstance(p, dict)}
@@ -1100,6 +1116,31 @@ def check_site(site, t, old_page=None):
                     f"never ship a downgrade")
     info["photos"] = len(rasters)
     return errs, info
+
+
+def _claimkey(x):
+    return re.sub(r"[\s-]+", " ", str(x).lower()).strip()
+
+
+def claim_problems(text, t):
+    """Claim words on the page with no sourced entry in target.json "claims"."""
+    claims = [c for c in (t or {}).get("claims") or [] if isinstance(c, dict)]
+    errs = [f'claims: "{c.get("text", "")}" needs the URL it came from' for c in claims
+            if not re.match(r"^https?://\S+$", str(c.get("source") or "").strip())]
+    backed = " | ".join(_claimkey(c.get("text") or "") for c in claims
+                        if re.match(r"^https?://", str(c.get("source") or "")))
+    missing = []
+    for pat in CLAIM_PATTERNS:
+        for m in re.finditer(pat, text, re.I):
+            if _claimkey(m.group(0)) not in backed:
+                missing.append(m.group(0))
+    for m in CLAIM_YEAR.finditer(text):
+        if m.group(1) not in backed:
+            missing.append(m.group(0))
+    for w in sorted(set(missing), key=str.lower)[:6]:
+        errs.append(f'"{w}" is a claim with no source - add it to target.json "claims" with the '
+                    f"URL where the business says it, or cut it")
+    return errs
 
 
 def look_and_law(sc):
