@@ -66,7 +66,7 @@ of the work. It's here: [PREVIEW URL]
 
 If you like it, it's yours for a flat $350, one time: your own photos and
 wording, one round of changes, and set up on your own web address, with no
-monthly fees.
+monthly fees. The photos are placeholders until you send me yours.
 """
 
 
@@ -1054,3 +1054,26 @@ class CheckDoesNotRemeasureAnUnchangedSite(unittest.TestCase):
         (self.site / "index.html").write_text("<html><body>new</body></html>")
         paul.fresh_shots(self.site / "index.html", shots)
         self.assertEqual(len(calls), 2)
+
+
+class StockPhotosAreSaidToBePlaceholders(PaulCase):
+    """Owner, 2026-10-06: College Hill Barbers and Milkbox were all-stock -
+    their own photos were behind Facebook's login. A concept may use stock,
+    but the pitch must say the photos are placeholders."""
+
+    def errs(self, draft, t):
+        return paul.check_draft(draft, t)[0]
+
+    def test_all_stock_without_saying_so(self):
+        draft = DRAFT.replace(" The photos are placeholders until you send me yours.", "")
+        self.assertTrue(any("placeholder" in e for e in self.errs(draft, target())))
+
+    def test_saying_so_passes(self):
+        self.assertEqual(self.errs(DRAFT, target()), [])
+
+    def test_their_own_photo_needs_no_line(self):
+        draft = DRAFT.replace(" The photos are placeholders until you send me yours.", "")
+        t = target(photos=[{"file": "img/hero.jpg", "source": "https://facebook.com/x/photo",
+                            "kind": "business"}])
+        self.assertFalse([e for e in self.errs(draft, t) if "placeholder" in e])
+

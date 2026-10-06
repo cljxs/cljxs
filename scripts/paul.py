@@ -1001,6 +1001,14 @@ def check_draft(text, t):
     if EM_DASH in body:
         errs.append("em dashes in the pitch read as AI-written - use a comma or a full stop")
     errs += offer_problems(body)
+    # Owner, 2026-10-06: Paul's prospects have no working site, so their
+    # photos sit behind Facebook's or Instagram's login, and an all-stock
+    # preview is the usual case (College Hill Barbers, Milkbox). Fine for a
+    # concept - but the pitch says so, rather than let stock pass as theirs.
+    photos = [p for p in (t or {}).get("photos") or [] if isinstance(p, dict)]
+    if photos and all(p.get("kind") == "stock" for p in photos) and "placeholder" not in body.lower():
+        errs.append('every photo is stock - say so in one line, e.g. "the photos are placeholders '
+                    'until you send me yours"')
     me = str(load_sender()[0].get("name") or "").strip().lower()
     tail = [ln.strip() for ln in body.strip().splitlines() if ln.strip()][-3:]
     if any(VALEDICTION.match(ln) or (me and ln.lower().strip(",.") in (me, me.split()[0]))
