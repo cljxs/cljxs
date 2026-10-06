@@ -108,7 +108,12 @@ layout. A stranger should think they paid for this.
 - **Photos:** their own posted photos first - their site, Facebook,
   Instagram, Google Business Profile owner uploads - then Unsplash or Pexels
   for gaps. All-stock is a last resort, and `notes` must say where you
-  looked for theirs. Never put a caption that implies "this is ours" (today's
+  looked for theirs. **Stock must pass for a shop like theirs, in their
+  town:** close-ups of tools, chairs, hands, food, textures - never a scene
+  with identifiable people, another business's signs, or writing in another
+  language (College Hill Barbers, a 1911 Iowa shop, got a street barbershop
+  with Thai signs as its hero). Open each photo with view_image and ask
+  whether the owner would believe it was taken in Cedar Falls. Never put a caption that implies "this is ours" (today's
   bake, our team, our shop) over a stock photo. Never customer review photos. Never an AI image of their product
   or place. Download every image into `work/site/img/` (`curl -sL -o`), never
   hotlink, and list each in `photos`. If their current site has photos,
@@ -133,7 +138,9 @@ layout. A stranger should think they paid for this.
   anything under WCAG contrast (4.5:1, 3:1 for large text) - check buttons
   especially; a link colour inherited onto a same-coloured button is the
   usual cause. Every `<img>` needs alt text describing it. Buttons say what
-  they do ("Call (319) 260-2068", "Get directions"). A favicon is required:
+  they do ("Call (319) 260-2068", "Get directions"). Button text never
+  wraps onto two lines - on a phone the header button just says "Call";
+  the full number goes in the big button below. A favicon is required:
   a simple mark that fits the business - never a padlock, a generic shape
   or a letter in a circle.
 - **Nothing that collects data.** No forms, no iframes or embeds (a Maps
