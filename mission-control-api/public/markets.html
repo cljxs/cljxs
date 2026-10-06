@@ -231,7 +231,8 @@ function spark(v) {
 
 function center(w) {
   const held = w.held ? `<div style="color:var(--mute);margin-top:6px">Holding ${w.shares} sh @ ${money(w.entry)} · stop ${money(w.stop)}${
-    w.catalyst ? ` · bought on: ${esc(w.catalyst)}` : ''}</div>` : `<div style="color:var(--mute);margin-top:6px">Passed ${w.mechanical_score ?? 0} of 3 screens · not held</div>`;
+    w.catalyst ? ` · bought on: ${esc(w.catalyst)}` : ''}</div>` : `<div style="color:var(--mute);margin-top:6px">Passed ${w.mechanical_score ?? 0} of 3 screens · not held</div>${
+    w.why_not ? `<div style="margin-top:6px;color:var(--gold2)">Why not: <span style="color:var(--ink)">${esc(w.why_not)}</span></div>` : ''}`;
   return `
   <div class="box"><div class="tick">
     <div><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><span class="s">${esc(w.symbol)}</span>${badge(w)}

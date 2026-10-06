@@ -172,7 +172,6 @@ def headline(hid, symbol, now_ts=None):
     """The news.json headline a buy cites, checked: it exists, it is from
     this name's own feed, and it is under HEADLINE_MAX_AGE_DAYS old. Raises
     ValueError saying which."""
-    from email.utils import parsedate_to_datetime
     try:
         items = json.loads(NEWS.read_text())["headlines"]
     except Exception:
@@ -182,9 +181,8 @@ def headline(hid, symbol, now_ts=None):
         raise ValueError(f"no headline {hid!r} in news.json - cite one by its \"id\"")
     if str(h.get("symbol", "")).upper() != symbol.upper():
         raise ValueError(f"headline {hid} is from {h.get('symbol')}'s news, not {symbol.upper()}'s")
-    try:
-        age = (now_ts or datetime.now(timezone.utc).timestamp()) - parsedate_to_datetime(h["published"]).timestamp()
-    except Exception:
+    age = headline_age(h, now_ts)
+    if age is None:
         raise ValueError(f"headline {hid} has no readable date")
     if age > HEADLINE_MAX_AGE_DAYS * 86400:
         raise ValueError(f"headline {hid} is {age / 86400:.0f} days old - a catalyst is news, "
@@ -283,6 +281,18 @@ def benchmark(symbol):
     return (quotes_doc().get("benchmarks") or {}).get(symbol)
 
 
+def headline_age(h, now_ts=None):
+    """Seconds since a news.json headline was published, or None if its date
+    cannot be read. The one reading of a headline's age: a buy's catalyst
+    must be under HEADLINE_MAX_AGE_DAYS by it, and the Markets page counts
+    the headlines that could still be one."""
+    from email.utils import parsedate_to_datetime
+    try:
+        return (now_ts or datetime.now(timezone.utc).timestamp()) - parsedate_to_datetime(h["published"]).timestamp()
+    except Exception:
+        return None
+
+
 def trading_days_until(day, today=None):
     """Weekdays from today (0) to `day`, or None if it has passed."""
     from datetime import date, timedelta
@@ -331,9 +341,15 @@ def size(p, symbol, state=None):
     soon = earnings_soon(sym)
     if soon:
         return 0, f"{sym} reports earnings {soon[0]}, {soon[1]} trading day(s) away"
+    held = position(p, sym)
+    names = [x for x in p["positions"] if float(x.get("shares") or 0) > 0]
+    # buy() refuses a 9th name; size() said "12 shares" all the same until
+    # 2026-10-06, when the Markets page began quoting it as the reason a
+    # stock is or is not held.
+    if not (held and float(held.get("shares") or 0) > 0) and len(names) >= MAX_POSITIONS:
+        return 0, f"{len(names)} names held, the most is {MAX_POSITIONS}"
     mv = market_value(p)
     cap = MAX_POSITION_PCT if state == "favorable" else NEUTRAL_POSITION_PCT
-    held = position(p, sym)
     held_value = float(held["shares"]) * px if held else 0.0
     group = cluster_of(sym)
     in_group = sum(float(x["shares"]) * float(last_price(x["symbol"], x.get("cost_basis")) or 0)
@@ -811,6 +827,17 @@ def board():
                    "catalyst": (pos.get("catalyst") or {}).get("title") if isinstance(pos.get("catalyst"), dict) else None}
         else:
             verdict = "WATCH"
+            room, blocked = size(p, sym, (state, why))
+            fresh = [n for n in news if str(n.get("symbol", "")).upper() == sym
+                     and (headline_age(n) or 10 ** 9) <= HEADLINE_MAX_AGE_DAYS * 86400]
+            if not room:
+                row["why_not"] = f"His rules block a buy: {blocked}."
+            elif not fresh:
+                row["why_not"] = (f"Room for {room} shares, but no headline under {HEADLINE_MAX_AGE_DAYS} days "
+                                  f"old in its feed - a buy must cite one.")
+            else:
+                row["why_not"] = (f"Room for {room} shares and {len(fresh)} fresh headline(s) - a buy needs one "
+                                  f"he scores 7+ of 10 at 9:35 or 3:55 ET; his report says why he passed.")
             flips.append(["BUY", "if a headline from its own news names a specific event he scores 7+ of 10"])
             if state == "unfavorable":
                 flips.append(["WAIT", f"no buys while the market is unfavorable ({why})"])

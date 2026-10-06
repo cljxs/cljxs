@@ -17498,6 +17498,44 @@ class TheMarketsPageDrawsBelfortsOwnNumbers(unittest.TestCase):
         self.assertIn("Belfort (AI)", [r["name"] for r in b["showdown"]["rows"]])
 
 
+class SizeKnowsTheEightNameCap(TheMarketsPageDrawsBelfortsOwnNumbers):
+    """buy() refused a 9th name, but size() - "the most a buy may take now" -
+    still offered shares. Found 2026-10-06 when the Markets page began
+    quoting size() as the reason a candidate is not held."""
+
+    def book(self, n):
+        state = self.root / "agents" / "belfort" / "state"
+        state.mkdir(parents=True, exist_ok=True)
+        names = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF", "GGG", "HHH"][:n]
+        p = {"starting_cash": 10000.0, "cash": 9000.0, "created_utc": "2026-09-01 13:00:00", "trades": [],
+             "positions": [{"symbol": x, "shares": 1, "cost_basis": 10.0} for x in names]}
+        (state / "portfolio.json").write_text(json.dumps(p))
+        return p
+
+    def board_row(self, sym):
+        r = subprocess.run([sys.executable, str(SCRIPTS / "belfort-trade.py"), "board"],
+                           capture_output=True, text=True, env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return next(w for w in json.loads(r.stdout)["watch"] if w["symbol"] == sym)
+
+    def test_a_ninth_name_gets_no_shares(self):
+        trade = load("belfort_trade_cap", "belfort-trade.py")
+        self.assertEqual(trade.size(self.book(8), "NVDA", ("favorable", "test"))[0], 0)
+        self.assertIn("8 names held, the most is 8", trade.size(self.book(8), "NVDA", ("favorable", "test"))[1])
+        self.assertGreater(trade.size(self.book(7), "NVDA", ("favorable", "test"))[0], 0)
+
+    def test_the_page_says_why_a_candidate_is_not_held(self):
+        trade = load("belfort_trade_why", "belfort-trade.py")
+        state = trade.regime()[0]
+        self.book(8)
+        row = self.board_row("NVDA")
+        self.assertIn("His rules block a buy", row["why_not"])
+        if state != "unfavorable":
+            self.assertIn("8 names held", row["why_not"])
+            self.book(0)
+            self.assertIn("no headline under 7 days old", self.board_row("NVDA")["why_not"])
+
+
 class TheMarketsPageIsWiredInOnePlace(unittest.TestCase):
     """Owner, 2026-10-06: Belfort's house and the Deck's Markets tab are one
     page, and the report renderer they share is one file - it was two
