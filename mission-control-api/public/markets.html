@@ -187,7 +187,7 @@ async function load() {
 
 function render() {
   const sd = B.showdown || {};
-  $('basis').textContent = 'Belfort vs the no-AI book vs QQQ · ' + (sd.basis || '');
+  $('basis').textContent = 'Belfort vs the no-AI book vs QQQ and SPY · ' + (sd.basis || '');
   $('spread').textContent = has(sd.spread) ? sd.spread.toFixed(2) + '%' : '—';
   const rows = sd.rows || [];
   const scale = Math.max(1, ...rows.map(r => Math.abs(r.pct || 0)));
@@ -396,7 +396,7 @@ async function loadBooks() {
     </div>
     ${d ? `<div class="sect">Same days, side by side</div>
       <div class="tr">Since ${esc(d.since)}: <b>Belfort ${d.belfort_pct === null ? '— (from his next wake-up)' : pct(d.belfort_pct)}</b>
-        · <b>No-AI ${pct(d.shadow_pct)}</b> · QQQ ${pct(d.qqq_pct)}</div>` : ''}
+        · <b>No-AI ${pct(d.shadow_pct)}</b> · QQQ ${pct(d.qqq_pct)} · SPY ${pct(d.spy_pct)}</div>` : ''}
     ${bookStats(shadow)}${bookPositions(shadow)}${bookTrades(shadow)}`;
   }
   $('side').innerHTML = html + '</div>';
@@ -415,7 +415,7 @@ function bookStats(b) {
   const rules = Object.entries(b.exits_by_rule || {}).filter(([, n]) => n).map(([r, n]) => `${esc(r)} ${n}`).join(' · ');
   return `<div class="stats">
       <div class="stat"><div class="l">Return</div><div class="v num ${cls(b.return_pct)}">${pct(b.return_pct)}</div>
-        <div class="l">QQQ same days ${pct(b.qqq_return_pct)}</div></div>
+        <div class="l">QQQ same days ${pct(b.qqq_return_pct)} · SPY ${pct(b.spy_return_pct)}</div></div>
       <div class="stat"><div class="l">Biggest drop</div><div class="v num">${Number(b.max_drawdown_pct).toFixed(2)}%</div>
         <div class="l">from a peak</div></div>
       <div class="stat"><div class="l">Closed trades</div><div class="v num">${b.closed}</div>

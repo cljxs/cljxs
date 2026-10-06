@@ -14,7 +14,7 @@ trading loss was under 4%.
     belfort-trade.py exits [--apply]   # the sell rules, in code; --apply sells what is due
     belfort-trade.py mark        # end of cycle: re-mark, bump cycle_count, stamp the file
     belfort-trade.py shadow      # the no-AI book's turn: same rules, top candidate, no judgement
-    belfort-trade.py stats [--json]    # both books against each other and QQQ
+    belfort-trade.py stats [--json]    # both books against each other, QQQ and SPY
     belfort-trade.py calls       # file state/calls.txt: his score and reason per candidate
 
 Every trade is validated against the rules before it is applied:
@@ -68,7 +68,6 @@ CALLS = ROOT / "agents" / "belfort" / "state" / "calls.jsonl"
 # that screened in after he wrote his calls would fail a cycle that did its job.
 CALLS_OWED = ROOT / "agents" / "belfort" / "state" / ".candidates-at-wake.json"
 CALL_MIN_WORDS = 6
-BOARD_CANDIDATES = 6        # candidates shown on the Markets page after what he holds
 
 MAX_POSITION_PCT = 25.0
 MIN_CASH_PCT = 5.0          # the owner lowered it from 15% on 2026-10-01
@@ -107,6 +106,11 @@ CLUSTERS = {
     "mega-cap": ["META", "GOOGL", "AMZN", "MSFT", "AAPL"],
     "crypto and high-beta": ["COIN", "HOOD", "TSLA"],
     "consumer internet": ["SHOP", "UBER", "ABNB", "RBLX"],
+    # Added 2026-10-06 with the names in belfort-fetch.py's UNIVERSE.
+    "healthcare": ["LLY", "ISRG", "VRTX", "ABBV", "HIMS"],
+    "financials": ["JPM", "GS", "V", "MA"],
+    "industrials and energy": ["GE", "CAT", "ETN", "XOM"],
+    "consumer and retail": ["COST", "NFLX", "WMT", "NKE"],
 }
 CLUSTER_CAP_PCT = 40.0
 MAX_POSITIONS = 8
@@ -114,7 +118,7 @@ MAX_POSITIONS = 8
 # The market regime (regime()). Mixed: a new buy may bring the position to
 # this much of the portfolio - half the usual ~20%. Unfavourable: none.
 NEUTRAL_POSITION_PCT = 10.0
-BREADTH_MIN = 0.5           # share of the 30 above their own 50-day average
+BREADTH_MIN = 0.5           # share of the names above their own 50-day average
 
 HEADLINE_MAX_AGE_DAYS = 7
 SHADOW_POSITION_PCT = 20.0
@@ -154,7 +158,7 @@ def regime(doc=None):
     """(state, why) - "favorable", "neutral", "unfavorable", or "unknown"
     (no QQQ data yet: treated as neutral). From QQQ against its own 50-day
     average and that average's direction over 10 days, and breadth: the share
-    of the 30 names above their own 50-day average."""
+    of the names above their own 50-day average."""
     doc = doc if doc is not None else quotes_doc()
     qqq = (doc.get("benchmarks") or {}).get("QQQ") or {}
     closes = [float(c) for _, c in qqq.get("history") or []]
@@ -618,7 +622,7 @@ def load_shadow():
 
 def shadow_turn(p):
     """The shadow book's cycle: the exits, then at most one buy - the first
-    candidate (candidates.json is ranked by MACD histogram) it does not hold
+    candidate (candidates.json is ranked by MACD histogram over price) it does not hold
     that every rule allows, sized like Belfort's. Returns what it did."""
     did = [f"sold {sym}: {reason}" for sym, _, reason in exits_due(p)
            if sell(p, sym, "all", None, reason) == 0]
@@ -637,7 +641,7 @@ def shadow_turn(p):
             continue
         # Belfort's usual ~20%, or less: whatever size() allows
         shares = min(int(mv * pct / 100 // px), size(p, sym, (state, why))[0])
-        if shares > 0 and buy(p, sym, shares, None, "SHADOW: top candidate by MACD histogram",
+        if shares > 0 and buy(p, sym, shares, None, "SHADOW: top candidate by MACD histogram over price",
                               0, None, (state, why)) == 0:
             return did + [f"bought {shares} {sym} ({state})"]
     return did + ["no buy: no candidate the rules allow"]
@@ -693,14 +697,13 @@ def book_stats(p, book, doc=None):
         peak = max(peak, v)
         drawdown = max(drawdown, (peak - v) / peak * 100)
     since = str(p.get("created_utc") or (p["trades"][0].get("utc") if p.get("trades") else "") or "")[:10]
-    qqq = (doc.get("benchmarks") or {}).get("QQQ") or {}
-    hist = [(d, float(c)) for d, c in qqq.get("history") or []]
-    base = next((c for d, c in hist if d >= since), hist[0][1] if hist else None) if since else None
+    qqq_pct, qqq_from = bench_since(doc, "QQQ", since)
+    spy_pct, spy_from = bench_since(doc, "SPY", since)
     return {
         "book": book, "since": since, "value": round(value, 2),
         "return_pct": round((value / start - 1) * 100, 2),
-        "qqq_return_pct": round((float(qqq["price"]) / base - 1) * 100, 2) if base and qqq.get("price") else None,
-        "qqq_from": next((d for d, _ in hist if d >= since), hist[0][0] if hist else None) if since else None,
+        "qqq_return_pct": qqq_pct, "qqq_from": qqq_from,
+        "spy_return_pct": spy_pct, "spy_from": spy_from,
         "closed": len(closed), "win_rate": round(len(wins) / len(closed) * 100, 1) if closed else None,
         "avg_win_pct": round(sum(c["pct"] for c in wins) / len(wins), 2) if wins else None,
         "avg_loss_pct": round(sum(c["pct"] for c in losses) / len(losses), 2) if losses else None,
@@ -711,6 +714,18 @@ def book_stats(p, book, doc=None):
                           for name in [n for _, n in RULE_NAMES] + ["judgement"]},
         "open": len([x for x in p["positions"] if float(x.get("shares") or 0) > 0]),
     }
+
+
+def bench_since(doc, symbol, since):
+    """(percent, from day): a benchmark from the first close on or after
+    `since` to its price now. QQQ is the tech market his first 30 names came
+    from; SPY, added 2026-10-06 with the non-tech names, the whole market."""
+    b = (doc.get("benchmarks") or {}).get(symbol) or {}
+    hist = [(d, float(c)) for d, c in b.get("history") or []]
+    if not since or not hist:
+        return None, None
+    day, base = next(((d, c) for d, c in hist if d >= since), hist[0])
+    return (round((float(b["price"]) / base - 1) * 100, 2) if base and b.get("price") else None), day
 
 
 def book_view(p):
@@ -748,6 +763,7 @@ def same_days(books):
     first = next((r["value"] for r in rows if r.get("book") == "belfort" and str(r.get("utc", "")) >= start), None)
     now_value = next(b["value"] for b in books if b["book"] == "belfort")
     return {"since": start[:10], "shadow_pct": shadow["return_pct"], "qqq_pct": shadow["qqq_return_pct"],
+            "spy_pct": shadow["spy_return_pct"],
             "belfort_pct": round((now_value / first - 1) * 100, 2) if first else None}
 
 
@@ -767,8 +783,9 @@ def cmd_stats(a):
     for b in books:
         name = "BELFORT (AI)" if b["book"] == "belfort" else "SHADOW (no AI)"
         print(f"{name}  since {b['since']}\n"
-              f"  value ${b['value']:,.2f}  return {fmt(b['return_pct'])}   QQQ over the same time "
-              f"{fmt(b['qqq_return_pct'])}" + (f" (from {b['qqq_from']})" if b["qqq_from"] and b["qqq_from"] > b["since"] else "")
+              f"  value ${b['value']:,.2f}  return {fmt(b['return_pct'])}   over the same time: QQQ "
+              f"{fmt(b['qqq_return_pct'])}, SPY {fmt(b['spy_return_pct'])}"
+              + (f" (from {b['qqq_from']})" if b["qqq_from"] and b["qqq_from"] > b["since"] else "")
               + f"\n  max drawdown {b['max_drawdown_pct']:.2f}%   open positions {b['open']}\n"
               f"  closed trades {b['closed']}   win rate {fmt(b['win_rate'], '%') if b['win_rate'] is None else str(b['win_rate']) + '%'}"
               f"   avg win {fmt(b['avg_win_pct'])}   avg loss {fmt(b['avg_loss_pct'])}\n"
@@ -795,7 +812,7 @@ def _change(closes, back):
 def board():
     """Everything the Markets page draws (owner, 2026-10-06), worked out
     here so nothing on the page is arithmetic in JavaScript: the showdown
-    between his book, the no-AI book and QQQ; what he holds and what passed
+    between his book, the no-AI book, QQQ and SPY; what he holds and what passed
     the screens; per name, the price, the candles and lines from bars.json,
     the gauges, his own exit rules as "what would change his mind", the
     news, and his reports."""
@@ -821,7 +838,7 @@ def board():
     for wake in sorted(calls, key=lambda w: report_order(Path(f"{w}.md"))):
         latest.update(calls[wake])
     cands = [c.get("symbol") for c in _doc(CANDIDATES).get("candidates") or []]
-    order = list(held) + [c for c in cands if c and c not in held][:BOARD_CANDIDATES]
+    order = list(held) + [c for c in cands if c and c not in held]
 
     def ticker(sym):
         q = quotes.get(sym) or {}
@@ -884,11 +901,12 @@ def board():
 
     if same and same.get("belfort_pct") is not None:
         basis = f"same days, since {same['since']}"
-        race = [("Belfort (AI)", same["belfort_pct"]), ("No-AI book", same["shadow_pct"]), ("QQQ", same["qqq_pct"])]
+        race = [("Belfort (AI)", same["belfort_pct"]), ("No-AI book", same["shadow_pct"]), ("QQQ", same["qqq_pct"]),
+                ("SPY", same["spy_pct"])]
     else:
         mine = books[0]
         basis = f"since {mine['since'] or 'the start'}"
-        race = [("Belfort (AI)", mine["return_pct"]), ("QQQ", mine["qqq_return_pct"])]
+        race = [("Belfort (AI)", mine["return_pct"]), ("QQQ", mine["qqq_return_pct"]), ("SPY", mine["spy_return_pct"])]
         if len(books) > 1:
             race.insert(1, ("No-AI book", books[1]["return_pct"]))
     vals = [v for _, v in race if v is not None]

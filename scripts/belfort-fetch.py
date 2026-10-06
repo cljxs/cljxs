@@ -28,12 +28,26 @@ import et_time  # noqa: E402
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
 DATA_DIR = ROOT / "agents" / "belfort" / "data"
 
-# ~30 US tech / momentum names, all well above $5B market cap.
+# US names, all well above $5B market cap. The first 30 are tech and
+# momentum; the owner added the four groups after them on 2026-10-06 because
+# most of what Belfort picked was chips. Every name needs a cluster in
+# belfort-trade.py's CLUSTERS, or the 40% cap cannot see it.
 UNIVERSE = [
     "NVDA", "AMD", "AVGO", "MU", "TSM", "SMCI", "ARM", "QCOM", "INTC", "MRVL",
     "PLTR", "COIN", "HOOD", "SHOP", "NET", "DDOG", "SNOW", "CRWD", "ZS", "PANW",
     "MDB", "TSLA", "META", "GOOGL", "AMZN", "MSFT", "AAPL", "UBER", "ABNB", "RBLX",
+    "LLY", "ISRG", "VRTX", "ABBV", "HIMS",
+    "JPM", "GS", "V", "MA",
+    "GE", "CAT", "ETN", "XOM",
+    "COST", "NFLX", "WMT", "NKE",
 ]
+
+# What Belfort is shown each wake. Code screens every name; he judges at most
+# MAX_CANDIDATES of those that pass, no more than CANDIDATES_PER_CLUSTER from
+# one group, so a chip rally cannot fill his whole list - and what he reads,
+# which is what he costs, stays the same size however wide the list grows.
+MAX_CANDIDATES = 10
+CANDIDATES_PER_CLUSTER = 3
 
 # Not traded - read by belfort-trade.py's regime() and stats: the market
 # Belfort's universe lives in, and what holding it instead would have made.
@@ -335,8 +349,46 @@ def file_is_fresh(path, seconds, now=None):
         return False
 
 
+def momentum(q):
+    """The MACD histogram as a share of price. The raw histogram is in
+    dollars, so ranking by it put a $900 stock ahead of a $50 one with the
+    same push behind it."""
+    return (q.get("macd_hist") or 0) / q["price"] if q.get("price") else 0
+
+
+def _cluster_of():
+    """belfort-trade.py's cluster_of: the groups live with the cap that uses
+    them. Loaded by path - the hyphen keeps it from a normal import."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("belfort_trade_clusters",
+                                                  Path(__file__).resolve().parent / "belfort-trade.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.cluster_of
+
+
+def shortlist(quotes, cluster_of=None):
+    """(shown, left_out): the names that pass all three screens, strongest
+    first, at most CANDIDATES_PER_CLUSTER per cluster and MAX_CANDIDATES in
+    all. left_out is [{symbol, cluster, why}] for what passed and was not shown."""
+    cluster_of = cluster_of or _cluster_of()
+    shown, left_out, per = [], [], {}
+    for q in sorted((q for q in quotes if q.get("mechanical_score") == 3), key=lambda q: -momentum(q)):
+        group = cluster_of(q["symbol"])
+        if per.get(group, 0) >= CANDIDATES_PER_CLUSTER:
+            why = f"already {CANDIDATES_PER_CLUSTER} from {group}"
+        elif len(shown) >= MAX_CANDIDATES:
+            why = f"list full at {MAX_CANDIDATES}"
+        else:
+            per[group] = per.get(group, 0) + 1
+            shown.append(q)
+            continue
+        left_out.append({"symbol": q["symbol"], "cluster": group, "why": why})
+    return shown, left_out
+
+
 def news_is_fresh(path, now=None):
-    """Whether news.json was written within NEWS_EVERY_SECONDS, for all 30."""
+    """Whether news.json was written within NEWS_EVERY_SECONDS, for every name."""
     try:
         d = json.loads(path.read_text())
         age = (now or time.time()) - datetime.strptime(
@@ -373,11 +425,8 @@ def main():
             failures.append({"symbol": sym, "error": str(exc)[:120]})
             log(f"{sym}: FAILED — {exc}")
 
-    # Pre-screen in plain code so the agent reasons over a short list, not 30.
-    candidates = sorted(
-        [q for q in quotes.values() if q["mechanical_score"] == 3],
-        key=lambda q: (-q["mechanical_score"], -(q["macd_hist"] or 0)),
-    )
+    # Pre-screen in plain code so the agent reasons over a short list.
+    candidates, left_out = shortlist(quotes.values())
 
     charts = {sym: q.pop("_chart") for sym, q in list(quotes.items()) + list(benchmarks.items())
               if "_chart" in q}
@@ -397,8 +446,13 @@ def main():
     (DATA_DIR / "candidates.json").write_text(json.dumps({
         "asof_utc": started.strftime("%Y-%m-%d %H:%M:%S"),
         "note": "Passed all three mechanical screens (trend, RSI band, MACD). "
-                "Belfort must still identify a nameable catalyst and score 7+ before opening.",
-        "candidates": candidates,
+                "Belfort must still identify a nameable catalyst and score 7+ before opening. "
+                f"At most {MAX_CANDIDATES}, at most {CANDIDATES_PER_CLUSTER} per cluster, ranked by "
+                "MACD histogram as a share of price. Daily closes are in quotes.json.",
+        "screened": len(quotes),
+        "passed": len(candidates) + len(left_out),
+        "candidates": [{k: v for k, v in q.items() if k != "history"} for q in candidates],
+        "left_out": left_out,
     }, indent=1) + "\n")
 
     news_file = DATA_DIR / "news.json"
@@ -438,7 +492,8 @@ def main():
         "source": "Yahoo Finance public chart endpoint (no API key)",
     }, indent=1) + "\n")
 
-    log(f"ok: {len(quotes)}/{len(UNIVERSE)} quotes, {len(candidates)} candidates, {len(news)} headlines")
+    log(f"ok: {len(quotes)}/{len(UNIVERSE)} quotes, {len(candidates)} candidates shown"
+        f" ({len(left_out)} more passed), {len(news)} headlines")
     if failures:
         log(f"{len(failures)} failed: {[f['symbol'] for f in failures]}")
     return 0

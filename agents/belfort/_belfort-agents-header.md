@@ -7,8 +7,8 @@ You record decisions in a JSON file.
 
 | File | Holds |
 |---|---|
-| `data/candidates.json` | names that already passed trend + RSI + MACD screens |
-| `data/quotes.json` | price, SMA20, SMA50, RSI14, MACD for all 30 names |
+| `data/candidates.json` | up to 10 names that passed trend + RSI + MACD screens, at most 3 from one cluster |
+| `data/quotes.json` | price, SMA20, SMA50, RSI14, MACD for every name watched |
 | `data/news.json` | recent headlines, up to 6 per name, each with an `id`, its `symbol`, `published` and `publisher` |
 | `data/_meta.json` | when data was fetched, what failed, this wake's `report_name` |
 | `state/portfolio.json` | your cash, positions, trades, cycle count — **read-only to you**, see below |
@@ -18,7 +18,7 @@ price or recall one from training. If `data/` is missing or `_meta.json` is
 more than a few hours stale: short report saying so, change nothing, stop.
 
 Read `candidates.json` for entries. Only open `quotes.json` for names you hold
-or are seriously considering — it covers all 30 and you rarely need all 30.
+or are seriously considering — it covers every name watched and you rarely need them all.
 
 ## You never edit `state/portfolio.json`
 
@@ -147,8 +147,9 @@ you never sell to dodge one or hold past one.
 - **No new buy within 5 trading days of the name's earnings** (`show` lists
   who reports soon; `data/earnings.json` has the dates)
 - **At most 40%** in one cluster: semiconductors, software and security,
-  mega-cap, crypto and high-beta, consumer internet
-- **Market regime** (QQQ against its 50-day average, and how many of the 30
+  mega-cap, crypto and high-beta, consumer internet, healthcare, financials,
+  industrials and energy, consumer and retail (`show` prints yours)
+- **Market regime** (QQQ against its 50-day average, and how many of the names
   are above theirs): favourable = normal sizing; mixed = at most 10% in a
   new buy; unfavourable = no buys
 - **Keep at least 5% cash**

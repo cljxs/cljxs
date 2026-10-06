@@ -17660,6 +17660,84 @@ class BelfortWritesHisCallOnEachName(TheMarketsPageDrawsBelfortsOwnNumbers):
         self.assertIn("belfort-trade.py calls", (ROOT / "agents" / "belfort" / "_belfort-agents-header.md").read_text())
 
 
+class BelfortWatchesMoreThanChips(unittest.TestCase):
+    """Owner, 2026-10-06: "most of the ones he picks are semiconductor
+    stocks" - the 30 names were all tech, a third of them chips. Four groups
+    were added (with HIMS, by name), he is shown at most 10 candidates and 3
+    from one group, and SPY joins QQQ as a yardstick."""
+
+    def setUp(self):
+        self.fetch = load("belfort_fetch_wide", "belfort-fetch.py")
+        self.trade = load("belfort_trade_wide", "belfort-trade.py")
+
+    def test_every_watched_name_is_in_exactly_one_cluster(self):
+        # cluster_of() returns a stray name as its own group, which the 40%
+        # cap then never sees: a name added without a cluster is uncapped.
+        members = [m for ms in self.trade.CLUSTERS.values() for m in ms]
+        self.assertEqual(len(members), len(set(members)), "a name in two clusters")
+        self.assertEqual(set(self.fetch.UNIVERSE) - set(members), set())
+        self.assertIn("HIMS", self.fetch.UNIVERSE)
+        self.assertEqual(self.trade.cluster_of("HIMS"), "healthcare")
+        for group in ("healthcare", "financials", "industrials and energy", "consumer and retail"):
+            self.assertGreaterEqual(len(self.trade.CLUSTERS[group]), 4, group)
+
+    @staticmethod
+    def q(sym, price, hist):
+        return {"symbol": sym, "price": price, "macd_hist": hist, "mechanical_score": 3}
+
+    def test_at_most_ten_and_three_from_one_group_strongest_first(self):
+        chips = [self.q(s, 100.0, 5.0 - i * 0.1) for i, s in enumerate(["NVDA", "AMD", "AVGO", "MU", "TSM", "ARM"])]
+        others = [self.q(s, 100.0, 1.0 - i * 0.05) for i, s in enumerate(
+            ["LLY", "JPM", "GE", "COST", "META", "PLTR", "COIN", "SHOP", "ISRG", "GS"])]
+        failed = dict(self.q("XOM", 100.0, 9.0), mechanical_score=2)
+        shown, left = self.fetch.shortlist(chips + others + [failed], self.trade.cluster_of)
+        syms = [c["symbol"] for c in shown]
+        self.assertEqual(len(shown), 10)
+        self.assertEqual(syms[:3], ["NVDA", "AMD", "AVGO"], "the strongest three chips, in order")
+        self.assertEqual(sum(self.trade.cluster_of(s) == "semiconductors" for s in syms), 3)
+        self.assertNotIn("XOM", syms + [x["symbol"] for x in left], "a name that failed a screen is not a candidate")
+        why = {x["symbol"]: x["why"] for x in left}
+        self.assertEqual(why["MU"], "already 3 from semiconductors")
+        self.assertEqual(why["GS"], "list full at 10")
+
+    def test_ranked_by_push_for_its_price_not_by_dollars(self):
+        # COST at $900 with a $3 histogram is 0.33%; HIMS at $50 with $1 is 2%.
+        shown, _ = self.fetch.shortlist([self.q("COST", 900.0, 3.0), self.q("HIMS", 50.0, 1.0)], self.trade.cluster_of)
+        self.assertEqual([c["symbol"] for c in shown], ["HIMS", "COST"])
+
+    def test_spy_is_measured_from_its_own_closes(self):
+        doc = {"quotes": {}, "benchmarks": {
+            "QQQ": {"price": 110.0, "history": [["2026-10-01", 100.0], ["2026-10-02", 105.0]]},
+            "SPY": {"price": 103.0, "history": [["2026-10-01", 100.0], ["2026-10-02", 101.0]]}}}
+        p = {"starting_cash": 10000.0, "cash": 10000.0, "created_utc": "2026-10-02 13:35:00",
+             "positions": [], "trades": []}
+        b = self.trade.book_stats(p, "belfort", doc)
+        self.assertEqual((b["qqq_return_pct"], b["spy_return_pct"], b["spy_from"]), (4.76, 1.98, "2026-10-02"))
+
+
+class TheShortlistIsWhatHeReads(TheMarketsPageDrawsBelfortsOwnNumbers):
+    """candidates.json carried each name's 90 daily closes, which he never
+    needs to judge a headline; quotes.json keeps them for the exit rules."""
+
+    def test_no_closes_in_candidates_and_the_count_is_kept(self):
+        d = json.loads((self.data / "candidates.json").read_text())
+        self.assertTrue(d["candidates"], "the fixture should screen in")
+        self.assertFalse(any("history" in c for c in d["candidates"]))
+        self.assertEqual((d["screened"], d["passed"]), (2, len(d["candidates"]) + len(d["left_out"])))
+        q = json.loads((self.data / "quotes.json").read_text())["quotes"]
+        self.assertTrue(all(len(v["history"]) == self.fetch.HISTORY_BARS for v in q.values()))
+
+    def test_the_showdown_has_spy(self):
+        state = self.root / "agents" / "belfort" / "state"
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "portfolio.json").write_text(json.dumps({"starting_cash": 10000.0, "cash": 10000.0,
+                                                           "created_utc": "2026-09-01 13:00:00", "positions": [], "trades": []}))
+        r = subprocess.run([sys.executable, str(SCRIPTS / "belfort-trade.py"), "board"],
+                           capture_output=True, text=True, env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("SPY", [row["name"] for row in json.loads(r.stdout)["showdown"]["rows"]])
+
+
 class TheMarketsPageIsWiredInOnePlace(unittest.TestCase):
     """Owner, 2026-10-06: Belfort's house and the Deck's Markets tab are one
     page, and the report renderer they share is one file - it was two
