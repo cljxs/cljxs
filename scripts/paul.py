@@ -166,6 +166,22 @@ DEPLOY_FIELDS = ("slug", "preview_url", "business", "deployed", "teardown",
 
 VERCEL_API = "https://api.vercel.com"
 UA = "Mozilla/5.0 (X11; Linux x86_64) paul-preview-check/1.0"
+# Owner, 2026-10-05, from two checklists he trusts (Yates, "don't look
+# vibecoded" and "don't get sued"). These are the ones a script can see; the
+# rest are rules in the header. Phrases are the stock lines a model reaches
+# for when it has nothing specific to say - copy that fits any business.
+AI_COPY = ("elevate your", "elevate the", "nestled in", "nestled on", "unlock ", "seamless",
+           "delve", "a testament to", "look no further", "whether you're", "whether you are",
+           "in the heart of", "welcome to", "where tradition meets", "where quality meets",
+           "experience the difference", "your one-stop", "one-stop shop", "second to none",
+           "passion for excellence", "crafted with love", "elevated", "curated")
+EM_DASH = "\u2014"
+EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B50\u2B55\uFE0F]")
+CUSTOM_CURSOR = re.compile(r"cursor\s*:\s*(none|url\()", re.I)
+FONT_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
+VALEDICTION = re.compile(r"^(best|thanks|thank you|cheers|regards|kind regards|warm regards|"
+                         r"best regards|sincerely|all the best|talk soon)\W*$", re.I)
+DOH = "https://dns.google/resolve?type=MX&name="
 BROWSERS = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome")
 SHOTS = (("mobile", 390, 844), ("desktop", 1440, 900))
 
@@ -614,6 +630,8 @@ class _Page(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.refs, self.text, self.css, self.tel = [], [], [], []
         self.viewport, self.robots = False, []
+        self.no_alt, self.embeds, self.scripts, self.styles = [], [], [], []
+        self.icon, self.forms = False, 0
         self._skip = 0
         self._style = False
 
@@ -631,6 +649,16 @@ class _Page(HTMLParser):
         rel = a.get("rel", "").lower()
         if tag == "img" and a.get("src"):
             self.refs.append(("image", a["src"]))
+            if not a.get("alt", "").strip():
+                self.no_alt.append(a["src"])
+        if tag in ("iframe", "embed", "object"):
+            self.embeds.append(a.get("src") or a.get("data") or tag)
+        if tag in ("form", "input", "textarea", "select"):
+            self.forms += 1
+        if tag == "link" and "icon" in rel and a.get("href"):
+            self.icon = True
+        if tag == "link" and "stylesheet" in rel and _external(a.get("href", "")):
+            self.styles.append(a["href"])
         if tag in ("img", "source") and a.get("srcset"):
             for part in a["srcset"].split(","):
                 u = part.strip().split(" ")[0]
@@ -646,6 +674,8 @@ class _Page(HTMLParser):
             self.refs.append((kind, a["href"]))
         if tag == "script" and a.get("src"):
             self.refs.append(("script", a["src"]))
+            if _external(a["src"]):
+                self.scripts.append(a["src"])
         if tag == "a" and a.get("href"):
             if a["href"].lower().startswith("tel:"):
                 self.tel.append(a["href"])
@@ -688,7 +718,9 @@ def scan_site(site):
     """Everything check() needs to know about a site folder, read once."""
     site = Path(site)
     out = {"pages": [], "errors": [], "text": "", "tel": [], "images": {},
-           "external_images": [], "bytes": 0, "viewport": True, "local_refs": []}
+           "external_images": [], "bytes": 0, "viewport": True, "local_refs": [],
+           "no_alt": [], "embeds": [], "scripts": [], "styles": [], "forms": 0,
+           "icon": False, "css": []}
     pages = sorted(site.rglob("*.html"))
     out["pages"] = [p.relative_to(site).as_posix() for p in pages]
     texts = []
@@ -702,6 +734,12 @@ def scan_site(site):
             continue
         if not pr.viewport:
             out["viewport"] = False
+        if page.name == "index.html" and page.parent == site:
+            out["icon"] = pr.icon
+        for k in ("no_alt", "embeds", "scripts", "styles"):
+            out[k] += getattr(pr, k)
+        out["forms"] += pr.forms
+        out["css"] += pr.css
         texts.append(" ".join(pr.text))
         out["tel"] += pr.tel
         refs = list(pr.refs)
@@ -710,6 +748,7 @@ def scan_site(site):
         for kind, u in refs:
             _ref(site, page.parent, kind, u, out)
     for css in sorted(site.rglob("*.css")):
+        out["css"].append(css.read_text(errors="replace"))
         for u in CSS_URL.findall(css.read_text(errors="replace")):
             _ref(site, css.parent, "css", u, out)
     out["text"] = " ".join(" ".join(texts).split())
@@ -911,6 +950,14 @@ def check_draft(text, t):
     street = str((t or {}).get("address") or "").split(",")[0].strip().lower()
     if len(street) > 6 and street in body.lower():
         errs.append("the pitch recites their own address back to them - cut it")
+    if EM_DASH in body:
+        errs.append("em dashes in the pitch read as AI-written - use a comma or a full stop")
+    me = str(load_sender()[0].get("name") or "").strip().lower()
+    tail = [ln.strip() for ln in body.strip().splitlines() if ln.strip()][-3:]
+    if any(VALEDICTION.match(ln) or (me and ln.lower().strip(",.") in (me, me.split()[0]))
+           for ln in tail):
+        errs.append("the pitch signs itself off - stop at the last sentence; code adds the "
+                    "user's name and signature")
     extra = sorted(set(re.findall(r"\[[^\]\n]{1,40}\]", body)) - {PREVIEW_URL})
     if extra:
         errs.append(f"remove {', '.join(extra)} - code adds the signature; nothing else "
@@ -971,6 +1018,8 @@ def check_site(site, t, old_page=None):
     if FICTIONAL_PHONE.search(sc["text"]):
         errs.append("a 555-01xx number is on the page - that is fiction, not this business")
 
+    errs += look_and_law(sc)
+
     photos = {str(p.get("file") or "").lstrip("./").removeprefix("site/"): p
               for p in (t.get("photos") or []) if isinstance(p, dict)}
     rasters = [r for r in sc["images"] if r.lower().endswith(RASTER)]
@@ -996,6 +1045,149 @@ def check_site(site, t, old_page=None):
     return errs, info
 
 
+def look_and_law(sc):
+    """The owner's two checklists (2026-10-05), the parts a script can see:
+    what makes a site read as AI-made, and what gets a small business sued.
+    No forms, embeds or outside scripts means no data is collected, so no
+    privacy, cookie or refund page is needed - and Paul must never write a
+    policy for a business that did not write one."""
+    errs = []
+    text = sc["text"]
+    if EM_DASH in text:
+        errs.append(f"{text.count(EM_DASH)} em dash(es) in the page text - they read as "
+                    f"AI-written; use a comma, a full stop or a plain hyphen")
+    emoji = sorted(set(EMOJI.findall(text)) - {"\ufe0f"})
+    if emoji:
+        errs.append(f"emoji in the page ({' '.join(emoji[:5])}) - use real icons (inline SVG) "
+                    f"or none")
+    low = text.lower()
+    stock = [p.strip() for p in AI_COPY if p in low]
+    if stock:
+        errs.append(f"stock AI phrasing: {', '.join(repr(p) for p in stock[:5])} - say "
+                    f"something only true of this business")
+    for src in sc["no_alt"][:5]:
+        errs.append(f"{src} has no alt text - describe what the photo shows "
+                    f"(screen readers, and the law)")
+    if not sc["icon"]:
+        errs.append('index.html has no favicon - add <link rel="icon" href="img/icon.svg"> '
+                    "with a simple mark that fits the business")
+    for u in sc["embeds"][:3]:
+        errs.append(f"embedded {u} - no iframes or embeds (they track visitors); link to "
+                    f"Maps or the menu instead")
+    for u in sc["scripts"][:3]:
+        errs.append(f"outside script {u} - no third-party scripts or tracking; write "
+                    f"the little JS you need")
+    for u in sc["styles"][:3]:
+        host = urllib.parse.urlsplit(u if "//" in u else "https:" + u).hostname or ""
+        if host not in FONT_HOSTS:
+            errs.append(f"outside stylesheet {u} - only Google Fonts may load from elsewhere")
+    if sc["forms"]:
+        errs.append("a form is on the page - forms collect data and need consent and a privacy "
+                    "policy; the call button is the contact")
+    if any(CUSTOM_CURSOR.search(c) for c in sc["css"]):
+        errs.append("a custom cursor - leave the visitor's cursor alone")
+    return errs
+
+
+# Measured in the browser, because a colour in CSS is not the colour on the
+# screen: Milkbox's "Call us" (2026-10-05) was brown text on a brown button,
+# inherited from a{color}, and Paul read the screenshot and missed it. For
+# each visible piece of text: its colour against whatever is painted behind
+# it, WCAG's ratio, 4.5 (3 for large text). Text over a photo or a gradient
+# is skipped - that cannot be judged from colours, and a guess would cost
+# Paul a pass for nothing.
+CONTRAST_ID = "paul-contrast"
+CONTRAST_JS = r"""(function(){
+var cv=document.createElement('canvas');cv.width=cv.height=1;var cx=cv.getContext('2d',{willReadFrequently:true});
+function rgba(c){cx.clearRect(0,0,1,1);cx.fillStyle='#000';cx.fillStyle=c;cx.fillRect(0,0,1,1);var d=cx.getImageData(0,0,1,1).data;return [d[0],d[1],d[2],d[3]/255];}
+function lum(p){var a=[p[0],p[1],p[2]].map(function(v){v/=255;return v<=0.03928?v/12.92:Math.pow((v+0.055)/1.055,2.4)});return 0.2126*a[0]+0.7152*a[1]+0.0722*a[2];}
+function over(t,b){var a=t[3];return [t[0]*a+b[0]*(1-a),t[1]*a+b[1]*(1-a),t[2]*a+b[2]*(1-a),1];}
+var MEDIA={IMG:1,VIDEO:1,CANVAS:1,PICTURE:1,SVG:1,svg:1,IFRAME:1};
+function behind(el){var r=el.getBoundingClientRect();var x=r.left+Math.min(r.width/2,20),y=r.top+r.height/2;
+ var st=document.elementsFromPoint(x,y);var i=st.indexOf(el);if(i<0)return null;var layers=[];
+ for(var j=i;j<st.length;j++){var e=st[j];if(MEDIA[e.tagName])return null;var s=getComputedStyle(e);
+  if(s.backgroundImage&&s.backgroundImage!=='none')return null;var c=rgba(s.backgroundColor);
+  if(c[3]>0){layers.push(c);if(c[3]>=0.999)break;}}
+ var b=[255,255,255,1];for(var k=layers.length-1;k>=0;k--)b=over(layers[k],b);return b;}
+var out=[],seen=0;var all=document.body.querySelectorAll('*');
+for(var n=0;n<all.length&&seen<400;n++){var el=all[n];if(/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(el.tagName))continue;
+ var own='';for(var c=el.firstChild;c;c=c.nextSibling)if(c.nodeType===3)own+=c.nodeValue;own=own.replace(/\s+/g,' ').trim();if(!own)continue;
+ var s=getComputedStyle(el);if(s.visibility!=='visible'||s.display==='none'||el.getClientRects().length===0)continue;
+ var fill=rgba(s.webkitTextFillColor||s.color);if(fill[3]===0)continue;seen++;
+ el.scrollIntoView({block:'center'});var bg=behind(el);if(!bg)continue;
+ var fg=over(rgba(s.color),bg);var L1=lum(fg),L2=lum(bg);var ratio=(Math.max(L1,L2)+0.05)/(Math.min(L1,L2)+0.05);
+ var px=parseFloat(s.fontSize),w=parseInt(s.fontWeight)||400;var need=(px>=24||(px>=18.66&&w>=700))?3:4.5;
+ if(ratio<need)out.push({text:own.slice(0,60),ratio:Math.round(ratio*100)/100,need:need});}
+var pre=document.createElement('pre');pre.id='paul-contrast';pre.textContent=JSON.stringify({checked:seen,fails:out});document.body.appendChild(pre);
+})();"""
+
+
+def contrast_problems(site, browser, run=subprocess.run, width=1280, height=900):
+    """[(page, text, ratio, need)] for text a visitor cannot read, or None
+    when the browser gave no answer - unmeasured is not "fine", and it is
+    not "broken" either. The probe runs on a hidden copy of each page beside
+    it, so relative links resolve; the copy is always removed."""
+    site = Path(site)
+    bad, answered = [], False
+    for page in sorted(site.rglob("*.html"))[:6]:
+        probe = page.with_name(f".{CONTRAST_ID}-{page.name}")
+        markup = page.read_text(errors="replace")
+        tag = f"<script>{CONTRAST_JS}</script>"
+        probe.write_text(re.sub(r"(?i)</body>", lambda _m: tag + "</body>", markup, count=1)
+                         if re.search(r"(?i)</body>", markup) else markup + tag)
+        try:
+            r = run([browser, "--headless=new", "--no-sandbox", "--disable-gpu",
+                     "--no-first-run", "--disable-dev-shm-usage",
+                     f"--window-size={width},{height}", "--virtual-time-budget=4000",
+                     "--dump-dom", probe.as_uri()], capture_output=True, text=True, timeout=90)
+            out = r.stdout or ""
+        except Exception:
+            out = ""
+        finally:
+            probe.unlink(missing_ok=True)
+        m = re.search(rf'<pre id="{CONTRAST_ID}">(.*?)</pre>', out, re.S)
+        if not m:
+            continue
+        try:
+            d = json.loads(html.unescape(m.group(1)))
+        except ValueError:
+            continue
+        answered = True
+        rel = page.relative_to(site).as_posix()
+        for f in d.get("fails") or []:
+            bad.append((rel, f.get("text", ""), f.get("ratio"), f.get("need")))
+    return bad if answered else None
+
+
+def mail_verdict(address, get=http_get):
+    """("none" | "yes" | "unknown", detail) for an email address's domain,
+    from Google's DNS-over-HTTPS. Milkbox (2026-10-05): the pitch went to an
+    address at milkboxbakery.com, a domain that no longer exists - the
+    email would have bounced. "none" only on proof: no such domain (Status
+    3), or a null MX ("0 .", RFC 7505: accepts no mail). No MX at all is not
+    proof - mail then goes to the domain's own address - so it is "unknown"."""
+    domain = str(address or "").rsplit("@", 1)[-1].strip().strip("<>.").lower()
+    if not domain or "." not in domain:
+        return "unknown", f"{address!r} has no domain to look up"
+    r = get(DOH + urllib.parse.quote(domain), timeout=15)
+    if not r.get("ok") or r.get("status") != 200:
+        return "unknown", f"could not look up {domain} ({r.get('error') or r.get('status')})"
+    try:
+        d = json.loads(r.get("body") or "")
+    except ValueError:
+        return "unknown", f"the lookup for {domain} did not answer in JSON"
+    if d.get("Status") == 3:
+        return "none", f"{domain} does not exist (no such domain in DNS)"
+    if d.get("Status") != 0:
+        return "unknown", f"DNS lookup for {domain} failed (status {d.get('Status')})"
+    mx = [str(a.get("data") or "") for a in d.get("Answer") or [] if a.get("type") == 15]
+    if mx and all(m.split()[-1:] == ["."] for m in mx):
+        return "none", f"{domain} says it accepts no email (null MX)"
+    if mx:
+        return "yes", f"{domain} receives email"
+    return "unknown", f"{domain} lists no mail server"
+
+
 def run_checks(t, get=http_get, work=None):
     """Every rule, for check (Paul, mid-cycle) and finish (code, after) alike.
     One function, two readers: when they were two copies elsewhere in this
@@ -1017,6 +1209,14 @@ def run_checks(t, get=http_get, work=None):
     serrs, sinfo = check_site(work / "site", t, page)
     errs += serrs
     info.update(sinfo)
+    browser = find_browser()
+    if browser and (work / "site" / "index.html").is_file():
+        bad = contrast_problems(work / "site", browser)
+        if bad is None:
+            notes.append("text contrast not measured - the browser gave no answer")
+        for rel, text, ratio, need in (bad or [])[:6]:
+            errs.append(f'"{text}" on {rel} is hard to read: contrast {ratio}:1, needs '
+                        f"{need}:1 - change the text colour or what is behind it")
 
     dp = work / "draft.md"
     if not dp.is_file():
@@ -1025,6 +1225,13 @@ def run_checks(t, get=http_get, work=None):
         derrs, head, _body, words = check_draft(dp.read_text(errors="replace"), t)
         errs += derrs
         info.update(channel=head.get("channel"), to=head.get("to"), words=words)
+        if (head.get("channel") or "").lower() == "email" and "@" in (head.get("to") or ""):
+            verdict, detail = mail_verdict(head["to"], get)
+            if verdict == "none":
+                errs.append(f"an email to {head['to']} would bounce: {detail}. Reach them "
+                            f"another way - their Facebook or Instagram (a DM), or a phone script")
+            elif verdict == "unknown":
+                notes.append(f"email address not confirmed: {detail}")
     return errs, notes, info
 
 

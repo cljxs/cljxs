@@ -45,7 +45,8 @@ SENDER = {"area": "Austin, TX", "name": "Sam Owner", "studio": "Sam Studio",
 
 INDEX = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rosa's Tailoring</title><link rel="stylesheet" href="style.css"></head><body>
+<title>Rosa's Tailoring</title><link rel="stylesheet" href="style.css">
+<link rel="icon" href="img/icon.svg"></head><body>
 <header class="hero" style="background-image:url('img/hero.jpg')">
 <h1>Rosa's Tailoring</h1><p>Hems, suits and wedding dresses, by hand since 1998.</p>
 <a class="cta" href="tel:+15124440199">Call (512) 444-0199</a></header>
@@ -148,6 +149,7 @@ class PaulCase(unittest.TestCase):
         (w / "site" / "index.html").write_text(index)
         (w / "site" / "style.css").write_text("body{margin:0}")
         (w / "site" / "img" / "hero.jpg").write_bytes(b"\xff\xd8" + b"0" * 5000)
+        (w / "site" / "img" / "icon.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
         (w / "target.json").write_text(json.dumps(t or target()))
         (w / "draft.md").write_text(draft)
         paul.save_cycle({"started": int(time.time()) - 5, "mode": cycle_mode,
@@ -796,3 +798,153 @@ class PreflightNamesTheSearchProvider(PaulCase):
         line = next(l for l in out.splitlines() if "web search" in l)
         self.assertIn("brave", line)
         self.assertNotIn("tools.web.search", asked)
+
+
+FIX = ROOT / "tests" / "fixtures"
+
+
+def doh(name):
+    """get() that answers the MX lookup with a real captured dns.google reply."""
+    body = (FIX / name).read_text()
+    return lambda url, timeout=20, limit=400_000: page(body, url=url)
+
+
+class NotVibecodedNotSued(SiteRules):
+    """Owner, 2026-10-05: two checklists (Yates) - what makes a site read as
+    AI-made, and what gets a small business sued. Milkbox, the first dry
+    cycle, had em dashes and stock phrasing; these are the parts code can
+    see, so Paul cannot just say he followed them."""
+
+    def has(self, errs, word):
+        self.assertTrue(any(word in e for e in errs), f"no error mentioning {word!r}: {errs}")
+
+    def test_em_dashes_in_the_page(self):
+        self.has(self.errors(index=INDEX.replace("by hand since", "by hand — since")),
+                 "em dash")
+
+    def test_emoji_icons(self):
+        self.has(self.errors(index=INDEX.replace("<h1>", "<h1>✂️ ")), "emoji")
+
+    def test_stock_ai_phrasing(self):
+        self.has(self.errors(index=INDEX.replace("Hems, suits", "Nestled in East Austin. Hems, suits")),
+                 "stock AI phrasing")
+
+    def test_a_photo_without_alt_text(self):
+        self.has(self.errors(index=INDEX.replace("</main>", '<img src="img/hero.jpg"></main>')),
+                 "alt text")
+
+    def test_alt_text_satisfies_it(self):
+        errs = self.errors(index=INDEX.replace(
+            "</main>", '<img src="img/hero.jpg" alt="Rosa pinning a hem"></main>'))
+        self.assertFalse([e for e in errs if "alt text" in e], errs)
+
+    def test_no_favicon(self):
+        self.has(self.errors(index=INDEX.replace('<link rel="icon" href="img/icon.svg">', "")),
+                 "favicon")
+
+    def test_embeds_scripts_and_forms(self):
+        errs = self.errors(index=INDEX.replace("</main>", (
+            '<iframe src="https://www.google.com/maps/embed?pb=1"></iframe>'
+            '<script src="https://www.googletagmanager.com/gtag/js"></script>'
+            '<form><input name="email"></form></main>')))
+        self.has(errs, "embedded")
+        self.has(errs, "outside script")
+        self.has(errs, "a form")
+
+    def test_google_fonts_are_allowed(self):
+        errs = self.errors(index=INDEX.replace(
+            '<link rel="icon"', '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter">'
+                                '<link rel="icon"'))
+        self.assertEqual(errs, [])
+
+    def test_other_outside_stylesheets_are_refused(self):
+        self.has(self.errors(index=INDEX.replace(
+            '<link rel="icon"', '<link rel="stylesheet" href="https://cdn.tailwindcss.com/x.css">'
+                                '<link rel="icon"')), "outside stylesheet")
+
+    def test_a_custom_cursor(self):
+        self.has(self.errors(index=INDEX.replace("</head>", "<style>body{cursor:none}</style></head>")),
+                 "cursor")
+
+    def test_the_clean_site_still_passes(self):
+        self.assertEqual(self.errors(), [])
+
+
+class ThePitchIsClean(PaulCase):
+    """Milkbox's pitch (2026-10-05) used em dashes and signed itself "Best,
+    Kollin" above the signature code adds - the name appeared twice."""
+
+    def errs(self, draft):
+        return paul.check_draft(draft, target())[0]
+
+    def test_em_dash(self):
+        self.assertTrue(any("em dash" in e for e in
+                            self.errs(DRAFT.replace("I'm a designer", "I'm a designer —"))))
+
+    def test_signing_off(self):
+        for tail in ("\nBest,\nSam\n", "\nThanks!\n", "\nSam Owner\n"):
+            self.assertTrue(any("signs itself off" in e for e in self.errs(DRAFT + tail)), tail)
+
+    def test_the_sample_pitch_passes(self):
+        self.assertEqual(self.errs(DRAFT), [])
+
+
+class AnEmailThatCanArrive(PaulCase):
+    """Milkbox (2026-10-05): the pitch went to andrea@ a domain that no longer
+    exists, found on an AI travel site. Real dns.google replies, captured
+    the same day: no such domain, a null MX, and gmail's."""
+
+    def test_no_such_domain(self):
+        self.assertEqual(paul.mail_verdict("a@gone.test", doh("dns-google-mx-nxdomain.json"))[0], "none")
+
+    def test_a_null_mx_takes_no_mail(self):
+        self.assertEqual(paul.mail_verdict("a@x.test", doh("dns-google-mx-null.json"))[0], "none")
+
+    def test_a_real_mail_server(self):
+        self.assertEqual(paul.mail_verdict("a@x.test", doh("dns-google-mx-gmail.json"))[0], "yes")
+
+    def test_no_answer_is_not_proof(self):
+        self.assertEqual(paul.mail_verdict("a@x.test", offline)[0], "unknown")
+
+    def test_check_refuses_a_bouncing_pitch(self):
+        self.work()
+        errs, _n, _i = paul.run_checks(target(), doh("dns-google-mx-nxdomain.json"))
+        self.assertTrue(any("would bounce" in e for e in errs), errs)
+
+
+def _a_browser():
+    for b in [os.environ.get("PAUL_BROWSER", "")] + [shutil.which(n) or "" for n in paul.BROWSERS] \
+            + ["/opt/pw-browsers/chromium-1194/chrome-linux/chrome"]:
+        if b and os.access(b, os.X_OK):
+            return b
+    return None
+
+
+@unittest.skipUnless(_a_browser(), "needs a headless Chrome")
+class TextAVisitorCanRead(unittest.TestCase):
+    """Milkbox's "Call us" (2026-10-05): brown text on a brown button,
+    inherited from a{color}, in both screenshots - Paul read them and missed
+    it. Measured in a real browser. White text on a photo must NOT be
+    flagged: it cannot be judged from colours, and a false alarm costs Paul
+    one of his two passes."""
+
+    PAGE = """<!doctype html><html><head><style>
+    a{color:#6b3a1f} .btn{background:#6b3a1f;padding:10px} .btn.ok{color:#fff}
+    .hero{position:relative;height:200px} .hero img{position:absolute;inset:0;width:100%;height:100%}
+    .hero h2{position:relative;color:#fff} .pale{color:#d8d0c8} .gap{height:1500px}
+    </style></head><body><a class="btn" href="tel:1">Call us</a> <a class="btn ok" href="#m">Menu</a>
+    <div class="hero"><img src="x.jpg" alt="bread"><h2>Over a photo</h2></div><div class="gap"></div>
+    <p class="pale">Pale text below the fold</p><p>Plain text</p></body></html>"""
+
+    def test_unreadable_text_is_found_and_photos_are_left_alone(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "index.html").write_text(self.PAGE)
+            bad = paul.contrast_problems(d, _a_browser())
+            self.assertEqual(sorted(p for p in os.listdir(d)), ["index.html"], "the probe copy was left behind")
+        self.assertIsNotNone(bad, "the browser gave no answer")
+        texts = [t for _p, t, _r, _n in bad]
+        self.assertIn("Call us", texts)
+        self.assertIn("Pale text below the fold", texts)
+        self.assertNotIn("Menu", texts)
+        self.assertNotIn("Over a photo", texts)
+        self.assertNotIn("Plain text", texts)

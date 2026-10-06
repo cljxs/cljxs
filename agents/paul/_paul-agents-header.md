@@ -63,7 +63,12 @@ business qualifies only with at least one problem a person could check:
     broken       broken links or images
     wrong-info   wrong hours, phone or address
 
-Prefer ones with a public email. Before you commit to one:
+Prefer ones with a public email **that the business itself published** - on
+its own site, Facebook page or Google listing. Never from an aggregator or
+an AI travel/review site: Milkbox's came from one, at a domain that no
+longer exists. Code looks the domain up and refuses an email that would
+bounce; use their Facebook or Instagram (a DM) instead. Before you commit to
+one:
 
     python3 ../../scripts/paul.py seen "<name>" "<phone>"
 
@@ -102,14 +107,41 @@ layout. A stranger should think they paid for this.
   look; never the layout FACTS says you used last.
 - **Photos:** their own posted photos first - their site, Facebook,
   Instagram, Google Business Profile owner uploads - then Unsplash or Pexels
-  for gaps. Never customer review photos. Never an AI image of their product
+  for gaps. All-stock is a last resort, and `notes` must say where you
+  looked for theirs. Never put a caption that implies "this is ours" (today's
+  bake, our team, our shop) over a stock photo. Never customer review photos. Never an AI image of their product
   or place. Download every image into `work/site/img/` (`curl -sL -o`), never
   hotlink, and list each in `photos`. If their current site has photos,
   yours must too.
 - **Copy:** specific, human, short. Their real full address and hours. No
-  copy about the site itself ("real photo", "our new site"), no invented
-  reviews or claims. Read it aloud and cut anything that sounds like a
-  brochure.
+  copy about the site itself ("real photo", "our new site"). **Every claim
+  needs a source** - "local ingredients", "family-owned", "award-winning"
+  only if one of their own pages says it. No reviews, ratings, counters
+  ("500+ happy customers") or metrics you did not read on a source, and no
+  animated number counters at all. The headline says what they sell and
+  where - never a slogan that would fit any business. Read it aloud and cut
+  anything that sounds like a brochure.
+- **Doesn't look AI-made** (the owner's checklist). Code refuses: em dashes,
+  emoji, stock phrasing ("nestled in", "elevate", "welcome to"...), a custom
+  cursor. Also never: purple or blue-violet gradients, pill-shaped buttons
+  (use a 4-8px radius), glassy see-through cards, scroll-triggered
+  animation on everything (one gentle fade at most), AI-generated images,
+  any "made with AI" badge. Colours come from the business - its sign, its
+  photos, its food - not from a theme.
+- **Readable and usable by everyone** (and the law). Code measures every
+  piece of text against what is behind it in a real browser and refuses
+  anything under WCAG contrast (4.5:1, 3:1 for large text) - check buttons
+  especially; a link colour inherited onto a same-coloured button is the
+  usual cause. Every `<img>` needs alt text describing it. Buttons say what
+  they do ("Call (319) 260-2068", "Get directions"). A favicon is required:
+  a simple mark that fits the business - never a padlock, a generic shape
+  or a letter in a circle.
+- **Nothing that collects data.** No forms, no iframes or embeds (a Maps
+  embed tracks visitors - link to Maps instead), no third-party scripts or
+  analytics; only Google Fonts may load from elsewhere. Code refuses all
+  of these. Because of that, the site needs no privacy, cookie, refund or
+  terms page - and **never write a policy for a business**; that is a
+  claim on their behalf.
 - Fast and mobile-first (`<meta name="viewport" ...>` on every page), with
   one clear call to action: a `tel:` link to their number, plus booking or
   directions if it fits. Subtle motion only. Plain HTML, CSS and JS - no
@@ -129,8 +161,9 @@ An email if they have a public email; otherwise a DM (`facebook`,
 `instagram` or `dm`, To: the profile URL) or a phone script (`phone`, To: the
 number). Sound like a person: say who you are and that this is an offer, no
 lists, don't recite their address, let the link do the selling. Under 170
-words. Code adds the opt-out line and the user's signature - do not write
-them.
+words. No em dashes. **Stop at your last sentence**: no "Best,", no name -
+code adds the opt-out line and the user's signature, and refuses a draft
+that signs itself.
 
 ## 5. Check, fix, finish
 
