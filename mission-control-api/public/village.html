@@ -356,6 +356,7 @@ const THEMED = {
   ace:     { prop: 'hoop',  h: 132, lamp: [100, 30] },
   emily:   { prop: 'easel', h: 144, lamp: [52, 9] },
   scout:   { prop: 'globe', h: 172, lamp: [64, 5] },
+  paul:    { prop: 'drafting', h: 168, lamp: [101, 3] },
 };
 
 // What each resident wears, so the person outside a house fits it. A base
@@ -410,6 +411,24 @@ const OUTFITS = {
         px(g, 11, 7, 3, 3, 0x2b2f3a); px(g, 12, 8, 1, 1, 0xaee3ff); px(g, 12, 11, 4, 10, 0xb89d68);
       }
     } },
+  paul: { shirt: 0x17191f, back: 0x15171c, legs: 0x4a5160, hair: 0x6b7280, shoes: 0x0b0d12,
+    more: (g, f) => {                                        // the architect: black turtleneck, big
+      const K = 0x0b0d12, BLUE = 0x2f6fb5, END = 0xe8f1fb;   // browline glasses, a roll of blueprints
+      px(g, 8, 11, 8, 2, 0x2a2e38);                          // the roll neck
+      px(g, 12, 1, 5, 2, 0xb8bec7); px(g, 15, 3, 2, 1, 0xb8bec7);   // salt and pepper, swept up
+      const lens = x => { px(g, x, 7, 4, 1, K); px(g, x, 8, 1, 2, K); px(g, x + 3, 8, 1, 1, K); };
+      if (f === 'down') {
+        lens(8); lens(12);
+        px(g, 15, 13, 8, 3, BLUE); px(g, 15, 13, 8, 1, 0x5b95d6);    // the roll, under his arm
+        px(g, 15, 13, 1, 3, END); px(g, 22, 13, 1, 3, END); px(g, 18, 14, 2, 1, END, .6);
+      } else if (f === 'side') {
+        lens(11); px(g, 8, 7, 3, 1, K);                          // a lens and the arm to his ear
+        px(g, 6, 14, 12, 3, BLUE); px(g, 6, 14, 12, 1, 0x5b95d6);
+        px(g, 6, 14, 1, 3, END); px(g, 17, 14, 1, 3, END);
+      } else {
+        px(g, 15, 9, 3, 12, BLUE); px(g, 15, 9, 3, 1, END); px(g, 15, 20, 3, 1, END);   // slung on his back
+      }
+    } },
   clip: { shirt: 0x22252e, back: 0x22252e, legs: 0x4b5563, hair: 0x3a2a1d,
     more: (g, f) => {                                        // hoodie in the app colours, cap on backwards
       px(g, 6, 15, 12, 1, 0xff3d7f); px(g, 6, 16, 12, 1, 0x23d5e6);
@@ -441,6 +460,19 @@ const PROPS_DOOR = 'Player Props';
 // and the knowledge the owner accepts. A door with no agent behind it, like
 // the props hall.
 const HALL_DOOR = 'Town Hall';
+
+// The name over a villager's head - every resident wears one, so nobody
+// outside a house is just "someone" (owner, 2026-10-07). One style for all.
+// How far below a door a resident may walk: the name plate hangs to 25px
+// under it and a tag stands 26px over the feet, so above this line the tag
+// would sit on the plate ("EMILY Emily").
+const TAG_CLEAR = 52;
+function nameTag(sc, x, y, who) {
+  return sc.add.text(x, y, who, {
+    fontFamily: 'ui-monospace,Menlo,monospace', fontSize: '9px', color: '#ffffff',
+    backgroundColor: '#00000088', padding: { x: 3, y: 1 },
+  }).setOrigin(.5, 1);
+}
 
 // Clip's studio: the clipping agent and Spotter, its research assistant. Its
 // own plot, like the props hall, kept out of PLOTS so the next agent cannot
@@ -1227,6 +1259,79 @@ function makeTextures(s) {
     px(g, 2, TH - 8, HW - 4, 8, STONE[0]); px(g, 2, TH - 8, HW - 4, 1, STONE[2]);
   });
 
+  // Paul, who designs and builds websites: an architect's studio from the
+  // future. A white box cantilevered over a glass ground floor on one slim
+  // column, a sloped roof of solar panels, a glass stair drum, a cyan light
+  // line under every slab, and a blueprint over the sliding doors.
+  themed('paul', (g, HW, TH, r) => {
+    const WHITE = 0xeef2f6, WHITE2 = 0xd5dde6, SHADE = 0xb9c3cf, CYAN = 0x22d3ee;
+    const GLASS = [0x6fb8d6, 0x8fcbe3, 0x4f9fc4], DARK = [0x1f3b52, 0x274b63, 0x2f5a75];
+    g.fillStyle(0x000000, .18); g.fillEllipse(HW / 2, TH - 3, HW - 6, 10);
+    px(g, 100, 3, 2, 24, 0x8d949f); px(g, 100, 3, 1, 24, 0xc0c6cf);       // mast, lamp on top
+    // the sloped roof: a white plane rising to the right, solar panels on it
+    for (let x = 28; x < 126; x++) {
+      const top = Math.round(30 - (x - 28) * 14 / 98);
+      px(g, x, top, 1, 31 - top, x % 2 ? WHITE : 0xe6ebf1);
+      px(g, x, top, 1, 1, 0x7f8a99);
+      if (x > 40 && x < 118 && (x - 41) % 13 < 11) {
+        px(g, x, top + 2, 1, 5, 0x1e3a5f);
+        if ((x - 41) % 13 === 5) px(g, x, top + 2, 1, 5, 0x3b6a9e);
+      }
+    }
+    px(g, 28, 27, 14, 3, 0x5fae5a); px(g, 30, 25, 3, 2, 0x7cc46f); px(g, 36, 24, 3, 3, 0x7cc46f); // roof garden
+    // the cantilevered upper volume, with a ribbon window the whole way along
+    px(g, 28, 30, 98, 44, WHITE); px(g, 28, 30, 98, 2, 0xffffff);
+    px(g, 28, 30, 4, 44, SHADE);
+    px(g, 34, 40, 88, 20, GLASS[2]);
+    for (let x = 34; x < 122; x += 11) {
+      px(g, x, 40, 11, 7, GLASS[1]); px(g, x, 47, 11, 13, GLASS[r() < .3 ? 2 : 0]);
+      px(g, x, 40, 1, 20, WHITE2);
+      if (r() < .35) px(g, x + 3, 50, 5, 6, 0xffe08a, .8);                // a lit desk inside
+    }
+    px(g, 34, 60, 88, 2, WHITE2);
+    for (let x = 38; x < 120; x += 6) px(g, x, 64, 3, 6, WHITE2);        // fins
+    px(g, 28, 74, 98, 2, CYAN); px(g, 28, 76, 98, 3, 0x000000, .22);   // light line, then the shadow it casts
+    // the glass stair drum on the left, steps showing through it
+    px(g, 6, 44, 26, TH - 52, GLASS[0]);
+    g.fillStyle(WHITE, 1); g.fillEllipse(19, 44, 26, 8);
+    g.fillStyle(GLASS[1], 1); g.fillEllipse(19, 45, 22, 5);
+    for (let k = 0; k < 12; k++) {
+      const y = 52 + k * 9, x = k % 2 ? 9 : 19;
+      px(g, x, y, 11, 2, 0xffffff, .55); px(g, x, y + 2, 11, 1, 0x000000, .12);
+    }
+    px(g, 8, 46, 3, TH - 56, 0xffffff, .30); px(g, 28, 46, 4, TH - 56, 0x000000, .14);
+    // the glass ground floor, set back under the box
+    px(g, 32, 79, 82, TH - 87, DARK[1]);
+    for (let x = 32; x < 114; x += 14) {
+      px(g, x, 79, 1, TH - 87, 0x9fb3c4);
+      px(g, x + 2, 81, 4, TH - 92, 0xffffff, .10);
+    }
+    px(g, 36, 128, 10, 2, 0xffe08a, .7); px(g, 90, 126, 14, 3, 0xffe08a, .6);  // warm light inside
+    px(g, 114, 79, 6, TH - 87, 0x9aa4b2); px(g, 114, 79, 2, TH - 87, 0xc3cbd5);  // the one column
+    px(g, 32, 79, 82, 2, CYAN, .7);
+    // the blueprint over the door: a floor plan in white on blue
+    px(g, 42, 86, 44, 20, 0xcbd5e1); px(g, 44, 88, 40, 16, 0x1e5aa8);
+    for (let x = 46; x < 84; x += 4) px(g, x, 88, 1, 16, 0x3b74c0, .6);
+    for (let y = 90; y < 104; y += 4) px(g, 44, y, 40, 1, 0x3b74c0, .6);
+    g.lineStyle(1, 0xffffff, .95); g.strokeRect(48, 90, 32, 12);
+    g.lineBetween(62, 90, 62, 102); g.lineBetween(62, 96, 80, 96);
+    px(g, 54, 101, 4, 2, 0x1e5aa8);                                         // a doorway in the plan
+    // sliding glass doors
+    const dx0 = 48, dy0 = 110;
+    px(g, dx0 - 3, dy0 - 3, 38, TH - dy0 - 5, 0xcbd5e1);
+    px(g, dx0, dy0, 32, TH - dy0 - 8, DARK[2]);
+    px(g, dx0 + 1, dy0 + 1, 14, TH - dy0 - 10, GLASS[2]); px(g, dx0 + 17, dy0 + 1, 14, TH - dy0 - 10, GLASS[2]);
+    px(g, dx0 + 3, dy0 + 3, 2, 30, 0xffffff, .4); px(g, dx0 + 19, dy0 + 3, 2, 30, 0xffffff, .4);
+    px(g, dx0 + 13, dy0 + 20, 1, 10, 0xe5e7eb); px(g, dx0 + 18, dy0 + 20, 1, 10, 0xe5e7eb);
+    // planters along the glass, then a concrete plinth and a step to the door
+    [[86, 0x5fae5a], [98, 0x4f9a4c]].forEach(([x, c]) => {
+      px(g, x, TH - 18, 12, 8, 0x9aa4b2); px(g, x + 1, TH - 22, 10, 5, c); px(g, x + 3, TH - 25, 5, 4, 0x7cc46f);
+    });
+    px(g, 2, TH - 10, HW - 4, 10, 0xd5dbe3); px(g, 2, TH - 10, HW - 4, 1, 0xf1f4f8);
+    px(g, 2, TH - 10, HW - 4, 1, CYAN, .5);
+    px(g, dx0 - 6, TH - 5, 44, 5, 0xeef2f6);
+  });
+
   /* --- what stands in each themed garden --- */
   {
     let d2 = s.add.graphics();                           // Belfort's bronze bull
@@ -1266,6 +1371,20 @@ function makeTextures(s) {
     d2.fillStyle(0x5fae5a, 1); d2.fillEllipse(9, 9, 7, 6); d2.fillEllipse(15, 15, 6, 5);
     d2.fillStyle(0xffffff, .35); d2.fillCircle(8, 8, 2);
     d2.generateTexture('globe', 24, 40); d2.destroy();
+
+    d2 = s.add.graphics();                               // Paul's drafting table
+    d2.fillStyle(0x000000, .18); d2.fillEllipse(16, 46, 26, 5);
+    for (let k = 0; k < 24; k++) {                       // splayed steel legs
+      px(d2, 9 - k * .2, 22 + k, 2, 1, 0x6b7280); px(d2, 22 + k * .2, 22 + k, 2, 1, 0x6b7280);
+    }
+    px(d2, 8, 34, 16, 2, 0x8d949f);
+    for (let k = 0; k < 14; k++) px(d2, 3 + k * .15, 8 + k, 26, 1, k ? 0x1e5aa8 : 0x0f3d7a);  // tilted board, a blueprint on it
+    for (let x = 6; x < 28; x += 4) px(d2, x, 9, 1, 13, 0x3b74c0, .6);
+    d2.lineStyle(1, 0xffffff, .9); d2.strokeRect(8, 11, 15, 8); d2.lineBetween(15, 11, 15, 19);
+    px(d2, 2, 21, 28, 2, 0xe2b04a); px(d2, 2, 8, 2, 15, 0xe2b04a);      // the T-square
+    px(d2, 27, 0, 2, 9, 0x6b7280); px(d2, 22, 0, 7, 2, 0x6b7280);        // the arm lamp
+    px(d2, 19, 1, 5, 4, 0x2b2f3a); px(d2, 19, 5, 5, 1, 0xffe08a);
+    d2.generateTexture('drafting', 32, 48); d2.destroy();
   }
 
   /* --- the town square: a statue of Iron Man on a granite plinth ---
@@ -1660,14 +1779,15 @@ function create() {
 
     // ---- the agent, pottering about outside its own house ----
     const lk = look(a.name);
-    const npc = this.physics.add.sprite(doorX + 34, doorY + 26, `${lk}-down-0`);
+    const npc = this.physics.add.sprite(doorX + 34, doorY + 64, `${lk}-down-0`);
     if (lk === 'hero') npc.setTint(SHIRTS[i % 6]);      // a plain villager, told apart by shirt
     npc.body.setSize(14, 12).setOffset(5, 16);
     npc.setDepth(npc.y);
     this.physics.add.collider(npc, solids);
     npcs.push({
-      s: npc, homeX: doorX, homeY: doorY + 30, look: lk,
-      tx: doorX, ty: doorY + 30, wait: 400 + Math.floor(rnd() * 1400), moving: false,
+      s: npc, homeX: doorX, homeY: doorY + 64, look: lk, minY: doorY + TAG_CLEAR,
+      tx: doorX, ty: doorY + 64, wait: 400 + Math.floor(rnd() * 1400), moving: false,
+      label: nameTag(this, npc.x, npc.y - 22, a.name.charAt(0).toUpperCase() + a.name.slice(1)),
     });
   });
 
@@ -1718,11 +1838,8 @@ function create() {
       const npc = this.physics.add.sprite(hx, hy, `${lk}-down-0`);
       npc.body.setSize(14, 12).setOffset(5, 16);
       this.physics.add.collider(npc, solids);
-      const label = this.add.text(hx, hy - 22, who, {
-        fontFamily: 'ui-monospace,Menlo,monospace', fontSize: '9px', color: '#ffffff',
-        backgroundColor: '#00000088', padding: { x: 3, y: 1 },
-      }).setOrigin(.5, 1);
-      npcs.push({ s: npc, homeX: hx, homeY: hy, tx: hx, ty: hy, look: lk,
+      const label = nameTag(this, hx, hy - 22, who);
+      npcs.push({ s: npc, homeX: hx, homeY: hy, tx: hx, ty: hy, look: lk, minY: by + SH + TAG_CLEAR,
                   wait: 400 + Math.floor(rnd() * 1400), moving: false, label });
     });
   }
@@ -1830,7 +1947,7 @@ function update() {
       }
     } else if (now > n.wait) {
       n.tx = n.homeX + (Math.random() * 2 - 1) * R;
-      n.ty = n.homeY + (Math.random() * 2 - 1) * R * 0.5;
+      n.ty = Math.max(n.minY ?? -Infinity, n.homeY + (Math.random() * 2 - 1) * R * 0.5);
       n.moving = true;
     }
     n.s.setDepth(n.s.y);

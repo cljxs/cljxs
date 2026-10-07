@@ -5595,7 +5595,7 @@ class EachHouseLooksLikeItsTrade(unittest.TestCase):
 
     def test_every_themed_house_and_prop_is_drawn(self):
         themed = self.themed()
-        self.assertEqual(sorted(themed), ["ace", "belfort", "emily", "scout"])
+        self.assertEqual(sorted(themed), ["ace", "belfort", "emily", "paul", "scout"])
         for name, (prop, h) in themed.items():
             self.assertIn(f"themed('{name}',", self.html, f"{name} has no house drawn")
             self.assertIn(f"generateTexture('{prop}',", self.html, f"{name}'s {prop} is never drawn")
@@ -5623,6 +5623,20 @@ class EachHouseLooksLikeItsTrade(unittest.TestCase):
             self.assertIn(f"n.s.anims.play(walkAnim(n.look, '{f}')", update)
         self.assertNotIn("n.s.anims.play('walk-", update, "an NPC playing the plain walk")
         self.assertIn("n.s.setTexture(`${n.look}-down-0`)", update)
+
+    def test_every_resident_wears_a_name_tag_clear_of_the_signs(self):
+        # Owner, 2026-10-07: "Label all the villagers by their name." Before,
+        # only Clip and Spotter had one. A tag must also never sit on a house's
+        # own name plate - "EMILY Emily" was the first draft.
+        body = self.html.split("function create()", 1)[1].split("// ---- player ----", 1)[0]
+        self.assertIn("label: nameTag(this, npc.x, npc.y - 22, a.name.charAt(0).toUpperCase() + a.name.slice(1))", body)
+        self.assertIn("const label = nameTag(this, hx, hy - 22, who);", body)
+        self.assertEqual(body.count("npcs.push("), body.count("nameTag(this,"), "a resident without a tag")
+        self.assertIn("minY: doorY + TAG_CLEAR", body)
+        self.assertIn("minY: by + SH + TAG_CLEAR", body)
+        update = self.html.split("function update(", 1)[1]
+        self.assertIn("n.ty = Math.max(n.minY ?? -Infinity,", update)
+        self.assertIn("if (n.label) n.label.setPosition(", update)
 
     def test_a_themed_house_is_never_mirrored(self):
         # a flipped plot mirrors a plain house; a ticker, "+150" or a painting
