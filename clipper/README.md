@@ -162,6 +162,16 @@ event in `status` names any topic it could not find:
 cd /root/ecosystem && clipper/.venv/bin/python -m clipper source rules curious-mike --hunt "Knicks: knicks, nicks, chant; Pat Beverley: pat bev, beverley" --spell "Trae Young: try young; Knicks: nicks"
 ```
 
+What a source's clips must stay away from goes in `--avoid`. Sponsor reads
+("use code", "brought to you by", "first deposit"...) are always skipped, for
+every source; the list adds your own. A skipped moment stays a candidate at
+score 0, with the reason, so the studio can say why it was passed over.
+Whole words only: "bet" does not skip "better".
+
+```
+cd /root/ecosystem && clipper/.venv/bin/python -m clipper source rules gils-arena --avoid "politics, ex-wife"
+```
+
 A Dropbox share link can be passed to `ingest` as it is. Clip swaps `dl=0`
 for `dl=1` to get the file rather than the preview page. It refuses folder
 links, because they download as a zip.

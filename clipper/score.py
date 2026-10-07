@@ -159,6 +159,33 @@ def parse_hunt(text):
     return out
 
 
+# Never a clip: a sponsor read. Podcasts break for them mid-show - on a sports
+# show often a betting app - and a clip of one is an ad nobody is paying you
+# for, which TikTok may also restrict. Phrases an ad read says and a
+# conversation does not, so a guest mentioning FanDuel's odds is not skipped.
+AD_READ = ("promo code", "use code", "use my code", "sponsored by", "brought to you by",
+           "today's sponsor", "our sponsor", "first deposit", "deposit match",
+           "terms and conditions apply", "gambling problem", "1-800-gambler", "must be 21",
+           "21 and older", "21+ only", "download the app today", "link in the description",
+           "check them out at")
+
+
+def parse_avoid(text):
+    """'politics, betting odds, ex-wife' -> ["politics", "betting odds", "ex-wife"]:
+    terms a source's clips stay away from, as the owner writes them."""
+    return [t.strip().lower() for t in re.split(r"[,;]", text or "") if t.strip()]
+
+
+def avoided(text, avoid=()):
+    """The first sponsor phrase or avoided term a piece of transcript says, or
+    None. Whole words, as topics() matches them."""
+    low = text.lower()
+    for term in list(AD_READ) + list(avoid or ()):
+        if re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?:'s|s'|s|es|ed|ing|er|')?(?![a-z0-9])", low):
+            return term
+    return None
+
+
 def topics(text, hunt):
     """Names of the topics a piece of transcript mentions. Whole words only,
     plurals and possessives allowed: 'Knicks' matches "the Knicks'", 'dunk'
@@ -173,7 +200,7 @@ def topics(text, hunt):
     return hit
 
 
-def score_windows(sents, wins, words, loud, cfg, hunt=None):
+def score_windows(sents, wins, words, loud, cfg, hunt=None, avoid=()):
     median = statistics.median([v for v in loud if v > -70]) if any(v > -70 for v in loud) else -30.0
     out = []
     for i, j in wins:
@@ -187,6 +214,13 @@ def score_windows(sents, wins, words, loud, cfg, hunt=None):
         if on_list:
             score = min(100.0, round(score + TOPIC_BONUS, 1))
             why = [f"on the campaign's list: {', '.join(on_list)}"] + why
+        # Anywhere in the window, not only its first half: a clip that ends
+        # on "use code GIL" is an ad as much as one that starts on it. Kept
+        # as a candidate at 0, with the reason, so the studio can say why.
+        bad = avoided(text, avoid)
+        if bad:
+            score, on_list = 0.0, []
+            why = [f"skipped: says {bad!r}" + (" (a sponsor read)" if bad in AD_READ else " (on the avoid list)")]
         out.append({"i": i, "j": j, "start": sents[i]["start"], "end": sents[j]["end"],
                     "text": text, "score": score, "features": f, "reasons": why,
                     "topics": on_list})

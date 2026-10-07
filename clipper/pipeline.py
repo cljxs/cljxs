@@ -94,9 +94,10 @@ def stage_find(conn, paths, cfg, video):
     loud = loudness_of(paths, video)
     src = conn.execute("SELECT * FROM sources WHERE id = ?", (video["source_id"],)).fetchone()
     hunt = json.loads(src["hunt"]) if src["hunt"] else []
+    avoid = json.loads(src["avoid"]) if src["avoid"] else []
     sents = moments.sentences(words, cfg["sentence_pause_seconds"])
     wins = moments.windows(sents, cfg["min_clip_seconds"], cfg["max_clip_seconds"])
-    scored = score.score_windows(sents, wins, words, loud, cfg, hunt)
+    scored = score.score_windows(sents, wins, words, loud, cfg, hunt, avoid)
     # At least one clip per topic on the campaign's list: the list is the
     # moments it says to make, so a smaller cap would silently drop some.
     chosen = moments.choose(scored, max(cfg["max_clips_per_video"], len(hunt)), cfg["min_score"], hunt)

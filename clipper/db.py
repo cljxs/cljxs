@@ -263,6 +263,11 @@ MIGRATIONS = [
     ALTER TABLE twitch_clips ADD COLUMN vod_id TEXT;
     ALTER TABLE twitch_clips ADD COLUMN vod_offset INTEGER;
     """,
+    # 11 - what a source's clips must stay away from, beside the sponsor
+    # reads every source skips (score.AD_READ): JSON list of terms.
+    """
+    ALTER TABLE sources ADD COLUMN avoid TEXT;
+    """,
 ]
 
 

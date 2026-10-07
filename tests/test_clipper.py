@@ -1391,6 +1391,44 @@ class CampaignTopics(unittest.TestCase):
                          "without a list: score alone")
 
 
+class NeverClipped(unittest.TestCase):
+    """Owner, 2026-10-07, before the first Gil's Arena episode: how do we tell
+    Clip what it should or shouldn't clip? A sponsor read - on a sports show
+    often a betting app - is never a clip, and the owner can name more."""
+
+    def words_saying(self, text):
+        return [w(k * 1.0, k * 1.0 + 0.9, " " + t + ("." if k % 6 == 5 else ""))
+                for k, t in enumerate(text.split())]
+
+    def scored(self, text, avoid=()):
+        ws = self.words_saying(text)
+        sents = moments.sentences(ws, 0.8)
+        return score.score_windows(sents, [(0, len(sents) - 1)], ws, [], CFG,
+                                   score.parse_hunt("Knicks: knicks"), avoid)[0]
+
+    def test_a_sponsor_read_scores_zero_even_on_a_topic(self):
+        got = self.scored("the knicks are rolling and this episode is brought to you by our friends "
+                          "so use code GIL for your first deposit match today")
+        self.assertEqual((got["score"], got["topics"]), (0.0, []))
+        self.assertIn("(a sponsor read)", got["reasons"][0])
+        self.assertEqual(moments.choose([got], 3, 1, score.parse_hunt("Knicks: knicks")), [],
+                         "not even as the topic's pick")
+
+    def test_talking_about_a_sportsbook_is_not_an_ad(self):
+        got = self.scored("fanduel had the knicks as big favourites and everybody lost money on that one")
+        self.assertGreater(got["score"], 0)
+
+    def test_the_owners_own_list(self):
+        avoid = score.parse_avoid("politics, ex-wife; betting odds")
+        self.assertEqual(avoid, ["politics", "ex-wife", "betting odds"])
+        got = self.scored("we are not doing politics on this show but the knicks need a center", avoid)
+        self.assertEqual(got["score"], 0.0)
+        self.assertIn("'politics' (on the avoid list)", got["reasons"][0])
+        self.assertIsNone(score.avoided("the knicks were better between the two halves", ["bet"]),
+                          "whole words: better and between are not bet")
+        self.assertEqual(score.avoided("he bets on the knicks", ["bet"]), "bet", "an ending still counts")
+
+
 class Spellings(unittest.TestCase):
     RULES = transcribe.parse_spellings("Trae Young: try young; Trae: tray; Knicks: nicks; "
                                        "chanting F Trae Young: chin fluck try young")
@@ -1415,7 +1453,9 @@ class Spellings(unittest.TestCase):
 
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
-class CampaignListEndToEnd(EndToEnd):
+class SourceRulesEndToEnd(EndToEnd):
+    """Was a second class named CampaignListEndToEnd, so the later one of that
+    name replaced it and none of these ran (found 2026-10-07)."""
     def setUp(self):
         super().setUp()
         self.cli("source", "add", "tao", "--rights", "public-domain", "--evidence", "LibriVox")
@@ -1446,6 +1486,23 @@ class CampaignListEndToEnd(EndToEnd):
             "SELECT msg FROM events WHERE stage = 'find'").fetchone()[0]
         self.assertIn("campaign topics clipped: Fisherman, LibriVox", ev)
         self.assertNotIn("not found", ev)
+
+    def test_an_avoid_list_is_kept_and_cleared(self):
+        code, said = self.cli("source", "rules", "tao", "--avoid", "Politics, fisherman")
+        self.assertEqual(code, 0, said)
+        self.assertIn("never clipping: politics, fisherman", said)
+        conn = db.connect(self.home / "clipper.db")
+        self.assertEqual(json.loads(conn.execute("SELECT avoid FROM sources").fetchone()[0]),
+                         ["politics", "fisherman"])
+        self.cli("ingest", "tao", str(self.video))
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        rows = conn.execute("SELECT text, score, selected FROM candidates").fetchall()
+        named = [r for r in rows if "fisherman" in r[0].lower()]
+        self.assertTrue(named, "the fixture must mention it, or this tests nothing")
+        self.assertTrue(all(r[1] == 0 and not r[2] for r in named), "an avoided moment is never picked")
+        self.assertEqual(self.cli("source", "rules", "tao", "--avoid", "")[0], 0)
+        self.assertIsNone(conn.execute("SELECT avoid FROM sources").fetchone()[0])
 
     def test_a_list_set_after_searching_is_used_by_refind(self):
         self.cli("ingest", "tao", str(self.video))

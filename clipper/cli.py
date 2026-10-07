@@ -5,6 +5,7 @@
     source rules NAME [--tags "#a #b"] [--credit "Clip from @creator"]   what every post must carry
     source rules NAME --hunt "Topic: term, term; Topic2: term"   moments a campaign asks for
     source rules NAME --spell "Right: wrong, wrong; Right2: wrong"   names Whisper mishears
+    source rules NAME --avoid "term, term"   never clip these (sponsor reads never are)
     source rules NAME --watermark FILE|URL [--cut-out-white] [--watermark-top PX]
                                 a campaign's watermark, burned into every clip
     source list
@@ -82,6 +83,16 @@ def cmd_source(a):
                 raise ValueError(f"no source named {a.name!r}")
             for wrong, right in rules:
                 print(f"captions say {right!r} where Whisper wrote {' '.join(wrong)!r}")
+        if a.avoid is not None:
+            avoid = score.parse_avoid(a.avoid)
+            with conn:
+                n = conn.execute("UPDATE sources SET avoid = ? WHERE name = ?",
+                                 (json.dumps(avoid) if avoid else None, a.name)).rowcount
+            if not n:
+                raise ValueError(f"no source named {a.name!r}")
+            print(f"never clipping: {', '.join(avoid) or 'nothing extra'} "
+                  f"(sponsor reads are always skipped)")
+            print("a video already searched keeps its picks - `refind VIDEO` searches it again")
         if a.hunt is not None:
             hunt = score.parse_hunt(a.hunt)
             with conn:
@@ -486,6 +497,8 @@ def main(argv=None):
     s.add_argument("--cutlist", help="a campaign's Notion page with its clip list (times, hooks, captions)")
     s.add_argument("--hunt", help="the moments the campaign wants, in its order: "
                                   "\"Knicks: knicks, chant; Pat Beverley: beverley, beverly\"")
+    s.add_argument("--avoid", help="what clips must stay away from: \"politics, ex-wife\" "
+                                   "(sponsor reads are always skipped; \"\" clears the list)")
     s.add_argument("--spell", help="names Whisper mishears: \"Trae Young: try young; Knicks: nicks\"")
     s.add_argument("--watermark-top", type=int,
                    help="how far down the 1920-high frame the watermark's top edge sits")
