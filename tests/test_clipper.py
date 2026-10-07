@@ -870,6 +870,11 @@ class Posting(EndToEnd):
         self.assertEqual((status, self.pubs()["youtube"]["status"]), ("approved", "queued"))
         publish.publish(self.conn, self.cfg, upload=self.upload)
         self.assertEqual((len(self.sent), self.pubs()["youtube"]["status"]), (1, "posted"))
+        # `clipper clips` shows the id approve takes, and where each post stands.
+        said = self.cli("clips")[1]
+        self.assertIn(f"CLIP {self.clip['id']} (v", said)
+        self.assertIn("post: youtube posted - https://youtube.com/shorts/abc123", said)
+        self.assertIn("post: tiktok manual - TikTok posting needs", said)
 
     def test_publish_holds_the_lock_while_it_uploads(self):
         # Two quick approvals start two background publishes; without the lock

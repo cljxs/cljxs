@@ -357,10 +357,18 @@ def cmd_clips(a):
         print("no clips yet")
     for r in rows:
         m = json.loads(r["meta"])
-        print(f"CLIP v{r['video_id']}#{r['rank']}  score {r['score']:.0f}/100  "
+        # Where each post stands, so a failed upload is seen here and not only
+        # in the village (2026-10-07: a dropped approval looked like nothing).
+        posts = "".join(
+            f"   post: {p['platform']} {p['status']}"
+            + (f" - {p['url']}" if p["url"] else f" - {p['detail']}" if p["detail"] else "") + "\n"
+            for p in conn.execute("SELECT * FROM publications WHERE clip_id = ? ORDER BY platform",
+                                  (r["id"],)))
+        print(f"CLIP {r['id']} (v{r['video_id']}#{r['rank']})  score {r['score']:.0f}/100  "
               f"{pipeline.clock(r['start'])}-{pipeline.clock(r['end'])}  {r['status']}\n"
               f"   why:  {'; '.join(m['reasons'])}\n"
               + (f"   frame: {m['framing']}\n" if m.get("framing") else "")
+              + posts
               + f"   file: {r['path']}")
     return 0
 
