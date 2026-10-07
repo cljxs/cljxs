@@ -109,7 +109,7 @@ def find_build(raw):
 # A draft is made once, so nothing ever re-made them. This deletes the old
 # UNPUBLISHED draft, draws the art again through today's pipeline, and drafts
 # again. Anything Printify says is live on Etsy is refused, never deleted.
-def redo(raw, product=None):
+def redo(raw, product=None, keep_art=False):
     d = find_build(raw)
     if d is None:
         print(f"emily-finish: no build folder for {raw}")
@@ -156,9 +156,15 @@ def redo(raw, product=None):
     if product and listing:
         listing["product_type"] = product
         (d / "listing.json").write_text(json.dumps(listing, indent=1) + "\n")
+    ea = _module("emily_assets_redo", "emily-assets.py")
+    # --redraft: the art was right and the drafting was not (the "Paws &
+    # Kissies" sticker, 2026-10-07: blue left inside its "&", lettering past
+    # the round cut). Draft the same design.png again through today's cut
+    # and placement - no new drawing, which costs money and changes the art.
+    if keep_art and (d / "design.png").is_file() and not ea.is_placeholder(d / "design.png"):
+        return draft(d)
     ok, msg = generate(d)
     print(f"  {d.name}: {msg}")
-    ea = _module("emily_assets_redo", "emily-assets.py")
     if not ok or ea.is_placeholder(d / "design.png"):
         print("  no real art yet - the hourly redraw will finish it")
         return 1
@@ -168,7 +174,8 @@ def redo(raw, product=None):
 def main():
     if sys.argv[1:2] == ["--redraw"]:
         return redraw()
-    if sys.argv[1:2] == ["--redo"]:
+    if sys.argv[1:2] in (["--redo"], ["--redraft"]):
+        keep_art = sys.argv[1] == "--redraft"
         args = sys.argv[2:]
         product = None
         if "--product" in args:
@@ -176,7 +183,7 @@ def main():
             product = args[i + 1]
             args = args[:i] + args[i + 2:]
         for raw in args:
-            if redo(raw, product):
+            if redo(raw, product, keep_art):
                 print("emily-finish: stopping - the rest wait")
                 return 1
         return 0

@@ -17330,6 +17330,24 @@ class TheEarlyDraftsAreRedone(unittest.TestCase):
         finally:
             sys.argv = real
 
+    def test_redraft_keeps_the_art_and_drafts_again(self):
+        # "Paws & Kissies" (2026-10-07): the art was right, the cut and the
+        # placement were not. --redraft deletes the unpublished draft and
+        # drafts the same design.png - nothing is drawn.
+        self.fin._module = (lambda real: lambda name, file: types.SimpleNamespace(is_placeholder=lambda p: False)
+                            if file == "emily-assets.py" else real(name, file))(self.fin._module)
+        real = sys.argv
+        sys.argv = ["emily-finish.py", "--redraft", "threaded-spine-chest-emblem"]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(self.fin.main(), 0)
+        finally:
+            sys.argv = real
+        self.assertEqual(self.deleted, [("DELETE", "/shops/s1/products/p1.json")])
+        self.assertEqual(self.drawn, [], "the art is kept")
+        self.assertEqual(self.drafted, ["threaded-spine-chest-emblem"])
+        self.assertTrue((self.d / "design.png").read_bytes().startswith(b"\x89PNG old"))
+
     def test_a_live_product_is_never_deleted(self):
         self.live["published"] = True
         self.assertEqual(self.redo("threaded-spine-chest-emblem"), 1)
@@ -17396,6 +17414,18 @@ class ARoundStickerKeepsItsArtInsideTheCut(unittest.TestCase):
         body = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
         self.assertIn("round_reach(upload_from) if is_round(cat) else None", body)
 
+    def test_unmeasured_it_still_stays_inside(self):
+        # "Paws & Kissies" (2026-10-07): with no print area read, the fallback
+        # placed it centred at full width and the circle took the ends off the
+        # lettering. A round cut is square, so the fit needs no measurement.
+        badge = self.art("badge2", lambda x, y: (x - 60) ** 2 + (y - 60) ** 2 <= 50 ** 2 or y >= 100)
+        reach = self.ep.round_reach(badge, step=1)
+        img = self.ep.print_areas("I", (120, 120), [1], self.round, None, reach)[0]["placeholders"][0]["images"][0]
+        self.assertLessEqual(img["scale"] * reach, self.ep.ROUND_SAFE + 1e-6)
+        self.assertLess(img["scale"], 0.9)
+        square = self.ep.print_areas("I", (120, 120), [1], {"blueprint_title": "Kiss-Cut Stickers"}, None, None)
+        self.assertEqual(square[0]["placeholders"][0]["images"][0]["scale"], 1, "a square cut is untouched")
+
 
 class LettersAndColoursOnAGarment(unittest.TestCase):
     """2026-10-05, "Trailside Girls Hiking Tee": (1) the holes inside the
@@ -17406,11 +17436,12 @@ class LettersAndColoursOnAGarment(unittest.TestCase):
 
     BG, RING, NEAR = (245, 240, 225), (40, 50, 60), (225, 220, 205)   # NEAR: 20 off - inside 32, outside 16
 
-    def letter_o(self):
+    def letter_o(self, size=60):
         """A 60x60 cream square: a dark ring (an O) whose hole is background,
         with a dot at its centre in a shade close to the background - detail
-        to keep, which only the tight match spares."""
-        w = h = 60
+        to keep, which only the tight match spares. `size` widens the field
+        round the same O, so its hole can be a letter's share of a design."""
+        w = h = size
         k = load("knockout_holes", "knockout.py")
         px = bytearray()
         for y in range(h):
@@ -17424,8 +17455,8 @@ class LettersAndColoursOnAGarment(unittest.TestCase):
         k.encode(src, w, h, px)
         return k, src, Path(tmp.name)
 
-    def cut(self, *flags):
-        k, src, d = self.letter_o()
+    def cut(self, *flags, size=60):
+        k, src, d = self.letter_o(size)
         out = d / "cut.png"
         # --keep-specks: the despeckle pass would take the small dot for a
         # speck; this measures the hole pass alone.
@@ -17453,11 +17484,43 @@ class LettersAndColoursOnAGarment(unittest.TestCase):
         opaque = [(i % w, i // w) for i in range(len(px) // 4) if px[i * 4 + 3]]
         xs, ys = [p[0] for p in opaque], [p[1] for p in opaque]
         self.assertNotEqual(self.alpha_at(w, px, (min(xs) + max(xs)) // 2, (min(ys) + max(ys)) // 2 - 6), 0,
-                            "a sticker keeps its enclosed whites")
+                            "with neither flag, the enclosed background is kept")
 
-    def test_draft_asks_for_holes_on_garments(self):
+    def test_draft_asks_for_holes_on_garments_and_counters_elsewhere(self):
         body = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
-        self.assertIn('(["--holes"] if is_garment(cat) else [])', body)
+        self.assertIn('(["--holes"] if is_garment(cat) else ["--counters"])', body)
+
+    def test_a_sticker_cut_clears_the_inside_of_a_letter(self):
+        # "Paws & Kissies" (2026-10-07) printed its blue background inside the
+        # "&". Off a garment the small enclosed pieces go too - the near-
+        # background dot still survives, as it does with --holes.
+        w, px = self.cut("--counters", size=160)        # the hole: ~1.2% of the frame
+        opaque = [(i % w, i // w) for i in range(len(px) // 4) if px[i * 4 + 3]]
+        xs, ys = [p[0] for p in opaque], [p[1] for p in opaque]
+        cx, cy = (min(xs) + max(xs)) // 2, (min(ys) + max(ys)) // 2
+        self.assertEqual(self.alpha_at(w, px, cx, cy - 6), 0, "the inside of the O is transparent")
+        self.assertNotEqual(self.alpha_at(w, px, cx, cy), 0, "the near-background dot survives")
+
+    def test_a_badge_keeps_a_big_enclosed_field(self):
+        # A frame enclosing more than COUNTER_MAX_PCT of the image in the
+        # background colour: that is the design, and only --holes clears it.
+        k = load("knockout_badge", "knockout.py")
+        w = h = 60
+        px = bytearray()
+        for y in range(h):
+            for x in range(w):
+                d = (x - 30) ** 2 + (y - 30) ** 2
+                px += bytes(self.RING if 400 <= d <= 625 else self.BG) + b"\xff"
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        src = Path(tmp.name) / "badge.png"
+        k.encode(src, w, h, px)
+        _, _, px = k.decode(src)
+        k.knockout(w, h, px)                                   # the outside goes first, as in main()
+        inside = sum(1 for i in range(w * h) if (i % w - 30) ** 2 + (i // w - 30) ** 2 < 400)
+        self.assertGreater(inside * 100.0 / (w * h), k.COUNTER_MAX_PCT, "the fixture must be past the limit")
+        self.assertEqual(k.holes(w, h, bytearray(px), self.BG, max_pct=k.COUNTER_MAX_PCT), 0)
+        self.assertEqual(k.holes(w, h, bytearray(px), self.BG), inside)
 
     def test_the_model_is_told_the_tee_colours(self):
         ea = load("emily_assets_ink", "emily-assets.py")

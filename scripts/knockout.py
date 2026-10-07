@@ -476,7 +476,16 @@ def all_over_verdict(w, h, px):
     return True, facts, None
 
 
-def holes(w, h, px, bg, tolerance=DEFAULT_TOLERANCE):
+# Off a garment, only small enclosed pieces go: the inside of an "&", an "A",
+# an "O". The "Paws & Kissies" sticker (2026-10-07) printed blue inside its
+# "&" - its background was blue, and the old reason for leaving stickers alone
+# ("the vinyl under it is white anyway") only holds for a white background.
+# A bigger enclosed area in the background colour can be the design itself -
+# the inside of a badge - so it stays.
+COUNTER_MAX_PCT = 2.0
+
+
+def holes(w, h, px, bg, tolerance=DEFAULT_TOLERANCE, max_pct=None):
     """Clear background left ENCLOSED by the art. Returns pixels cleared.
 
     knockout() floods inward from the border, so background it cannot reach -
@@ -488,13 +497,41 @@ def holes(w, h, px, bg, tolerance=DEFAULT_TOLERANCE):
     """
     br, bg_, bb = bg
     tight = max(4, tolerance // 2)
-    cleared = 0
-    for i in range(w * h):
+
+    def match(i):
         j = i * 4
-        if px[j + 3] and abs(px[j] - br) <= tight and abs(px[j + 1] - bg_) <= tight \
-                and abs(px[j + 2] - bb) <= tight:
-            px[j + 3] = 0
-            cleared += 1
+        return px[j + 3] and abs(px[j] - br) <= tight and abs(px[j + 1] - bg_) <= tight \
+            and abs(px[j + 2] - bb) <= tight
+
+    cleared = 0
+    if max_pct is None:
+        for i in range(w * h):
+            if match(i):
+                px[i * 4 + 3] = 0
+                cleared += 1
+        return cleared
+    # Only pieces no bigger than max_pct of the frame: four-connected runs of
+    # enclosed background, each measured before any of it is cleared.
+    limit, seen = w * h * max_pct / 100.0, bytearray(w * h)
+    for start in range(w * h):
+        if seen[start] or not match(start):
+            continue
+        piece, q = [], deque([start])
+        seen[start] = 1
+        while q:
+            i = q.popleft()
+            piece.append(i)
+            x, y = i % w, i // w
+            for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if 0 <= nx < w and 0 <= ny < h:
+                    n = ny * w + nx
+                    if not seen[n] and match(n):
+                        seen[n] = 1
+                        q.append(n)
+        if len(piece) <= limit:
+            for i in piece:
+                px[i * 4 + 3] = 0
+            cleared += len(piece)
     return cleared
 
 
@@ -531,7 +568,7 @@ def trim(w, h, px, margin_pct=TRIM_MARGIN_PCT):
 
 def main():
     if len(sys.argv) < 3:
-        print("usage: knockout.py <in.png> <out.png> [--tolerance N] [--keep-specks] [--holes]\n"
+        print("usage: knockout.py <in.png> <out.png> [--tolerance N] [--keep-specks] [--holes | --counters]\n"
               "       knockout.py <in.png> --check [--all-over]", file=sys.stderr)
         return 2
     src = sys.argv[1]
@@ -583,6 +620,9 @@ def main():
     if "--holes" in sys.argv:
         n = holes(w, h, px, background_colour(w, h, px), tol)
         print(f"holes: cleared {n:,} px of background enclosed by the art")
+    elif "--counters" in sys.argv:
+        n = holes(w, h, px, background_colour(w, h, px), tol, COUNTER_MAX_PCT)
+        print(f"counters: cleared {n:,} px of background inside letters and small gaps")
 
     if "--keep-specks" not in sys.argv:
         wiped, parts, why = despeckle(w, h, px)

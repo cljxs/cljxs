@@ -947,10 +947,16 @@ def print_areas(image_id, image, variant_ids, entry, measured=None, reach=None):
                     "images": fit_images(image_id, image, area, top, rnd, reach)}]}
                 for area, vids in sorted(groups.items())]
     if not sizes:
+        # Unmeasured: centred at full width - except on a round cut, where full
+        # width puts the corners outside the circle. The "Paws & Kissies"
+        # sticker (2026-10-07) lost the ends of its lettering that way; its
+        # print area had not been read. A round sticker's area is square, so
+        # the fit needs no measurement.
+        images = (fit_images(image_id, image, (1, 1), False, True, reach)
+                  if is_round(entry) and image else
+                  [{"id": image_id, "x": 0.5, "y": 0.5, "scale": 1, "angle": 0}])
         return [{"variant_ids": list(variant_ids), "placeholders": [{
-            "position": "front",
-            "images": [{"id": image_id, "x": 0.5, "y": 0.5, "scale": 1, "angle": 0}],
-        }]}]
+            "position": "front", "images": images}]}]
     folded = bool(entry.get("folded"))
     groups = {}
     for v in variant_ids:
@@ -1895,8 +1901,10 @@ def cmd_draft(a):
         cut = d / "design-cutout.png"
         print(f"cutting the background out of {design.name} so the print has "
               f"none ...")
+        # A garment loses every enclosed patch of background; anything else
+        # only the small ones - the inside of its letters (knockout --counters).
         r = subprocess.run([sys.executable, str(ko), str(design), str(cut)]
-                           + (["--holes"] if is_garment(cat) else []),
+                           + (["--holes"] if is_garment(cat) else ["--counters"]),
                            capture_output=True, text=True)
         sys.stdout.write(r.stdout)
         if r.returncode != 0:
