@@ -1,3 +1,7 @@
-# Only the transcriber needs anything installed; the rest of Clipper is the
-# standard library plus the ffmpeg already on the droplet.
+# The transcriber and the framing need something installed; the rest of
+# Clipper is the standard library plus the ffmpeg already on the droplet.
 faster-whisper==1.2.1
+# framing.py: finds the faces in each shot (with the YuNet model committed
+# beside it). Free; runs on the droplet's CPU. Without it clips are
+# centre-cropped and say so.
+opencv-python-headless==5.0.0.93

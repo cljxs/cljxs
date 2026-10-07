@@ -59,20 +59,57 @@ def watermark_box(wm_w, wm_h, top, max_width):
     return w, h, x, y
 
 
-def video_filter(mode, src_w, src_h, ass_name, fps, wm=None):
-    if mode == "center":
+def full_frame(inl, out):
+    """The whole frame across the middle, on a blurred copy of itself. The
+    backdrop is made at quarter size and scaled up: the same look for a
+    sixteenth of the pixels, which matters on one CPU."""
+    return (f"[{inl}]split=2[{out}g][{out}f];"
+            f"[{out}g]scale={W // 4}:{H // 4}:force_original_aspect_ratio=increase,"
+            f"crop={W // 4}:{H // 4},boxblur=12:2,scale={W}:{H},setsar=1[{out}k];"
+            f"[{out}f]scale={W}:-2:flags=lanczos,setsar=1[{out}t];"
+            f"[{out}k][{out}t]overlay=(W-w)/2:(H-h)/2,format=yuv420p[{out}]")
+
+
+def shot_filter(inl, out, seg):
+    """One shot of a framed clip, from framing.layout(), as WxH yuv420p."""
+    if seg["layout"] == "crop":
+        w, h, x, y = seg["box"]
+        return f"[{inl}]crop={w}:{h}:{x}:{y},scale={W}:{H}:flags=lanczos,setsar=1,format=yuv420p[{out}]"
+    if seg["layout"] == "split":
+        (w1, h1, x1, y1), (w2, h2, x2, y2) = seg["boxes"]
+        return (f"[{inl}]split=2[{out}a][{out}b];"
+                f"[{out}a]crop={w1}:{h1}:{x1}:{y1},scale={W}:{H // 2}:flags=lanczos,setsar=1[{out}t];"
+                f"[{out}b]crop={w2}:{h2}:{x2}:{y2},scale={W}:{H // 2}:flags=lanczos,setsar=1[{out}u];"
+                f"[{out}t][{out}u]vstack,format=yuv420p[{out}]")
+    return full_frame(inl, out)
+
+
+def framed(plan):
+    """Every shot cut with its own layout, then joined. The last shot runs on
+    past the clip's end: -t ends the clip, and a trim that stopped early
+    would drop its last frames."""
+    n = len(plan)
+    parts = [f"[0:v]split={n}" + "".join(f"[i{k}]" for k in range(n))]
+    for k, seg in enumerate(plan):
+        end = f":end={seg['t1']:.3f}" if k < n - 1 else ""
+        parts.append(f"[i{k}]trim=start={seg['t0']:.3f}{end},setpts=PTS-STARTPTS[j{k}]")
+        parts.append(shot_filter(f"j{k}", f"s{k}", seg))
+    return ";".join(parts) + ";" + "".join(f"[s{k}]" for k in range(n)) + f"concat=n={n}:v=1:a=0"
+
+
+def video_filter(mode, src_w, src_h, ass_name, fps, wm=None, plan=None):
+    if plan:
+        chain = framed(plan)
+    elif mode == "center":
         w, h, x, y = center_crop(src_w, src_h)
         chain = f"[0:v]crop={w}:{h}:{x}:{y},scale={W}:{H}:flags=lanczos,setsar=1"
     elif mode == "blur":
-        # The blurred backdrop is made at quarter size and scaled up: the same
-        # look for a sixteenth of the pixels, which matters on one CPU.
-        chain = (f"[0:v]split=2[bg][fg];"
-                 f"[bg]scale={W // 4}:{H // 4}:force_original_aspect_ratio=increase,"
-                 f"crop={W // 4}:{H // 4},boxblur=12:2,scale={W}:{H},setsar=1[back];"
-                 f"[fg]scale={W}:-2:flags=lanczos,setsar=1[front];"
-                 f"[back][front]overlay=(W-w)/2:(H-h)/2")
+        chain = full_frame("0:v", "ff") + ";[ff]null"
+    elif mode == "faces":                        # no plan: framing was unavailable
+        w, h, x, y = center_crop(src_w, src_h)
+        chain = f"[0:v]crop={w}:{h}:{x}:{y},scale={W}:{H}:flags=lanczos,setsar=1"
     else:
-        raise ValueError(f"unknown crop_mode {mode!r} - center or blur")
+        raise ValueError(f"unknown crop_mode {mode!r} - faces, center or blur")
     if wm:
         # The still image is input 1. overlay repeats its one frame for as
         # long as the video runs (eof_action=repeat), so it is on screen for
@@ -83,7 +120,7 @@ def video_filter(mode, src_w, src_h, ass_name, fps, wm=None):
     return f"{chain},fps={fps},ass={ass_name}[v]"
 
 
-def command(src, out_name, start, end, info, ass_name, cfg, wm=None):
+def command(src, out_name, start, end, info, ass_name, cfg, wm=None, plan=None):
     """wm: (path, (w, h, x, y)) or None. The watermark's -i comes before -t,
     so -t stays an output option (the clip's length) and is not read as
     the length of the image."""
@@ -92,7 +129,7 @@ def command(src, out_name, start, end, info, ass_name, cfg, wm=None):
     return ["ffmpeg", "-nostdin", "-y", "-v", "error",
             "-ss", f"{start:.3f}", *media.input_args(src), *extra, "-t", f"{end - start:.3f}",
             "-filter_complex", video_filter(cfg["crop_mode"], info["width"], info["height"],
-                                            ass_name, cfg["fps"], wm[1] if wm else None),
+                                            ass_name, cfg["fps"], wm[1] if wm else None, plan),
             "-map", "[v]", "-map", "0:a:0?",
             "-c:v", "libx264", "-preset", cfg["x264_preset"], "-crf", str(cfg["x264_crf"]),
             "-pix_fmt", "yuv420p", "-af", af, "-c:a", "aac", "-b:a", "128k",
@@ -167,8 +204,18 @@ def render(src, out_path, start, end, ass_text, cfg, watermark=None):
     info = media.probe(src)
     if not info["has_video"]:
         raise media.MediaError(f"{src} has no video stream")
+    # Framing a clip shot by shot (crop_mode "faces", framing.py). If it cannot
+    # run - no OpenCV yet - the clip is still made, centre-cropped, and says so.
+    plan, framing_note = None, None
+    if cfg["crop_mode"] == "faces":
+        from clipper import framing
+        try:
+            plan = framing.plan(src, start, end, info)
+            framing_note = framing.summary(plan)
+        except framing.FramingUnavailable as exc:
+            framing_note = f"centre crop - {exc}"
     tmp = out_path.with_name(out_path.stem + ".part.mp4")
-    media.run(command(src, tmp.name, start, end, info, ass_name, cfg, wm),
+    media.run(command(src, tmp.name, start, end, info, ass_name, cfg, wm, plan),
               cwd=out_path.parent)
     tmp.replace(out_path)
-    return media.probe(out_path)
+    return dict(media.probe(out_path), framing=framing_note)

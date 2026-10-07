@@ -389,6 +389,30 @@ first) plus `01.json` (everything about it). Viewing them on the iPad comes
 with the Deck page in Phase 3. Until then, download them with your terminal
 app's SFTP.
 
+## Framing: each shot on its people
+
+A short is upright and the footage is wide, so a clip shows about a third of
+each frame. Which third is decided shot by shot (`clipper/framing.py`):
+Clip finds the camera cuts and the faces in each shot, then
+
+* **crop**: one person, or people sitting close: the strip, centred on them.
+* **split**: two people too far apart for one strip (Gil's Arena's couch):
+  one on the top half, one on the bottom, each zoomed to their face.
+* **full**: three or more spread out, or nobody found: the whole frame across
+  the middle on a blurred copy of itself, so nobody is cut out.
+
+`clipper clips` shows each clip's shots on its `frame:` line. It needs
+OpenCV in Clip's venv, once (free, about 100 MB; the face model is in the
+repo):
+
+```
+cd /root/ecosystem && clipper/.venv/bin/pip install -r clipper/requirements.txt
+```
+
+Without it, clips are centre-cropped as before and the `frame:` line says so.
+`"crop_mode": "center"` or `"blur"` in `clipper/var/config.json` goes back to
+one layout for every shot.
+
 Settings are changed in `clipper/var/config.json`. Only the keys you change
 are needed, for example `{"max_clips_per_video": 3, "crop_mode": "blur"}`.
 The full list is in `clipper/config.py`, and a misspelt key is refused

@@ -24,6 +24,7 @@ Provenance of each file, and how to refresh it:
 | `dns-google-mx-nxdomain.json` | dns.google's DNS-over-HTTPS answer for an MX lookup on a domain that does not exist (`Status: 3`) | fetched 2026-10-06 for milkboxbakery.com, the address on Paul's first pitch; `paul.py mail_verdict` reads it as "would bounce" |
 | `dns-google-mx-null.json` | the same lookup for example.com: a null MX (`0 .`, RFC 7505 - accepts no mail) | fetched 2026-10-06 |
 | `dns-google-mx-gmail.json` | the same lookup for gmail.com: real mail servers | fetched 2026-10-06 |
+| `faces/person1-4.jpg` | head-and-shoulders crops of four astronauts, the faces framing.py must find | cut on 2026-10-07 from NASA's official Expedition 4 and Expedition 61 crew portraits (images.nasa.gov `iss004-s-002`, `jsc2019e022584_alt`; public domain) around the faces YuNet found in them; the test builds its four camera shots from these |
 | `schema-dump-401.log` | a tool-schema dump containing `401` as a VALUE | format captured from a real `last-run.py` dump; the `401` line is the one that caused the false positive |
 
 `scripts/capture-fixtures.py` refreshes these from the live droplet and

@@ -49,7 +49,7 @@ DEFAULTS = {
     # --- editing ------------------------------------------------------------
     # "center": crop the middle of the frame (one speaker, centred).
     # "blur":   whole frame on a blurred copy of itself (wide shots, two people).
-    "crop_mode": "center",
+    "crop_mode": "faces",            # framed shot by shot on the people (framing.py); "center" or "blur"
     "caption_style": "bold-yellow",
     "caption_uppercase": True,
     "caption_max_words": 3,

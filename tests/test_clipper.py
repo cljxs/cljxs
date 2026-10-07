@@ -231,6 +231,155 @@ class Crop(unittest.TestCase):
             render.video_filter("zoom", 1920, 1080, "a.ass", 30)
 
 
+from clipper import framing  # noqa: E402
+
+try:
+    import cv2  # noqa: F401
+    HAVE_CV2 = True
+except ImportError:
+    HAVE_CV2 = False
+
+
+class FramingLayouts(unittest.TestCase):
+    """Owner, 2026-10-07: "In every clip of Gil's Arena it cuts to this camera
+    angle showing nothing" - the middle strip of a wide shot whose hosts sit
+    at the ends of a couch. Each shot is framed on its people instead."""
+
+    SW, SH = 1920, 1080
+
+    def test_nobody_found_shows_the_whole_frame(self):
+        self.assertEqual(framing.layout([], self.SW, self.SH)["layout"], "full")
+
+    def test_one_face_is_centred_and_kept_inside_the_frame(self):
+        got = framing.layout([(1250, 500, 240, 320)], self.SW, self.SH)
+        self.assertEqual(got["layout"], "crop")
+        w, h, x, y = got["box"]
+        self.assertEqual((w, h), (606, 1080))
+        self.assertLess(abs(x + w / 2 - 1250), 2)
+        edge = framing.layout([(1880, 500, 120, 160)], self.SW, self.SH)["box"]
+        self.assertEqual(edge[2] + edge[0], self.SW, "clamped at the edge, not past it")
+
+    def test_two_close_share_a_strip_two_apart_split(self):
+        self.assertEqual(framing.layout([(860, 800, 110, 140), (1060, 800, 110, 140)],
+                                        self.SW, self.SH)["layout"], "crop")
+        got = framing.layout([(170, 760, 120, 150), (1750, 760, 120, 150)], self.SW, self.SH)
+        self.assertEqual(got["layout"], "split")
+        (w1, h1, x1, y1), (w2, h2, x2, y2) = got["boxes"]
+        self.assertEqual((w1, h1), (w2, h2), "both halves at the same zoom")
+        self.assertTrue(x1 <= 170 <= x1 + w1 and x2 <= 1750 <= x2 + w2, "each half holds its person")
+        self.assertTrue(y1 <= 760 <= y1 + h1)
+        self.assertLess(h1, self.SH, "zoomed to the faces, not the whole height")
+
+    def test_three_across_the_frame_show_it_all(self):
+        self.assertEqual(framing.layout([(200, 700, 100, 130), (960, 700, 100, 130), (1700, 700, 100, 130)],
+                                        self.SW, self.SH)["layout"], "full")
+
+    def test_a_flicker_is_not_a_person(self):
+        samples = [(k / 5, [(400, 500, 100, 130)]) for k in range(10)]
+        samples[3] = (0.6, [(400, 500, 100, 130), (1500, 500, 100, 130)])     # once in ten
+        self.assertEqual([round(p[0]) for p in framing.people(samples, self.SW)], [400])
+
+    def test_a_flash_of_a_shot_joins_the_one_before(self):
+        self.assertEqual(framing.shots([2.0, 2.3, 5.0], 8.0), [(0.0, 2.3), (2.3, 5.0), (5.0, 8.0)])
+        self.assertEqual(framing.shots([], 8.0), [(0.0, 8.0)])
+
+    def test_the_filter_cuts_each_shot_and_joins_them(self):
+        plan = [{"t0": 0.0, "t1": 2.0, "layout": "split", "boxes": [(658, 584, 0, 300), (658, 584, 1262, 300)]},
+                {"t0": 2.0, "t1": 4.0, "layout": "crop", "box": (606, 1080, 946, 0)},
+                {"t0": 4.0, "t1": 8.0, "layout": "full"}]
+        f = render.video_filter("faces", 1920, 1080, "a.ass", 30, plan=plan)
+        self.assertIn("[0:v]split=3[i0][i1][i2]", f)
+        self.assertIn("trim=start=2.000:end=4.000", f)
+        self.assertIn("[i2]trim=start=4.000,setpts", f, "the last shot runs on to the clip's end")
+        self.assertIn("concat=n=3:v=1:a=0", f)
+        self.assertIn("vstack", f)
+        self.assertTrue(f.endswith(",fps=30,ass=a.ass[v]"))
+
+
+@unittest.skipUnless(HAVE_CV2 and shutil.which("ffmpeg"), "needs OpenCV and ffmpeg")
+class FramingOnRealFaces(unittest.TestCase):
+    """Four shots made from NASA crew portraits (public domain,
+    tests/fixtures/faces): the couch, a close-up off centre, an empty set, two
+    side by side. The empty shot is the one ffmpeg's scene score alone missed."""
+
+    FACES = Path(__file__).parent / "fixtures" / "faces"
+
+    @classmethod
+    def setUpClass(cls):
+        import numpy as np
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.video = Path(cls.tmp.name) / "shots.mp4"
+        P = [cv2.imread(str(cls.FACES / f"person{i}.jpg")) for i in (1, 2, 3, 4)]
+
+        def frame(bg, people):
+            img = np.full((1080, 1920, 3), bg, np.uint8)
+            cv2.rectangle(img, (0, 700), (1920, 1080), tuple(int(c * 0.5) for c in bg), -1)
+            for p, cx, k in people:
+                q = cv2.resize(p, None, fx=k, fy=k)
+                h, w = q.shape[:2]
+                img[1080 - h - 60:1020, int(cx - w / 2):int(cx - w / 2) + w] = q
+            return img
+        shots = [((40, 20, 60), [(P[0], 170, 1.0), (P[1], 1750, 1.0)]),
+                 ((20, 60, 40), [(P[2], 1250, 2.4)]),
+                 ((70, 70, 20), []),
+                 ((30, 30, 80), [(P[3], 860, 1.1), (P[0], 1060, 1.1)])]
+        w = subprocess.Popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24",
+                              "-s", "1920x1080", "-r", "30", "-i", "-", "-f", "lavfi", "-i",
+                              "sine=frequency=300:duration=8", "-shortest", "-c:v", "libx264",
+                              "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", str(cls.video)],
+                             stdin=subprocess.PIPE)
+        for bg, people in shots:
+            w.stdin.write(frame(bg, people).tobytes() * 60)
+        w.stdin.close()
+        w.wait()
+        cls.info = media.probe(cls.video)
+        cls.plan = framing.plan(cls.video, 0.0, 8.0, cls.info)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_each_shot_gets_its_own_layout(self):
+        got = [(s["layout"], round(s["t0"], 1), round(s["t1"], 1)) for s in self.plan]
+        self.assertEqual(got, [("split", 0.0, 2.0), ("crop", 2.0, 4.0), ("full", 4.0, 6.0), ("crop", 6.0, 8.0)])
+
+    def test_the_crops_are_on_the_people(self):
+        w, _, x, _ = self.plan[1]["box"]
+        self.assertLess(abs(x + w / 2 - 1250), 40, "the close-up, off centre")
+        w, _, x, _ = self.plan[3]["box"]
+        self.assertLess(abs(x + w / 2 - 960), 40, "between the two side by side")
+
+    def test_it_renders_and_says_how(self):
+        out = Path(self.tmp.name) / "out" / "01.mp4"
+        cfg = dict(config.DEFAULTS, x264_preset="ultrafast")
+        info = render.render(self.video, out, 0.0, 8.0, "[Script Info]\nScriptType: v4.00+\n", cfg)
+        self.assertEqual((info["width"], info["height"]), (1080, 1920))
+        self.assertAlmostEqual(info["duration"], 8.0, delta=0.2)
+        self.assertEqual(info["framing"], "4 shot(s): split 0-2s, crop 2-4s, full 4-6s, crop 6-8s")
+
+
+class FramingFallsBackToTheCentre(unittest.TestCase):
+    def test_no_opencv_is_a_centre_crop_said_out_loud(self):
+        real = framing.plan
+
+        def missing(*a, **k):
+            raise framing.FramingUnavailable("OpenCV is not installed")
+        framing.plan = missing
+        try:
+            calls = []
+            real_run, real_probe = media.run, media.probe
+            media.run = lambda cmd, cwd=None: calls.append(cmd)
+            media.probe = lambda p: {"width": 1920, "height": 1080, "has_video": True, "duration": 8.0}
+            with tempfile.TemporaryDirectory() as d:
+                (Path(d) / "01.part.mp4").write_bytes(b"x")
+                info = render.render("in.mp4", Path(d) / "01.mp4", 0.0, 8.0, "", dict(config.DEFAULTS))
+        finally:
+            framing.plan, media.run, media.probe = real, real_run, real_probe
+        self.assertEqual(info["framing"], "centre crop - OpenCV is not installed")
+        vf = calls[0][calls[0].index("-filter_complex") + 1]
+        self.assertIn("crop=606:1080:657:0", vf)
+
+
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "needs ffmpeg")
 class EndToEnd(unittest.TestCase):
     """The whole Phase 1 path through the real CLI: rights gate, ingest,
@@ -249,6 +398,9 @@ class EndToEnd(unittest.TestCase):
         (self.home / "config.json").write_text(json.dumps({
             "transcriber": "file", "max_clips_per_video": 1, "min_score": 0,
             "x264_preset": "ultrafast", "max_clip_seconds": 30,
+            # Framing has its own tests (FramingOnRealFaces); on these it found
+            # no faces in a test pattern and added minutes to the suite.
+            "crop_mode": "center",
             # On the droplet the OpenRouter key is real: a test must never
             # spend it. Drafting by model is tested with a stand-in call.
             "copy_model": None}))

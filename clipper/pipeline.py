@@ -166,6 +166,7 @@ def stage_render(conn, paths, cfg, video):
         meta = {"source": src["name"], "rights": src["rights"], "evidence": src["evidence"],
                 "watermark": Path(src["watermark"]).name if src["watermark"] else None,
                 "hook": hook, "campaign_key": cut["key"] if cut else None,
+                "framing": info.get("framing"),
                 "attribution": src["attribution"], "video_title": video["title"],
                 "origin": video["origin"], "start": c["start"], "end": c["end"],
                 "score": c["score"], "scorer": c["scorer"],

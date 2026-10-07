@@ -359,7 +359,9 @@ def cmd_clips(a):
         m = json.loads(r["meta"])
         print(f"CLIP v{r['video_id']}#{r['rank']}  score {r['score']:.0f}/100  "
               f"{pipeline.clock(r['start'])}-{pipeline.clock(r['end'])}  {r['status']}\n"
-              f"   why:  {'; '.join(m['reasons'])}\n   file: {r['path']}")
+              f"   why:  {'; '.join(m['reasons'])}\n"
+              + (f"   frame: {m['framing']}\n" if m.get("framing") else "")
+              + f"   file: {r['path']}")
     return 0
 
 
