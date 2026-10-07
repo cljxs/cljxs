@@ -31,6 +31,11 @@
   .title{font-size:24px;font-weight:700;letter-spacing:.18em}
   .who{color:var(--mute);letter-spacing:.12em;font-size:11.5px;text-transform:uppercase}
   .sp{flex:1}
+  /* his account in dollars: belfort-trade.py board works it out, this prints it */
+  .acct{display:flex;gap:22px;flex-wrap:wrap;align-items:baseline;margin-left:8px}
+  .acct .l{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}
+  .acct .v{font-size:19px;font-weight:800}
+  .acct .v.big{font-size:22px;color:var(--gold2)}
   .btn{font:inherit;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink);background:transparent;
     border:1px solid var(--line);border-radius:6px;padding:8px 14px;cursor:pointer;text-decoration:none}
   .btn:hover{border-color:var(--gold)}
@@ -133,6 +138,7 @@
   <div class="head">
     <div class="title">MARKETS</div>
     <div class="who">Belfort · swing trader · paper $10,000</div>
+    <div class="acct" id="acct"></div>
     <div class="sp"></div>
     <a class="btn" id="back" href="/dashboard">← Deck</a>
     <button class="btn" id="close" style="display:none">✕ Esc</button>
@@ -194,6 +200,13 @@ async function load() {
 }
 
 function render() {
+  const a = B.account;
+  const signed = v => (v > 0 ? '+' : v < 0 ? '-' : '') + money(Math.abs(v));
+  $('acct').innerHTML = a ? `
+    <div><div class="l">Account value</div><div class="v big num">${money(a.value)}</div></div>
+    <div><div class="l">Since start</div><div class="v num ${cls(a.pnl)}">${signed(a.pnl)} <span style="font-size:13px">${pct(a.pnl_pct)}</span></div></div>
+    <div><div class="l">Today</div><div class="v num ${cls(a.today)}">${signed(a.today)} <span style="font-size:13px">${pct(a.today_pct)}</span></div></div>
+    <div><div class="l">Cash</div><div class="v num">${money(a.cash)}</div></div>` : '';
   const sd = B.showdown || {};
   $('basis').textContent = 'Belfort vs the no-AI book vs QQQ and SPY · ' + (sd.basis || '');
   $('spread').textContent = has(sd.spread) ? sd.spread.toFixed(2) + '%' : '—';

@@ -943,6 +943,7 @@ def board():
         "showdown": {"basis": basis, "rows": [{"name": n, "pct": v} for n, v in race],
                      "spread": round(max(vals) - min(vals), 2) if len(vals) > 1 else None},
         "books": [{k: b[k] for k in ("book", "value", "return_pct", "open")} for b in books],
+        "account": account(p, quotes),
         "watch": [ticker(s) for s in order if s in quotes],
         "report": {"name": reports[0].name, "text": reports[0].read_text(errors="replace")} if reports else None,
         "history": [f.name for f in reports[:30]],
@@ -1072,6 +1073,24 @@ def cmd_calls(a):
         f" Still owed: {', '.join(left)} - add a line for each and run this again." if left
         else " Every candidate has a call."))
     return 0
+
+
+def account(p, quotes):
+    """His account in dollars, for the top of the Markets page (owner,
+    2026-10-07: "add the money value at the top"). Worked out here, so the
+    page only prints it: the value and cash are the same market_value() and
+    cash every other reading uses, and today's move is each holding's shares
+    times its change since yesterday's close."""
+    value, start, cash = market_value(p), float(p.get("starting_cash") or 10000), float(p["cash"])
+    today = 0.0
+    for pos in p["positions"]:
+        q = quotes.get(pos["symbol"].upper()) or {}
+        if float(pos.get("shares") or 0) > 0 and q.get("price") is not None and q.get("prev_close"):
+            today += float(pos["shares"]) * (float(q["price"]) - float(q["prev_close"]))
+    return {"value": round(value, 2), "starting_cash": start, "pnl": round(value - start, 2),
+            "pnl_pct": round((value / start - 1) * 100, 2) if start else None, "cash": round(cash, 2),
+            "invested": round(value - cash, 2), "today": round(today, 2),
+            "today_pct": round(today / (value - today) * 100, 2) if value - today else None}
 
 
 def report_order(f):

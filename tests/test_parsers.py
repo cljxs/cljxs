@@ -17700,6 +17700,32 @@ class TheMarketsPageDrawsBelfortsOwnNumbers(unittest.TestCase):
         self.assertIn("Belfort (AI)", [r["name"] for r in b["showdown"]["rows"]])
 
 
+class TheMarketsPageShowsHisMoney(TheMarketsPageDrawsBelfortsOwnNumbers):
+    """Owner, 2026-10-07: "add the money value at the top". The dollars come
+    from board(), off the same cash and market_value() as the book - the page
+    prints them and adds nothing up itself."""
+
+    def test_the_account_in_dollars(self):
+        q = json.loads((self.data / "quotes.json").read_text())["quotes"]["TSM"]
+        state = self.root / "agents" / "belfort" / "state"
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "portfolio.json").write_text(json.dumps({
+            "starting_cash": 10000.0, "cash": 9000.0, "created_utc": "2026-09-01 13:00:00",
+            "positions": [{"symbol": "TSM", "shares": 3, "cost_basis": 100.0}], "trades": []}))
+        r = subprocess.run([sys.executable, str(SCRIPTS / "belfort-trade.py"), "board"],
+                           capture_output=True, text=True, env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        a = json.loads(r.stdout)["account"]
+        value = 9000.0 + 3 * q["price"]
+        self.assertEqual((a["value"], a["cash"], a["invested"]), (round(value, 2), 9000.0, round(3 * q["price"], 2)))
+        self.assertEqual(a["pnl"], round(value - 10000.0, 2))
+        self.assertEqual(a["today"], round(3 * (q["price"] - q["prev_close"]), 2))
+        self.assertNotEqual(a["today"], 0, "the fixture must move today, or this tests nothing")
+        html = (ROOT / "mission-control-api" / "public" / "markets.html").read_text()
+        self.assertIn("const a = B.account;", html)
+        self.assertIn("${money(a.value)}", html)
+
+
 class SizeKnowsTheEightNameCap(TheMarketsPageDrawsBelfortsOwnNumbers):
     """buy() refused a 9th name, but size() - "the most a buy may take now" -
     still offered shares. Found 2026-10-06 when the Markets page began
