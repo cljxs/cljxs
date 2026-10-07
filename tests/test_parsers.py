@@ -5399,8 +5399,7 @@ class ThePropsHallIsItsOwnBuilding(unittest.TestCase):
     def test_the_hall_gets_a_path_out_to_the_lane(self):
         # Without one it stands on grass with no way in, which is what made
         # the houses read as scenery before they were given theirs.
-        self.assertRegex(self.html,
-                         r"PROPS_PLOT\.x \+ 2\.5[\s\S]{0,400}PAVED\[y\]\[dx\] = true")
+        self.assertIn("layPath((PROPS_PLOT.x + 2.5) * T,", self.html)
 
 
 class ClipHasAStudio(unittest.TestCase):
@@ -5428,7 +5427,7 @@ class ClipHasAStudio(unittest.TestCase):
             self.assertTrue(apart, f"the studio overlaps the building at {px},{py}")
 
     def test_it_has_a_path_and_a_door_that_opens_its_panel(self):
-        self.assertRegex(self.html, r"CLIP_PLOT\.x \+ 2\.25[\s\S]{0,400}PAVED\[y\]\[dx\] = true")
+        self.assertIn("layPath((CLIP_PLOT.x + 2.25) * T,", self.html)
         self.assertIn("doors.push({ name: CLIP_DOOR", self.html)
         body = self.html.split("function openPanel(", 1)[1]
         before = body.split("(DATA.agents || []).find", 1)[0]
@@ -5563,7 +5562,8 @@ class NothingGrowsThroughAWall(unittest.TestCase):
         found = self.scenery()
         self.assertEqual(sorted(k for k, *_ in found), ["bush", "fence", "rock", "sign", "tree"])
         for kind, pts, *_ in found:
-            self.assertGreaterEqual(len(pts), 5, f"only {len(pts)} {kind} found")
+            # three fence pieces since 2026-10-07: two stood across Ace's and Scout's paths
+            self.assertGreaterEqual(len(pts), 3 if kind == "fence" else 5, f"only {len(pts)} {kind} found")
 
     def test_the_check_can_actually_fail(self):
         # Stand a tree on the hall's doorstep and confirm it is reported.
@@ -5579,6 +5579,103 @@ class NothingGrowsThroughAWall(unittest.TestCase):
 
     def test_nothing_covers_a_wall_or_a_name_plate(self):
         self.assertEqual(self.collisions(), [])
+
+
+class NothingStandsOnAPath(NothingGrowsThroughAWall):
+    """Owner, 2026-10-07: "make sure there are no gates or objects blocking
+    paths". There were several. A path ran down the column NEAREST its door by
+    rounding - up to a tile beside it - so the garden fence, gated at the door,
+    crossed it like a shut gate. A rock and a barrel stood on Paul's path, a
+    fence and a bush on Scout's, a market stall on Clip's way into the square,
+    and three tree trunks in the edge of the high street. The two buildings
+    south of the lane face away from it, and their paths ran under them into
+    the back wall.
+
+    Found by measuring every image and body in the real page against the
+    paths it drew (window.__paved); this keeps it so for all eight plots, the
+    ones not built on yet included."""
+
+    WIDTH = {"tree": 62, "bush": 30, "rock": 24, "sign": 18, "fence": 32, "lamp": 16,
+             "bed": 36, "stall": 64, "crate": 22}
+
+    def placed(self):
+        """[(kind, x, y)] in tiles, for every hand-placed thing in the file."""
+        # a fence is drawn at (tx + .5, ty + .4); everything else where it is listed
+        out = [(k, x + .5, y + .4) if k == "fence" else (k, x, y) for k, pts, *_ in self.scenery() for x, y in pts]
+        for kind in ("lamp", "bed", "stall"):
+            m = re.search(r"(\[\[[^\n]*\]\])\s*\.forEach\(\(\[tx\s*,\s*ty\]\) => place\('" + kind, self.html)
+            out += [(kind, float(a), float(b)) for a, b in re.findall(r"\[\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\]", m.group(1))]
+        m = re.search(r"(\[\[[^\n]*\]\])\s*\.forEach\(\(\[tx,ty\], i\) => place\(i % 2 \? 'barrel' : 'crate'", self.html)
+        out += [("crate", float(a), float(b)) for a, b in re.findall(r"\[\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\]", m.group(1))]
+        return out
+
+    def paths(self):
+        """{(x, y)} path tiles to keep clear, by the rule village.html lays them."""
+        T, ROAD = self.T, 13
+        jsround = lambda v: math.floor(v + 0.5)
+        tiles = set()
+
+        def lay(door_x, dy, x0, x1, side=None):
+            dx = math.floor(door_x / T)
+            if dy <= ROAD:
+                tiles.update((dx, y) for y in range(dy, ROAD + 1))
+                return
+            sx = math.ceil(x1 / T) if side == "right" else math.floor(x0 / T) - 1
+            tiles.update((sx, y) for y in range(ROAD + 1, dy + 1))
+            tiles.update((x, dy) for x in range(min(sx, dx), max(sx, dx) + 1))
+
+        plots = re.findall(r"\{ x:\s*([\d.]+),\s*y:\s*([\d.]+),\s*flip: \w+,?\s*(?:side: '(\w+)')?", self.html)
+        self.assertEqual(len(plots), 8)
+        for x, y, side in plots:
+            x, y = float(x), float(y)
+            lay((x + 2) * T, jsround(y + 3.7), x * T, x * T + 128, side or None)
+        hx, hy = (float(v) for v in re.search(r"PROPS_PLOT = \{ x: ([\d.]+), y: ([\d.]+) \}", self.html).groups())
+        lay((hx + 2.5) * T, jsround(hy + 3.9), hx * T, hx * T + 160, "right")
+        cx, cy = (float(v) for v in re.search(r"CLIP_PLOT = \{ x: ([\d.]+), y: ([\d.]+) \}", self.html).groups())
+        lay((cx + 2.25) * T, jsround(cy + 3.9), cx * T, cx * T + 144)
+        tiles.update((x, y) for x in range(38) for y in (ROAD, ROAD + 1))      # the high street
+        # The square is meant to be furnished; only the road across it and
+        # Clip's way in are kept clear.
+        clip_col = math.floor((cx + 2.25) * T / T)
+        return {(x, y) for x, y in tiles
+                if not (16 <= x <= 21 and 11 <= y <= 17) or y in (ROAD, ROAD + 1) or (x == clip_col and y < ROAD)}
+
+    def blocked(self):
+        T, bad, tiles = self.T, [], self.paths()
+        for kind, sx, sy in self.placed():
+            half = self.WIDTH[kind] / 2
+            for tx, ty in tiles:
+                if (sx * T + half - 3 > tx * T and sx * T - half + 3 < (tx + 1) * T
+                        and sy * T > ty * T + 4 and sy * T - 10 < (ty + 1) * T):
+                    bad.append(f"{kind} at ({sx:g},{sy:g}) on path tile ({tx},{ty})")
+        return bad
+
+    def test_it_reads_everything_it_should(self):
+        kinds = collections.Counter(k for k, *_ in self.placed())
+        for kind, least in (("tree", 15), ("bush", 10), ("rock", 5), ("fence", 3), ("lamp", 5),
+                            ("bed", 4), ("stall", 2), ("crate", 4), ("sign", 5)):
+            self.assertGreaterEqual(kinds[kind], least, f"only {kinds[kind]} {kind} found")
+        self.assertGreater(len(self.paths()), 120)
+
+    def test_it_can_fail(self):
+        real, self.html = self.html, self.html.replace("[13,12],[27.5,12]", "[13,12],[26,12]", 1)
+        try:
+            self.assertIn("rock at (26,12) on path tile (25,11)", self.blocked())
+        finally:
+            self.html = real
+
+    def test_nothing_stands_on_a_path(self):
+        self.assertEqual(self.blocked(), [])
+
+    def test_gates_open_onto_the_path_and_south_paths_go_round(self):
+        self.assertIn("const pathCol = doorX => Math.floor(doorX / T);", self.html)
+        self.assertIn("gate = (pathCol(bx + HW/2) + .5) * T;", self.html)
+        self.assertIn("this.add.image(fx, gy, 'fence')", self.html)
+        self.assertIn("if (row < MAP_H && col >= 0 && col < MAP_W && PAVED[row][col]) return;", self.html)
+        self.assertIn("const sx = side === 'right' ? Math.ceil(x1 / T) : Math.floor(x0 / T) - 1;", self.html)
+        self.assertIn("const propLeft = plot.side ? plot.side === 'right' : plot.flip;", self.html)
+        self.assertIn("const bedRight = plot.side ? plot.side === 'left' : plot.flip;", self.html)
+        self.assertNotIn("Math.round(pl.x + 2)", self.html, "the rounded column is the shut-gate bug")
 
 
 class EachHouseLooksLikeItsTrade(unittest.TestCase):
@@ -5633,9 +5730,10 @@ class EachHouseLooksLikeItsTrade(unittest.TestCase):
         self.assertIn("const label = nameTag(this, hx, hy - 22, who);", body)
         self.assertEqual(body.count("npcs.push("), body.count("nameTag(this,"), "a resident without a tag")
         self.assertIn("minY: doorY + TAG_CLEAR", body)
+        self.assertIn("y: doorY - 48, maxY: doorY - 24", body, "a south resident stays above its sign")
         self.assertIn("minY: by + SH + TAG_CLEAR", body)
         update = self.html.split("function update(", 1)[1]
-        self.assertIn("n.ty = Math.max(n.minY ?? -Infinity,", update)
+        self.assertIn("n.ty = Math.min(n.maxY ?? Infinity, Math.max(n.minY ?? -Infinity,", update)
         self.assertIn("if (n.label) n.label.setPosition(", update)
 
     def test_a_themed_house_is_never_mirrored(self):

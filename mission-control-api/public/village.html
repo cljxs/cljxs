@@ -326,6 +326,8 @@ const MAP_W = 38, MAP_H = 23; // tiles
 // buildings - the one thing a neighbourhood never looks like. These sit at
 // different depths, in loose clusters, some set back from the lane and some
 // close to it. `flip` mirrors a house so its neighbour is not a photocopy.
+// `side` is for a plot south of the lane, whose door faces away from it: the
+// side its garden path comes down before turning along the front.
 // Module scope because the ground painter needs them too, to run a garden path
 // from each door out to the lane before anything is drawn.
 const PLOTS = [
@@ -334,8 +336,8 @@ const PLOTS = [
   { x: 13.8, y: 3.2,  flip: false },
   { x: 23.6, y: 6.2,  flip: true  },
   { x: 29.8, y: 2.6,  flip: false },
-  { x: 26.4, y: 17.6, flip: true  },
-  { x: 11.6, y: 18.6, flip: false },
+  { x: 26.4, y: 17.6, flip: true,  side: 'left'  },
+  { x: 11.6, y: 18.6, flip: false, side: 'right' },
   { x: 33.4, y: 8.6,  flip: true  },
 ];
 
@@ -1560,30 +1562,35 @@ function create() {
   // A garden path from each occupied door out to the lane. Without one the
   // houses sit on grass with no way in, which is what made them read as
   // scenery rather than as homes people come and go from.
+  //
+  // The path runs down the column the door is IN. It used to be the nearest
+  // column by rounding, up to a tile beside the door, so a garden fence (whose
+  // gate is centred on the path, below) crossed it like a shut gate. A building
+  // south of the lane faces away from it: its path comes down the plot's
+  // `side` and turns along the front to the door, instead of running under
+  // the building into its back wall (owner, 2026-10-07: "no gates or objects
+  // blocking paths").
+  const pathCol = doorX => Math.floor(doorX / T);
+  const layPath = (doorX, dy, x0, x1, side) => {
+    const pave = (x, y) => { if (x >= 0 && y >= 0 && x < MAP_W && y < MAP_H && !WET[y][x]) PAVED[y][x] = true; };
+    const dx = pathCol(doorX);
+    if (dy <= ROAD_Y) { for (let y = dy; y <= ROAD_Y; y++) pave(dx, y); return; }
+    const sx = side === 'right' ? Math.ceil(x1 / T) : Math.floor(x0 / T) - 1;
+    for (let y = ROAD_Y + 1; y <= dy; y++) pave(sx, y);
+    for (let x = Math.min(sx, dx); x <= Math.max(sx, dx); x++) pave(x, dy);
+  };
   const occupied = Math.min(housed().length, PLOTS.length);
   for (let i = 0; i < occupied; i++) {
     const pl = PLOTS[i];
-    const dx = Math.round(pl.x + 2);                 // door tile, house is 4 wide
-    const dy = Math.round(pl.y + 3.7);               // ground just below the door
-    if (dy <= ROAD_Y) for (let y = dy; y <= ROAD_Y; y++) { if (!WET[y][dx]) PAVED[y][dx] = true; }
-    else              for (let y = ROAD_Y + 1; y <= dy; y++) { if (!WET[y][dx]) PAVED[y][dx] = true; }
+    layPath((pl.x + 2) * T, Math.round(pl.y + 3.7), pl.x * T, pl.x * T + 128, pl.side);
   }
+  // ...the props hall, which is wider, so its door sits further in; south of
+  // the lane, with Timmy's plot on its left, so its path comes down the right...
+  layPath((PROPS_PLOT.x + 2.5) * T, Math.round(PROPS_PLOT.y + 3.9), PROPS_PLOT.x * T, PROPS_PLOT.x * T + 160, 'right');
+  // ...and Clip's studio, whose door is at the middle of a 4.5-tile front.
+  layPath((CLIP_PLOT.x + 2.25) * T, Math.round(CLIP_PLOT.y + 3.9), CLIP_PLOT.x * T, CLIP_PLOT.x * T + 144);
 
-  // ...and one for the props hall, which is wider, so its door sits further in.
-  {
-    const dx = Math.round(PROPS_PLOT.x + 2.5);
-    const dy = Math.round(PROPS_PLOT.y + 3.9);
-    if (dy <= ROAD_Y) for (let y = dy; y <= ROAD_Y; y++) { if (!WET[y][dx]) PAVED[y][dx] = true; }
-    else              for (let y = ROAD_Y + 1; y <= dy; y++) { if (!WET[y][dx]) PAVED[y][dx] = true; }
-  }
-
-  // ...and one for Clip's studio, whose door is at the middle of a 4.5-tile front.
-  {
-    const dx = Math.round(CLIP_PLOT.x + 2.25);
-    const dy = Math.round(CLIP_PLOT.y + 3.9);
-    if (dy <= ROAD_Y) for (let y = dy; y <= ROAD_Y; y++) { if (!WET[y][dx]) PAVED[y][dx] = true; }
-    else              for (let y = ROAD_Y + 1; y <= dy; y++) { if (!WET[y][dx]) PAVED[y][dx] = true; }
-  }
+  window.__paved = PAVED;   // lets a check read the paths as drawn, not a copy of the rule
 
   const at = (grid, x, y) => (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) ? false : grid[y][x];
 
@@ -1628,8 +1635,7 @@ function create() {
   const rnd = rng(20260914);
   for (let i = 0; i < 130; i++) {
     const tx = Math.floor(rnd() * MAP_W), ty = Math.floor(rnd() * MAP_H);
-    const paved = (ty >= ROAD_Y && ty <= ROAD_Y + 1) || (tx >= 18 && tx <= 19 && ty >= ROAD_Y)
-                || (tx >= 16 && tx <= 21 && ty >= 11 && ty <= 17);
+    const paved = PAVED[ty][tx] || WET[ty][tx] || (tx >= 16 && tx <= 21 && ty >= 11 && ty <= 17);
     if (!paved) ground.draw('flowers', tx * T + 8, ty * T + 10);
   }
 
@@ -1672,40 +1678,43 @@ function create() {
   // every coordinate below against every building's footprint, because
   // "nudged" is a thing someone remembers to do and a test is not.
   [[1,3],[4,1],[9,2],[20,2],[25,1],[34,1],[0,9],[36,4],
-   [2,16],[8,17],[17,21],[15,18],[22,20],[24,21],[29,15],[37,18],[24,15],[18,2],
-   [7,11],[13,16],[10,15]]
+   [2,16],[8,17],[15,18],[22,20],[24,21],[29,15.5],[9.6,22.6],[24,15.5],[18,2],
+   [7,11],[13,16],[10,15.5]]
     .forEach(([tx,ty], i) => place(`tree${i % 3}`, tx, ty, 40, true, .78));
 
   // [32,21] stood exactly in front of the props hall's name plate, which then
   // read "P    PROPS". Found by screenshotting the village, not by reading it.
-  [[6,11],[14,11],[23,11],[29,11],[32,12],[3,12],[10,17],[14,20],[22,20],[28,18],[31,22],[16,20]]
+  [[6,11],[14,11],[23,11],[29,11],[32.6,12],[3,12],[10,17],[14,20],[22,20],[28,18],[31,22],[17.5,19.6]]
     .forEach(([tx,ty]) => place('bush', tx, ty, 8, false, .42));
 
-  [[7,16],[21,19],[30,16],[13,12],[26,12],[37,21]]
+  [[7,16],[21,19],[30,16],[13,12],[27.5,12],[37.5,22.2]]
     .forEach(([tx,ty]) => place('rock', tx, ty, 6, true, .34));
 
   // fence runs along the bottom edge of the north gardens
   // [8..10, 11] ran across the front of Belfort's garden and [25..27, 11]
   // across Scout's, path and all - both plots sit lower than the north row.
   // Found by the fence check in tests/test_parsers.py, once it had one.
-  [[2,11],[3,11],[4,11],[31,11],[32,11]]
+  // [4,11] and [31,11] stood across Ace's and Scout's paths.
+  [[2,11],[3,11],[32,11]]
     .forEach(([tx,ty]) => place('fence', tx + .5, ty + .4, 6, false));
 
   // street lamps down the high street
-  [[6,13],[13,13],[24,13],[31,13],[16.6,11.6],[21.4,11.6]]
+  [[6,13],[13,13],[24,13],[32.4,13],[16.6,11.6],[21.4,11.6]]
     .forEach(([tx,ty]) => place('lamp', tx, ty, 30, false));
 
-  [[5.5,12.4],[11.5,12.4],[28.5,12.4],[34.5,12.4]]
+  [[5.8,12.4],[11.8,12.4],[28.5,12.4],[34.5,12.4]]
     .forEach(([tx,ty]) => place('bed', tx, ty, 4, false));
 
   // The plaza had nothing in it. Stalls beside the road and stacked goods
   // against the walls give the eye somewhere to land; the statue (below)
   // stands where a well used to.
-  [[16.7, 12.6], [21.3, 12.6]].forEach(([tx, ty]) => place('stall', tx, ty, 18, true, .7));
-  [[15.4, 15.2], [22.6, 15.6], [8.6, 12.4], [26.4, 12.4]]
+  // [21.3, 12.6] stood across Clip's path into the square, and [16.7, 12.6]
+  // overhung Emily's.
+  [[17.0, 12.6], [22.0, 12.6]].forEach(([tx, ty]) => place('stall', tx, ty, 18, true, .7));
+  [[15.4, 15.6], [22.6, 15.6], [8.6, 12.4], [26.8, 12.4]]
     .forEach(([tx,ty], i) => place(i % 2 ? 'barrel' : 'crate', tx, ty, 6, true, .32));
   // [11.4, 12.3] stood on the end of Belfort's name plate ("BELFOR-").
-  [[13.4, 16.4], [24.6, 17.4], [6.4, 16.2], [30.4, 15.4], [12.5, 12.9], [31.4, 12.3]]
+  [[13.4, 16.4], [24.6, 17.4], [6.4, 16.2], [30.4, 15.4], [12.5, 12.9], [30.2, 12.3]]
     .forEach(([tx,ty]) => place('sign', tx, ty, 6, false, .22));
 
   // --- town square: the statue, with the ledger on its plinth's plaque ---
@@ -1751,14 +1760,23 @@ function create() {
     // A garden gives the house a plot rather than leaving it standing loose on
     // open grass. The fence sits below the name plate, not through it, and
     // leaves the middle open as a gate so the path to the door reads.
-    const gy = by + HH + 58;
-    [-2, -1, 1, 2].forEach(f =>
-      this.add.image(bx + HW/2 + f * T, gy, 'fence').setOrigin(.5, 1).setDepth(gy - 2));
-    this.add.image(bx + (plot.flip ? HW - 18 : 18), by + HH + 6, 'bed')
+    // A fence piece that would stand on paving is left out: the eighth plot's
+    // garden runs down to the lane itself.
+    const gy = by + HH + 58, gate = (pathCol(bx + HW/2) + .5) * T;   // the gap is the path
+    [-2, -1, 1, 2].forEach(f => {
+      const fx = gate + f * T, row = Math.floor((gy - 2) / T), col = Math.floor(fx / T);
+      if (row < MAP_H && col >= 0 && col < MAP_W && PAVED[row][col]) return;
+      this.add.image(fx, gy, 'fence').setOrigin(.5, 1).setDepth(gy - 2);
+    });
+    // South of the lane the path runs along half the front, so the flower
+    // bed and the prop both go on the other half; north of it, one each side.
+    const propLeft = plot.side ? plot.side === 'right' : plot.flip;
+    const bedRight = plot.side ? plot.side === 'left' : plot.flip;
+    this.add.image(bx + (bedRight ? HW - 18 : 18), by + HH + 6, 'bed')
       .setOrigin(.5, 1).setDepth(by + HH + 8);
     // a themed house's prop stands where the bush would: in front of the
     // wall it hid a window (Ace's hoop), under it a fence hid it (the bull)
-    this.add.image(bx + (plot.flip ? -6 : HW + 6), by + HH + 14, theme ? theme.prop : 'bush')
+    this.add.image(bx + (propLeft ? -6 : HW + 6), by + HH + 14, theme ? theme.prop : 'bush')
       .setOrigin(.5, 1).setDepth(by + HH + 16);
 
     const plateW = Math.max(70, a.name.length * 10 + 22);
@@ -1779,14 +1797,21 @@ function create() {
 
     // ---- the agent, pottering about outside its own house ----
     const lk = look(a.name);
-    const npc = this.physics.add.sprite(doorX + 34, doorY + 64, `${lk}-down-0`);
+    // Below the sign is the resident's spot. A south plot has no room there -
+    // its front is the edge of the map - so its resident keeps to the side its
+    // path comes down, above the sign rather than below it.
+    const room = H - doorY > 64 + 28;
+    const home = room ? { x: doorX, y: doorY + 64, minY: doorY + TAG_CLEAR }
+      : { x: plot.side === 'right' ? (Math.ceil((bx + HW) / T) + .5) * T : (Math.floor(bx / T) - .5) * T,
+          y: doorY - 48, maxY: doorY - 24 };
+    const npc = this.physics.add.sprite(home.x + (room ? 34 : 0), home.y, `${lk}-down-0`);
     if (lk === 'hero') npc.setTint(SHIRTS[i % 6]);      // a plain villager, told apart by shirt
     npc.body.setSize(14, 12).setOffset(5, 16);
     npc.setDepth(npc.y);
     this.physics.add.collider(npc, solids);
     npcs.push({
-      s: npc, homeX: doorX, homeY: doorY + 64, look: lk, minY: doorY + TAG_CLEAR,
-      tx: doorX, ty: doorY + 64, wait: 400 + Math.floor(rnd() * 1400), moving: false,
+      s: npc, homeX: home.x, homeY: home.y, look: lk, minY: home.minY, maxY: home.maxY,
+      tx: home.x, ty: home.y, wait: 400 + Math.floor(rnd() * 1400), moving: false,
       label: nameTag(this, npc.x, npc.y - 22, a.name.charAt(0).toUpperCase() + a.name.slice(1)),
     });
   });
@@ -1798,8 +1823,8 @@ function create() {
     this.add.image(bx, by, 'sportshall').setOrigin(0, 0).setDepth(by + SH);
     blocker(bx + SW / 2, by + SH - 26, SW - 12, 52);
 
+    // one goal, on the left: the right-hand one stood on the hall's own path
     this.add.image(bx - 10, by + SH + 10, 'goalpost').setOrigin(.5, 1).setDepth(by + SH + 12);
-    this.add.image(bx + SW + 10, by + SH + 10, 'goalpost').setOrigin(.5, 1).setDepth(by + SH + 12);
 
     const plateW = Math.max(96, PROPS_DOOR.length * 10 + 22);
     this.add.rectangle(bx + SW / 2, by + SH + 18, 6, 14, 0x7a5230).setDepth(by + SH + 24);
@@ -1947,11 +1972,11 @@ function update() {
       }
     } else if (now > n.wait) {
       n.tx = n.homeX + (Math.random() * 2 - 1) * R;
-      n.ty = Math.max(n.minY ?? -Infinity, n.homeY + (Math.random() * 2 - 1) * R * 0.5);
+      n.ty = Math.min(n.maxY ?? Infinity, Math.max(n.minY ?? -Infinity, n.homeY + (Math.random() * 2 - 1) * R * 0.5));
       n.moving = true;
     }
     n.s.setDepth(n.s.y);
-    if (n.label) n.label.setPosition(n.s.x, n.s.y - 14).setDepth(n.s.y + 1);
+    if (n.label) n.label.setPosition(n.s.x, n.s.y - 14).setDepth(8000 + n.s.y);   // over any prop
   }
 
   // ---- town square: the plaque says TOWN HALL, the ledger goes under it ----
