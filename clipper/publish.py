@@ -21,7 +21,10 @@ deactivated since the clip was cut (a campaign ended, a licence withdrawn)
 blocks the post.
 """
 
-from clipper import db, postcopy, youtube
+import fcntl
+from contextlib import contextmanager
+
+from clipper import config, db, postcopy, youtube
 
 FINAL = ("posted",)
 
@@ -56,8 +59,11 @@ def reject(conn, clip_id, reason):
     db.event(conn, "review", f"clip {clip_id} rejected: {reason.strip()}", clip_id=clip_id)
 
 
-def approve(conn, cfg, clip_id, note=None, **kw):
-    """Record the verdict, then post. Returns publish()'s results."""
+def approve(conn, cfg, clip_id, note=None, post=True, **kw):
+    """Record the verdict, then post. Returns publish()'s results - or [] with
+    post=False, when the caller posts separately (the village: an upload can
+    outlast Safari's patience, and a dropped request once left an approval
+    unrecorded, 2026-10-07)."""
     clip = _clip(conn, clip_id)
     if clip["status"] != "rendered":
         raise ValueError(f"clip {clip_id} is already {clip['status']}")
@@ -73,7 +79,20 @@ def approve(conn, cfg, clip_id, note=None, **kw):
             conn.execute("INSERT OR IGNORE INTO publications (clip_id, platform, status, created_at) "
                          "VALUES (?, ?, 'queued', ?)", (clip_id, p, db.now()))
     db.event(conn, "review", f"clip {clip_id} approved", clip_id=clip_id)
-    return publish(conn, cfg, clip_id, **kw)
+    return publish(conn, cfg, clip_id, **kw) if post else []
+
+
+@contextmanager
+def one_at_a_time():
+    """Only one publish at a time. Two approvals in quick succession start two
+    background publishes, and both would find the same queued post and upload
+    it twice. The second waits here, then finds it already posted. Closing
+    the file releases the lock, also when the process dies mid-upload."""
+    path = config.home() / "publish.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
 
 
 def posted_today(conn, platform):
@@ -90,6 +109,11 @@ def _set(conn, pub_id, **fields):
 def publish(conn, cfg, clip_id=None, upload=None):
     """Post whatever is approved and not yet out. One clip, or all of them.
     `upload` replaces youtube.upload in tests."""
+    with one_at_a_time():
+        return _publish(conn, cfg, clip_id, upload)
+
+
+def _publish(conn, cfg, clip_id=None, upload=None):
     q = ("SELECT p.* FROM publications p JOIN clips c ON c.id = p.clip_id WHERE c.status IN "
          "('approved', 'posted') AND p.status NOT IN ('posted', 'manual')")
     rows = conn.execute(q + (" AND p.clip_id = ?" if clip_id else "") + " ORDER BY p.id",

@@ -9,7 +9,7 @@
 // two buttons run the clipper commands with an argument array, never a shell
 // string, behind the same trust boundary as every write route here.
 
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { ROOT } = require('./db');
@@ -80,13 +80,22 @@ function register(app) {
       .json({ ok: r.code === 0, message: (r.code === 0 ? r.stdout : r.stderr || r.stdout).trim().slice(-600) });
   });
 
-  // Approving posts. An upload of a ~15 MB clip is seconds; the limit is
-  // generous because a slow network must not report failure for a post
-  // that then arrives anyway.
+  // Approving records the verdict and answers; the upload runs on in the
+  // background. It used to wait for the upload, and on 2026-10-07 Safari
+  // gave up first ("Could not reach the API: Load failed") and the approval
+  // was never recorded. publish takes a lock, so two quick approvals cannot
+  // upload the same clip twice.
   app.post('/api/clip/approve/:id', async (req, res) => {
     if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
     const note = String((req.body && req.body.note) || '').slice(0, TEXT_MAX);
-    const r = await clipper(['approve', req.params.id, ...(note ? ['--note', note] : [])], APPROVE_TIMEOUT_MS);
+    const r = await clipper(['approve', req.params.id, '--later', ...(note ? ['--note', note] : [])],
+      APPROVE_TIMEOUT_MS);
+    if (r.code === 0) {
+      spawn(python(), ['-m', 'clipper', 'publish'], {
+        cwd: ROOT, detached: true, stdio: 'ignore',
+        env: Object.assign({}, process.env, { CLIPPER_HOME: HOME }),
+      }).unref();
+    }
     reply(res, r);
   });
 

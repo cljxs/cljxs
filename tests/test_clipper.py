@@ -5,6 +5,7 @@ reading). The end-to-end test needs ffmpeg and skips without it.
 """
 
 import contextlib
+import fcntl
 import importlib.util
 import io
 import json
@@ -855,6 +856,39 @@ class Posting(EndToEnd):
         with self.assertRaisesRegex(ValueError, "already"):
             publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
         self.assertEqual(len(self.sent), 1, "never posted twice")
+
+    def test_approve_later_records_now_and_posts_on_the_next_publish(self):
+        # 2026-10-07: Approve waited for the upload, Safari gave up first
+        # ("Load failed") and the approval was never recorded. --later answers
+        # at once; the village then runs `publish` in the background.
+        self.ready()
+        code, said = self.cli("approve", str(self.clip["id"]), "--later")
+        self.assertEqual(code, 0, said)
+        self.assertIn("posting in the background", said)
+        self.assertEqual(self.sent, [], "--later must not upload in the request")
+        status = self.conn.execute("SELECT status FROM clips WHERE id = ?", (self.clip["id"],)).fetchone()[0]
+        self.assertEqual((status, self.pubs()["youtube"]["status"]), ("approved", "queued"))
+        publish.publish(self.conn, self.cfg, upload=self.upload)
+        self.assertEqual((len(self.sent), self.pubs()["youtube"]["status"]), (1, "posted"))
+
+    def test_publish_holds_the_lock_while_it_uploads(self):
+        # Two quick approvals start two background publishes; without the lock
+        # both find the same queued post and upload it twice.
+        self.ready()
+        held = []
+        def check(*a):
+            with open(config.home() / "publish.lock", "w") as f:
+                try:
+                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    held.append(False)
+                    fcntl.flock(f, fcntl.LOCK_UN)
+                except BlockingIOError:
+                    held.append(True)
+            return self.upload(*a)
+        publish.approve(self.conn, self.cfg, self.clip["id"], upload=check)
+        self.assertEqual(held, [True], "another publish could have started this upload too")
+        with open(config.home() / "publish.lock", "w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)      # released afterwards
 
     def test_not_signed_in_waits_then_goes_out(self):
         self.ready()

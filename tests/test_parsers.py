@@ -5485,6 +5485,17 @@ class ClipHasAStudio(unittest.TestCase):
         for route in ("approve", "reject", "edit", "redraft", "posted"):
             self.assertIn(f"app.post('/api/clip/{route}/", js)
 
+    def test_approve_answers_before_the_upload(self):
+        # 2026-10-07: the route waited for the YouTube upload, Safari gave up
+        # first ("Could not reach the API: Load failed") and nothing was recorded.
+        js = (ROOT / "mission-control-api" / "clip.js").read_text()
+        route = js.split("app.post('/api/clip/approve/", 1)[1].split("app.post(", 1)[0]
+        self.assertIn("['approve', req.params.id, '--later'", route)
+        self.assertIn("spawn(python(), ['-m', 'clipper', 'publish']", route)
+        self.assertIn("detached: true", route)
+        self.assertIn(".unref()", route, "the reply must not wait for the upload")
+        self.assertIn("const { execFile, spawn } = require('child_process');", js)
+
     def test_copying_a_caption_works_without_https(self):
         # The Deck is plain http over Tailscale, where navigator.clipboard
         # does not exist - relying on it would make the button do nothing.

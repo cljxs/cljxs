@@ -432,7 +432,11 @@ def print_results(results):
 
 def cmd_approve(a):
     cfg, paths, conn = open_all()
-    results = publish.approve(conn, cfg, a.clip, a.note)
+    results = publish.approve(conn, cfg, a.clip, a.note, post=not a.later)
+    if a.later:
+        print(f"clip {a.clip} approved - posting in the background. Reload Clip's studio "
+              f"in a minute or two for the link.")
+        return 0
     print(f"clip {a.clip} approved.")
     print_results(results)
     return 0
@@ -557,6 +561,8 @@ def main(argv=None):
     x = sub.add_parser("approve")
     x.add_argument("clip", type=int)
     x.add_argument("--note")
+    x.add_argument("--later", action="store_true",
+                   help="record the approval and stop; `publish` posts it (the village runs that in the background)")
     x.set_defaults(fn=cmd_approve)
     x = sub.add_parser("reject")
     x.add_argument("clip", type=int)
