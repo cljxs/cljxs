@@ -40,7 +40,14 @@ from pathlib import Path
 DEFAULT_TOLERANCE = 32      # per-channel distance that still counts as background
 MIN_REMOVED_PCT = 2.0       # below this, no background was found
 BORDER_MIN_PCT = 70.0       # the border must actually BE one colour
-MAX_REMOVED_PCT = 92.0      # above this, the art matched the background
+# Above this, nothing is left that could be a design. It was 92% until
+# 2026-10-07, which read "the art is small" as "the art matched the
+# background": Emily's "Paws & Kissies" sticker - a paw and one line of
+# lettering on a plain blue field - was 92.2% background and was refused as
+# "not artwork". Small art is fine; trim() crops the cut-out to it, so it
+# prints as large as the product allows. What this still catches is a file
+# with essentially nothing on it.
+MAX_REMOVED_PCT = 99.0
 
 # After the background is gone, whatever the model drew outside the design is
 # still there. A compass emblem came back with two pen-stroke scratches beside
@@ -417,9 +424,9 @@ def verdict(w, h, px, tol=DEFAULT_TOLERANCE):
     if pct > MAX_REMOVED_PCT:
         return False, facts, (
             f"{pct:.1f}% was removed - the artwork itself matched the "
-            f"background, so what is\n  left is not a design. Lower "
-            f"--tolerance, or ask for art that contrasts with\n  its "
-            f"background.")
+            f"background, so what is\n  left ({100 - pct:.1f}% of the image) is "
+            f"not a design. Lower --tolerance, or ask for\n  art that contrasts "
+            f"with its background.")
     return True, facts, None
 
 

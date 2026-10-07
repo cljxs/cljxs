@@ -931,6 +931,33 @@ class BackgroundKnockout(unittest.TestCase):
         self.assertIn("the artwork itself matched the background", r.stderr)
         self.assertFalse((self.d / "no.png").exists(), "nothing should be written")
 
+    def test_small_art_on_a_big_plain_field_is_art(self):
+        # Emily's "Paws & Kissies" sticker (2026-10-07): a paw and one line of
+        # lettering on a light-blue field, 92.2% background, refused as "the
+        # artwork itself matched the background" under the old 92% line. Same
+        # colours, same share: about 8% of the frame is art.
+        W = H = 100
+        def art(x, y):
+            if (x - 50) ** 2 + (y - 38) ** 2 < 11 ** 2:
+                return (251, 238, 214)                          # the cream paw
+            if 30 <= x < 70 and 62 <= y < 67 and x % 5 != 4:
+                return (122, 31, 38)                            # the lettering
+            return (168, 217, 231)                              # the field
+        p = self.png("paws.png", W, H, art)
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knockout.py"), str(p), str(self.d / "paws-cut.png")],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        removed = float(re.search(r"\(([\d.]+)%\)", r.stdout).group(1))
+        self.assertGreater(removed, 92.0, "the fixture must be past the old line, or it tests nothing")
+        self.assertIn("trim: 100x100 ->", r.stdout, "and it is cropped to the art, so it prints full size")
+
+    def test_a_speck_on_a_blank_field_is_still_refused(self):
+        p = self.png("speck.png", 100, 100, lambda x, y: (20, 20, 20) if 50 <= x < 55 and 50 <= y < 55 else (255, 255, 255))
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knockout.py"), str(p), "--check"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("the artwork itself matched the background", r.stderr)
+
     def test_art_with_no_flat_background_is_refused(self):
         # A gradient everywhere: no border colour to fill from.
         p = self.png("grad.png", 48, 48, lambda x, y: (x * 5 % 256, y * 5 % 256, 128))
