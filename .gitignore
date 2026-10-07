@@ -13,6 +13,11 @@ agents/belfort/data/*
 agents/belfort/reports/*
 !agents/belfort/reports/.gitkeep
 agents/belfort/state/portfolio.json
+# Everything else he and his scripts write: the no-AI book, the equity
+# history, his calls, what his passes did next, and the monthly reviews.
+agents/belfort/state/*
+!agents/belfort/state/portfolio.seed.json
+agents/belfort/reviews/
 agents/belfort/MEMORY.md
 # Written by the dispatcher when it wakes an agent and removed when the agent
 # exits - it says which task is in flight right now, and nothing about it

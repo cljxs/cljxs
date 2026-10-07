@@ -12,6 +12,7 @@ const path = require('path');
 const { ROOT } = require('./db');
 
 const TRADE = path.join(ROOT, 'scripts', 'belfort-trade.py');
+const LEARN = path.join(ROOT, 'scripts', 'belfort-learn.py');
 
 function register(app) {
   // Everything the Markets page draws, from `belfort-trade.py board` - the
@@ -22,6 +23,16 @@ function register(app) {
         if (err) return res.status(500).json({ error: String(stderr || err.message).trim().slice(0, 400) });
         try { res.set('Cache-Control', 'no-cache'); res.json(JSON.parse(stdout)); }
         catch { res.status(500).json({ error: 'belfort-trade.py board printed something that is not JSON' }); }
+      });
+  });
+
+  // His record and the monthly reviews, from `belfort-learn.py record --json`.
+  app.get('/api/belfort/record', (req, res) => {
+    execFile('python3', [LEARN, 'record', '--json'], { cwd: ROOT, timeout: 30000, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) return res.status(500).json({ error: String(stderr || err.message).trim().slice(0, 400) });
+        try { res.set('Cache-Control', 'no-cache'); res.json(JSON.parse(stdout)); }
+        catch { res.status(500).json({ error: 'belfort-learn.py record printed something that is not JSON' }); }
       });
   });
 

@@ -75,13 +75,18 @@ echo "$SHADOW_LINE"
 cp "$AGENT/data/candidates.json" "$AGENT/state/.candidates-at-wake.json" 2>/dev/null \
   || rm -f "$AGENT/state/.candidates-at-wake.json"
 OWED="$(python3 "$ROOT/scripts/belfort-trade.py" calls --owed 2>/dev/null)" || OWED="(run belfort-trade.py calls --owed)"
+# His record, worked out by belfort-learn.py: closed trades by catalyst and
+# score, and what the names he passed on did next. Code's numbers, not his
+# memory of them. Running it also measures any pass that has come due.
+RECORD="$(python3 "$ROOT/scripts/belfort-learn.py" record 2>/dev/null)" || RECORD="(your record could not be worked out this wake)"
 openclaw agent --agent belfort \
   --message "Scheduled cycle. This wake's report is a NEW file: reports/$REPORT - write it there. Do not edit an earlier report, even one from today.
 
 The exit rules were already applied by code before you woke:
 $EXITS
 Report these sales as they are; do not sell for those rules again. You judge only a broken thesis.
-Candidates owed a call this wake (one line each in state/calls.txt, then belfort-trade.py calls): $OWED" \
+Candidates owed a call this wake (one line each in state/calls.txt, then belfort-trade.py calls): $OWED
+$RECORD" \
   --session-id "wake-belfort-$STARTED" \
   --timeout 600 --json 2>&1 | tee "$LOG"
 # The agent's own exit code is deliberately not checked here. It exits 0 for

@@ -85,6 +85,13 @@
   .tab{flex:1;font:inherit;font-size:11px;letter-spacing:.14em;text-transform:uppercase;padding:11px 6px;color:var(--mute);
     background:transparent;border:0;border-bottom:2px solid transparent;cursor:pointer}
   .tab.on{color:var(--gold2);border-bottom-color:var(--gold);background:rgba(201,162,74,.06)}
+  .newdot[hidden]{display:none}
+  .newdot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--gold2);margin-left:6px;vertical-align:middle}
+  .rec table{width:100%;border-collapse:collapse;margin:6px 0 14px;font-size:12.5px}
+  .rec th,.rec td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line)}
+  .rec th{color:var(--mute);font-weight:400;font-size:11px;letter-spacing:.06em}
+  .rec .revs button{background:none;border:1px solid var(--line);border-radius:6px;color:var(--ink);font:inherit;font-size:12px;padding:5px 9px;margin:0 6px 6px 0;cursor:pointer}
+  .rec .revs button.on{border-color:var(--gold);color:var(--gold2)}
   .doc{max-height:calc(100vh - 230px);overflow:auto;font-size:12.5px;line-height:1.65}
   .doc h1,.doc h2,.doc h3{color:var(--up);letter-spacing:.06em;font-size:15px;margin:16px 0 6px}
   .doc h1{font-size:18px;color:var(--c20)}
@@ -145,6 +152,7 @@
         <button class="tab on" data-t="report">Latest report</button>
         <button class="tab" data-t="history">History</button>
         <button class="tab" data-t="books">Books</button>
+        <button class="tab" data-t="record">Record<span class="newdot" id="recdot" hidden></span></button>
       </div>
       <div class="doc" id="side"></div>
     </div>
@@ -359,10 +367,62 @@ async function side() {
         shownReport = { name: j.name, text: j.markdown }; tab = 'report'; side();
       } catch (e) { alert('Could not open that report: ' + e.message); }
     });
+  } else if (tab === 'record') {
+    $('side').innerHTML = '<div class="empty">working out his record…</div>';
+    loadRecord();
   } else {
     $('side').innerHTML = '<div class="empty">loading the books…</div>';
     loadBooks();
   }
+}
+
+/* ---------------- his record and the monthly reviews ----------------
+ * From belfort-learn.py record --json: every number is worked out there.
+ * A review not yet opened in this browser puts a dot on the tab (and on the
+ * Deck's Markets tab) - the owner asked not to have to remember. */
+const SEEN = 'belfort-review-seen';
+function seenReview() { try { return localStorage.getItem(SEEN); } catch { return null; } }
+function markSeen(name) { try { localStorage.setItem(SEEN, name); } catch {} }
+let R = null, shownReview = null;
+
+async function fetchRecord() {
+  try { const r = await fetch('/api/belfort/record', { cache: 'no-store' }); R = await r.json(); if (!r.ok) throw new Error(R.error || r.status); }
+  catch (e) { R = { error: e.message }; }
+  const latest = R.reviews && R.reviews[0];
+  $('recdot').hidden = !(latest && latest.name !== seenReview());
+  return R;
+}
+
+async function loadRecord() {
+  await fetchRecord();
+  if (tab !== 'record') return;
+  if (R.error) { $('side').innerHTML = `<div class="err">Could not work out his record: ${esc(R.error)}</div>`; return; }
+  const revs = R.reviews || [];
+  if (revs[0]) { markSeen(revs[0].name); $('recdot').hidden = true; }
+  const shown = revs.find(r => r.name === shownReview) || revs[0];
+  const c = R.closed || {}, ps = R.passes || {};
+  const table = (groups, head, won) => {
+    const rows = Object.entries(groups || {}).filter(([, g]) => g.n).sort((a, b) => b[1].n - a[1].n);
+    return rows.length ? `<table><tr><th></th><th>${head}</th><th>${won}</th><th>average</th></tr>${rows.map(([k, g]) =>
+      `<tr><td>${esc(k)}</td><td class="num">${g.n}</td><td class="num">${g.win_rate}%</td><td class="num ${cls(g.avg_pct)}">${pct(g.avg_pct)}</td></tr>`).join('')}</table>`
+      : '<div class="muted" style="margin:4px 0 12px">None yet.</div>';
+  };
+  $('side').innerHTML = `<div class="rec bk">
+    <div class="verdict" style="margin-top:0">Worked out by code from his trades and his calls. A group under ${R.min_sample} is mostly luck.
+      He sees a summary of this every wake; it never changes his rules - the monthly review suggests, you decide.</div>
+    <div class="sect">Closed trades</div>
+    <div class="tr">${c.n ? `${c.n} closed · ${c.won} won (${c.win_rate}%) · average <span class="${cls(c.avg_pct)}">${pct(c.avg_pct)}</span>` : 'None yet.'}</div>
+    <div class="k" style="margin-top:10px">By the news he bought on</div>${table(R.by_catalyst, 'trades', 'won')}
+    <div class="k">By the score he gave</div>${table(R.by_score, 'trades', 'won')}
+    <div class="sect">Names he passed on, 10 trading days later vs SPY</div>
+    <div class="muted">${ps.called || 0} called · ${ps.measured || 0} measured so far (each needs 10 trading days)</div>
+    <div class="k" style="margin-top:10px">By the score he gave</div>${table(ps.by_score, 'calls', 'beat SPY')}
+    <div class="k">By group</div>${table(ps.by_cluster, 'calls', 'beat SPY')}
+    <div class="sect">Monthly reviews</div>
+    ${revs.length ? `<div class="revs">${revs.map(r => `<button data-r="${esc(r.name)}" class="${r === shown ? 'on' : ''}">${esc(r.name.replace(/\.md$/, ''))}</button>`).join('')}</div>${mdToHtml(shown.text)}`
+      : '<div class="muted">The first is written on the 1st of next month, 8:05 AM Eastern.</div>'}
+  </div>`;
+  document.querySelectorAll('.revs [data-r]').forEach(b => b.onclick = () => { shownReview = b.dataset.r; loadRecord(); });
 }
 
 /* ---------------- the two books: his, and the no-AI shadow book ----------------
@@ -436,6 +496,7 @@ function bookTrades(b) {
 
 $('tabs').onclick = e => { const t = e.target.closest('[data-t]'); if (!t) return; tab = t.dataset.t; if (tab === 'report') shownReport = null; if (B) side(); };
 load();
+fetchRecord();
 setInterval(load, 60000);
 </script>
 </body>

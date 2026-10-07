@@ -549,7 +549,7 @@ def buy(p, symbol, shares, price=None, reason="", score=0, cited=None, state=Non
     p["trades"].append({"cycle": p.get("cycle_count", 0), "side": "BUY", "symbol": sym,
                         "shares": shares, "price": round(float(px), 2),
                         "notional": round(cost, 2), "utc": now(), "reason": reason or "",
-                        "catalyst": cited, "regime": state})
+                        "catalyst": cited, "regime": state, "score": score})
     print(f"BOUGHT {shares} {sym} @ ${float(px):,.2f} = ${cost:,.2f}   cash now ${float(p['cash']):,.2f}")
     return 0
 
@@ -669,19 +669,46 @@ RULE_NAMES = (("STOP LOSS", "stop loss"), ("TAKE PROFIT", "take profit"),
               ("PROTECT GAIN", "protect a gain"), ("DEAD MONEY", "dead money"))
 
 
-def book_stats(p, book, doc=None):
-    """The numbers a strategy is judged by, for one book."""
-    doc = doc if doc is not None else quotes_doc()
-    closed = []
+def catalyst_type(reason):
+    """"ANALYST" from "ANALYST: Piper Sandler to Neutral" - the TYPE his
+    instructions make him write first. "untagged" when there is none."""
+    m = re.match(r"\s*([A-Z][A-Z/&\- ]{1,24}):", reason or "")
+    return m.group(1).strip() if m else "untagged"
+
+
+def closed_trades(p):
+    """Every sale that realised a profit or loss, with the buy that opened
+    its position: what it was bought on, the score, the regime. The one
+    reading of a closed trade - stats and belfort-learn.py's record both use
+    it. A position added to keeps its first buy."""
+    lots, held, out = {}, {}, []
     for t in p.get("trades", []):
-        if str(t.get("side", "")).upper() != "SELL" or t.get("realised_pnl") is None:
+        sym, side = str(t.get("symbol", "")).upper(), str(t.get("side", "")).upper()
+        if side == "BUY":
+            lots.setdefault(sym, t)
+            held[sym] = held.get(sym, 0) + float(t.get("shares") or 0)
+            continue
+        if side != "SELL" or t.get("realised_pnl") is None:
             continue
         pnl = float(t["realised_pnl"])
         cost = float(t.get("notional") or 0) - pnl
         rule = next((name for prefix, name in RULE_NAMES if str(t.get("reason", "")).startswith(prefix)),
                     "judgement")
-        closed.append({"symbol": t.get("symbol"), "pnl": pnl, "pct": pnl / cost * 100 if cost else 0.0,
-                       "rule": rule})
+        entry = lots.get(sym) or {}
+        out.append({"symbol": t.get("symbol"), "pnl": pnl, "pct": pnl / cost * 100 if cost else 0.0,
+                    "rule": rule, "sold_utc": t.get("utc"), "bought_utc": entry.get("utc"),
+                    "catalyst_type": catalyst_type(entry.get("reason")), "score": entry.get("score") or None,
+                    "regime": entry.get("regime"), "cluster": cluster_of(sym)})
+        held[sym] = held.get(sym, 0) - float(t.get("shares") or 0)
+        if held[sym] <= 0:
+            lots.pop(sym, None)
+    return out
+
+
+def book_stats(p, book, doc=None):
+    """The numbers a strategy is judged by, for one book."""
+    doc = doc if doc is not None else quotes_doc()
+    closed = closed_trades(p)
     wins = [c for c in closed if c["pnl"] > 0]
     losses = [c for c in closed if c["pnl"] < 0]
     start = float(p.get("starting_cash") or 10000)
@@ -1022,7 +1049,9 @@ def cmd_calls(a):
         print("state/calls.txt is from an earlier wake - nothing recorded. Rewrite it with this "
               f"wake's calls. Owed: {', '.join(owed) or 'none'}", file=sys.stderr)
         return 1
-    known = set((quotes_doc().get("quotes") or {}))
+    doc = quotes_doc()
+    quotes, known = doc.get("quotes") or {}, set(doc.get("quotes") or {})
+    spy = ((doc.get("benchmarks") or {}).get("SPY") or {}).get("price")
     got, bad = parse_calls(CALLS_IN.read_text(errors="replace"), known)
     if bad:
         print("nothing recorded:\n  " + "\n  ".join(bad), file=sys.stderr)
@@ -1035,7 +1064,9 @@ def cmd_calls(a):
         for sym, (score, reason) in got.items():
             f.write(json.dumps({"ts": int(now_.timestamp()), "utc": now_.strftime("%Y-%m-%d %H:%M:%S"),
                                 "wake": wake, "symbol": sym, "score": score, "reason": reason,
-                                "held": sym in held}) + "\n")
+                                "held": sym in held,
+                                # what belfort-learn.py measures a pass from, and SPY beside it
+                                "price": (quotes.get(sym) or {}).get("price"), "spy": spy}) + "\n")
     left = calls_missing()
     print(f"recorded {len(got)} call(s) for {wake}." + (
         f" Still owed: {', '.join(left)} - add a line for each and run this again." if left

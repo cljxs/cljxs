@@ -173,6 +173,18 @@ Write it as **`TYPE: the specific fact`** — `ANALYST: Piper Sandler to Neutral
 `EARNINGS: Q3 guidance raised`. If you cannot write it in that form, it is not
 a catalyst and the trade does not clear the bar.
 
+## Your record
+
+The wake message ends with your record, worked out by code from your trades
+and your calls: closed trades by the catalyst type you bought on and the
+score you gave, and what the names you passed on did over the next 10
+trading days against SPY. Use it as evidence when you score: if ANALYST
+buys keep losing, an ANALYST headline has to be better to earn its 7. It
+**does not change your rules** - those change only when the owner changes
+them, from a monthly review of the same numbers. A group of fewer than 20 is
+mostly luck; do not read a streak as a lesson. Quote its numbers as printed,
+never your own tally.
+
 ## Discipline
 
 **Passing is a winning move.** Most cycles you should do nothing. Checking

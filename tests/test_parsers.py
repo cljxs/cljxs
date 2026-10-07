@@ -17738,6 +17738,171 @@ class TheShortlistIsWhatHeReads(TheMarketsPageDrawsBelfortsOwnNumbers):
         self.assertIn("SPY", [row["name"] for row in json.loads(r.stdout)["showdown"]["rows"]])
 
 
+class BelfortLearnsFromNumbersNotMemory(unittest.TestCase):
+    """Owner, 2026-10-07: "Does it learn from its wins and losses?" It did
+    not - each wake is a new conversation and MEMORY.md holds a week of his
+    own notes. belfort-learn.py works his record out in code: closed trades by
+    the catalyst and score he bought on, what the names he passed on did over
+    the next 10 trading days against SPY, and a monthly review that suggests -
+    past MIN_SAMPLE only - and changes nothing."""
+
+    DAYS = [f"2026-09-{d:02d}" for d in range(1, 31)]
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.agent = self.root / "agents" / "belfort"
+        for d in ("state", "data", "reports"):
+            (self.agent / d).mkdir(parents=True)
+        old = os.environ.get("ECOSYSTEM_ROOT")
+        os.environ["ECOSYSTEM_ROOT"] = str(self.root)
+        self.addCleanup(lambda: os.environ.__setitem__("ECOSYSTEM_ROOT", old) if old
+                        else os.environ.pop("ECOSYSTEM_ROOT", None))
+        self.book([])
+        self.prices({"NVDA": [100.0 + i for i in range(30)], "JPM": [100.0 - i for i in range(30)]},
+                    spy=[100.0 + i * 0.5 for i in range(30)])
+        self.learn = load(f"belfort_learn_{time.time_ns()}", "belfort-learn.py")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def book(self, trades):
+        (self.agent / "state" / "portfolio.json").write_text(json.dumps({
+            "starting_cash": 10000.0, "cash": 10000.0, "created_utc": "2026-09-01 13:00:00",
+            "positions": [], "trades": trades}))
+
+    def prices(self, closes, spy):
+        hist = lambda cs: [[d, c] for d, c in zip(self.DAYS, cs)]
+        (self.agent / "data" / "quotes.json").write_text(json.dumps({
+            "quotes": {s: {"symbol": s, "price": cs[-1], "history": hist(cs)} for s, cs in closes.items()},
+            "benchmarks": {"SPY": {"price": spy[-1], "history": hist(spy)}}}))
+
+    def calls(self, rows):
+        (self.agent / "state" / "calls.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+    @staticmethod
+    def trade(side, sym, shares, price, utc, **kw):
+        t = {"side": side, "symbol": sym, "shares": shares, "price": price, "notional": shares * price, "utc": utc}
+        return {**t, **kw}
+
+    def test_a_closed_trade_carries_what_it_was_bought_on(self):
+        self.book([self.trade("BUY", "MU", 2, 100.0, "2026-09-02 13:36:00", reason="EARNINGS: guidance raised",
+                              score=8, regime="favorable"),
+                   self.trade("BUY", "MU", 1, 110.0, "2026-09-03 13:36:00", reason="added", score=7),
+                   self.trade("SELL", "MU", 1, 120.0, "2026-09-04 19:56:00", realised_pnl=16.67, reason="judgement"),
+                   self.trade("SELL", "MU", 2, 90.0, "2026-09-05 19:56:00", realised_pnl=-26.67, reason="STOP LOSS"),
+                   self.trade("BUY", "MU", 1, 95.0, "2026-09-08 13:36:00", reason="ANALYST: Citi to Buy", score=7),
+                   self.trade("SELL", "MU", 1, 99.0, "2026-09-09 19:56:00", realised_pnl=4.0, reason="judgement")])
+        closed = self.learn.T.closed_trades(self.learn.T.load())
+        self.assertEqual([(c["catalyst_type"], c["score"]) for c in closed],
+                         [("EARNINGS", 8), ("EARNINGS", 8), ("ANALYST", 7)],
+                         "a position added to keeps its first buy; a new one after a full close starts over")
+        self.assertEqual(closed[0]["cluster"], "semiconductors")
+        self.assertEqual(self.learn.T.catalyst_type("listicle with no type"), "untagged")
+
+    def test_a_pass_is_measured_ten_trading_days_on_against_spy(self):
+        self.calls([{"symbol": "NVDA", "utc": "2026-09-05 13:40:00", "score": 6, "price": 104.0, "spy": 102.0,
+                     "held": False, "wake": "2026-09-05-open"},
+                    {"symbol": "NVDA", "utc": "2026-09-05 19:56:00", "score": 2, "held": False},
+                    {"symbol": "JPM", "utc": "2026-09-05 13:40:00", "score": 4, "held": True}])
+        out = self.learn.pass_outcomes()
+        self.assertEqual(sorted(out), ["NVDA|2026-09-05"], "held is not a pass; one call a name a day")
+        o = out["NVDA|2026-09-05"]
+        # NVDA closes 104 on 09-05 (index 4) and 114 ten bars on; SPY 102 -> 107.
+        self.assertEqual((o["score"], o["ret_10"], o["spy_10"], o["vs_spy_10"]), (6, 9.62, 4.9, 4.71))
+        self.assertEqual(o["ret_5"], round((109 / 104 - 1) * 100, 2))
+        self.prices({"NVDA": [1.0] * 30}, spy=[1.0] * 30)
+        self.assertEqual(self.learn.pass_outcomes()["NVDA|2026-09-05"]["ret_10"], 9.62,
+                         "a measured outcome is kept - quotes.json forgets after 90 closes")
+
+    def test_too_recent_to_measure_is_left_open(self):
+        self.calls([{"symbol": "NVDA", "utc": "2026-09-25 13:40:00", "score": 5, "price": 124.0, "held": False},
+                    {"symbol": "NVDA", "utc": "2026-09-25 19:56:00", "score": 3, "price": 200.0, "held": False}])
+        o = self.learn.pass_outcomes()["NVDA|2026-09-25"]
+        self.assertEqual(o["ret_5"], round((129 / 124 - 1) * 100, 2), "the day's first call is the one measured")
+        self.assertIsNone(o.get("vs_spy_10"))
+        self.assertEqual(self.learn.record()["passes"]["measured"], 0)
+
+    def test_the_wake_lines_quote_codes_numbers(self):
+        self.book([self.trade("BUY", "MU", 2, 100.0, "2026-09-02 13:36:00", reason="EARNINGS: x", score=8),
+                   self.trade("SELL", "MU", 2, 110.0, "2026-09-05 19:56:00", realised_pnl=20.0, reason="TAKE PROFIT")])
+        self.calls([{"symbol": "NVDA", "utc": "2026-09-05 13:40:00", "score": 6, "held": False}])
+        lines = "\n".join(self.learn.wake_lines(self.learn.record()))
+        self.assertIn("closed trades: 1, 1 won (100%), average +10.0%", lines)
+        self.assertIn("by catalyst: EARNINGS 1 (1 won, +10.0%)", lines)
+        self.assertIn("scored 6: 1 (1 beat it, +4.7%)", lines)
+        self.assertIn("does not change the rules", lines)
+
+    def losers(self, n, typ="ANALYST"):
+        out = []
+        for i in range(n):
+            out += [self.trade("BUY", f"S{i}", 1, 100.0, "2026-09-02 13:36:00", reason=f"{typ}: x", score=8),
+                    self.trade("SELL", f"S{i}", 1, 95.0, "2026-09-05 19:56:00", realised_pnl=-5.0, reason="STOP LOSS")]
+        return out
+
+    def test_suggestions_only_past_the_minimum_sample(self):
+        self.book(self.losers(self.learn.MIN_SAMPLE - 1))
+        self.assertEqual(self.learn.suggestions(self.learn.record()), [])
+        self.book(self.losers(self.learn.MIN_SAMPLE))
+        tips = self.learn.suggestions(self.learn.record())
+        self.assertEqual(len(tips), 1)
+        self.assertIn("**ANALYST** buys have lost on average", tips[0])
+
+    def test_passes_that_keep_winning_say_the_bar_may_be_strict(self):
+        rows = [{"symbol": "NVDA", "utc": f"{d} 13:40:00", "score": 6, "held": False} for d in self.DAYS[:20]]
+        self.DAYS = [f"2026-09-{d:02d}" for d in range(1, 31)] + [f"2026-10-{d:02d}" for d in range(1, 11)]
+        self.prices({"NVDA": [100.0 * 1.01 ** i for i in range(40)]}, spy=[100.0] * 40)
+        self.calls(rows[:self.learn.MIN_SAMPLE - 1])
+        self.assertEqual(self.learn.suggestions(self.learn.record()), [])
+        self.calls(rows)
+        tips = self.learn.suggestions(self.learn.record())
+        self.assertTrue(any("scored **6** and passed on went on to beat SPY" in t for t in tips), tips)
+
+    def test_the_monthly_review_is_written_for_last_month(self):
+        self.assertEqual(self.learn.last_month(datetime(2027, 1, 1, 8, 5)), "2026-12")
+        r = subprocess.run([sys.executable, str(SCRIPTS / "belfort-learn.py"), "review", "--month", "2026-09", "--write"],
+                           capture_output=True, text=True, env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        text = (self.agent / "reviews" / "2026-09.md").read_text()
+        self.assertIn("# Belfort - review of 2026-09", text)
+        self.assertIn("Nothing here changes a rule", text)
+        self.assertIn(f"A suggestion needs at least {self.learn.MIN_SAMPLE} in a group", text)
+        j = json.loads(subprocess.run([sys.executable, str(SCRIPTS / "belfort-learn.py"), "record", "--json"],
+                                      capture_output=True, text=True,
+                                      env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root))).stdout)
+        self.assertEqual(j["reviews"][0]["name"], "2026-09.md")
+
+    def test_a_buy_keeps_its_score_and_a_call_its_price(self):
+        trade = self.learn.T
+        p = trade.load()
+        with contextlib.redirect_stdout(io.StringIO()):
+            trade.buy(p, "NVDA", 1, 129.0, "EARNINGS: x", 8, None, ("favorable", "test"))
+        self.assertEqual(p["trades"][-1]["score"], 8)
+        (self.agent / "data" / "candidates.json").write_text(json.dumps({"candidates": [{"symbol": "NVDA"}]}))
+        (self.agent / "state" / ".cycle-started").write_text(f"{int(time.time()) - 60}\n")
+        (self.agent / "state" / "calls.txt").write_text("NVDA | 5 | a reason that is long enough to count\n")
+        r = subprocess.run([sys.executable, str(SCRIPTS / "belfort-trade.py"), "calls"], capture_output=True,
+                           text=True, env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        c = json.loads((self.agent / "state" / "calls.jsonl").read_text().splitlines()[-1])
+        self.assertEqual((c["price"], c["spy"]), (129.0, 114.5))
+
+    def test_it_is_wired_in(self):
+        sh = (SCRIPTS / "belfort-cycle.sh").read_text()
+        self.assertIn('RECORD="$(python3 "$ROOT/scripts/belfort-learn.py" record', sh)
+        self.assertLess(sh.index("RECORD="), sh.index("openclaw agent"))
+        self.assertIn("\n$RECORD\"", sh)
+        timer = (ROOT / "deploy" / "belfort-review.timer").read_text()
+        self.assertIn("OnCalendar=*-*-01 08:05 America/New_York", timer)
+        self.assertIn("Persistent=true", timer)
+        self.assertIn("belfort-learn.py review --write", (ROOT / "deploy" / "belfort-review.service").read_text())
+        self.assertIn("app.get('/api/belfort/record'", (ROOT / "mission-control-api" / "belfort.js").read_text())
+        pub = ROOT / "mission-control-api" / "public"
+        self.assertIn("const SEEN = 'belfort-review-seen';", (pub / "markets.html").read_text())
+        self.assertIn("localStorage.getItem('belfort-review-seen')", (pub / "dashboard.html").read_text())
+        self.assertIn("## Your record", (ROOT / "agents" / "belfort" / "_belfort-agents-header.md").read_text())
+
+
 class TheMarketsPageIsWiredInOnePlace(unittest.TestCase):
     """Owner, 2026-10-06: Belfort's house and the Deck's Markets tab are one
     page, and the report renderer they share is one file - it was two

@@ -235,7 +235,7 @@
 <div class="topbar">
   <div class="brand"><div class="mark"></div>Command Deck</div>
   <div class="live"><span class="dot" id="livedot"></span><span id="livetext">connecting…</span></div>
-  <nav class="tabsnav"><a class="tabnav on" href="/dashboard">Overview</a><a class="tabnav" href="/markets">Markets</a></nav>
+  <nav class="tabsnav"><a class="tabnav on" href="/dashboard">Overview</a><a class="tabnav" href="/markets">Markets<span id="mkdot" title="A monthly review of Belfort you have not opened" style="display:none;width:7px;height:7px;border-radius:50%;background:#e0b85a;margin-left:6px;vertical-align:middle"></span></a></nav>
   <div class="spacer"></div>
   <div class="chip" id="chipAgents">— agents</div>
   <div class="chip" id="chipHealth">—</div>
@@ -795,6 +795,13 @@ tick(); loadIdeas(); loadBuilds();
 setInterval(tick, 5000);
 setInterval(() => { if (!busy) loadIdeas(); }, 15000);
 setInterval(() => { if (!$('lb').classList.contains('on')) loadBuilds(); }, 20000);
+// A monthly review of Belfort not yet opened in this browser puts a dot on
+// Markets; markets.html's Record tab clears it (same key).
+fetch('/api/belfort/record', { cache: 'no-store' }).then(r => r.json()).then(j => {
+  const latest = j.reviews && j.reviews[0]; let seen = null;
+  try { seen = localStorage.getItem('belfort-review-seen'); } catch {}
+  if (latest && latest.name !== seen) document.getElementById('mkdot').style.display = 'inline-block';
+}).catch(() => {});
 </script>
 </body>
 </html>
