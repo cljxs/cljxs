@@ -16195,6 +16195,21 @@ class AWellSellingNicheIsMeasuredInSales(unittest.TestCase):
         r = self.intake(*stickers[:2], "crow shirt | Crow Shirt | tshirt | y")
         self.assertIn("3 filed, 0 refused", r.stdout, r.stderr)
 
+    def test_two_sticker_entries_are_one_kind_for_the_mix(self):
+        # The droplet's catalogue has 'sticker' and 'kisscut'; counted as two
+        # products, a run could file four stickers.
+        cat = self.root / "agents/emily/state/printify-catalog.json"
+        cat.parent.mkdir(parents=True, exist_ok=True)
+        cat.write_text(json.dumps({"sticker": {"blueprint_title": "Sticker Sheets"},
+                                   "kisscut": {"blueprint_title": "Kiss-Cut Stickers"},
+                                   "tshirt": {"blueprint_title": "Unisex Jersey Short Sleeve Tee"}}))
+        self.scan("sticker", [self.row(f"cat sticker {i}", selling=10, reviews=300) for i in range(4)])
+        self.scan("shirt", [self.row("crow shirt", selling=10, reviews=20)])
+        r = self.intake("cat sticker 0 | A | sticker | x", "cat sticker 1 | B | sticker | x",
+                        "cat sticker 2 | C | kisscut | x", "cat sticker 3 | D | kisscut | x")
+        self.assertIn("2 filed, 2 refused", r.stdout, r.stderr)
+        self.assertIn("already 2 sticker ideas", r.stderr)
+
     def test_a_phrase_already_used_gives_way_to_a_fresh_one(self):
         self.scan("sticker", [dict(self.row(f"sticker idea {i}", selling=10, reviews=900 - i), price=4.0)
                               for i in range(5)])

@@ -269,12 +269,28 @@ def product_of_phrase(phrase):
         return word
 
 
+@functools.lru_cache(maxsize=None)
+def product_kind(product):
+    """The kind of thing a product is, for the per-run mix: 'kisscut' and
+    'sticker' are two catalogue entries and one kind, sticker - read from the
+    entry's own Printify blueprint title, so no list of aliases is kept here."""
+    key = emily_key(product)
+    try:
+        mod = _module("emily_printify", "emily-printify.py")
+        entry = dict(mod.products(mod.read_catalog())).get(key) or {}
+        word = mod.product_word(entry.get("blueprint_title") or key or product)
+        return _module("blanks_key", "blanks.py").family(word) or key or str(product).lower()
+    except Exception:
+        return key or str(product).lower()
+
+
 def by_product(rows):
     """[(product, [(phrase, row), ...])] - each product's phrases, the ones
     no idea has used yet first, then by money; products by their best."""
     groups = {}
     for phrase, row in rows:
-        groups.setdefault(product_of_phrase(phrase) or "any product", []).append((phrase, row))
+        key = product_of_phrase(phrase)
+        groups.setdefault(product_kind(key) if key else "any product", []).append((phrase, row))
     return sorted(groups.items(), key=lambda g: -max(sales_value(r) for _p, r in g[1]))
 
 
@@ -695,7 +711,7 @@ def cmd_intake(_argv):
                         f"{product_word_of(product) or product!r}. Clear the "
                         f"focus to propose other products."))
             continue
-        kind = emily_key(product) or product_word_of(product) or product.lower()
+        kind = product_kind(product)
         if not want and per_product.get(kind, 0) >= MAX_PER_PRODUCT:
             if kinds is None:
                 kinds = {k for k, _rows in by_product(proposable())}
