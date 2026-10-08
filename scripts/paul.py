@@ -841,6 +841,46 @@ def old_site_photos(page):
 # what Paul wrote, checked
 # --------------------------------------------------------------------------
 
+# THE FOCUS: the kind of business every cycle looks for, until cleared. The
+# owner wanted restaurants and cafes first (2026-10-08). One file, so the
+# brief that asks for it and the check that enforces it read the same answer.
+KIND_WORDS = {"food": "a restaurant, cafe, bakery, coffee shop or food truck",
+              "trade": "a trade (plumber, roofer, electrician...)",
+              "salon": "a salon, barber or spa", "retail": "a shop", "other": "any other business"}
+
+
+def focus_kind():
+    try:
+        k = A("state", "focus").read_text().strip()
+    except OSError:
+        return None
+    return k if k in KINDS else None
+
+
+def cmd_focus(a):
+    path = A("state", "focus")
+    if a.clear:
+        path.unlink(missing_ok=True)
+        print("focus cleared - Paul looks for any kind of business again.")
+        return 0
+    if not a.kind:
+        k = focus_kind()
+        print(f"focus: {k} - {KIND_WORDS[k]}" if k else "no focus - any kind of business.")
+        return 0
+    if a.kind not in KINDS:
+        print(f"{a.kind!r} is not a kind. One of: {', '.join(KINDS)}", file=sys.stderr)
+        return 2
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(a.kind + "\n")
+    print(f"focus set: every cycle looks for {KIND_WORDS[a.kind]}, until `paul.py focus --clear`.")
+    return 0
+
+
+# A food business's site starts from templates/cafe (the owner's chosen look).
+# Its stylesheet opens with this line; a page designed from blank does not.
+CAFE_TEMPLATE_MARK = "Paul's cafe and restaurant template"
+
+
 def validate_target(t):
     if not isinstance(t, dict):
         return ["work/target.json is not a JSON object"]
@@ -858,6 +898,9 @@ def validate_target(t):
             errs.append(f'"{k}" is empty')
     if t.get("kind") not in KINDS:
         errs.append(f'"kind" must be one of: {", ".join(KINDS)}')
+    elif focus_kind() and t.get("kind") != focus_kind():
+        errs.append(f'the focus is "{focus_kind()}" - {KIND_WORDS[focus_kind()]}. This is '
+                    f'"{t.get("kind")}". Find one of those, or write status "no-target".')
     ch = t.get("channel")
     if ch and ch not in CHANNELS:
         errs.append(f'"channel" must be one of: {", ".join(CHANNELS)}')
@@ -1099,6 +1142,9 @@ def check_site(site, t, old_page=None):
 
     errs += look_and_law(sc)
     errs += claim_problems(sc["text"], t)
+    if t.get("kind") == "food" and not any(CAFE_TEMPLATE_MARK in c for c in sc["css"]):
+        errs.append("a food business starts from the template: "
+                    "mkdir -p work/site && cp -r templates/cafe/. work/site/ - then fill it in")
 
     photos = {str(p.get("file") or "").lstrip("./").removeprefix("site/"): p
               for p in (t.get("photos") or []) if isinstance(p, dict)}
@@ -1902,6 +1948,9 @@ def cmd_brief(a, get=http_get):
           f"offer        ${s.get('price', '?')}, one time. It covers {OFFER_COVERS}.",
           "             The pitch states that exact price and what it covers, in your words.",
           f"resume       {resume}",
+          *([f"FOCUS        {KIND_WORDS[focus_kind()]} only (kind \"{focus_kind()}\"). Code refuses",
+             "             any other kind; none good enough is a valid no-target day."]
+            if focus_kind() else []),
           f"passes       {MAX_PASSES} - each `paul.py check` that finds problems uses one",
           f"skip         {len(rows)} businesses already contacted or excluded. Check a candidate:",
           '             python3 ../../scripts/paul.py seen "<name>" "<phone>"']
@@ -2221,6 +2270,9 @@ def main(argv=None):
     p.add_argument("--anyway", action="store_true", help="skip the seen-a-dry-cycle check")
     p = sub.add_parser("dry-next", help="make the next paul-cycle.service run a dry cycle")
     p.add_argument("--take", action="store_true", help=argparse.SUPPRESS)
+    p = sub.add_parser("focus", help="look only for one kind of business, until cleared")
+    p.add_argument("kind", nargs="?", help=f"one of: {', '.join(KINDS)}")
+    p.add_argument("--clear", action="store_true")
     p = sub.add_parser("should-run", help="(wrapper) wake the model or hold")
     p.add_argument("--dry", action="store_true")
     p.add_argument("--record", action="store_true")
@@ -2237,6 +2289,7 @@ def main(argv=None):
     return {"init": cmd_init, "sender": cmd_sender, "preflight": cmd_preflight,
             "status": cmd_status, "mark": cmd_mark, "exclude": cmd_exclude,
             "teardown": cmd_teardown, "go-live": cmd_go_live, "dry-next": cmd_dry_next,
+            "focus": cmd_focus,
             "should-run": cmd_should_run, "brief": cmd_brief, "finish": cmd_finish,
             "seen": cmd_seen, "check": cmd_check}[a.cmd](a)
 

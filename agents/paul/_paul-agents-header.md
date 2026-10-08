@@ -52,7 +52,9 @@ every photo, and each file can be written in one go.
 
 ## 1. Find one target
 
-Search public sources (maps, directories, search) in the FACTS area. A
+Search public sources (maps, directories, search) in the FACTS area - and
+if FACTS has a FOCUS line, only that kind of business; code refuses any
+other. A
 business qualifies only with at least one problem a person could check:
 
     no-site      no website by search or on its Maps listing

@@ -1185,3 +1185,49 @@ class TheCafeTemplate(unittest.TestCase):
         reduced = css.split("@media (prefers-reduced-motion: reduce)", 1)[1].split("}", 1)[0]
         self.assertIn(".intro { display: none;", reduced)
         self.assertIn(".seen .intro { display: none; }", css, "once per visit")
+
+
+class TheFocusIsEnforcedByCode(PaulCase):
+    """"Restaurants/cafes first" (owner, 2026-10-08). Asking the model for a
+    cafe is a request; refusing a plumber at the check is a rule. And a food
+    business's site must come from the template, not a blank page - the
+    template is the quality bar the owner chose."""
+
+    def test_set_shown_and_cleared(self):
+        rc, said = self.run_quiet(paul.cmd_focus, self.args(kind="food", clear=False))
+        self.assertEqual((rc, paul.focus_kind()), (0, "food"))
+        self.assertIn("restaurant, cafe", said)
+        rc, _ = self.run_quiet(paul.cmd_focus, self.args(kind="bakery", clear=False))
+        self.assertEqual((rc, paul.focus_kind()), (2, "food"), "not a kind: refused, unchanged")
+        self.run_quiet(paul.cmd_focus, self.args(kind=None, clear=True))
+        self.assertIsNone(paul.focus_kind())
+
+    def test_another_kind_is_refused_while_focused(self):
+        self.assertFalse([e for e in paul.validate_target(target()) if "focus" in e], "no focus, any kind")
+        self.run_quiet(paul.cmd_focus, self.args(kind="food", clear=False))
+        errs = paul.validate_target(target())
+        self.assertTrue(any('the focus is "food"' in e for e in errs), errs)
+        self.assertFalse([e for e in paul.validate_target(target(kind="food")) if "focus" in e])
+        self.assertEqual(paul.validate_target({"status": "no-target", "why": "no cafe without a site"}), [],
+                         "none good enough is still a valid day")
+
+    def test_the_brief_says_so(self):
+        get = lambda url, **kw: offline(url)
+        _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=get)
+        self.assertNotIn("FOCUS", facts)
+        self.run_quiet(paul.cmd_focus, self.args(kind="food", clear=False))
+        _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=get)
+        self.assertIn("FOCUS        a restaurant, cafe, bakery, coffee shop or food truck only", facts)
+
+    def test_a_food_site_designed_from_blank_is_refused(self):
+        site = self.root / "blank"
+        site.mkdir()
+        (site / "index.html").write_text(INDEX)
+        (site / "style.css").write_text("body{margin:0}")
+        (site / "img").mkdir()
+        (site / "img" / "icon.svg").write_text("<svg/>")
+        (site / "img" / "hero.jpg").write_bytes(b"\xff\xd8" + b"0" * 5000)
+        t = target()
+        self.assertFalse([e for e in paul.check_site(site, t)[0] if "template" in e], "a tailor may")
+        errs, _ = paul.check_site(site, dict(t, kind="food"))
+        self.assertTrue(any("cp -r templates/cafe/. work/site/" in e for e in errs), errs)
