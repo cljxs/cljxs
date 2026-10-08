@@ -91,6 +91,9 @@ candidates at most. None good enough? That is a valid day: write
                  "hours": "url", "contact": "url"},
      "photos": [{"file": "img/hero.jpg", "source": "url", "kind": "business|stock"}],
      "claims": [{"text": "Iowa's oldest barbershop, est. 1911", "source": "url"}],
+     "identity": [{"detail": "what is only true of them",
+                   "source": "their Facebook post, page or a news story - url",
+                   "on_page": "the exact words on the site that show it"}],
      "layout": "one line: what this layout is",
      "notes": "anything the user should know"}
 
@@ -99,33 +102,37 @@ it can disprove fails the check.
 
 ## 3. Build work/site/
 
-**Every site starts from the template.** It is the owner's chosen look
-(2026-10-08) and it already passes every check below, so your job is their
-content, not a design. Code refuses a site that does not start from it:
+**Design this site for this business, and no other.** The owner
+(2026-10-08): every site unique to that business, using things from their
+Facebook or their history. A 1911 barbershop and a new smoothie bar must not
+look alike, and neither may look like the last site you built.
 
-    mkdir -p work/site && cp -r templates/local/. work/site/
+1. **Find what is only true of them, before you design anything.** Their
+   Facebook - the About tab, old posts, the photos they posted, the year
+   they opened, how they write - their own site, Instagram, their Google
+   listing's owner photos, a local news story, the town's history pages.
+   What you are after: when and how they started, who runs it, the
+   building, a signature item or service, their logo, their sign and its
+   colours, the way they talk to customers.
+2. **Build the design from that.** Their colours, from their sign, logo or
+   photos. Their photos. Type and layout that suit their story - old and
+   established reads differently from new and bright. The details you found
+   go on the page where a visitor sees them: in the headline, the about
+   section, captions on their own photos.
+3. **List at least two of those details in target.json "identity"**, each
+   with the URL it came from and the exact words on the site that show it.
+   Code checks every one is sourced and on the page, and treats it as a
+   sourced claim. Cannot find two? This is not the business to build for -
+   write status "below-bar" and say why.
 
-1. Fill every `{{SLOT}}` with their real facts. Code refuses a page with one
-   left. `{{OFFER_NAV}}` is one word for what they sell: Menu, Services,
-   Shop or Prices. Copy each `<!-- repeat -->` block once per item (what
-   they are known for, each section of their menu or price list, each
-   line); delete a block or section they have nothing true for. The
-   customer-quotes section is deleted unless every quote is word for word
-   from a public review, with a link, listed in `claims`.
-2. Colours: the four at the top of `style.css`, taken from the business -
-   its sign, its storefront, its photos. Nothing else in the CSS changes.
-   Keep the layout, spacing and fonts; they are the point.
-3. The mark: pick the drawing in `img/marks/` that fits their trade (cup,
-   fork-knife, whisk, wheat, bowl, pizza, scissors, barber-pole, comb,
-   wrench, hammer, house, leaf, paw, car, bag). Copy it over `img/icon.svg`,
-   set its stroke to their colour, and paste its `<path>`s into the three
-   inline `<svg class="mark">` in index.html (intro, header, hero
-   background) - the intro draws that mark, so it must fit them.
-4. Leave the template's HTML comments; code removes them before publishing.
-
-The references in FACTS are for judging quality - how a good site in their
-category reads - not a layout to copy. A stranger should think they paid
-for this.
+**The quality bar: `templates/local/`.** Open its index.html and style.css
+to see what good looks like - generous spacing, a clear type scale, text
+that passes contrast, a phone layout where the call button and hours come
+first, small touches like a drawing of their trade that draws itself once
+as the page loads. Take the craft, never the layout: code refuses a site
+built on that stylesheet. The references in FACTS are the same - how a good
+site in their category reads, not something to copy. A stranger should
+think they paid for this.
 
 - **Layout fits the business.** Trades - a full-bleed real-photo hero,
   headline, a call/quote button, a trust row (years, rating and count,
@@ -160,8 +167,9 @@ for this.
   emoji, stock phrasing ("nestled in", "elevate", "welcome to"...), a custom
   cursor. Also never: purple or blue-violet gradients, pill-shaped buttons
   (use a 4-8px radius), glassy see-through cards, scroll-triggered
-  animation on everything (the template's intro is the one animation the
-  owner asked for; add none of your own), AI-generated images,
+  animation on everything (one short intro as the page loads - their mark
+  or logo, once per visit, never for visitors who ask for less motion - is
+  the one the owner asked for), AI-generated images,
   any "made with AI" badge. Colours come from the business - its sign, its
   photos, its food - not from a theme.
 - **Readable and usable by everyone** (and the law). Code measures every

@@ -876,10 +876,45 @@ def cmd_focus(a):
     return 0
 
 
-# Every site starts from templates/local, the owner's chosen look (2026-10-08:
-# "we're targeting any business that has a poor or no website"). Its
-# stylesheet opens with this line; a page designed from blank does not.
+# templates/local is a worked example of the quality bar, not a mold. Owner,
+# 2026-10-08: "I don't want to use the same premade template style website
+# for every site ... I want these websites to be unique to that business using
+# things from their facebook or their history." Its stylesheet opens with this
+# line, so a site built on it is caught.
 TEMPLATE_MARK = "Paul's site template"
+
+# What makes a site theirs: details only true of this business, each with the
+# page it came from and the words that show it on the site.
+MIN_IDENTITY = 2
+
+
+def identity_problems(text, t):
+    """target.json "identity": at least MIN_IDENTITY details from their
+    Facebook, their own pages or their history, each sourced and each shown
+    on the page in the words given."""
+    rows = [r for r in (t or {}).get("identity") or [] if isinstance(r, dict)]
+    errs = []
+    page = re.sub(r"\s+", " ", text).lower()
+    good = 0
+    for r in rows:
+        what = str(r.get("detail") or "").strip() or "(no detail)"
+        shown = re.sub(r"\s+", " ", str(r.get("on_page") or "")).strip()
+        if not re.match(r"^https?://\S+$", str(r.get("source") or "").strip()):
+            errs.append(f'identity: "{what}" needs the URL it came from (their Facebook, their '
+                        f"site, a news story)")
+        elif not shown:
+            errs.append(f'identity: "{what}" needs "on_page" - the words on the site that show it')
+        elif shown.lower() not in page:
+            errs.append(f'identity: "{shown}" is not on the page - show "{what}" on the site, '
+                        f"in those words")
+        else:
+            good += 1
+    if good < MIN_IDENTITY:
+        errs.append(f"the site shows {good} detail(s) only true of this business; it needs at "
+                    f"least {MIN_IDENTITY} in target.json \"identity\" - from their Facebook, their "
+                    f"history, their own pages. Nothing to find? This is not the business to "
+                    f"build for: status \"below-bar\".")
+    return errs
 
 
 def validate_target(t):
@@ -1143,9 +1178,10 @@ def check_site(site, t, old_page=None):
 
     errs += look_and_law(sc)
     errs += claim_problems(sc["text"], t)
-    if not any(TEMPLATE_MARK in c for c in sc["css"]):
-        errs.append("every site starts from the template: "
-                    "mkdir -p work/site && cp -r templates/local/. work/site/ - then fill it in")
+    errs += identity_problems(sc["text"], t)
+    if any(TEMPLATE_MARK in c for c in sc["css"]):
+        errs.append("this site is built on templates/local - that is an example of the quality "
+                    "bar, not a layout. Design this one for them, from what is only true of them")
 
     photos = {str(p.get("file") or "").lstrip("./").removeprefix("site/"): p
               for p in (t.get("photos") or []) if isinstance(p, dict)}
@@ -1179,6 +1215,11 @@ def _claimkey(x):
 def claim_problems(text, t):
     """Claim words on the page with no sourced entry in target.json "claims"."""
     claims = [c for c in (t or {}).get("claims") or [] if isinstance(c, dict)]
+    # An identity detail is sourced the same way: "since 1911" shown because
+    # their Facebook says so needs no second entry.
+    claims += [{"text": r.get("on_page"), "source": r.get("source")}
+               for r in (t or {}).get("identity") or [] if isinstance(r, dict) and r.get("on_page")
+               and re.match(r"^https?://", str(r.get("source") or ""))]
     errs = [f'claims: "{c.get("text", "")}" needs the URL it came from' for c in claims
             if not re.match(r"^https?://\S+$", str(c.get("source") or "").strip())]
     backed = " | ".join(_claimkey(c.get("text") or "") for c in claims

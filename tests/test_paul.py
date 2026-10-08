@@ -81,6 +81,10 @@ def target(**over):
          "photos": [{"file": "img/hero.jpg", "source": "https://images.unsplash.com/photo-1",
                      "kind": "stock"}],
          "claims": [{"text": "by hand since 1998", "source": "https://maps.google.com/?cid=1"}],
+         "identity": [{"detail": "Rosa has sewn by hand since 1998",
+                       "source": "https://facebook.com/rosastailoring/about", "on_page": "by hand since 1998"},
+                      {"detail": "known for wedding dresses",
+                       "source": "https://facebook.com/rosastailoring/photos", "on_page": "wedding dresses"}],
          "layout": "full-bleed photo hero", "notes": "test"}
     t.update(over)
     return t
@@ -150,7 +154,7 @@ class PaulCase(unittest.TestCase):
         w = paul.A("work")
         (w / "site" / "img").mkdir(parents=True, exist_ok=True)
         (w / "site" / "index.html").write_text(index)
-        (w / "site" / "style.css").write_text("/* Paul's site template (test fixture) */ body{margin:0}")
+        (w / "site" / "style.css").write_text("body{margin:0}")
         (w / "site" / "img" / "hero.jpg").write_bytes(b"\xff\xd8" + b"0" * 5000)
         (w / "site" / "img" / "icon.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
         (w / "target.json").write_text(json.dumps(t or target()))
@@ -1102,7 +1106,7 @@ class EveryClaimHasASource(SiteRules):
         self.has(self.errors(t=t), "needs the URL")
 
     def test_a_founding_year(self):
-        self.has(self.errors(t=target(claims=[])), '"since 1998" is a claim')
+        self.has(self.errors(t=target(claims=[], identity=[])), '"since 1998" is a claim')
 
     def test_ordinary_copy_is_not_a_claim(self):
         self.assertEqual(self.errors(index=INDEX.replace(
@@ -1133,23 +1137,30 @@ def fill_template(site, t):
     page.write_text(re.sub(r"\{\{([A-Z0-9_]+)\}\}", one, page.read_text()))
 
 
-class TheCafeTemplate(unittest.TestCase):
-    """The owner's chosen look for restaurants and cafes (2026-10-08): light,
-    warm, a mark that draws itself once, rows that scroll sideways. Paul fills
-    it rather than designing from a blank page - so the template itself must
-    pass every rule Paul is held to, or every cafe site starts out refused."""
+class TheTemplateIsTheBarNotTheMold(unittest.TestCase):
+    """templates/local shows Paul what good looks like. The owner, 2026-10-08:
+    "I don't want to use the same premade template style website for every
+    site ... unique to that business using things from their facebook or their
+    history." So the example must itself meet every rule Paul is held to -
+    Paul studies it - and a site built on it is refused."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.site = Path(self.tmp.name) / "site"
-        self.t = target(name="Hollow Oak Coffee", category="cafe", kind="food", photos=[], claims=[])
+        self.t = target(name="Hollow Oak Coffee", category="cafe", kind="food", photos=[], claims=[],
+                        identity=[])
 
-    def test_a_filled_template_passes_every_site_check(self):
+    def test_the_example_meets_every_rule_but_being_itself(self):
         fill_template(self.site, self.t)
         errs, info = paul.check_site(self.site, self.t)
-        self.assertEqual(errs, [])
+        self.assertEqual([e for e in errs if "identity" not in e and "templates/local" not in e], [])
         self.assertEqual(info["pages"], 1)
+
+    def test_a_site_built_on_it_is_refused(self):
+        fill_template(self.site, self.t)
+        errs, _ = paul.check_site(self.site, self.t)
+        self.assertTrue(any("this site is built on templates/local" in e for e in errs), errs)
 
     def test_a_slot_left_unfilled_is_refused_by_name(self):
         fill_template(self.site, self.t)
@@ -1158,12 +1169,7 @@ class TheCafeTemplate(unittest.TestCase):
         errs, _ = paul.check_site(self.site, self.t)
         self.assertTrue(any("template slots left unfilled: {{HERO_ALT}}" in e for e in errs), errs)
 
-    def test_the_template_as_shipped_is_refused(self):
-        shutil.copytree(TEMPLATE, self.site)
-        errs, _ = paul.check_site(self.site, self.t)
-        self.assertTrue(any("template slots left unfilled" in e for e in errs), errs)
-
-    def test_its_notes_to_paul_never_reach_a_visitor(self):
+    def test_comments_never_reach_a_visitor(self):
         fill_template(self.site, self.t)
         self.assertIn("target.json", (self.site / "index.html").read_text(), "the template does carry them")
         paul.apply_safeguards(self.site, self.t["name"], "Sam Studio")
@@ -1172,20 +1178,48 @@ class TheCafeTemplate(unittest.TestCase):
         self.assertNotIn("target.json", html)
         self.assertIn('class="intro"', html, "only the comments went")
 
-    def test_the_header_sends_food_businesses_to_it_and_names_marks_that_exist(self):
+    def test_the_header_calls_it_the_bar_and_asks_for_their_own_details(self):
         header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
-        self.assertIn("cp -r templates/local/. work/site/", header)
-        for mark in ("cup", "fork-knife", "whisk", "wheat", "bowl", "pizza", "scissors", "barber-pole",
-                     "comb", "wrench", "hammer", "house", "leaf", "paw", "car", "bag"):
-            self.assertIn(mark, header)
-            self.assertTrue((TEMPLATE / "img" / "marks" / f"{mark}.svg").is_file(), mark)
-        self.assertTrue((TEMPLATE / "img" / "icon.svg").is_file(), "a favicon is required")
+        self.assertNotIn("cp -r templates/local", header, "no longer copied")
+        self.assertIn("The quality bar: `templates/local/`", header)
+        self.assertIn('"identity"', header)
+        self.assertIn("Facebook", header)
+        self.assertTrue((TEMPLATE / "img" / "icon.svg").is_file())
 
     def test_the_intro_never_plays_for_people_who_ask_for_less_motion(self):
         css = (TEMPLATE / "style.css").read_text()
         reduced = css.split("@media (prefers-reduced-motion: reduce)", 1)[1].split("}", 1)[0]
         self.assertIn(".intro { display: none;", reduced)
         self.assertIn(".seen .intro { display: none; }", css, "once per visit")
+
+
+class WhatIsOnlyTrueOfThem(SiteRules):
+    """A site is theirs when it shows things only true of them - from their
+    Facebook, their history - each sourced, each visibly on the page."""
+
+    def identity_errs(self, rows):
+        return [e for e in self.errors(target(identity=rows)) if "identity" in e or "only true" in e]
+
+    def test_the_sample_site_with_two_sourced_details_passes(self):
+        self.assertEqual(self.identity_errs(target()["identity"]), [])
+
+    def test_fewer_than_two_is_refused_and_says_below_bar(self):
+        errs = self.identity_errs(target()["identity"][:1])
+        self.assertTrue(any("1 detail(s) only true of this business" in e and "below-bar" in e for e in errs), errs)
+
+    def test_a_detail_with_no_source_is_refused(self):
+        rows = [dict(target()["identity"][0], source=""), target()["identity"][1]]
+        self.assertTrue(any("needs the URL it came from" in e for e in self.identity_errs(rows)))
+
+    def test_a_detail_not_shown_on_the_page_is_refused(self):
+        rows = [dict(target()["identity"][0], on_page="three generations of tailors"), target()["identity"][1]]
+        self.assertTrue(any('"three generations of tailors" is not on the page' in e
+                            for e in self.identity_errs(rows)))
+
+    def test_a_detail_backs_its_own_claim(self):
+        # "since 1998" is a claim word; sourced as identity, it needs no second entry.
+        errs = self.errors(target(claims=[]))
+        self.assertFalse([e for e in errs if "is a claim with no source" in e], errs)
 
 
 class TheFocusIsEnforcedByCode(PaulCase):
@@ -1219,15 +1253,3 @@ class TheFocusIsEnforcedByCode(PaulCase):
         self.run_quiet(paul.cmd_focus, self.args(kind="food", clear=False))
         _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=get)
         self.assertIn("FOCUS        a restaurant, cafe, bakery, coffee shop or food truck only", facts)
-
-    def test_a_site_designed_from_blank_is_refused_whatever_the_kind(self):
-        site = self.root / "blank"
-        site.mkdir()
-        (site / "index.html").write_text(INDEX)
-        (site / "style.css").write_text("body{margin:0}")
-        (site / "img").mkdir()
-        (site / "img" / "icon.svg").write_text("<svg/>")
-        (site / "img" / "hero.jpg").write_bytes(b"\xff\xd8" + b"0" * 5000)
-        for kind in ("trade", "food"):
-            errs, _ = paul.check_site(site, target(kind=kind))
-            self.assertTrue(any("cp -r templates/local/. work/site/" in e for e in errs), (kind, errs))
