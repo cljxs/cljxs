@@ -17681,6 +17681,46 @@ class OnlyColoursTheDesignCanBeReadOn(unittest.TestCase):
         self.assertIn("ink_sample(upload_from) if is_garment(cat) else None", body)
 
 
+class ToolsAreCutToNamesTheAgentWasOffered(unittest.TestCase):
+    """Paul, 2026-10-08: 39 tools and 37,020 characters of schema on each of
+    71 turns, most of them image, music and video generators. Cutting them
+    means an allow-list - and a name in it that OpenClaw does not use is a
+    tool Paul silently lacks next cycle. So the list is intersected with the
+    names his last real run was offered, read from that run's own JSON."""
+
+    FIXTURE = ROOT / "tests" / "fixtures" / "openclaw-agent-json-2026.9.log"
+
+    def test_the_names_come_from_the_runs_own_json(self):
+        spec = importlib.util.spec_from_file_location("last_run_names", ROOT / "scripts" / "last-run.py")
+        lr = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(lr)
+        d = lr.last_block(self.FIXTURE.read_text())
+        want = [e["name"] for e in d["systemPromptReport"]["tools"]["entries"]]
+        self.assertEqual(lr.tool_names(d), want)
+        self.assertIn("web_search", want, "the fixture is the real run this test relies on")
+
+    def test_set_agent_tools_keeps_only_offered_names_and_says_what_it_cut(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        log = tmp / "set.txt"
+        (tmp / "journalctl").write_text(f"#!/bin/bash\ncat '{self.FIXTURE}'\n")
+        (tmp / "openclaw").write_text(
+            "#!/bin/bash\n"
+            "if [ \"$1 $2\" = 'config get' ]; then echo 'Config path is valid but unset'; exit 1; fi\n"
+            f"if [ \"$1 $2\" = 'config set' ]; then echo \"$3 $4\" >> '{log}'; fi\n")
+        for f in ("journalctl", "openclaw"):
+            (tmp / f).chmod(0o755)
+        r = subprocess.run(["bash", str(SCRIPTS / "set-agent-tools.sh"), "paul", "--apply"],
+                           capture_output=True, text=True,
+                           env=dict(os.environ, PATH=f"{tmp}:{os.environ['PATH']}"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(log.read_text().strip(),
+                         'agents.entries.paul.tools.allow ["read","exec","web_search","web_fetch"]')
+        self.assertIn("cutting: progress_card, sessions_spawn", r.stdout)
+        self.assertIn("wanted but never offered (left out): write, edit, apply_patch, process, image, view_image",
+                      r.stdout)
+
+
 class LastRunReadsTheWrappedRun(unittest.TestCase):
     """Bug, Paul's first dry cycle 2026-10-05: openclaw 2026.9.2 prints the
     run wrapped - {"runId", "status", "summary", "result": {"payloads",

@@ -26,6 +26,12 @@ APPLY="${2:-}"
 # a tool the agent needs costs a whole cycle, and six tools is already a 90%
 # cut. Trim further once a few cycles have passed cleanly.
 KEEP="read,write,edit,apply_patch,exec,process"
+# Paul also searches for businesses (web_search, web_fetch) and looks at each
+# photo before using it. The image viewer's name was never seen in a real run,
+# so both spellings are wanted and only the one OpenClaw offers is kept.
+case "$AGENT" in
+  paul) KEEP="$KEEP,web_search,web_fetch,image,view_image" ;;
+esac
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 
@@ -84,6 +90,31 @@ if [ -z "$FOUND" ]; then
     openclaw config get agents | head -40
     openclaw agents list --bindings
 EOF
+fi
+
+# Keep only names the agent's last run was really offered: an allow-list entry
+# OpenClaw does not know is a tool the agent silently lacks next cycle. What is
+# dropped is printed, so a tool it needs and that was missed shows up here.
+OFFERED=$(python3 "$(dirname "$0")/last-run.py" "$AGENT" --tool-names 2>/dev/null)
+if [ -n "$OFFERED" ]; then
+  KEPT=""; DROPPED=""; ABSENT=""
+  for t in ${KEEP//,/ }; do
+    case ",$OFFERED," in
+      *",$t,"*) KEPT="${KEPT:+$KEPT,}$t" ;;
+      *) ABSENT="${ABSENT:+$ABSENT, }$t" ;;
+    esac
+  done
+  for t in ${OFFERED//,/ }; do
+    case ",$KEEP," in *",$t,"*) ;; *) DROPPED="${DROPPED:+$DROPPED, }$t" ;; esac
+  done
+  say "from its last run"
+  echo "  offered: $(echo "$OFFERED" | tr ',' '\n' | wc -l) tools"
+  echo "  keeping: ${KEPT//,/, }"
+  echo "  cutting: ${DROPPED:-nothing}"
+  [ -n "$ABSENT" ] && echo "  wanted but never offered (left out): $ABSENT"
+  KEEP="$KEPT"
+else
+  say "no last run to read tool names from - using the list as written"
 fi
 
 CMD_ALLOW="openclaw config set '$FOUND.allow' '[\"${KEEP//,/\",\"}\"]'"

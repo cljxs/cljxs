@@ -97,28 +97,43 @@ def run_view(d):
     return flat
 
 
+def last_block(raw):
+    """The last cycle's JSON in a journal, or None. The LAST agent block, not
+    the biggest. Picking the biggest showed the previous night's cycle - it
+    listed more games, so its JSON was longer - while the run being
+    investigated sat further down, unread."""
+    blocks = [run_view(b) for b in json_blocks(raw)]
+    agent_blocks = [b for b in blocks if "toolSummary" in b or "completion" in b]
+    return (agent_blocks or blocks or [None])[-1]
+
+
+def tool_names(d):
+    """The names of the tools a cycle was offered, as OpenClaw spells them -
+    what set-agent-tools.sh keeps from, so it never allows a guessed name."""
+    entries = (((d or {}).get("systemPromptReport") or {}).get("tools") or {}).get("entries") or []
+    return [e.get("name") for e in entries if isinstance(e, dict) and e.get("name")]
+
+
 def main():
     if len(sys.argv) < 2:
-        print("usage: last-run.py <agent>    e.g. last-run.py ace", file=sys.stderr)
+        print("usage: last-run.py <agent> [--tool-names]    e.g. last-run.py ace", file=sys.stderr)
         return 2
     agent = sys.argv[1]
     unit = f"{agent}-cycle.service"
     raw = fetch(unit)
+    if "--tool-names" in sys.argv[2:]:
+        names = tool_names(last_block(raw))
+        print(",".join(names))
+        return 0 if names else 1
     if not raw.strip():
         print(f"no journal entries for {unit}")
         return 0
 
-    blocks = json_blocks(raw)
-    if not blocks:
+    d = last_block(raw)
+    if d is None:
         print(f"no complete JSON block in the journal for {unit}. Raw tail:\n")
         print("\n".join(raw.splitlines()[-40:]))
         return 0
-    # The LAST agent block, not the biggest. Picking the biggest showed the
-    # previous night's cycle - it listed more games, so its JSON was longer -
-    # while the run being investigated sat further down, unread.
-    blocks = [run_view(b) for b in blocks]
-    agent_blocks = [b for b in blocks if "toolSummary" in b or "completion" in b]
-    d = (agent_blocks or blocks)[-1]
 
     print(f"=== {agent}: last cycle " + "=" * 40)
     comp, ts = d.get("completion") or {}, d.get("toolSummary") or {}
@@ -157,10 +172,9 @@ def main():
     # tells you whether a tools.allow restriction actually took effect - the
     # config command can report success and change nothing.
     tools = (((d.get("systemPromptReport") or {}).get("tools")) or {})
-    entries = tools.get("entries") or []
     schema_chars = tools.get("schemaChars")
-    if entries or schema_chars:
-        names = [e.get("name") for e in entries if isinstance(e, dict)]
+    names = tool_names(d)
+    if names or schema_chars:
         print(f"toolset      {len(names)} tools offered, {schema_chars} chars of schema")
         loud = [n for n in names if n in (
             "sessions_spawn", "subagents", "progress_card", "dashboard",
