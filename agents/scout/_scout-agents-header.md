@@ -81,7 +81,8 @@ last year, and how many reviews. A review can only come from a purchase,
 so it is a floor on sales - say it that way, never as a forecast.
 
 **You may only propose into a phrase with recent sales.** Code refuses the
-rest. The list in your FACTS block is sorted best-selling first: start there.
+rest. The list in your FACTS block gives each product its best phrases,
+most money first (reviews x the typical price): start there.
 
 **The niche is the market, not the design.** The numbers say WHAT people buy.
 Every idea is an original design for that market. Never describe, copy, or
@@ -107,8 +108,11 @@ Do not re-litigate these from your own head. They came from real scans:
   selling (185 reviews in a year), `funny dad shirt` 377 reviews,
   `hiking shirt` 8 of 10. Mugs in the same run sold 0 or 1 of 10.
 
-So: propose where the sales evidence is, best-selling first, whatever the
-product - `scout-ideas.py brief` already orders them that way. Seasonal
+So: propose where the sales evidence is, and spread each run across
+products. A sticker sells more often than a sweatshirt and earns far less
+per sale, so counting sales alone filled the shop with stickers. The brief ranks
+by money and lists each product separately; code files at most two ideas of
+one product a run when another product has a measured market. Seasonal
 phrases still need a scan showing sales before you propose one; an
 argument is not evidence.
 

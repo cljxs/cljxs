@@ -16121,17 +16121,91 @@ class AWellSellingNicheIsMeasuredInSales(unittest.TestCase):
         self.assertIn("its sales were never measured", si.measured("frog sticker pack")[2])
         self.assertEqual([p for p, _ in si.proposable()], ["frog sticker"])
 
-    def test_the_brief_is_best_selling_first_and_says_original(self):
+    def test_the_brief_is_most_money_first_and_says_original(self):
+        # 2026-10-08: every phrase had 10 of 10 selling, reviews decided the
+        # order, and the cheapest product filled the top 25. Money decides now.
         self.scan("mug", [self.row("cat lover mug", selling=3, reviews=50),
                           self.row("teacher gift mug", selling=8, reviews=12),
                           self.row("nurse gift mug", selling=8, reviews=40)])
+        self.scan("sticker", [dict(self.row("cat sticker", selling=10, reviews=600), price=4.0)])
+        self.scan("sweatshirt", [dict(self.row("book sweatshirt", selling=10, reviews=227), price=38.0)])
         si = load("scout_ideas_brief", "scout-ideas.py")
-        self.assertEqual([p for p, _ in si.proposable()], ["nurse gift mug", "teacher gift mug", "cat lover mug"])
+        self.assertEqual([p for p, _ in si.proposable()],
+                         ["book sweatshirt", "cat sticker", "cat lover mug", "nurse gift mug", "teacher gift mug"],
+                         "227 sales at $38 outrank 600 at $4")
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             si.cmd_brief([])
-        self.assertIn("nurse gift mug  (5,000 listings; 8 of top 10 sold in 90 days, 40 reviews)", out.getvalue())
+        self.assertIn("nurse gift mug  (5,000 listings; 8 of top 10 sold in 90 days, 40 reviews; "
+                      "x $18.00 = $720 of sales)", out.getvalue())
         self.assertIn("never describe, copy or\n  imitate a particular listing", out.getvalue())
+
+    def test_the_brief_gives_each_product_its_own_best(self):
+        # Fifteen sticker phrases outsell everything by reviews; the shirt
+        # must still reach Scout, and only PER_PRODUCT of the stickers do.
+        self.scan("sticker", [dict(self.row(f"sticker idea {i}", selling=10, reviews=900 - i), price=4.0)
+                              for i in range(15)])
+        self.scan("shirt", [dict(self.row("crow shirt", selling=10, reviews=200), price=25.0)])
+        si = load("scout_ideas_groups", "scout-ideas.py")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            si.cmd_brief([])
+        text = out.getvalue()
+        self.assertIn("STICKER (15 phrases measured):", text)
+        self.assertIn("crow shirt", text, "the shirt was 16th by reviews and used to fall off the top")
+        self.assertEqual(text.count("    sticker idea "), si.PER_PRODUCT)
+        self.assertIn(f"at most {si.MAX_PER_PRODUCT} ideas of one product", text)
+        self.assertLess(text.index("TSHIRT ("), text.index("STICKER ("),
+                        "products by their best phrase: 200 x $25 beats 900 x $4")
+
+    def catalogue(self, *keys):
+        cat = self.root / "agents/emily/state/printify-catalog.json"
+        cat.parent.mkdir(parents=True, exist_ok=True)
+        cat.write_text(json.dumps({k: {"variant_ids": [1]} for k in keys}))
+
+    def test_a_market_emily_cannot_make_is_not_handed_over(self):
+        # The real brief, 2026-10-08: 'embroidered hat custom' third and
+        # 'botanical prints' in the list, with no hat or print in the shop.
+        self.catalogue("sticker", "tshirt", "mug")
+        for phrase, reviews in (("embroidered hat custom", 545), ("botanical prints", 86),
+                                ("car decal business", 325), ("crow shirt", 235), ("bird lover gift", 50)):
+            self.scan(phrase, [self.row(phrase, selling=10, reviews=reviews)])
+        si = load("scout_ideas_makeable", "scout-ideas.py")
+        self.assertEqual([p for p, _ in si.proposable()], ["car decal business", "crow shirt", "bird lover gift"])
+        self.assertEqual({k: [p for p, _ in rows] for k, rows in si.by_product(si.proposable())},
+                         {"sticker": ["car decal business"], "tshirt": ["crow shirt"],
+                          "any product": ["bird lover gift"]})
+
+    def intake(self, *lines):
+        (self.state / "drafts.txt").write_text("".join(l + "\n" for l in lines))
+        (self.state / "proposals.json").write_text("[]\n")     # merged between runs, in a real cycle
+        return subprocess.run([sys.executable, str(SCRIPTS / "scout-ideas.py"), "intake"],
+                              capture_output=True, text=True, env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)))
+
+    def test_a_run_files_at_most_two_of_one_product_when_another_sells(self):
+        self.catalogue("sticker", "tshirt")
+        self.scan("sticker", [self.row(f"cat sticker {i}", selling=10, reviews=300) for i in range(3)])
+        stickers = [f"cat sticker {i} | Cat {i} Sticker | sticker | x" for i in range(3)]
+        r = self.intake(*stickers)
+        self.assertIn("3 filed, 0 refused", r.stdout, "stickers are all there is: no cap")
+        self.scan("shirt", [self.row("crow shirt", selling=10, reviews=20)])
+        r = self.intake(*stickers)
+        self.assertIn("2 filed, 1 refused", r.stdout, r.stderr)
+        self.assertIn("at most 2 of one product a run", r.stderr)
+        r = self.intake(*stickers[:2], "crow shirt | Crow Shirt | tshirt | y")
+        self.assertIn("3 filed, 0 refused", r.stdout, r.stderr)
+
+    def test_a_phrase_already_used_gives_way_to_a_fresh_one(self):
+        self.scan("sticker", [dict(self.row(f"sticker idea {i}", selling=10, reviews=900 - i), price=4.0)
+                              for i in range(5)])
+        (self.state / "ideas.json").write_text(json.dumps({"ideas": [
+            {"title": "Old", "evidence": {"phrase": "sticker idea 0"}}]}))
+        si = load("scout_ideas_fresh", "scout-ideas.py")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            si.cmd_brief([])
+        self.assertNotIn("sticker idea 0", out.getvalue(), "the best is used: three fresh ones instead")
+        self.assertIn("sticker idea 3", out.getvalue())
 
     def test_the_idea_carries_its_sales_to_the_owner(self):
         self.scan("frog sticker", [self.row("frog sticker", selling=6, reviews=31)])

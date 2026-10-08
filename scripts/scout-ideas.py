@@ -25,6 +25,7 @@ Standard library only.
 """
 
 import contextlib
+import functools
 import importlib.util
 import io
 import json
@@ -163,13 +164,20 @@ def product_word_of(text):
     """The catalogue product word in some text, or None - emily-printify's
     list, the same one catalogue_word() uses."""
     try:
-        spec = importlib.util.spec_from_file_location(
-            "emily_printify", SCRIPTS / "emily-printify.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return mod.product_word(str(text or ""))
+        return _module("emily_printify", "emily-printify.py").product_word(str(text or ""))
     except Exception:
         return None
+
+
+@functools.lru_cache(maxsize=None)
+def _module(name, filename):
+    """A sibling script as a module, loaded once. The brief asks which product
+    each of a hundred-odd phrases is, and loading emily-printify for every
+    one of them was most of the brief's time."""
+    spec = importlib.util.spec_from_file_location(name, SCRIPTS / filename)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def focus():
@@ -212,14 +220,62 @@ def proposable():
             seen.add(key)
             if want and product_word_of(phrase) != want:
                 continue
+            # A hat, a poster: a market Emily has no product for. The brief
+            # listed 'embroidered hat custom' third on 2026-10-08, and propose
+            # refuses the product anyway - so it only took a slot.
+            if product_of_phrase(phrase) is False:
+                continue
             best, _scan, problem = measured(phrase)
             if problem or not (best or {}).get("score"):
                 continue
             out.append((phrase, best))
-    # Best-selling first: the most top listings with a recent sale, then the
-    # most reviews. What Scout reads first is what it proposes into.
-    out.sort(key=lambda pr: (-(pr[1].get("selling") or 0), -(pr[1].get("reviews") or 0)))
+    # Most money first. What Scout reads first is what it proposes into, and
+    # by count of sales alone the cheapest product always won: on 2026-10-08
+    # every phrase in the brief had 10 of 10 top listings selling, reviews
+    # decided the order, and 24 of the top 25 were stickers and decals.
+    out.sort(key=lambda pr: (-sales_value(pr[1]), -(pr[1].get("selling") or 0)))
     return out
+
+
+# How the brief hands phrases over, and how many ideas of one product a run
+# may file (owner, 2026-10-08: "almost exclusively stickers ... he's kinda
+# left tshirts and sweatshirts alone").
+PER_PRODUCT = 3
+MAX_PER_PRODUCT = 2
+
+
+def sales_value(row):
+    """Reviews x the typical price: dollars of sales the top listings were
+    reviewed for in the window. A floor, like the reviews it is made of -
+    but it weighs a $35 sweatshirt sale as more than a $4 sticker sale."""
+    return round((row.get("reviews") or 0) * (row.get("price") or 0))
+
+
+@functools.lru_cache(maxsize=None)
+def product_of_phrase(phrase):
+    """Which of Emily's products a phrase is the market for: her catalogue
+    key, None when the phrase names no product ('bird lover gift'), or False
+    when it names one she has not been set up to make ('embroidered hat').
+    With no readable catalogue, the product family - never False, because an
+    unreadable file is not the owner deciding the shop sells nothing."""
+    word = product_word_of(phrase)
+    if not word:
+        return None
+    if emily_products():
+        return emily_key(phrase) or False
+    try:
+        return _module("blanks_key", "blanks.py").family(word)
+    except Exception:
+        return word
+
+
+def by_product(rows):
+    """[(product, [(phrase, row), ...])] - each product's phrases, the ones
+    no idea has used yet first, then by money; products by their best."""
+    groups = {}
+    for phrase, row in rows:
+        groups.setdefault(product_of_phrase(phrase) or "any product", []).append((phrase, row))
+    return sorted(groups.items(), key=lambda g: -max(sales_value(r) for _p, r in g[1]))
 
 
 def emily_key(product):
@@ -234,10 +290,7 @@ def emily_key(product):
     text win, the longest such entry first ("zipper tote" over "tote").
     """
     try:
-        spec = importlib.util.spec_from_file_location(
-            "emily_printify_key", SCRIPTS / "emily-printify.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        mod = _module("emily_printify", "emily-printify.py")
         cat = mod.read_catalog()
         try:
             key, _entry = mod.resolve(cat, str(product or ""))
@@ -253,9 +306,7 @@ def emily_key(product):
             return hits[0]
         # Last, the product family blanks.py keeps: "comfort colors tee" ->
         # tee -> tshirt, when Emily has a tshirt.
-        spec = importlib.util.spec_from_file_location("blanks_key", SCRIPTS / "blanks.py")
-        bl = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(bl)
+        bl = _module("blanks_key", "blanks.py")
         fam = bl.family(mod.product_word(str(product or "")))
         return fam if fam and fam in dict(mod.products(cat)) else None
     except Exception:
@@ -267,10 +318,7 @@ def emily_products():
     be read - and [] never refuses anything, because an unreadable file is not
     the owner deciding the shop sells nothing."""
     try:
-        spec = importlib.util.spec_from_file_location(
-            "emily_printify_list", SCRIPTS / "emily-printify.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        mod = _module("emily_printify", "emily-printify.py")
         return sorted(k for k, _e in mod.products(mod.read_catalog()))
     except Exception:
         return []
@@ -621,6 +669,10 @@ def cmd_intake(_argv):
     if PROPOSALS.is_file():
         PROPOSALS.write_text("[]\n")
     filed, bad = 0, []
+    # At most MAX_PER_PRODUCT ideas of one product a run, when there is a
+    # measured market for another one. Asked of the brief's own grouping,
+    # once, and only when the cap is about to bite.
+    per_product, kinds = {}, None
     for where, raw in lines:
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -643,6 +695,16 @@ def cmd_intake(_argv):
                         f"{product_word_of(product) or product!r}. Clear the "
                         f"focus to propose other products."))
             continue
+        kind = emily_key(product) or product_word_of(product) or product.lower()
+        if not want and per_product.get(kind, 0) >= MAX_PER_PRODUCT:
+            if kinds is None:
+                kinds = {k for k, _rows in by_product(proposable())}
+            if len(kinds) > 1:
+                bad.append((n, title or line[:40],
+                            f"already {MAX_PER_PRODUCT} {kind} ideas this run - code files at most "
+                            f"{MAX_PER_PRODUCT} of one product a run, so the shop gets a mix. "
+                            f"Propose another product from the brief."))
+                continue
         angle = parts[3] if len(parts) > 3 else ""
         brief = parts[4] if len(parts) > 4 else ""
         argv = ["--phrase", phrase, "--title", title, "--product", product]
@@ -655,6 +717,7 @@ def cmd_intake(_argv):
             code = cmd_propose(argv)
         if code == 0:
             filed += 1
+            per_product[kind] = per_product.get(kind, 0) + 1
             print(f"  + {n}: {title}")
         else:
             bad.append((n, title, buf.getvalue().strip().splitlines()[0]
@@ -901,14 +964,23 @@ def cmd_brief(_argv):
     have = emily_products()
     if have:
         print(f"- products Emily can make (anything else is refused): {', '.join(have)}")
+    groups = by_product(proposable())
     print("- measured phrases you may use" + (f" ({want} only)" if want else "")
-          + ", fresh and above zero:")
-    for phrase, row in proposable():
-        have = used.get(phrase.lower())
-        tail = f"  - already has: {'; '.join(have)[:90]}" if have else ""
-        print(f"    {phrase}  ({row.get('supply') or 0:,} listings; {sales_line(row)}){tail}")
-    print("- Best-selling first. 'sold' counts top listings with a review in the "
-          "window - a\n  review is a purchase, so it is a floor on sales, never a forecast.")
+          + f", fresh and above zero - the best {PER_PRODUCT} for each product:")
+    for product, rows in groups:
+        rows = sorted(rows, key=lambda pr: (bool(used.get(pr[0].lower())), -sales_value(pr[1])))
+        print(f"  {product.upper()} ({len(rows)} phrase{'s' if len(rows) != 1 else ''} measured):")
+        for phrase, row in rows[:PER_PRODUCT]:
+            have = used.get(phrase.lower())
+            tail = f"  - already has: {'; '.join(have)[:90]}" if have else ""
+            price = row.get("price")
+            money = (f"; x ${price:,.2f} = ${sales_value(row):,} of sales" if price else "")
+            print(f"    {phrase}  ({row.get('supply') or 0:,} listings; {sales_line(row)}{money}){tail}")
+    print("- Most money first: reviews x the typical price. 'sold' counts top listings with a\n"
+          "  review in the window - a review is a purchase, so it is a floor on sales, never a forecast.")
+    if len(groups) > 1:
+        print(f"- Spread the run across products. Code files at most {MAX_PER_PRODUCT} ideas of one "
+              f"product a run;\n  the rest of that product is refused.")
     print("- An idea on a phrase that already has one must be a clearly "
           "different design,\n  not a rewording of it.")
     print("- Every design is original. The numbers say WHAT sells; never describe, "
