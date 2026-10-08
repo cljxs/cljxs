@@ -18080,6 +18080,12 @@ class BelfortWatchesMoreThanChips(unittest.TestCase):
         for group in ("healthcare", "financials", "industrials and energy", "consumer and retail"):
             self.assertGreaterEqual(len(self.trade.CLUSTERS[group]), 4, group)
 
+    def test_space_is_its_own_group_with_spacex(self):
+        # Owner, 2026-10-08: "Can we add the space sector to it?"
+        for sym in ("SPCX", "RKLB", "ASTS", "LUNR", "PL", "RDW"):
+            self.assertIn(sym, self.fetch.UNIVERSE)
+            self.assertEqual(self.trade.cluster_of(sym), "space", sym)
+
     @staticmethod
     def q(sym, price, hist):
         return {"symbol": sym, "price": price, "macd_hist": hist, "mechanical_score": 3}

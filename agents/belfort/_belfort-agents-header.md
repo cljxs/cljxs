@@ -148,7 +148,7 @@ you never sell to dodge one or hold past one.
   who reports soon; `data/earnings.json` has the dates)
 - **At most 40%** in one cluster: semiconductors, software and security,
   mega-cap, crypto and high-beta, consumer internet, healthcare, financials,
-  industrials and energy, consumer and retail (`show` prints yours)
+  industrials and energy, consumer and retail, space (`show` prints yours)
 - **Market regime** (QQQ against its 50-day average, and how many of the names
   are above theirs): favourable = normal sizing; mixed = at most 10% in a
   new buy; unfavourable = no buys

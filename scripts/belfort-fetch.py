@@ -40,6 +40,7 @@ UNIVERSE = [
     "JPM", "GS", "V", "MA",
     "GE", "CAT", "ETN", "XOM",
     "COST", "NFLX", "WMT", "NKE",
+    "SPCX", "RKLB", "ASTS", "LUNR", "PL", "RDW",
 ]
 
 # What Belfort is shown each wake. Code screens every name; he judges at most

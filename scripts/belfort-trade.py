@@ -111,6 +111,9 @@ CLUSTERS = {
     "financials": ["JPM", "GS", "V", "MA"],
     "industrials and energy": ["GE", "CAT", "ETN", "XOM"],
     "consumer and retail": ["COST", "NFLX", "WMT", "NKE"],
+    # Owner, 2026-10-08. SpaceX listed 2026-06-12 as SPCX; 82 trading days by
+    # the day it was added, past the 60 the signals need.
+    "space": ["SPCX", "RKLB", "ASTS", "LUNR", "PL", "RDW"],
 }
 CLUSTER_CAP_PCT = 40.0
 MAX_POSITIONS = 8
