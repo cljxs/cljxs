@@ -318,6 +318,14 @@ def forget(conn, paths, video_id, including_posted=False):
     return v["title"], n, posted
 
 
+UNFINISHED = "SELECT * FROM videos WHERE stage NOT IN ('done', 'failed')"
+
+
+def unfinished(conn):
+    """Videos a run would advance - one definition, for run() and the timer."""
+    return conn.execute(UNFINISHED + " ORDER BY id").fetchall()
+
+
 def run(conn, paths, cfg, video_id=None):
     """Advance every unfinished video. One run at a time: two transcribers on
     a one-CPU droplet is two slow ones and an out-of-memory kill."""
@@ -327,8 +335,7 @@ def run(conn, paths, cfg, video_id=None):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise Busy("another Clipper run is in progress")
-        q = "SELECT * FROM videos WHERE stage NOT IN ('done', 'failed')"
-        args = ()
+        q, args = UNFINISHED, ()
         if video_id is not None:
             q, args = "SELECT * FROM videos WHERE id = ?", (video_id,)
         results = {}

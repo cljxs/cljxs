@@ -2399,6 +2399,35 @@ class TwitchChannelOnASource(unittest.TestCase):
         self.assertEqual(twitch.watched(conn), [])
 
 
+class TheTimerClipsAVideoAddedByHand(EndToEnd):
+    """2026-10-08: the Ant-Man & LaMelo episode was added with `ingest` and sat
+    unclipped for a day. The 15-minute timer (`pickup --run`) ran the pipeline
+    only when Dropbox brought a new file, and nothing told anyone to run it."""
+
+    test_permitted_video_in_captioned_short_out = None
+    test_a_failing_stage_is_retried_then_parked_then_retryable = None
+
+    def test_a_waiting_video_is_run_with_nothing_new_in_dropbox(self):
+        from unittest import mock
+        self.cli("source", "add", "tao", "--rights", "permission", "--evidence", "campaign page")
+        code, said = self.cli("ingest", "tao", str(self.video))
+        self.assertIn("within 15 minutes", said, "the owner is told it will happen")
+        ran = []
+        nothing = {"new": [], "skipped": 0, "failed": 0}
+        with mock.patch.object(cli.dropbox, "pickup", return_value=nothing), \
+             mock.patch.object(cli.pipeline, "run", side_effect=lambda *a, **k: ran.append(1)):
+            code, said = self.cli("pickup", "--run")
+        self.assertEqual((code, ran), (0, [1]), said)
+        self.assertIn("video 1: ingested", said)
+        with mock.patch.object(cli.dropbox, "pickup", return_value=nothing), \
+             mock.patch.object(cli.pipeline, "run", side_effect=lambda *a, **k: ran.append(2)):
+            conn = db.connect(self.home / "clipper.db")
+            with conn:
+                conn.execute("UPDATE videos SET stage = 'done'")
+            self.cli("pickup", "--run")
+        self.assertEqual(ran, [1], "nothing waiting: no run")
+
+
 # ---------------------------------------------------------------- the Dropbox folder pickup
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")

@@ -211,13 +211,18 @@ def cmd_pickup(a):
     print(f"Dropbox: {len(r['new'])} new video(s)"
           + (f" ({', '.join(map(str, r['new']))})" if r["new"] else "")
           + f", {r['skipped']} already picked up, {r['failed']} could not be (see clipper status)")
-    if a.run and r["new"]:
+    # Any video waiting, not only a new Dropbox one. 2026-10-08: a video added
+    # by hand with `ingest` sat unclipped for a day, because this timer only
+    # ran the pipeline when Dropbox brought something new. A video that keeps
+    # failing is parked after MAX_ATTEMPTS, so this cannot retry it forever.
+    waiting = [v["id"] for v in pipeline.unfinished(conn)]
+    if a.run and waiting:
         try:
             pipeline.run(conn, paths, cfg)
         except pipeline.Busy:
             print("a run is already going - it will get to them")
             return 0
-        for vid in r["new"]:
+        for vid in waiting:
             v = conn.execute("SELECT stage, error FROM videos WHERE id = ?", (vid,)).fetchone()
             print(f"video {vid}: {v['stage']}" + (f" - {v['error']}" if v["error"] else ""))
     return 0
@@ -231,7 +236,7 @@ def cmd_ingest(a):
     if new:
         where = " - left in place, read over the network" if a.remote else ""
         print(f"video {row['id']} ingested: {row['title']} ({row['duration'] / 60:.1f} min){where}. "
-              f"Next: clipper/.venv/bin/python -m clipper run")
+              f"Clip starts on it within 15 minutes, or now with: clipper/.venv/bin/python -m clipper run")
     else:
         print(f"already have it: video {row['id']} ({row['title']}, stage {row['stage']}) - "
               f"the same file is never processed twice")
