@@ -1253,3 +1253,37 @@ class TheFocusIsEnforcedByCode(PaulCase):
         self.run_quiet(paul.cmd_focus, self.args(kind="food", clear=False))
         _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=get)
         self.assertIn("FOCUS        a restaurant, cafe, bakery, coffee shop or food truck only", facts)
+
+
+class TheVillageSeesWhatHeBuilt(PaulCase):
+    """The owner works from an iPad, where agents/paul/sites/ cannot be opened.
+    `deck` is everything the village's Paul panel shows: newest build first,
+    whether the site and each screenshot exist, what makes it theirs, the
+    pitch - read from the files finish() wrote, never restated."""
+
+    def test_builds_newest_first_with_what_exists(self):
+        slug = "rosas-tailoring-concept-abc123"
+        paul.log_build({"day": "2026-10-07", "mode": "dry", "outcome": "below-bar", "slug": "", "name": "Joe's Diner"})
+        paul.log_build({"day": "2026-10-08", "mode": "dry", "outcome": "built", "slug": slug,
+                        "name": "Rosa's Tailoring", "kind": "trade", "layout": "x"})
+        site, box = paul.A("sites", slug), paul.A("outbox", slug)
+        site.mkdir(parents=True)
+        (site / "index.html").write_text(INDEX)
+        box.mkdir(parents=True)
+        (box / "mobile.png").write_bytes(b"\x89PNG")
+        paul.write_json(box / "target.json", target())
+        (box / "draft.md").write_text("Channel: email\n\nHi Rosa")
+        rc, out = self.run_quiet(paul.cmd_deck, self.args())
+        d = json.loads(out)
+        self.assertEqual([b["name"] for b in d["builds"]], ["Rosa's Tailoring", "Joe's Diner"])
+        rosa, joe = d["builds"]
+        self.assertEqual((rosa["site"], rosa["shots"], joe["site"]), (True, ["mobile"], False),
+                         "no desktop.png on disk, so none is offered")
+        self.assertEqual([i["detail"] for i in rosa["identity"]],
+                         [i["detail"] for i in target()["identity"]])
+        self.assertIn("Hi Rosa", rosa["draft"])
+        self.assertFalse(d["go_live"])
+
+    def test_nothing_built_is_an_empty_list_not_an_error(self):
+        rc, out = self.run_quiet(paul.cmd_deck, self.args())
+        self.assertEqual((rc, json.loads(out)["builds"]), (0, []))

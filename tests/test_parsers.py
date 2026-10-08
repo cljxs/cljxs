@@ -5429,6 +5429,37 @@ class ThePropsHallIsItsOwnBuilding(unittest.TestCase):
         self.assertIn("layPath((PROPS_PLOT.x + 2.5) * T,", self.html)
 
 
+class PaulHasAWorkshop(unittest.TestCase):
+    """Owner, 2026-10-08: show Paul's builds in the village, from an iPad,
+    where the droplet's folders cannot be opened."""
+
+    def setUp(self):
+        self.html = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        self.js = (ROOT / "mission-control-api" / "paul.js").read_text()
+
+    def test_his_house_opens_the_workshop_before_the_agent_lookup(self):
+        body = self.html.split("function openPanel(name) {", 1)[1]
+        before = body.split("(DATA.agents || []).find", 1)[0]
+        self.assertIn("if (name === 'paul') return openPaulPanel();", before)
+
+    def test_the_panel_shows_the_site_screenshots_and_pitch_escaped(self):
+        draw = self.html.split("function drawPaul(){", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("/paul/site/${encodeURIComponent(b.slug)}/", draw)
+        self.assertIn("/api/paul/shot/${encodeURIComponent(b.slug)}/${n}", draw)
+        self.assertIn("${esc(b.draft)}", draw)
+        self.assertIn("${esc(b.name)}", draw)
+        self.assertNotIn("onclick=", draw)
+
+    def test_the_routes_hold_no_rules_and_read_only_his_folders(self):
+        self.assertIn("'paul.py'), 'deck']", self.js)
+        self.assertNotIn(".exec(", self.js)
+        self.assertNotIn("app.post(", self.js, "read-only: sending and marking stay in the terminal")
+        self.assertIn("const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,80}$/;", self.js)
+        self.assertIn("dotfiles: 'deny'", self.js)
+        server = (ROOT / "mission-control-api" / "server.js").read_text()
+        self.assertIn("paulRoutes.register(app);", server)
+
+
 class ClipHasAStudio(unittest.TestCase):
     """2026-09-28: Clip, the clipping agent, and Spotter, its research
     assistant, got a building. Like the props hall it is not in PLOTS, so

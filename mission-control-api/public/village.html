@@ -272,6 +272,16 @@
   .vfoot{font-size:10px;color:var(--mute);letter-spacing:.03em;margin-top:10px;
          padding-top:8px;border-top:1px solid var(--line);line-height:1.5}
   .clipgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+  .paulbuild{margin-bottom:12px}
+  .paulshots{display:grid;grid-template-columns:1fr 2.6fr;gap:8px;margin:9px 0;align-items:start}
+  .paulshots img{width:100%;max-height:440px;object-fit:cover;object-position:top;display:block;
+    border-radius:6px;border:1px solid var(--line)}
+  .paulnoshot{border:1px dashed var(--line);border-radius:6px;padding:18px 6px;text-align:center}
+  .paulbtn{flex:1;text-align:center;padding:9px;border-radius:10px;font-size:12.5px;font-weight:600;
+    border:1px solid var(--line);color:inherit;text-decoration:none}
+  .paulids{margin:4px 0 0;padding-left:18px}
+  .pauldraft summary{cursor:pointer;font-size:12.5px;margin-top:8px}
+  .pauldraft pre{white-space:pre-wrap;font:12px/1.5 inherit;margin:6px 0 0}
   #clipSpot a, #clipClips a{color:#7dd3fc}
   /* Four buttons do not fit across a 150px card: a 2x2 grid keeps each one
      inside its own card instead of spilling into the next (seen in a screenshot). */
@@ -2021,6 +2031,9 @@ function openPanel(name) {
   // Belfort's house is his trading desk: the Markets page, the same one
   // the Deck opens as a tab (owner, 2026-10-06).
   if (name === 'belfort') return openMarkets();
+  // Paul's house is his workshop: what he built, as it looks, and the site
+  // itself to open (owner, 2026-10-08).
+  if (name === 'paul') return openPaulPanel();
   const a = (DATA.agents || []).find(x => x.name === name);
   if (!a) return;
   openAgent = name;
@@ -2858,6 +2871,82 @@ const clock = sec => {
 };
 const big = n => (n === null || n === undefined) ? '—'
   : n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'K' : String(Math.round(n));
+
+/* ---------------- Paul's workshop ---------------- */
+
+let PAUL = null;
+const PAUL_DOOR = 'paul';
+
+function openPaulPanel(){
+  openAgent = PAUL_DOOR;
+  $('card').innerHTML = `
+    <h2>Paul</h2>
+    <div class="sub">website builder · finds a local business with a poor or no website, builds
+      it a site of its own, and drafts a pitch that you send yourself</div>
+    <div id="paulStatus"><div class="muted">loading…</div></div>
+    <div class="sect">What he built</div>
+    <div id="paulBuilds"></div>
+    <button id="close">Close</button>`;
+  $('card').className = 'wide';
+  $('panel').style.display = 'flex';
+  $('close').onclick = closePanel;
+  loadPaul();
+}
+
+async function loadPaul(){
+  try { PAUL = await (await fetch('/api/paul', { cache: 'no-store' })).json(); }
+  catch (e) { PAUL = { ok: false, error: e.message }; }
+  if (openAgent === PAUL_DOOR) drawPaul();
+}
+
+function drawPaul(){
+  if (openAgent !== PAUL_DOOR) return;
+  const p = PAUL || {};
+  if (!p.ok) {
+    $('paulStatus').innerHTML = `<div class="verdict">Paul's records could not be read${p.error ? ' — ' + esc(p.error) : ''}.</div>`;
+    $('paulBuilds').innerHTML = '';
+    return;
+  }
+  const mode = p.go_live ? 'live: previews are published for you to send'
+    : 'dry runs only: sites are built here and never published';
+  $('paulStatus').innerHTML = `<div class="verdict">
+      <div><b>Last run:</b> ${esc(p.last_run || 'never')}</div>
+      <div class="muted">${esc(mode)}${p.waiting ? ` · <b>${p.waiting}</b> pitch(es) waiting for you` : ''}
+        ${p.dry_next ? ' · the next run is a dry run' : ''}${p.focus ? ' · focus: ' + esc(p.focus) : ''}</div>
+    </div>`;
+  const all = p.builds || [];
+  const built = all.filter(b => b.site);
+  const other = all.filter(b => !b.site);
+  let html = built.map(b => {
+    const shot = n => b.shots.includes(n)
+      ? `<a href="/api/paul/shot/${encodeURIComponent(b.slug)}/${n}" target="_blank" rel="noopener">
+           <img src="/api/paul/shot/${encodeURIComponent(b.slug)}/${n}" alt="${esc(b.name)} on a ${n === 'mobile' ? 'phone' : 'computer'}" loading="lazy"></a>`
+      : `<div class="muted paulnoshot">no ${n} screenshot</div>`;
+    const ids = (b.identity || []).map(i => `<li>${esc(i.detail || '')}
+        ${i.source ? `· <a href="${esc(i.source)}" target="_blank" rel="noopener">source</a>` : ''}</li>`).join('');
+    return `<div class="idea paulbuild">
+      <div class="t">${esc(b.name)}</div>
+      <div class="ktags"><span class="pill">${esc(b.day || '')}</span>
+        <span class="pill">${b.mode === 'live' ? 'live' : 'dry run'}</span>
+        ${b.kind ? `<span class="pill">${esc(b.kind)}</span>` : ''}
+        ${b.status ? `<span class="pill">${esc(b.status)}</span>` : ''}</div>
+      <div class="paulshots">${shot('mobile')}${shot('desktop')}</div>
+      <div class="acts"><a class="paulbtn" href="/paul/site/${encodeURIComponent(b.slug)}/" target="_blank" rel="noopener">Open the site</a>
+        ${b.preview_url ? `<a class="paulbtn" href="${esc(b.preview_url)}" target="_blank" rel="noopener">Live preview</a>` : ''}</div>
+      ${ids ? `<div class="d"><b>What makes it theirs</b><ul class="paulids">${ids}</ul></div>` : ''}
+      ${b.notes ? `<div class="d"><b>Paul's notes:</b> ${esc(b.notes)}</div>` : ''}
+      ${b.draft ? `<details class="pauldraft"><summary>The pitch he drafted</summary><pre>${esc(b.draft)}</pre></details>` : ''}
+      ${b.teardown ? `<div class="muted">preview comes down ${esc(b.teardown)}</div>` : ''}
+    </div>`;
+  }).join('');
+  if (other.length) {
+    html += `<div class="sect">Runs without a site</div>` + other.map(b =>
+      `<div class="muted">${esc(b.day || '')} · ${esc(b.name || 'no business')} — ${esc(b.outcome || '')}</div>`).join('');
+  }
+  $('paulBuilds').innerHTML = html || `<div class="muted">Nothing built yet. A dry run builds one site without
+    publishing anything or contacting anyone:<br><b>python3 scripts/paul.py dry-next &amp;&amp;
+    systemctl start --no-block paul-cycle.service</b></div>`;
+}
 
 function openClipPanel(){
   openAgent = CLIP_DOOR;

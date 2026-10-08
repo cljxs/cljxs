@@ -1751,6 +1751,48 @@ def cmd_status(a):
     return 0
 
 
+DECK_BUILDS = 12
+
+
+def cmd_deck(a):
+    """Everything the village's Paul panel shows, as JSON - the panel holds
+    no rules, so it and `status` cannot disagree. Newest build first."""
+    rows = {r["slug"]: r for r in contacted() if r.get("slug")}
+    deps = {d["slug"]: d for d in deployments() if d.get("slug")}
+    out = []
+    for b in reversed(builds()):
+        slug = str(b.get("slug") or "")
+        site, box = A("sites", slug), A("outbox", slug)
+        t = read_json(box / "target.json", {}) if slug else {}
+        draft = box / "draft.md"
+        out.append({
+            "day": b.get("day"), "mode": b.get("mode"), "outcome": b.get("outcome"),
+            "slug": slug, "name": b.get("name"), "kind": b.get("kind"), "layout": b.get("layout"),
+            "site": bool(slug) and (site / "index.html").is_file(),
+            "shots": [n for n, _w, _h in SHOTS if slug and (box / f"{n}.png").is_file()],
+            "preview_url": (deps.get(slug) or {}).get("preview_url") or None,
+            "teardown": (deps.get(slug) or {}).get("teardown") or None,
+            "status": (rows.get(slug) or {}).get("status") or None,
+            "identity": [{"detail": r.get("detail"), "source": r.get("source")}
+                         for r in (t or {}).get("identity") or [] if isinstance(r, dict)],
+            "notes": (t or {}).get("notes") or None,
+            "draft": draft.read_text(errors="replace") if draft.is_file() else None,
+        })
+        if len(out) >= DECK_BUILDS:
+            break
+    lr = A("state", "last-run.txt")
+    live = read_json(A("state", "live.json"))
+    print(json.dumps({
+        "today": today(),
+        "last_run": lr.read_text().strip() if lr.is_file() else None,
+        "go_live": bool(live), "dry_next": A("state", "dry-next").is_file(),
+        "focus": focus_kind(),
+        "waiting": sum(1 for r in contacted() if r["status"] == "drafted"),
+        "builds": out,
+    }))
+    return 0
+
+
 def _find(key):
     rows = contacted()
     hit = [r for r in rows if r["slug"] and r["slug"] == key] or \
@@ -2312,6 +2354,7 @@ def main(argv=None):
     p.add_argument("--anyway", action="store_true", help="skip the seen-a-dry-cycle check")
     p = sub.add_parser("dry-next", help="make the next paul-cycle.service run a dry cycle")
     p.add_argument("--take", action="store_true", help=argparse.SUPPRESS)
+    sub.add_parser("deck", help="(village) everything the Paul panel shows, as JSON")
     p = sub.add_parser("focus", help="look only for one kind of business, until cleared")
     p.add_argument("kind", nargs="?", help=f"one of: {', '.join(KINDS)}")
     p.add_argument("--clear", action="store_true")
@@ -2331,7 +2374,7 @@ def main(argv=None):
     return {"init": cmd_init, "sender": cmd_sender, "preflight": cmd_preflight,
             "status": cmd_status, "mark": cmd_mark, "exclude": cmd_exclude,
             "teardown": cmd_teardown, "go-live": cmd_go_live, "dry-next": cmd_dry_next,
-            "focus": cmd_focus,
+            "focus": cmd_focus, "deck": cmd_deck,
             "should-run": cmd_should_run, "brief": cmd_brief, "finish": cmd_finish,
             "seen": cmd_seen, "check": cmd_check}[a.cmd](a)
 
