@@ -152,6 +152,8 @@ REFERENCES = (
 DEMO_FACTS = ("555-0188", "555-0142", "555-0173", "41207", "4,200+ jobs",
               "1109 woodland", "rourke", "ferngrove", "vellum", "repair champion",
               "austin furniture")
+# templates/<kind>/ marks what Paul fills in as {{NAME}}, {{HERO_IMG}} ...
+TEMPLATE_SLOT = re.compile(r"\{\{\s*[A-Z][A-Z0-9_]*\s*\}\}")
 FICTIONAL_PHONE = re.compile(r"(?<!\d)555[\s.-]?01\d\d(?!\d)")
 
 # Copy that talks about the site instead of the business, and leftovers.
@@ -766,6 +768,11 @@ def scan_site(site):
     texts = []
     for page in pages:
         markup = strip_note(page.read_text(errors="replace"))
+        # A template slot nobody filled - in text, an alt or a link alike.
+        left = sorted(set(TEMPLATE_SLOT.findall(markup)))
+        if left:
+            out["errors"].append(f"{page.relative_to(site).as_posix()}: template slots left unfilled: "
+                                 f"{', '.join(left[:6])} - fill each one, or delete the block it is in")
         pr = _Page()
         try:
             pr.feed(markup)
@@ -1379,12 +1386,14 @@ def concept_note(business, studio):
 
 def apply_safeguards(site, business, studio):
     """noindex on every page, the footer on every page, robots.txt,
-    vercel.json with the header, and no sitemap. Idempotent."""
+    vercel.json with the header, and no sitemap. Idempotent. HTML comments
+    go too: the template's say "target.json" and "the owner", and anyone can
+    read a page's source."""
     site = Path(site)
     note = concept_note(business, studio)
     meta = f'<meta name="robots" content="{NOINDEX}">'
     for page in sorted(site.rglob("*.html")):
-        markup = page.read_text(errors="replace")
+        markup = re.sub(r"(?s)<!--.*?-->\n?", "", page.read_text(errors="replace"))
         markup = re.sub(rf'(?is)<p[^>]*id="{CONCEPT_ID}"[^>]*>.*?</p>', "", markup)
         markup = re.sub(r'(?i)<meta[^>]+name=["\']robots["\'][^>]*>', "", markup)
         if re.search(r"(?i)<head[^>]*>", markup):

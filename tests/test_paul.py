@@ -1107,3 +1107,81 @@ class EveryClaimHasASource(SiteRules):
     def test_ordinary_copy_is_not_a_claim(self):
         self.assertEqual(self.errors(index=INDEX.replace(
             "<main>", "<main><p>Walk-ins welcome. Bring the dress, we will pin it.</p>")), [])
+
+
+TEMPLATE = ROOT / "agents" / "paul" / "templates" / "cafe"
+
+
+def fill_template(site, t):
+    """Every {{SLOT}} in a copy of the cafe template, filled the way Paul is
+    told to: real facts in, images and links pointing at files that exist."""
+    import re
+    shutil.copytree(TEMPLATE, site, dirs_exist_ok=True)
+    street, rest = t["address"].split(", ", 1)
+    values = {"NAME": t["name"], "PHONE": t["phone"], "PHONE_TEL": "+1" + paul.norm_phone(t["phone"]),
+              "ADDRESS_LINE1": street, "ADDRESS_LINE2": rest, "TOWN": "Austin, Texas"}
+    def one(m):
+        k = m.group(1)
+        if k in values:
+            return values[k]
+        if k.endswith("_IMG"):
+            return "icon.svg"
+        if k.endswith("_URL"):
+            return "https://maps.google.com/?q=1801+E+7th+St"
+        return "$4.00" if k.endswith("PRICE") else "Coffee and pastries"
+    page = site / "index.html"
+    page.write_text(re.sub(r"\{\{([A-Z0-9_]+)\}\}", one, page.read_text()))
+
+
+class TheCafeTemplate(unittest.TestCase):
+    """The owner's chosen look for restaurants and cafes (2026-10-08): light,
+    warm, a mark that draws itself once, rows that scroll sideways. Paul fills
+    it rather than designing from a blank page - so the template itself must
+    pass every rule Paul is held to, or every cafe site starts out refused."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.site = Path(self.tmp.name) / "site"
+        self.t = target(name="Hollow Oak Coffee", category="cafe", kind="food", photos=[], claims=[])
+
+    def test_a_filled_template_passes_every_site_check(self):
+        fill_template(self.site, self.t)
+        errs, info = paul.check_site(self.site, self.t)
+        self.assertEqual(errs, [])
+        self.assertEqual(info["pages"], 1)
+
+    def test_a_slot_left_unfilled_is_refused_by_name(self):
+        fill_template(self.site, self.t)
+        page = self.site / "index.html"
+        page.write_text(page.read_text().replace('alt="Coffee and pastries"', 'alt="{{HERO_ALT}}"', 1))
+        errs, _ = paul.check_site(self.site, self.t)
+        self.assertTrue(any("template slots left unfilled: {{HERO_ALT}}" in e for e in errs), errs)
+
+    def test_the_template_as_shipped_is_refused(self):
+        shutil.copytree(TEMPLATE, self.site)
+        errs, _ = paul.check_site(self.site, self.t)
+        self.assertTrue(any("template slots left unfilled" in e for e in errs), errs)
+
+    def test_its_notes_to_paul_never_reach_a_visitor(self):
+        fill_template(self.site, self.t)
+        self.assertIn("target.json", (self.site / "index.html").read_text(), "the template does carry them")
+        paul.apply_safeguards(self.site, self.t["name"], "Sam Studio")
+        html = (self.site / "index.html").read_text()
+        self.assertNotIn("<!--", html)
+        self.assertNotIn("target.json", html)
+        self.assertIn('class="intro"', html, "only the comments went")
+
+    def test_the_header_sends_food_businesses_to_it_and_names_marks_that_exist(self):
+        header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
+        self.assertIn("cp -r templates/cafe/. work/site/", header)
+        for mark in ("cup", "fork-knife", "whisk", "wheat", "bowl", "pizza"):
+            self.assertIn(mark, header)
+            self.assertTrue((TEMPLATE / "img" / "marks" / f"{mark}.svg").is_file(), mark)
+        self.assertTrue((TEMPLATE / "img" / "icon.svg").is_file(), "a favicon is required")
+
+    def test_the_intro_never_plays_for_people_who_ask_for_less_motion(self):
+        css = (TEMPLATE / "style.css").read_text()
+        reduced = css.split("@media (prefers-reduced-motion: reduce)", 1)[1].split("}", 1)[0]
+        self.assertIn(".intro { display: none;", reduced)
+        self.assertIn(".seen .intro { display: none; }", css, "once per visit")
