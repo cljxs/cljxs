@@ -150,7 +150,7 @@ class PaulCase(unittest.TestCase):
         w = paul.A("work")
         (w / "site" / "img").mkdir(parents=True, exist_ok=True)
         (w / "site" / "index.html").write_text(index)
-        (w / "site" / "style.css").write_text("body{margin:0}")
+        (w / "site" / "style.css").write_text("/* Paul's site template (test fixture) */ body{margin:0}")
         (w / "site" / "img" / "hero.jpg").write_bytes(b"\xff\xd8" + b"0" * 5000)
         (w / "site" / "img" / "icon.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
         (w / "target.json").write_text(json.dumps(t or target()))
@@ -1109,11 +1109,11 @@ class EveryClaimHasASource(SiteRules):
             "<main>", "<main><p>Walk-ins welcome. Bring the dress, we will pin it.</p>")), [])
 
 
-TEMPLATE = ROOT / "agents" / "paul" / "templates" / "cafe"
+TEMPLATE = ROOT / "agents" / "paul" / "templates" / "local"
 
 
 def fill_template(site, t):
-    """Every {{SLOT}} in a copy of the cafe template, filled the way Paul is
+    """Every {{SLOT}} in a copy of the site template, filled the way Paul is
     told to: real facts in, images and links pointing at files that exist."""
     import re
     shutil.copytree(TEMPLATE, site, dirs_exist_ok=True)
@@ -1174,8 +1174,9 @@ class TheCafeTemplate(unittest.TestCase):
 
     def test_the_header_sends_food_businesses_to_it_and_names_marks_that_exist(self):
         header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
-        self.assertIn("cp -r templates/cafe/. work/site/", header)
-        for mark in ("cup", "fork-knife", "whisk", "wheat", "bowl", "pizza"):
+        self.assertIn("cp -r templates/local/. work/site/", header)
+        for mark in ("cup", "fork-knife", "whisk", "wheat", "bowl", "pizza", "scissors", "barber-pole",
+                     "comb", "wrench", "hammer", "house", "leaf", "paw", "car", "bag"):
             self.assertIn(mark, header)
             self.assertTrue((TEMPLATE / "img" / "marks" / f"{mark}.svg").is_file(), mark)
         self.assertTrue((TEMPLATE / "img" / "icon.svg").is_file(), "a favicon is required")
@@ -1219,7 +1220,7 @@ class TheFocusIsEnforcedByCode(PaulCase):
         _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=get)
         self.assertIn("FOCUS        a restaurant, cafe, bakery, coffee shop or food truck only", facts)
 
-    def test_a_food_site_designed_from_blank_is_refused(self):
+    def test_a_site_designed_from_blank_is_refused_whatever_the_kind(self):
         site = self.root / "blank"
         site.mkdir()
         (site / "index.html").write_text(INDEX)
@@ -1227,7 +1228,6 @@ class TheFocusIsEnforcedByCode(PaulCase):
         (site / "img").mkdir()
         (site / "img" / "icon.svg").write_text("<svg/>")
         (site / "img" / "hero.jpg").write_bytes(b"\xff\xd8" + b"0" * 5000)
-        t = target()
-        self.assertFalse([e for e in paul.check_site(site, t)[0] if "template" in e], "a tailor may")
-        errs, _ = paul.check_site(site, dict(t, kind="food"))
-        self.assertTrue(any("cp -r templates/cafe/. work/site/" in e for e in errs), errs)
+        for kind in ("trade", "food"):
+            errs, _ = paul.check_site(site, target(kind=kind))
+            self.assertTrue(any("cp -r templates/local/. work/site/" in e for e in errs), (kind, errs))

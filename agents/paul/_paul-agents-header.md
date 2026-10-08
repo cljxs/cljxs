@@ -99,30 +99,33 @@ it can disprove fails the check.
 
 ## 3. Build work/site/
 
-**Restaurants, cafes, bakeries, coffee shops, food trucks: start from the
-template.** It is the owner's chosen look (2026-10-08) and it already passes
-every check below, so your job is their content, not a design:
+**Every site starts from the template.** It is the owner's chosen look
+(2026-10-08) and it already passes every check below, so your job is their
+content, not a design. Code refuses a site that does not start from it:
 
-    mkdir -p work/site && cp -r templates/cafe/. work/site/
+    mkdir -p work/site && cp -r templates/local/. work/site/
 
 1. Fill every `{{SLOT}}` with their real facts. Code refuses a page with one
-   left. Copy each `<!-- repeat -->` block once per item (their favourites,
-   menu sections, dishes); delete a block or section they have nothing true
-   for. The customer-quotes section is deleted unless every quote is word for
-   word from a public review, with a link, listed in `claims`.
+   left. `{{OFFER_NAV}}` is one word for what they sell: Menu, Services,
+   Shop or Prices. Copy each `<!-- repeat -->` block once per item (what
+   they are known for, each section of their menu or price list, each
+   line); delete a block or section they have nothing true for. The
+   customer-quotes section is deleted unless every quote is word for word
+   from a public review, with a link, listed in `claims`.
 2. Colours: the four at the top of `style.css`, taken from the business -
-   its sign, its cups, its room. Nothing else in the CSS changes. Keep the
-   layout, spacing and fonts; they are the point.
-3. The mark: pick the drawing in `img/marks/` that fits what they make (cup,
-   fork-knife, whisk, wheat, bowl, pizza). Copy it over `img/icon.svg`, set
-   its stroke to their colour, and paste its `<path>`s into the three inline
-   `<svg class="mark">` in index.html (intro, header, hero background) - the
-   intro draws that mark, so it must be theirs.
+   its sign, its storefront, its photos. Nothing else in the CSS changes.
+   Keep the layout, spacing and fonts; they are the point.
+3. The mark: pick the drawing in `img/marks/` that fits their trade (cup,
+   fork-knife, whisk, wheat, bowl, pizza, scissors, barber-pole, comb,
+   wrench, hammer, house, leaf, paw, car, bag). Copy it over `img/icon.svg`,
+   set its stroke to their colour, and paste its `<path>`s into the three
+   inline `<svg class="mark">` in index.html (intro, header, hero
+   background) - the intro draws that mark, so it must fit them.
 4. Leave the template's HTML comments; code removes them before publishing.
 
-Other businesses: open the reference closest to the category (FACTS lists
-the ones that load today; `curl -s <url>` shows the HTML and CSS) and match
-its quality, not its layout. A stranger should think they paid for this.
+The references in FACTS are for judging quality - how a good site in their
+category reads - not a layout to copy. A stranger should think they paid
+for this.
 
 - **Layout fits the business.** Trades - a full-bleed real-photo hero,
   headline, a call/quote button, a trust row (years, rating and count,

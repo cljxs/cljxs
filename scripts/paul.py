@@ -876,9 +876,10 @@ def cmd_focus(a):
     return 0
 
 
-# A food business's site starts from templates/cafe (the owner's chosen look).
-# Its stylesheet opens with this line; a page designed from blank does not.
-CAFE_TEMPLATE_MARK = "Paul's cafe and restaurant template"
+# Every site starts from templates/local, the owner's chosen look (2026-10-08:
+# "we're targeting any business that has a poor or no website"). Its
+# stylesheet opens with this line; a page designed from blank does not.
+TEMPLATE_MARK = "Paul's site template"
 
 
 def validate_target(t):
@@ -1142,9 +1143,9 @@ def check_site(site, t, old_page=None):
 
     errs += look_and_law(sc)
     errs += claim_problems(sc["text"], t)
-    if t.get("kind") == "food" and not any(CAFE_TEMPLATE_MARK in c for c in sc["css"]):
-        errs.append("a food business starts from the template: "
-                    "mkdir -p work/site && cp -r templates/cafe/. work/site/ - then fill it in")
+    if not any(TEMPLATE_MARK in c for c in sc["css"]):
+        errs.append("every site starts from the template: "
+                    "mkdir -p work/site && cp -r templates/local/. work/site/ - then fill it in")
 
     photos = {str(p.get("file") or "").lstrip("./").removeprefix("site/"): p
               for p in (t.get("photos") or []) if isinstance(p, dict)}

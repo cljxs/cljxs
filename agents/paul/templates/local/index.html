@@ -45,7 +45,7 @@
       <span>{{NAME}}</span>
     </a>
     <nav class="nav" aria-label="Sections">
-      <a href="#menu">Menu</a>
+      <a href="#offer">{{OFFER_NAV}}</a>
       <a href="#visit">Hours &amp; location</a>
       <a href="#about">About</a>
     </nav>
@@ -81,13 +81,16 @@
     </div>
   </section>
 
-  <!-- FAVOURITES: a row that scrolls sideways. Four to eight things they are
-       known for, each with its own photo where they have one. Names and prices
-       exactly as their menu has them; no price on their menu, no price here. -->
-  <section class="section" id="menu" aria-labelledby="fav-title">
+  <!-- WHAT THEY OFFER. {{OFFER_NAV}} is one word for what they sell: Menu
+       (food), Services (barbers, salons, trades), Shop (retail), Prices.
+       FAVOURITES: a row that scrolls sideways - four to eight things they are
+       known for (dishes, cuts, jobs, products), each with a photo where they
+       have one. Names and prices exactly as their own menu or price list has
+       them; no price published, no price here. -->
+  <section class="section" id="offer" aria-labelledby="fav-title">
     <div class="wrap row-head">
       <div>
-        <p class="label">The menu</p>
+        <p class="label">{{OFFER_NAV}}</p>
         <h2 id="fav-title">{{FAVOURITES_TITLE}}</h2>
       </div>
       <div class="row-arrows">
@@ -112,25 +115,28 @@
       <!-- end repeat -->
     </div>
 
-    <!-- THE FULL MENU: their sections and items, as their menu has them. -->
+    <!-- THE FULL LIST: their sections and items - a menu, a price list, the
+         jobs they do - as they publish it. A trade with no prices lists the
+         work and leaves the price span out. -->
     <div class="wrap menu">
-      <!-- repeat: one <div class="menu-group"> per menu section -->
+      <!-- repeat: one <div class="menu-group"> per section -->
       <div class="menu-group">
         <h3>{{SECTION}}</h3>
         <ul>
           <!-- repeat: one <li> per item -->
-          <li><span>{{DISH}}</span><span class="dots" aria-hidden="true"></span><span>{{DISH_PRICE}}</span></li>
+          <li><span>{{LINE}}</span><span class="dots" aria-hidden="true"></span><span>{{LINE_PRICE}}</span></li>
           <!-- end repeat -->
         </ul>
       </div>
       <!-- end repeat -->
-      <!-- Keep this link if their menu lives somewhere (a PDF, their Facebook,
-           an ordering page); otherwise delete the paragraph. -->
-      <p class="menu-more"><a href="{{MENU_URL}}">See the full menu</a></p>
+      <!-- Keep this link if their full list lives somewhere (a menu PDF,
+           their Facebook, a booking or ordering page); otherwise delete it.
+           MORE_TEXT says where it goes: "See the full menu", "Book online". -->
+      <p class="menu-more"><a href="{{MORE_URL}}">{{MORE_TEXT}}</a></p>
     </div>
   </section>
 
-  <!-- A wide photo between sections: their room, their counter, their food.
+  <!-- A wide photo between sections: their room, their counter, their work.
        No caption that claims a stock photo is theirs. -->
   <div class="band">
     <img src="img/{{BAND_IMG}}" alt="{{BAND_ALT}}" width="2000" height="900" loading="lazy">
