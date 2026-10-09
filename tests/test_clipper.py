@@ -359,6 +359,72 @@ class FramingOnRealFaces(unittest.TestCase):
         self.assertEqual(info["framing"], "4 shot(s): split 0-2s, crop 2-4s, full 4-6s, crop 6-8s")
 
 
+class APictureOfAFaceIsNotAPerson(unittest.TestCase):
+    """Owner, 2026-10-09: a Gil's Arena clip split the screen between a host
+    and the mural behind the couch (LeBron and Harden, printed). A real face
+    changes between sightings; a printed one does not."""
+
+    @staticmethod
+    def face(cx, motion, t):
+        import numpy as np
+        rng = np.random.default_rng(int(cx))
+        base = rng.integers(60, 200, (framing.THUMB, framing.THUMB)).astype(np.float32)
+        thumb = np.clip(base + (motion if t % 2 else 0), 0, 255).astype(np.uint8)
+        return (cx, 500, 120, 150, thumb)
+
+    def samples(self, *faces):
+        return [(k / 5, [self.face(cx, m, k) for cx, m in faces]) for k in range(10)]
+
+    @unittest.skipUnless(HAVE_CV2, "needs numpy")
+    def test_a_still_face_beside_a_live_one_is_dropped(self):
+        got = framing.people(self.samples((300, 0.0), (1400, 8.0)), 1920)
+        self.assertEqual([round(p[0]) for p in got], [1400])
+
+    @unittest.skipUnless(HAVE_CV2, "needs numpy")
+    def test_a_quiet_listener_is_still_a_person(self):
+        # 3.4 beside 7.8 on the interview: 44% of the speaker - kept.
+        got = framing.people(self.samples((300, 3.4), (1400, 7.8)), 1920)
+        self.assertEqual([round(p[0]) for p in got], [300, 1400])
+
+    @unittest.skipUnless(HAVE_CV2, "needs numpy")
+    def test_a_quiet_face_beside_a_very_animated_one_stays(self):
+        # 2.0 is under 30% of 15, but over STILL_MAX: in doubt, a person.
+        got = framing.people(self.samples((300, 2.0), (1400, 15.0)), 1920)
+        self.assertEqual(len(got), 2)
+
+    @unittest.skipUnless(HAVE_CV2, "needs numpy")
+    def test_a_shot_of_only_still_faces_keeps_them_all(self):
+        # A photo on screen, a frozen frame: nothing to tell real faces by.
+        got = framing.people(self.samples((300, 0.0), (1400, 1.0)), 1920)   # 1.0: under LIVE_MIN
+        self.assertEqual(len(got), 2)
+
+    @unittest.skipUnless(HAVE_CV2 and shutil.which("ffmpeg"), "needs OpenCV and ffmpeg")
+    def test_on_real_footage_the_mural_is_ignored(self):
+        # A public-domain interview (fixtures/faces/talking.mp4) with a still
+        # portrait pasted beside her: one live face, one picture of a face.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        out = Path(tmp.name) / "mural.mp4"
+        faces = Path(__file__).parent / "fixtures" / "faces"
+        subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(faces / "talking.mp4"),
+                        "-loop", "1", "-i", str(faces / "person1.jpg"), "-filter_complex",
+                        "color=c=0x302040:s=1920x1080:d=4[bg];[0:v]scale=960:-2[t];[1:v]scale=-2:420[p];"
+                        "[bg][t]overlay=900:400[a];[a][p]overlay=60:330:shortest=1",
+                        "-t", "4", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(out)],
+                       check=True)
+        info = media.probe(out)
+        cuts, seen = framing.look(out, 0.0, 4.0, info)
+        report = []
+        folk = framing.people(seen, info["width"], report)
+        self.assertGreaterEqual(len(report), 2, "the portrait and she are both found")
+        self.assertLess(min(report), 0.5, "the portrait does not change")
+        self.assertGreater(max(report), framing.LIVE_MIN, "she does")
+        self.assertFalse([p for p in folk if p[0] < 600], "the portrait is not a person")
+        self.assertTrue([p for p in folk if p[0] > 900], "she is")
+        plan = framing.plan(out, 0.0, 4.0, info)
+        self.assertEqual([s["layout"] for s in plan], ["crop"], "no split with a picture")
+
+
 class FramingFallsBackToTheCentre(unittest.TestCase):
     def test_no_opencv_is_a_centre_crop_said_out_loud(self):
         real = framing.plan

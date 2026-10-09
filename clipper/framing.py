@@ -54,6 +54,24 @@ CLUSTER_GAP = 0.10          # of the frame's width: faces closer than this are o
 SHARE = 0.85                # faces spanning under this much of a strip can share it
 SPLIT_FACES = 4.5           # a split half is this many face heights tall...
 SPLIT_MIN = 0.35            # ...but at least this much of the frame's height
+THUMB = 24                  # px: each sighting keeps a grey thumbnail of the face this big
+# A face that never changes is a picture of one: Gil's Arena's set has a mural
+# of LeBron and Harden behind the couch, and a clip split the screen between
+# a host and the mural (owner, 2026-10-09). A real face blinks, talks and
+# moves. When a shot has a face that changes at least LIVE_MIN (mean grey
+# levels between sightings), a face changing less than STILL_SHARE of it is
+# dropped. A shot whose faces are ALL still - a photo on screen, a frozen
+# frame - is left alone: there is nothing to tell the real ones by.
+# Measured 2026-10-09 on a public-domain interview (archive.org, "News Now -
+# Evelyn Gomez") with a still portrait pasted beside her: the portrait 0.0,
+# people talking 5.8-8.9, a quiet listener 3.4 (44% of the speaker beside him).
+# A face goes only if it is under BOTH: a share of the liveliest face, and an
+# absolute ceiling - so a quiet listener beside a very animated speaker stays.
+# On grainy footage blown up 2.2x a still wall sketch read 3.3, as much as the
+# listener: in doubt, a face is kept, which is how framing behaved before.
+LIVE_MIN = 3.0
+STILL_SHARE = 0.3
+STILL_MAX = 1.5
 
 
 class FramingUnavailable(Exception):
@@ -107,10 +125,15 @@ def look(src, start, end, info):
             if i % DETECT_EVERY == 0:
                 _, found = det.detect(frame)
                 boxes = []
+                grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 for f in (found if found is not None else []):
                     x, y, w, h = (float(v) * scale for v in f[:4])
                     if h >= MIN_FACE * sh:
-                        boxes.append((x + w / 2, y + h / 2, w, h))
+                        fx, fy, fw, fh = (int(round(float(v))) for v in f[:4])
+                        patch = grey[max(0, fy):max(0, fy) + max(1, fh), max(0, fx):max(0, fx) + max(1, fw)]
+                        thumb = cv2.resize(patch, (THUMB, THUMB), interpolation=cv2.INTER_AREA) \
+                            if patch.size else None
+                        boxes.append((x + w / 2, y + h / 2, w, h, thumb))
                 faces.append((i / SAMPLE_FPS, boxes))
             i += 1
         err = p.stderr.read().decode(errors="replace")
@@ -145,25 +168,44 @@ def shots(cuts, duration):
     return out
 
 
-def people(samples, sw):
+def motion(sightings):
+    """How much a face changes between sightings: the median mean grey
+    difference of its thumbnails, in time order. None without thumbnails."""
+    thumbs = [b[4] for _t, b in sorted(sightings, key=lambda x: x[0]) if len(b) > 4 and b[4] is not None]
+    if len(thumbs) < 3:
+        return None
+    import numpy as np
+    diffs = [float(np.abs(a.astype(np.float32) - b.astype(np.float32)).mean()) for a, b in zip(thumbs, thumbs[1:])]
+    return statistics.median(diffs)
+
+
+def people(samples, sw, report=None):
     """The people in one shot's samples: [(cx, cy, w, h)] by x, each the median
-    of its sightings, kept only if seen in MIN_SEEN of the samples."""
+    of its sightings, kept only if seen in MIN_SEEN of the samples - and, when
+    the shot has a face that clearly moves, only if it moves too (a mural is
+    not a person). `report`, a list, gets each face's motion."""
     if not samples:
         return []
-    seen = sorted((b for _, boxes in samples for b in boxes), key=lambda b: b[0])
+    seen = sorted(((t, b) for t, boxes in samples for b in boxes), key=lambda tb: tb[1][0])
     groups = []
-    for b in seen:
-        if groups and b[0] - groups[-1][-1][0] <= CLUSTER_GAP * sw:
-            groups[-1].append(b)
+    for tb in seen:
+        if groups and tb[1][0] - groups[-1][-1][1][0] <= CLUSTER_GAP * sw:
+            groups[-1].append(tb)
         else:
-            groups.append([b])
-    out, gap = [], CLUSTER_GAP * sw
+            groups.append([tb])
+    kept, gap = [], CLUSTER_GAP * sw
     for g in groups:
-        lo, hi = g[0][0] - gap, g[-1][0] + gap
+        lo, hi = g[0][1][0] - gap, g[-1][1][0] + gap
         frames = sum(1 for _, boxes in samples if any(lo <= x[0] <= hi for x in boxes))
         if frames >= MIN_SEEN * len(samples):
-            out.append(tuple(statistics.median(b[k] for b in g) for k in range(4)))
-    return out
+            kept.append((tuple(statistics.median(b[k] for _t, b in g) for k in range(4)), motion(g)))
+    moves = [m for _p, m in kept if m is not None]
+    live = max(moves) if moves else None
+    if report is not None:
+        report.extend(m for _p, m in kept)
+    if live is not None and LIVE_MIN is not None and live >= LIVE_MIN:
+        kept = [(p, m) for p, m in kept if m is None or m >= min(STILL_SHARE * live, STILL_MAX)]
+    return [p for p, _m in kept]
 
 
 def clamp(v, lo, hi):

@@ -25,6 +25,7 @@ Provenance of each file, and how to refresh it:
 | `dns-google-mx-null.json` | the same lookup for example.com: a null MX (`0 .`, RFC 7505 - accepts no mail) | fetched 2026-10-06 |
 | `dns-google-mx-gmail.json` | the same lookup for gmail.com: real mail servers | fetched 2026-10-06 |
 | `faces/person1-4.jpg` | head-and-shoulders crops of four astronauts, the faces framing.py must find | cut on 2026-10-07 from NASA's official Expedition 4 and Expedition 61 crew portraits (images.nasa.gov `iss004-s-002`, `jsc2019e022584_alt`; public domain) around the faces YuNet found in them; the test builds its four camera shots from these |
+| `faces/talking.mp4` | 4 s of a real person talking to camera, 640 px, the face framing.py must tell from a picture of a face | cut on 2026-10-09 from "Belmont Journal / News Now - Evelyn Gomez 07/27/20" (archive.org, the item `snafuinfinity` + `news-now_072720-evelyn-gomez`, Public Domain Mark 1.0), 24-28 s, close-up only; on the full clip a still portrait measured 0.0, people talking 5.8-8.9 |
 | `schema-dump-401.log` | a tool-schema dump containing `401` as a VALUE | format captured from a real `last-run.py` dump; the `401` line is the one that caused the false positive |
 
 `scripts/capture-fixtures.py` refreshes these from the live droplet and
