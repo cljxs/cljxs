@@ -827,6 +827,23 @@ class Posting(EndToEnd):
                              call=never, key="k", left=0.5)
         self.assertEqual((row["generator"], calls), ("template", []), "switched off: no call, even with a key")
 
+    def test_a_new_draft_uses_the_spellings_added_after_the_cut(self):
+        # 2026-10-09: "Kamehna" for Kuminga, "Amber Woolf" for Wolves - fixed
+        # in the source's spellings, and New draft must see the fix.
+        self.ready()
+        with self.conn:
+            meta = json.loads(self.clip["meta"])
+            meta["text"] = "a clutch Kamehna role around Amber Woolf's style"
+            self.conn.execute("UPDATE clips SET meta = ? WHERE id = ?", (json.dumps(meta), self.clip["id"]))
+        self.cli("source", "rules", "tao", "--spell", "Kuminga: kamehna; Wolves: amber woolf")
+        seen = []
+        def model(text, src, key, slug):
+            seen.append(text)
+            return {"title": "Kuminga and the Wolves", "caption": "x"}, 0.0
+        cfg = dict(self.cfg, copy_model="openai/gpt-5-mini")
+        postcopy.write(self.conn, cfg, self.clip["id"], redo=True, call=model, key="k", left=0.5)
+        self.assertIn("a clutch Kuminga role around Wolves's style", seen[0])
+
     def test_your_edit_is_never_overwritten(self):
         self.ready()
         postcopy.edit(self.conn, self.clip["id"], title="My title", hashtags="#mine")

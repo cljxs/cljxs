@@ -29,7 +29,7 @@ import json
 import re
 import urllib.request
 
-from clipper import config, db
+from clipper import config, db, transcribe
 
 TITLE_MAX = 100          # YouTube's limit
 CAPTION_MAX = 300        # ours: the hook, not an essay
@@ -168,7 +168,13 @@ def write(conn, cfg, clip_id, redo=False, call=None, key=None, left=None):
         return have
     clip = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
     meta = json.loads(clip["meta"])
-    transcript = meta.get("text") or ""
+    # With the source's spellings as they are NOW: the sentence was stored when
+    # the clip was cut, and a name fixed since ("Kamehna" -> Kuminga,
+    # 2026-10-09) must reach a New draft instead of being redrafted wrong.
+    src = conn.execute("SELECT s.spellings FROM sources s JOIN videos v ON v.source_id = s.id "
+                       "WHERE v.id = ?", (clip["video_id"],)).fetchone()
+    transcript = transcribe.respell_text(meta.get("text") or "",
+                                         json.loads(src["spellings"]) if src and src["spellings"] else [])
     listed = conn.execute("SELECT l.* FROM candidates c JOIN cutlist l ON l.id = c.cut_id WHERE c.id = ?",
                           (clip["candidate_id"],)).fetchone()
     if listed and listed["caption"]:

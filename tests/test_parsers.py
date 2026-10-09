@@ -5527,6 +5527,21 @@ class ClipHasAStudio(unittest.TestCase):
         self.assertIn(".unref()", route, "the reply must not wait for the upload")
         self.assertIn("const { execFile, spawn } = require('child_process');", js)
 
+    def test_editing_a_post_is_a_real_editor_not_prompts(self):
+        # 2026-10-09: three window.prompt boxes on an iPad showed a sliver of
+        # the caption. One editor, the whole caption visible, 17px text.
+        card = self.html.split("async function clipCard(", 1)[1].split("\n}", 1)[0]
+        self.assertNotIn("window.prompt('Caption'", card)
+        self.assertIn("body = await editPost(k.post);", card)
+        for el in ('id="edTitle"', 'id="edCaption"', 'id="edTags"', 'id="edSave"', 'id="edCancel"'):
+            self.assertIn(el, self.html)
+        self.assertIn("font-size:17px", self.html, "below 16px Safari zooms the page on focus")
+
+    def test_typing_in_a_box_never_walks_or_opens_a_house(self):
+        keys = self.html.split("this.input.keyboard.on('keydown', e => {", 1)[1].split("});", 1)[0]
+        guard = keys.index("/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;")
+        self.assertLess(guard, keys.index("openPanel(nearDoor.name)"), "an 'e' in a caption reopened the house")
+
     def test_copying_a_caption_works_without_https(self):
         # The Deck is plain http over Tailscale, where navigator.clipboard
         # does not exist - relying on it would make the button do nothing.

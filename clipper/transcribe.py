@@ -155,6 +155,13 @@ def respell(words, rules):
     return out
 
 
+def respell_text(text, rules):
+    """respell() for plain text - a clip's stored sentence, drafted into a post
+    long after it was cut, gets the spellings the source has now."""
+    words = [{"start": 0.0, "end": 0.0, "word": " " + w} for w in str(text or "").split()]
+    return "".join(w["word"] for w in respell(words, rules)).strip()
+
+
 def transcribe(audio_path, cache_path, cfg):
     cache_path = Path(cache_path)
     if cache_path.exists():

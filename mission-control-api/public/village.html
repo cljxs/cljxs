@@ -102,6 +102,27 @@
   #lb{position:fixed;inset:0;z-index:25;display:none;align-items:center;justify-content:center;
     flex-direction:column;gap:12px;padding:18px;background:rgba(3,5,8,.94)}
   #lb.on{display:flex}
+  /* The post editor: full width on an iPad, 17px+ text so Safari never zooms,
+     the whole caption visible without scrolling inside a one-line box. */
+  #ed{position:fixed;inset:0;z-index:30;display:none;align-items:flex-start;justify-content:center;
+    background:rgba(5,8,14,.72);padding:4vh 14px;overflow-y:auto}
+  #ed.on{display:flex}
+  #edbox{width:min(760px,100%);background:var(--card);border:1px solid var(--line);border-radius:16px;
+    padding:20px 20px 16px}
+  #edbox h2{margin:0 0 10px;font-size:20px}
+  #edbox label{display:block;margin:14px 0 6px;font-size:13px;letter-spacing:.04em;color:var(--mute);
+    text-transform:uppercase}
+  #edbox .edn{float:right;text-transform:none;letter-spacing:0}
+  #edbox input,#edbox textarea{width:100%;box-sizing:border-box;font-family:inherit;font-size:17px;
+    line-height:1.45;color:inherit;
+    background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:10px;padding:12px 14px;
+    resize:vertical}
+  #edbox textarea#edCaption{min-height:170px}
+  #edbox input:focus,#edbox textarea:focus{outline:2px solid rgba(52,211,153,.6);outline-offset:1px}
+  .edacts{display:flex;gap:12px;margin-top:18px}
+  .edacts button{flex:1;padding:15px;border-radius:12px;font-size:17px;font-weight:600;
+    background:transparent;color:inherit;border:1px solid var(--line)}
+  .edacts .yes{border-color:rgba(52,211,153,.55);color:var(--up)}
   #lb img{max-width:min(100%,760px);max-height:66vh;border-radius:11px;border:1px solid var(--line);background:#000}
   #lb .bar{display:flex;gap:7px;flex-wrap:wrap;justify-content:center}
   #lb .bar button{padding:8px 12px;border-radius:10px;font-size:12px;font-weight:600;
@@ -308,6 +329,19 @@
       <button onclick="closeDoc()">Close</button></div>
     <div id="docdays"></div>
     <div id="docbody"></div>
+  </div>
+</div>
+
+<div id="ed">
+  <div id="edbox">
+    <h2>Edit the post</h2>
+    <label for="edTitle">Title <span class="edn" id="edTitleN"></span></label>
+    <input id="edTitle" maxlength="100" autocomplete="off" autocapitalize="sentences">
+    <label for="edCaption">Caption <span class="edn" id="edCaptionN"></span></label>
+    <textarea id="edCaption" rows="7" maxlength="300" autocapitalize="sentences"></textarea>
+    <label for="edTags">Hashtags <span class="edn">spaces between</span></label>
+    <textarea id="edTags" rows="2" autocapitalize="none" autocorrect="off" spellcheck="false"></textarea>
+    <div class="edacts"><button id="edCancel">Cancel</button><button id="edSave" class="yes">Save</button></div>
   </div>
 </div>
 
@@ -1902,6 +1936,9 @@ function create() {
   this.cameras.main.setZoom(zoomForViewport());
 
   this.input.keyboard.on('keydown', e => {
+    // Typing in a box is typing, not walking: an "e" in a caption used to
+    // open the house again and throw away what was being written.
+    if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
     keys[e.key.toLowerCase()] = true;
     if (e.key.toLowerCase() === 'e' && nearDoor) openPanel(nearDoor.name);
     // Escape peels one layer at a time: the enlarged image first,
@@ -3204,6 +3241,32 @@ async function clipPost(url, body){
   alert((j.message || j.error || (r.ok ? 'Done.' : 'That did not work.')).slice(0, 600));
 }
 
+// Resolves with {title, caption, tags}, or null when cancelled.
+function editPost(post){
+  return new Promise(resolve => {
+    const t = $('edTitle'), c = $('edCaption'), h = $('edTags');
+    t.value = post.title || '';
+    c.value = post.caption || '';
+    h.value = (post.hashtags || []).map(x => '#' + x).join(' ');
+    const count = () => {
+      $('edTitleN').textContent = `${t.value.length} / ${t.maxLength}`;
+      $('edCaptionN').textContent = `${c.value.length} / ${c.maxLength}`;
+      c.style.height = 'auto';
+      c.style.height = Math.max(170, c.scrollHeight + 2) + 'px';
+    };
+    t.oninput = c.oninput = count;
+    const done = v => { $('ed').classList.remove('on'); resolve(v); };
+    $('edCancel').onclick = () => done(null);
+    $('edSave').onclick = () => {
+      if (!t.value.trim() || !c.value.trim()) { alert('A post needs a title and a caption.'); return; }
+      done({ title: t.value.trim(), caption: c.value.trim(), tags: h.value.trim() });
+    };
+    $('ed').classList.add('on');
+    count();
+    c.focus();
+  });
+}
+
 async function clipCard(kind, id, platform){
   if (clipBusy) return;
   const k = ((CLIP && CLIP.clips) || []).find(c => String(c.id) === String(id));
@@ -3217,14 +3280,11 @@ async function clipCard(kind, id, platform){
     if (!why || !why.trim()) return;
     body = { why: why.trim() };
   } else if (kind === 'edit') {
+    // A real editor, not three one-line prompts: on an iPad those showed a
+    // sliver of the caption and could not be read back (owner, 2026-10-09).
     if (!k || !k.post) return;
-    const title = window.prompt('Title', k.post.title);
-    if (title === null) return;
-    const caption = window.prompt('Caption', k.post.caption);
-    if (caption === null) return;
-    const tags = window.prompt('Hashtags (spaces between)', (k.post.hashtags || []).join(' '));
-    if (tags === null) return;
-    body = { title, caption, tags };
+    body = await editPost(k.post);
+    if (!body) return;
   } else if (kind === 'posted') {
     if (!confirm('Mark this clip as posted on TikTok? It will not be offered again.')) return;
   }
