@@ -351,6 +351,22 @@ def prior_designs(build_root, phrase, limit=12):
     return seen[-limit:]
 
 
+def on_product(product):
+    """What the art is printed on, said so it is not drawn.
+
+    This line used to read "Artwork for a mug." and on 2026-10-09 the model
+    drew exactly that: two enamel mugs with handles and rims, which Printify
+    then wrapped round a real mug - a mug printed with pictures of mugs.
+    "For a mug" names the product as the subject; "printed ON a mug" names it
+    as the surface. PRINT_DIRECTION's "not a product mockup" was there all
+    along and did not stop it, because a drawn mug is not obviously a mockup.
+    """
+    p = product.strip()
+    return (f"This artwork will be printed ON a {p}. Draw only the design that "
+            f"goes on it - never the {p} itself, and no {p}, cup, handle, rim, "
+            f"shirt, bag or other product shown as an object.")
+
+
 def compose(idea, brief="", product="", evidence=None, already=()):
     """THE art prompt. One place.
 
@@ -370,7 +386,7 @@ def compose(idea, brief="", product="", evidence=None, already=()):
     if brief and brief.strip():
         parts.append(brief.strip())
     if product and product.strip():
-        parts.append(f"Artwork for a {product.strip()}.")
+        parts.append(on_product(product))
     parts += market_notes(evidence)
     if already:
         parts.append("The shop already sells these, so this must be visibly "
@@ -498,9 +514,18 @@ PROOF_ASK = (
     "it as a customer would. Reply with JSON only, nothing else:\n"
     '{"lines": [each line of text as drawn], "errors": [each misspelled word, '
     "garbled or doubled or missing word, or broken letter, quoted as drawn "
-    'with what it should be]}\n'
-    'If there is no text, reply {"lines": [], "errors": []}.'
+    'with what it should be], "product": null}\n'
+    'If there is no text, "lines" and "errors" are []. '
+    'Set "product" to the product\'s name (e.g. "mug", "t-shirt", "tote bag") '
+    "if the picture SHOWS a product as an object - a mug with its handle and "
+    "rim, a shirt with sleeves, a bag, a framed print, a sticker lying on "
+    "something - instead of being flat artwork to print onto one. A small "
+    "icon drawn as part of a flat design is artwork, not a product: null."
 )
+
+# Words a proofreader writes when it means "no product". read_proof keeps the
+# JSON as sent, and a model asked for null answers "none" often enough.
+NO_PRODUCT = ("", "null", "none", "no", "false", "n/a")
 
 _MONTH = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?"
 DATE_RE = re.compile(
@@ -549,12 +574,17 @@ def prints_name(lines, name):
 def proof_problems(reading, name=None):
     """[problem] from what the proofreader read. A year alone is allowed -
     "EST. 2026" is a style - a calendar date never is. Nor is the product's
-    own name, spelled however well."""
+    own name, spelled however well, nor a picture of the product itself (the
+    mug of mugs, 2026-10-09)."""
     lines = [str(x) for x in (reading or {}).get("lines") or [] if str(x).strip()]
     out = [f"prints a date: {m.group(0)!r}" for m in DATE_RE.finditer(" / ".join(lines))]
     if name and prints_name(lines, name):
         out.append(f"prints the product's own name ({name!r}) instead of a design")
     out += [f"text error: {e}" for e in (reading or {}).get("errors") or [] if str(e).strip()]
+    shown = (reading or {}).get("product")
+    if shown and str(shown).strip().lower() not in NO_PRODUCT:
+        out.append(f"draws a {str(shown).strip()} - a picture of the product, not artwork "
+                   f"to print on it")
     return out
 
 

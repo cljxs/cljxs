@@ -1885,7 +1885,7 @@ def cmd_draft(a):
         name = None
     problems, note = proofread(design, name or listing.get("title"))
     if problems:
-        print(f"\nnot drafting: the artwork's text is wrong -", file=sys.stderr)
+        print(f"\nnot drafting: the artwork is wrong -", file=sys.stderr)
         for p in problems:
             print(f"  - {p}", file=sys.stderr)
         print(f"  Regenerate the art: emily-assets.py proofreads and redraws.",

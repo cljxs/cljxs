@@ -17144,6 +17144,41 @@ class AceWakesBeforeTheEarlyKickoffs(unittest.TestCase):
         self.assertIn(11 * 60 + 30, self.wakes())
 
 
+class TheArtIsNotAPictureOfTheProduct(unittest.TestCase):
+    """2026-10-09: a mug's art came back as two drawn enamel mugs, handles and
+    orange rims, "SHARED PATH" and "TWO TRAILS" on their sides - and Printify
+    wrapped that round a real mug. The prompt said "Artwork for a mug.", which
+    names the mug as the subject. Now it says printed ON, never drawn, and the
+    proofread refuses a design that shows the product as an object."""
+
+    def setUp(self):
+        self.ea = load("emily_assets_mockup", "emily-assets.py")
+
+    def test_the_real_mug_of_mugs_is_refused(self):
+        reading = self.ea.read_proof('{"lines": ["SHARED PATH", "TWO TRAILS"], "errors": [], '
+                                     '"product": "mug"}')
+        got = self.ea.proof_problems(reading, "Shared Path Mug")
+        self.assertEqual(len(got), 1, got)
+        self.assertIn("draws a mug", got[0])
+
+    def test_flat_art_passes_however_the_proofreader_says_no(self):
+        for said in ('null', '"none"', '"None"', '""', '"no"', 'false'):
+            reading = self.ea.read_proof('{"lines": ["TWO TRAILS"], "errors": [], "product": %s}' % said)
+            self.assertEqual(self.ea.proof_problems(reading), [], said)
+        self.assertEqual(self.ea.proof_problems({"lines": ["TWO TRAILS"], "errors": []}), [],
+                         "an older reply without the field")
+
+    def test_the_proofreader_is_asked(self):
+        self.assertIn('"product"', self.ea.PROOF_ASK)
+
+    def test_the_prompt_says_on_the_mug_not_a_mug(self):
+        said = self.ea.compose("Shared Path Mug", "", "mug", None)
+        self.assertIn("printed ON a mug", said)
+        self.assertIn("never the mug itself", said)
+        self.assertNotIn("Artwork for a mug", said)
+        self.assertNotIn("printed ON", self.ea.compose("X", "", "", None), "no product, no line")
+
+
 class TheDesignDoesNotPrintItsOwnName(unittest.TestCase):
     """2026-10-03: a mug came back reading "TEACHER'S COFFEE PLOT MUG" - its
     own product name, every word spelled right, so the proofread passed it.
