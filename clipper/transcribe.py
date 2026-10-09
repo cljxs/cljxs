@@ -127,9 +127,16 @@ def respell(words, rules):
     while i < len(words):
         for wrong, right in rules:
             n = len(wrong)
-            if norm[i:i + n] == wrong:
+            # The plural or possessive of the last word too: the rule said
+            # "cat" for KAT, and Whisper wrote "Cat's" - the caption went out
+            # as "Cats speaks out" (2026-10-08). It becomes "KAT's".
+            owns = (norm[i:i + n - 1] == wrong[:-1] and i + n <= len(norm)
+                    and norm[i + n - 1] in (wrong[-1] + "s", wrong[-1] + "'s", wrong[-1] + "s'"))
+            if norm[i:i + n] == wrong or owns:
                 old = words[i:i + n]
                 new = right.split()
+                if owns and norm[i:i + n] != wrong:
+                    new[-1] += "'s"
                 start, end = old[0]["start"], old[-1]["end"]
                 step = (end - start) / len(new)
                 tail = old[-1]["word"].rstrip()

@@ -895,6 +895,29 @@ class Posting(EndToEnd):
         with open(config.home() / "publish.lock", "w") as f:
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)      # released afterwards
 
+    def test_youtubes_daily_limit_holds_the_post_then_the_timer_sends_it(self):
+        self.ready()
+        tries = []
+        def limit(*a):
+            tries.append(1)
+            raise youtube.UploadLimit("YouTube's daily upload limit (400): exceeded the number of videos")
+        publish.approve(self.conn, self.cfg, self.clip["id"], upload=limit)
+        p = self.pubs()["youtube"]
+        self.assertEqual(p["status"], "queued", "held, not failed - it was never the clip's fault")
+        self.assertIn("daily upload limit", p["detail"])
+        self.assertTrue(publish.youtube_held())
+        self.assertEqual(publish.waiting(self.conn), 1)
+        publish.publish(self.conn, self.cfg, upload=limit)
+        self.assertEqual(len(tries), 1, "no second try while the hold lasts")
+        (self.home / "youtube-hold").write_text("2000-01-01 00:00:00\n")
+        self.assertIsNone(publish.youtube_held())
+        from unittest import mock
+        with mock.patch.object(publish.youtube, "upload", self.upload):
+            code, said = self.cli("pickup", "--run")
+        self.assertEqual(code, 0, said)
+        self.assertEqual((self.pubs()["youtube"]["status"], publish.waiting(self.conn)), ("posted", 0),
+                         "the 15-minute timer sent it once the hold was over")
+
     def test_not_signed_in_waits_then_goes_out(self):
         self.ready()
         def not_yet(*a):
@@ -991,6 +1014,18 @@ class YouTubeSignInAndUpload(unittest.TestCase):
         self.assertEqual(first["status"]["privacyStatus"], "public")
         self.assertEqual(seen[0].get_header("X-upload-content-length"), "1234")
         self.assertEqual(seen[1].full_url, "https://upload.example/session1")
+
+    def test_the_channels_daily_limit_is_its_own_error(self):
+        # The words YouTube sent on 2026-10-08, in the documented error shape.
+        video = Path(self.tmp.name) / "c.mp4"
+        video.write_bytes(b"x")
+        body = {"error": {"code": 400, "message": "The user has exceeded the number of videos they may upload.",
+                          "errors": [{"domain": "youtube.video", "reason": "uploadLimitExceeded",
+                                      "message": "The user has exceeded the number of videos they may upload."}]}}
+        for raw in (body, {"error": {"message": body["error"]["message"]}}):
+            with self.assertRaises(youtube.UploadLimit):
+                youtube.upload(video, {"title": "T", "description": "D", "tags": []}, "public", "24",
+                               token="tok", send=lambda req, t, raw=raw: (400, {}, json.dumps(raw).encode()))
 
     def test_a_refused_upload_is_an_error_with_googles_words(self):
         video = Path(self.tmp.name) / "c.mp4"
@@ -1641,6 +1676,47 @@ class Spellings(unittest.TestCase):
         ws = [w(0, 1, " I'll"), w(1, 2, " try"), w(2, 3, " it,"), w(3, 4, " Tray,"), w(4, 5, " NICKS")]
         self.assertEqual("".join(x["word"] for x in transcribe.respell(ws, self.RULES)),
                          " I'll try it, Trae, Knicks")
+
+
+class SpellingsAreAddedNotReplaced(EndToEnd):
+    """2026-10-08: setting LaMelo's spellings for one Gil's Arena episode
+    wiped KAT's, set the day before for another."""
+
+    test_permitted_video_in_captioned_short_out = None
+    test_a_failing_stage_is_retried_then_parked_then_retryable = None
+
+    def rules(self):
+        conn = db.connect(self.home / "clipper.db")
+        return {" ".join(w): r for w, r in json.loads(conn.execute("SELECT spellings FROM sources").fetchone()[0] or "[]")}
+
+    def test_kept_updated_and_cleared(self):
+        self.cli("source", "add", "gils", "--rights", "permission", "--evidence", "campaign page")
+        self.cli("source", "rules", "gils", "--spell", "KAT: cat; Brunson: brunsen")
+        self.cli("source", "rules", "gils", "--spell", "LaMelo: la melo; Jalen Brunson: brunsen")
+        self.assertEqual(self.rules(), {"cat": "KAT", "brunsen": "Jalen Brunson", "la melo": "LaMelo"})
+        code, said = self.cli("source", "rules", "gils", "--spell", "")
+        self.assertEqual(said.count("captions say"), 0)
+        conn = db.connect(self.home / "clipper.db")
+        self.assertIsNone(conn.execute("SELECT spellings FROM sources").fetchone()[0])
+
+
+class SpellingsCatchThePossessive(unittest.TestCase):
+    """2026-10-08: the rule was "KAT: cat", Whisper wrote "Cat's", and the
+    post went out as "Cats speaks out as Knicks juggle contract extensions"."""
+    RULES = transcribe.parse_spellings("KAT: cat; Karl-Anthony Towns: carl anthony towns")
+
+    def said(self, *words):
+        ws = [w(i, i + 1, " " + x) for i, x in enumerate(words)]
+        return "".join(x["word"] for x in transcribe.respell(ws, self.RULES))
+
+    def test_cats_and_cats_possessive_become_kats(self):
+        self.assertEqual(self.said("Cat's", "frustrated."), " KAT's frustrated.")
+        self.assertEqual(self.said("Cats", "speaks"), " KAT's speaks")
+        self.assertEqual(self.said("Carl", "Anthony", "Towns'", "deal"), " Karl-Anthony Towns' deal")
+
+    def test_the_plain_word_and_other_words_are_unchanged(self):
+        self.assertEqual(self.said("cat", "said"), " KAT said")
+        self.assertEqual(self.said("category", "catch", "cast"), " category catch cast")
 
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")

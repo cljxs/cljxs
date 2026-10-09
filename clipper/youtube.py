@@ -39,6 +39,23 @@ SCOPE = "https://www.googleapis.com/auth/youtube"
 GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 
 
+class UploadLimit(RuntimeError):
+    """YouTube's own cap on how many videos the channel may upload in a day -
+    not ours. Seen 2026-10-08: "(400): The user has exceeded the number of
+    videos they may upload." Waiting is the only fix; publish holds the post."""
+
+
+LIMIT_REASON = "uploadLimitExceeded"
+LIMIT_TEXT = "exceeded the number of videos"
+
+
+def _reasons(raw):
+    try:
+        return [e.get("reason") for e in (json.loads(raw).get("error") or {}).get("errors") or []]
+    except Exception:
+        return []
+
+
 class NotSetUp(RuntimeError):
     pass
 
@@ -147,6 +164,8 @@ def upload(path, meta, privacy, category, token=None, send=_send, timeout=600):
     code, headers, raw = send(req, 60)
     where = headers.get("Location") or headers.get("location")
     if code != 200 or not where:
+        if LIMIT_REASON in _reasons(raw) or LIMIT_TEXT in _why(raw):
+            raise UploadLimit(f"YouTube's daily upload limit for this channel ({code}): {_why(raw)}")
         raise RuntimeError(f"YouTube refused the upload ({code}): {_why(raw)}")
     with open(path, "rb") as f:
         put = urllib.request.Request(where, data=f, method="PUT", headers={

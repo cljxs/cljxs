@@ -95,6 +95,43 @@ def one_at_a_time():
         yield
 
 
+# YouTube's own daily upload limit (youtube.UploadLimit) is a rolling window
+# nobody publishes. After a refusal, no YouTube upload is tried for this long;
+# the 15-minute timer then tries the waiting posts again. Four tries a day at
+# most, never one every 15 minutes.
+HOLD_HOURS = 6
+
+
+def _hold_path():
+    return config.home() / "youtube-hold"
+
+
+def youtube_held(now=None):
+    """The UTC time YouTube uploads may resume, or None when they may go now."""
+    try:
+        until = _hold_path().read_text().strip()
+    except OSError:
+        return None
+    return until if until > (now or db.now()) else None
+
+
+def hold_youtube(now=None):
+    import datetime as _dt
+    start = _dt.datetime.strptime((now or db.now())[:19], "%Y-%m-%d %H:%M:%S")
+    until = (start + _dt.timedelta(hours=HOLD_HOURS)).strftime("%Y-%m-%d %H:%M:%S")
+    _hold_path().parent.mkdir(parents=True, exist_ok=True)
+    _hold_path().write_text(until + "\n")
+    return until
+
+
+def waiting(conn):
+    """Approved posts still to go out on a platform code posts to - what the
+    timer sends. TikTok is posted by hand; a failed post waits for you."""
+    return conn.execute("SELECT COUNT(*) FROM publications p JOIN clips c ON c.id = p.clip_id "
+                        "WHERE c.status IN ('approved', 'posted') AND p.platform = 'youtube' "
+                        "AND p.status IN ('queued', 'needs_setup')").fetchone()[0]
+
+
 def posted_today(conn, platform):
     return conn.execute("SELECT COUNT(*) FROM publications WHERE platform = ? AND status = 'posted' "
                         "AND substr(posted_at, 1, 10) = ?", (platform, db.now()[:10])).fetchone()[0]
@@ -137,6 +174,12 @@ def _publish(conn, cfg, clip_id=None, upload=None):
         if pub["platform"] != "youtube":
             _set(conn, pub["id"], status="failed", detail=f"no poster for {pub['platform']}")
             continue
+        held = youtube_held()
+        if held:
+            _set(conn, pub["id"], status="queued",
+                 detail=f"waiting for YouTube's daily upload limit to reset - tries again after {held} UTC")
+            results.append(("youtube", "queued", "YouTube's daily limit"))
+            continue
         if posted_today(conn, "youtube") >= int(cfg["max_daily_uploads"]):
             _set(conn, pub["id"], status="queued",
                  detail=f"today's {cfg['max_daily_uploads']} YouTube posts are done - goes out tomorrow")
@@ -148,6 +191,14 @@ def _publish(conn, cfg, clip_id=None, upload=None):
         except youtube.NotSetUp as e:
             _set(conn, pub["id"], status="needs_setup", detail=str(e))
             results.append(("youtube", "needs_setup", str(e)))
+            continue
+        except youtube.UploadLimit as e:
+            until = hold_youtube()
+            _set(conn, pub["id"], status="queued",
+                 detail=f"YouTube's daily upload limit for the channel was reached - goes out "
+                        f"automatically after {until} UTC")
+            db.event(conn, "publish", f"clip {clip['id']} held: {e}", level="warn", clip_id=clip["id"])
+            results.append(("youtube", "queued", "YouTube's daily limit"))
             continue
         except Exception as e:
             attempts = pub["attempts"] + 1

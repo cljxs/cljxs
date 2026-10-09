@@ -75,12 +75,23 @@ def cmd_source(a):
                 print(f"campaign list for YouTube {ep} ({section}): {n} moments, {first} to start with")
             print("link a video to its episode with --episode on ingest, or `clipper cuts VIDEO --episode ID`")
         if a.spell is not None:
-            rules = transcribe.parse_spellings(a.spell)
-            with conn:
-                n = conn.execute("UPDATE sources SET spellings = ? WHERE name = ?",
-                                 (json.dumps(rules) if rules else None, a.name)).rowcount
-            if not n:
+            # Added to what the source already has, not in place of it: a
+            # show's names come back every episode, and setting LaMelo's
+            # spellings for one video wiped KAT's (2026-10-08). The same
+            # mishearing given again takes the new spelling; --spell "" clears.
+            src = conn.execute("SELECT spellings FROM sources WHERE name = ?", (a.name,)).fetchone()
+            if not src:
                 raise ValueError(f"no source named {a.name!r}")
+            new = transcribe.parse_spellings(a.spell)
+            rules = {} if not a.spell.strip() else {
+                tuple(w): r for w, r in json.loads(src["spellings"] or "[]")}
+            rules.update({tuple(w): r for w, r in new})
+            rules = sorted(([list(w), r] for w, r in rules.items()), key=lambda x: -len(x[0]))
+            with conn:
+                conn.execute("UPDATE sources SET spellings = ? WHERE name = ?",
+                             (json.dumps(rules) if rules else None, a.name))
+            if not rules:
+                print("no spellings - captions use Whisper's words as heard")
             for wrong, right in rules:
                 print(f"captions say {right!r} where Whisper wrote {' '.join(wrong)!r}")
         if a.avoid is not None:
@@ -211,6 +222,10 @@ def cmd_pickup(a):
     print(f"Dropbox: {len(r['new'])} new video(s)"
           + (f" ({', '.join(map(str, r['new']))})" if r["new"] else "")
           + f", {r['skipped']} already picked up, {r['failed']} could not be (see clipper status)")
+    # Approved posts still waiting - held by YouTube's daily limit or the daily
+    # cap. Nothing sent them before: "goes out tomorrow" never did.
+    if a.run and publish.waiting(conn) and not publish.youtube_held():
+        print_results(publish.publish(conn, cfg))
     # Any video waiting, not only a new Dropbox one. 2026-10-08: a video added
     # by hand with `ingest` sat unclipped for a day, because this timer only
     # ran the pipeline when Dropbox brought something new. A video that keeps
