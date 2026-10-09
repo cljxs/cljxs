@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a0d16">
+<title>Markets</title>
+<!-- Belfort's trading desk (owner, 2026-10-06). Every number on this page
+     comes from `belfort-trade.py board` via /api/belfort/board: the page
+     draws, and works nothing out. Opened inside Belfort's house in the
+     village (?embed=1) and as its own tab from the Command Deck. -->
+<style>
+  :root{
+    --bg:#0a0d16; --panel:#0e1220; --panel2:#121729; --line:rgba(255,255,255,.07);
+    --gold:#c9a24a; --gold2:#e8c26a; --ink:#e9e4d4; --mute:#8b90a0; --dim:#596074;
+    --up:#2fd39b; --down:#f0646f; --warn:#f2c14e; --c20:#4cc9f0; --c50:#a78bfa;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink)}
+  body{font:13px/1.5 var(--mono);-webkit-font-smoothing:antialiased;padding:14px}
+  body.embed{padding:10px;background:rgba(5,7,12,.92)}
+  .frame{max-width:1500px;margin:0 auto;border:1.5px solid var(--gold);border-radius:10px;background:var(--panel);
+    box-shadow:0 0 0 1px rgba(0,0,0,.6),0 18px 60px rgba(0,0,0,.55);overflow:hidden}
+  .num{font-variant-numeric:tabular-nums}
+  .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--mute)}
+  .k{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}
+
+  /* header */
+  .head{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:16px 20px;border-bottom:1px solid var(--line)}
+  .title{font-size:24px;font-weight:700;letter-spacing:.18em}
+  .who{color:var(--mute);letter-spacing:.12em;font-size:11.5px;text-transform:uppercase}
+  .sp{flex:1}
+  /* his account in dollars: belfort-trade.py board works it out, this prints it */
+  .acct{display:flex;gap:22px;flex-wrap:wrap;align-items:baseline;margin-left:8px}
+  .acct .l{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}
+  .acct .v{font-size:19px;font-weight:800}
+  .acct .v.big{font-size:22px;color:var(--gold2)}
+  .btn{font:inherit;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink);background:transparent;
+    border:1px solid var(--line);border-radius:6px;padding:8px 14px;cursor:pointer;text-decoration:none}
+  .btn:hover{border-color:var(--gold)}
+  .btn.on{border-color:var(--gold);color:var(--gold2);background:rgba(201,162,74,.08)}
+
+  /* showdown */
+  .show{padding:12px 20px 14px;border-bottom:1px solid var(--line)}
+  .showtop{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+  .race{display:grid;grid-template-columns:150px 1fr 78px;gap:10px;align-items:center;margin:6px 0}
+  .race .n{font-size:12px;letter-spacing:.1em;text-transform:uppercase}
+  .track{position:relative;height:22px;background:rgba(255,255,255,.03);border-radius:4px}
+  .track .zero{position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--line)}
+  .bar{position:absolute;top:2px;bottom:2px;border-radius:3px}
+  .bar.pos{left:50%;background:linear-gradient(90deg,rgba(47,211,155,.25),rgba(47,211,155,.75))}
+  .bar.neg{right:50%;background:linear-gradient(270deg,rgba(240,100,111,.25),rgba(240,100,111,.75))}
+  .race .v{text-align:right;font-weight:700}
+  .status{display:flex;gap:14px;flex-wrap:wrap;padding:9px 20px;border-bottom:1px solid var(--line);color:var(--mute);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase}
+  .status .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--up);margin-right:6px;vertical-align:1px}
+
+  /* body */
+  .grid{display:grid;grid-template-columns:270px minmax(0,1fr) 400px;gap:14px;padding:14px 20px 20px}
+  .box{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:14px}
+  .watch{display:flex;flex-direction:column;gap:10px}
+  .w{cursor:pointer;border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--panel2)}
+  .w.on{border-color:var(--gold);background:rgba(201,162,74,.06)}
+  .w .sym{font-weight:700;font-size:14px;letter-spacing:.05em}
+  .w .row{display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .w .px{font-size:17px;font-weight:700}
+  .badge{display:inline-block;font-size:10.5px;letter-spacing:.12em;padding:3px 8px;border-radius:4px;border:1px solid}
+  .b-HOLD{color:var(--gold2);border-color:var(--gold)}
+  .b-SELL{color:var(--down);border-color:var(--down)}
+  .b-WATCH{color:var(--c20);border-color:rgba(76,201,240,.6)}
+  .dotv{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:1px}
+  .center{display:flex;flex-direction:column;gap:14px;min-width:0}
+  .tick{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  .tick > div:first-child{flex:1 1 320px;min-width:0}
+  .tick > div:last-child{flex:0 0 auto;margin-left:auto;text-align:right}
+  .tick .s{font-size:30px;font-weight:800;letter-spacing:.04em}
+  .tick .p{font-size:32px;font-weight:800;text-align:right}
+  .gauges{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+  .g{text-align:center}
+  .g .big{font-size:22px;font-weight:800;margin-top:4px}
+  .flip{display:flex;gap:10px;margin:7px 0;align-items:baseline}
+  .flip .side{font-weight:800;min-width:46px}
+  .s-BUY{color:var(--up)} .s-SELL{color:var(--down)} .s-WAIT{color:var(--warn)} .s-RISK{color:var(--c20)}
+  .news a,.news div.t{color:var(--ink);text-decoration:none;display:block;margin-top:9px}
+  .news .src{color:var(--dim);font-size:11.5px}
+  svg text{font-family:var(--mono)}
+
+  /* right panel */
+  .tabs{display:flex;border-bottom:1px solid var(--line);margin:-14px -14px 12px}
+  .tab{flex:1;font:inherit;font-size:11px;letter-spacing:.14em;text-transform:uppercase;padding:11px 6px;color:var(--mute);
+    background:transparent;border:0;border-bottom:2px solid transparent;cursor:pointer}
+  .tab.on{color:var(--gold2);border-bottom-color:var(--gold);background:rgba(201,162,74,.06)}
+  .newdot[hidden]{display:none}
+  .newdot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--gold2);margin-left:6px;vertical-align:middle}
+  .rec table{width:100%;border-collapse:collapse;margin:6px 0 14px;font-size:12.5px}
+  .rec th,.rec td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line)}
+  .rec th{color:var(--mute);font-weight:400;font-size:11px;letter-spacing:.06em}
+  .rec .revs button{background:none;border:1px solid var(--line);border-radius:6px;color:var(--ink);font:inherit;font-size:12px;padding:5px 9px;margin:0 6px 6px 0;cursor:pointer}
+  .rec .revs button.on{border-color:var(--gold);color:var(--gold2)}
+  .doc{max-height:calc(100vh - 230px);overflow:auto;font-size:12.5px;line-height:1.65}
+  .doc h1,.doc h2,.doc h3{color:var(--up);letter-spacing:.06em;font-size:15px;margin:16px 0 6px}
+  .doc h1{font-size:18px;color:var(--c20)}
+  .doc table{border-collapse:collapse;width:100%;font-size:11.5px}
+  .doc td,.doc th{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left}
+  .doc code{color:var(--gold2)}
+  .hist button{display:block;width:100%;text-align:left;font:inherit;color:var(--ink);background:transparent;
+    border:0;border-bottom:1px solid var(--line);padding:9px 2px;cursor:pointer}
+  .hist button:hover{color:var(--gold2)}
+  .empty{color:var(--mute);padding:20px 4px;text-align:center}
+  /* Books tab: both books, from /api/belfort/books (moved from the village's Belfort panel) */
+  .bk .stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:8px 0}
+  .bk .stat{border:1px solid var(--line);border-radius:6px;padding:8px}
+  .bk .stat .l{color:var(--mute);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase}
+  .bk .stat .v{font-size:16px;font-weight:800}
+  .bk .sect{color:var(--gold2);letter-spacing:.12em;text-transform:uppercase;font-size:11px;margin:16px 0 6px}
+  .calls{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:0 0 12px;background:rgba(201,162,74,.04)}
+  .calls .c{display:grid;grid-template-columns:auto auto 1fr;gap:8px;align-items:baseline;padding:5px 0;border-top:1px solid var(--line);font-size:12.5px}
+  .calls .k + .c{border-top:0}
+  .calls button{background:none;border:0;color:var(--gold2);font:inherit;font-weight:700;cursor:pointer;padding:0}
+  .calls .sc{color:var(--mute);white-space:nowrap}
+  .bk .verdict{border-left:2px solid var(--gold);padding:6px 10px;color:var(--ink);background:rgba(201,162,74,.05);margin:8px 0}
+  .bk .muted{color:var(--mute)}
+  .bk table{width:100%;border-collapse:collapse;font-size:11.5px} .bk td,.bk th{padding:4px 5px;border-bottom:1px solid var(--line);text-align:left}
+  .bk .tr{margin:6px 0}
+  .err{color:var(--down)}
+
+  @media (max-width:1180px){ .grid{grid-template-columns:240px minmax(0,1fr)} .right{grid-column:1 / -1} .doc{max-height:none} }
+  @media (max-width:760px){
+    body{padding:6px} .grid{grid-template-columns:1fr;padding:10px} .race{grid-template-columns:96px 1fr 64px}
+    .gauges{grid-template-columns:repeat(2,1fr)} .watch{flex-direction:row;overflow-x:auto} .w{min-width:210px}
+    .tick .s{font-size:24px} .tick .p{font-size:24px;text-align:left}
+  }
+</style>
+<script src="/shared/md.js"></script>
+</head>
+<body>
+<div class="frame">
+  <div class="head">
+    <div class="title">MARKETS</div>
+    <div class="who">Belfort · swing trader · paper $10,000</div>
+    <div class="acct" id="acct"></div>
+    <div class="sp"></div>
+    <a class="btn" id="back" href="/dashboard">← Deck</a>
+    <button class="btn" id="close" style="display:none">✕ Esc</button>
+  </div>
+  <div class="show">
+    <div class="showtop"><div class="k">The showdown — <span id="basis">…</span></div>
+      <div class="k">Spread <b id="spread" style="color:var(--ink)">—</b></div></div>
+    <div id="race"><div class="empty">loading…</div></div>
+  </div>
+  <div class="status" id="status"><span><span class="dot"></span>loading</span></div>
+  <div class="grid">
+    <div><div class="k" style="margin-bottom:8px">Watchlist · <span id="wcount">0</span></div>
+      <div class="watch" id="watch"></div></div>
+    <div class="center" id="center"><div class="box empty">loading…</div></div>
+    <div class="right box">
+      <div class="tabs" id="tabs">
+        <button class="tab on" data-t="report">Latest report</button>
+        <button class="tab" data-t="history">History</button>
+        <button class="tab" data-t="books">Books</button>
+        <button class="tab" data-t="record">Record<span class="newdot" id="recdot" hidden></span></button>
+      </div>
+      <div class="doc" id="side"></div>
+    </div>
+  </div>
+</div>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const has = v => v !== null && v !== undefined;
+const money = v => has(v) ? '$' + Number(v).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—';
+const pct = v => has(v) ? (v > 0 ? '+' : '') + Number(v).toFixed(2) + '%' : '—';
+const cls = v => !has(v) ? 'flat' : v > 0 ? 'up' : v < 0 ? 'down' : 'flat';
+const big = v => !has(v) ? '—' : v >= 1e9 ? (v/1e9).toFixed(2)+'B' : v >= 1e6 ? (v/1e6).toFixed(2)+'M' : v >= 1e3 ? (v/1e3).toFixed(1)+'K' : String(v);
+
+const EMBED = new URLSearchParams(location.search).has('embed');
+if (EMBED) {
+  document.body.classList.add('embed');
+  $('back').style.display = 'none';
+  $('close').style.display = '';
+  const close = () => parent.postMessage({ type: 'markets-close' }, '*');
+  $('close').onclick = close;
+  addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+}
+
+let B = null, sel = null, tab = 'report', shownReport = null;
+
+async function load() {
+  try {
+    const r = await fetch('/api/belfort/board', { cache: 'no-store' });
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || r.status);
+    B = j;
+    if (!sel || !B.watch.some(w => w.symbol === sel)) sel = B.watch[0] ? B.watch[0].symbol : null;
+    render();
+  } catch (e) {
+    $('status').innerHTML = `<span class="err">Could not read Belfort's board: ${esc(e.message)}</span>`;
+  }
+}
+
+function render() {
+  const a = B.account;
+  const signed = v => (v > 0 ? '+' : v < 0 ? '-' : '') + money(Math.abs(v));
+  $('acct').innerHTML = a ? `
+    <div><div class="l">Account value</div><div class="v big num">${money(a.value)}</div></div>
+    <div><div class="l">Since start</div><div class="v num ${cls(a.pnl)}">${signed(a.pnl)} <span style="font-size:13px">${pct(a.pnl_pct)}</span></div></div>
+    <div><div class="l">Today</div><div class="v num ${cls(a.today)}">${signed(a.today)} <span style="font-size:13px">${pct(a.today_pct)}</span></div></div>
+    <div><div class="l">Cash</div><div class="v num">${money(a.cash)}</div></div>` : '';
+  const sd = B.showdown || {};
+  $('basis').textContent = 'Belfort vs the no-AI book vs QQQ and SPY · ' + (sd.basis || '');
+  $('spread').textContent = has(sd.spread) ? sd.spread.toFixed(2) + '%' : '—';
+  const rows = sd.rows || [];
+  const scale = Math.max(1, ...rows.map(r => Math.abs(r.pct || 0)));
+  $('race').innerHTML = rows.map(r => {
+    const w = has(r.pct) ? Math.min(50, Math.abs(r.pct) / scale * 50) : 0;
+    return `<div class="race"><div class="n">${esc(r.name)}</div>
+      <div class="track"><div class="zero"></div>${has(r.pct) ? `<div class="bar ${r.pct >= 0 ? 'pos' : 'neg'}" style="width:${w}%"></div>` : ''}</div>
+      <div class="v num ${cls(r.pct)}">${pct(r.pct)}</div></div>`;
+  }).join('') || '<div class="empty">No books yet.</div>';
+
+  const asof = B.asof_utc ? new Date(B.asof_utc.replace(' ', 'T') + 'Z') : null;
+  $('status').innerHTML = `<span><span class="dot" style="background:${B.regime === 'unfavorable' ? 'var(--down)' : B.regime === 'favorable' ? 'var(--up)' : 'var(--warn)'}"></span>Market ${esc(B.regime)}</span>
+    <span>${esc(B.regime_why || '')}</span>
+    <span>${B.watch.length} watched</span>
+    <span>Data ${asof ? asof.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : '—'} · every 10 min, market hours</span>`;
+
+  $('wcount').textContent = B.watch.length;
+  $('watch').innerHTML = B.watch.map(w => `<div class="w ${w.symbol === sel ? 'on' : ''}" data-s="${esc(w.symbol)}">
+      <div class="row"><div class="sym"><span class="dotv" style="background:${w.held ? 'var(--gold2)' : 'var(--c20)'}"></span>${esc(w.symbol)}</div>
+        ${badge(w)}</div>
+      <div class="row" style="margin-top:6px"><div><div class="px num">${money(w.price)}</div>
+        <div class="num ${cls(w.change_pct)}" style="font-size:12px">${pct(w.change_pct)} today</div></div>
+        ${spark(w.spark)}</div>
+      <div class="row" style="margin-top:4px;font-size:11.5px;color:var(--dim)"><span>${w.held ? `${w.shares} sh · ${pct(w.pnl_pct)} from cost` : `${w.mechanical_score ?? '—'}/3 screens`}</span>
+        <span class="num">30D ${pct(w.change_30d)}</span></div></div>`).join('')
+    || '<div class="empty">Nothing held and no candidates today.</div>';
+  document.querySelectorAll('.w').forEach(el => el.onclick = () => { sel = el.dataset.s; render(); });
+
+  const w = B.watch.find(x => x.symbol === sel);
+  $('center').innerHTML = w ? center(w) : '<div class="box empty">Nothing to show yet - the fetcher runs every 10 minutes in market hours.</div>';
+  side();
+}
+
+function badge(w) {
+  const tail = w.verdict === 'WATCH' ? `${w.mechanical_score ?? 0}/3` : (has(w.score) && w.score ? `${w.score}/10` : '');
+  return `<span class="badge b-${esc(w.verdict)}">${esc(w.verdict)}${tail ? ' · ' + tail : ''}</span>`;
+}
+
+function spark(v) {
+  if (!v || v.length < 2) return '';
+  const W = 110, H = 34, lo = Math.min(...v), hi = Math.max(...v), r = hi - lo || 1;
+  const pts = v.map((c, i) => `${(i / (v.length - 1) * W).toFixed(1)},${(H - 3 - (c - lo) / r * (H - 6)).toFixed(1)}`).join(' ');
+  const col = v[v.length - 1] >= v[0] ? 'var(--up)' : 'var(--down)';
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.6"/></svg>`;
+}
+
+function center(w) {
+  const held = w.held ? `<div style="color:var(--mute);margin-top:6px">Holding ${w.shares} sh @ ${money(w.entry)} · stop ${money(w.stop)}${
+    w.catalyst ? ` · bought on: ${esc(w.catalyst)}` : ''}</div>` : `<div style="color:var(--mute);margin-top:6px">Passed ${w.mechanical_score ?? 0} of 3 screens · not held</div>${
+    w.why_not ? `<div style="margin-top:6px;color:var(--gold2)">Why not: <span style="color:var(--ink)">${esc(w.why_not)}</span></div>` : ''}`;
+  const call = callLine(w);
+  return `
+  <div class="box"><div class="tick">
+    <div><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><span class="s">${esc(w.symbol)}</span>${badge(w)}
+      <span class="k">${esc(w.cluster || '')}</span></div>${held}${call}</div>
+    <div><div class="p num">${money(w.price)}</div>
+      <div class="num ${cls(w.change_pct)}" style="text-align:right;font-size:15px">${pct(w.change_pct)} today</div>
+      <div class="num" style="text-align:right;color:var(--dim);font-size:12px">5D ${pct(w.change_5d)} · 30D ${pct(w.change_30d)}</div></div>
+  </div></div>
+  <div class="box"><div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <div class="k">90-day price · candles</div>
+      <div class="k"><span style="color:var(--c20)">━ SMA20 ${money(w.sma20)}</span> &nbsp; <span style="color:var(--c50)">━ SMA50 ${money(w.sma50)}</span></div></div>
+    ${candles(w)}</div>
+  <div class="gauges">
+    <div class="box g"><div class="k">RSI 14</div>${rsiGauge(w.rsi14)}</div>
+    <div class="box g"><div class="k">MACD (12,26,9)</div>${macdBars(w.macd_hist_line)}
+      <div class="num ${cls(w.macd_hist)}" style="font-weight:700">${has(w.macd_hist) ? (w.macd_hist > 0 ? '+' : '') + w.macd_hist : '—'}</div>
+      <div class="k" style="font-size:9.5px">histogram</div></div>
+    <div class="box g"><div class="k">Volume today</div><div class="big num">${big(w.volume)}</div>
+      <div style="height:5px;background:rgba(255,255,255,.06);border-radius:3px;margin:8px 4px">
+        <div style="height:5px;border-radius:3px;width:${Math.min(100, (w.volume_ratio || 0) / 2 * 100)}%;background:${(w.volume_ratio || 0) >= 1 ? 'var(--up)' : 'var(--down)'}"></div></div>
+      <div class="k" style="font-size:9.5px">${has(w.volume_ratio) ? w.volume_ratio + '× 20D avg' : 'no average yet'}</div></div>
+    <div class="box g"><div class="k">Trend distance</div>
+      <div class="num ${cls(w.vs_sma20_pct)}" style="font-size:16px;font-weight:800;margin-top:8px">${pct(w.vs_sma20_pct)}</div><div class="k" style="font-size:9.5px">vs SMA20</div>
+      <div class="num ${cls(w.vs_sma50_pct)}" style="font-size:16px;font-weight:800;margin-top:6px">${pct(w.vs_sma50_pct)}</div><div class="k" style="font-size:9.5px">vs SMA50</div></div>
+  </div>
+  <div class="box"><div class="k" style="color:var(--gold2)">What would change his mind</div>
+    ${(w.flips || []).map(([s, t]) => `<div class="flip"><span>→</span><span class="side s-${esc(s)}">${esc(s)}</span><span>${esc(t)}</span></div>`).join('')}</div>
+  <div class="box news"><div class="k">${esc(w.symbol)} news · ${(w.news || []).length}</div>
+    ${(w.news || []).map(n => `<div class="t">${esc(n.title)}<div class="src">${esc(n.publisher || '')}${n.published ? ' · ' + esc(String(n.published).slice(0, 16)) : ''}</div></div>`).join('')
+      || '<div class="empty">No headlines in his feed for this name.</div>'}</div>`;
+}
+
+function candles(w) {
+  const c = w.candles || [];
+  if (c.length < 2) return '<div class="empty">Candles appear after the fetcher\'s next run.</div>';
+  const W = 820, H = 300, L = 54, R = 8, T = 10, Bm = 24;
+  const lo = Math.min(...c.map(b => b[3]), ...(w.sma50_line || []).filter(has), ...(w.sma20_line || []).filter(has));
+  const hi = Math.max(...c.map(b => b[2]), ...(w.sma50_line || []).filter(has), ...(w.sma20_line || []).filter(has));
+  const span = hi - lo || 1, step = (W - L - R) / c.length, bw = Math.max(1.5, step * 0.62);
+  const y = v => T + (hi - v) / span * (H - T - Bm);
+  const x = i => L + step * i + step / 2;
+  let g = '';
+  for (let k = 0; k <= 4; k++) {
+    const v = lo + span * k / 4, yy = y(v);
+    g += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="rgba(255,255,255,.06)"/>
+      <text x="${L - 6}" y="${yy + 3}" fill="#596074" font-size="10" text-anchor="end">$${v.toFixed(v >= 100 ? 0 : 2)}</text>`;
+  }
+  const every = Math.max(1, Math.round(c.length / 6));
+  c.forEach((b, i) => {
+    const [d, o, h, l, cl] = b, up = cl >= o, col = up ? '#2fd39b' : '#f0646f';
+    g += `<line x1="${x(i)}" x2="${x(i)}" y1="${y(h)}" y2="${y(l)}" stroke="${col}" stroke-width="1"/>
+      <rect x="${x(i) - bw / 2}" y="${Math.min(y(o), y(cl))}" width="${bw}" height="${Math.max(1, Math.abs(y(o) - y(cl)))}" fill="${col}"/>`;
+    if (i % every === 0) g += `<text x="${x(i)}" y="${H - 6}" fill="#596074" font-size="10" text-anchor="middle">${esc(String(d).slice(5))}</text>`;
+  });
+  const line = (vals, col) => {
+    const pts = (vals || []).map((v, i) => has(v) ? `${x(i).toFixed(1)},${y(v).toFixed(1)}` : null).filter(Boolean);
+    return pts.length > 1 ? `<polyline points="${pts.join(' ')}" fill="none" stroke="${col}" stroke-width="1.6"/>` : '';
+  };
+  g += line(w.sma50_line, '#a78bfa') + line(w.sma20_line, '#4cc9f0');
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;margin-top:6px">${g}</svg>`;
+}
+
+function rsiGauge(v) {
+  const W = 150, H = 90, cx = 75, cy = 80, r = 60;
+  const at = t => [cx + r * Math.cos(Math.PI * (1 - t)), cy - r * Math.sin(Math.PI * (1 - t))];
+  const arc = (a, b, col) => { const [x1, y1] = at(a), [x2, y2] = at(b);
+    return `<path d="M${x1} ${y1} A${r} ${r} 0 0 1 ${x2} ${y2}" stroke="${col}" stroke-width="7" fill="none"/>`; };
+  const t = has(v) ? Math.max(0, Math.min(100, v)) / 100 : null;
+  const label = !has(v) ? '—' : v >= 70 ? 'OVERBOUGHT' : v <= 30 ? 'OVERSOLD' : 'NEUTRAL';
+  const needle = t === null ? '' : (() => { const [nx, ny] = [cx + (r - 14) * Math.cos(Math.PI * (1 - t)), cy - (r - 14) * Math.sin(Math.PI * (1 - t))];
+    return `<line x1="${cx}" y1="${cy}" x2="${nx}" y2="${ny}" stroke="#e8c26a" stroke-width="2.5"/><circle cx="${cx}" cy="${cy}" r="4" fill="#e8c26a"/>`; })();
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:170px">${arc(0, .3, '#2fd39b')}${arc(.3, .7, '#8b90a0')}${arc(.7, 1, '#f0646f')}${needle}</svg>
+    <div class="num" style="font-size:20px;font-weight:800;color:#e8c26a;margin-top:-4px">${has(v) ? v.toFixed(1) : '—'}</div>
+    <div class="k" style="font-size:10px">${label}</div>`;
+}
+
+function macdBars(v) {
+  if (!v || !v.length) return '<div class="empty">—</div>';
+  const W = 160, H = 64, m = Math.max(...v.map(Math.abs)) || 1, bw = W / v.length;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:190px;margin:8px 0 4px"><line x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}" stroke="rgba(255,255,255,.12)"/>${
+    v.map((h, i) => { const hh = Math.abs(h) / m * (H / 2 - 2);
+      return `<rect x="${i * bw + 0.5}" y="${h >= 0 ? H / 2 - hh : H / 2}" width="${Math.max(1, bw - 1.2)}" height="${Math.max(0.5, hh)}" fill="${h >= 0 ? '#2fd39b' : '#f0646f'}"/>`; }).join('')}</svg>`;
+}
+
+/* His call on each candidate that wake: belfort-trade.py calls files them,
+ * board() groups them by wake, the same name as the report's. */
+function callsBox(rep) {
+  const list = (B.calls || {})[String(rep.name).replace(/\.md$/, '')];
+  if (!list || !list.length) {
+    return rep === B.report ? '<div class="calls"><div class="k">His call on each name</div><div class="muted">None filed for this wake - he writes one per candidate from his next wake-up.</div></div>' : '';
+  }
+  return `<div class="calls"><div class="k">His call on each name · ${list.length}</div>${list.map(c => `
+    <div class="c"><button data-s="${esc(c.symbol)}">${esc(c.symbol)}</button><span class="sc num">${esc(c.score)}/10</span>
+      <span>${esc(c.reason)}</span></div>`).join('')}</div>`;
+}
+
+function callLine(w) {
+  const c = w.call;
+  if (!c) return w.held ? '' : `<div style="margin-top:6px;color:var(--dim)">His call: none filed for this name yet - he writes one per candidate each wake.</div>`;
+  const when = String(c.wake || '').replace(/^\d{4}-(\d{2})-(\d{2})-(\w+)$/, (m, mo, d, slot) => `${slot === 'open' ? '9:35' : slot === 'close' ? '3:55' : slot} ET ${mo}/${d}`);
+  return `<div style="margin-top:6px;color:var(--gold2)">His call (${esc(when)}): <span class="num">${esc(c.score)}/10</span> - <span style="color:var(--ink)">${esc(c.reason)}</span></div>`;
+}
+
+async function side() {
+  document.querySelectorAll('#tabs .tab').forEach(t => t.classList.toggle('on', t.dataset.t === tab));
+  if (tab === 'report') {
+    const rep = shownReport || B.report;
+    $('side').innerHTML = rep ? `<div class="k" style="margin-bottom:6px">${esc(rep.name)}</div>${callsBox(rep)}${mdToHtml(rep.text)}`
+      : '<div class="empty">No reports yet.</div>';
+    document.querySelectorAll('.calls [data-s]').forEach(el => el.onclick = () => {
+      sel = el.dataset.s; render(); $('center').scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+  } else if (tab === 'history') {
+    $('side').innerHTML = `<div class="hist">${(B.history || []).map(n => `<button data-f="${esc(n)}">${esc(n.replace(/\.md$/, ''))}</button>`).join('')
+      || '<div class="empty">No reports yet.</div>'}</div>`;
+    document.querySelectorAll('.hist button').forEach(b => b.onclick = async () => {
+      try {
+        const j = await (await fetch('/api/reports/belfort/' + encodeURIComponent(b.dataset.f), { cache: 'no-store' })).json();
+        shownReport = { name: j.name, text: j.markdown }; tab = 'report'; side();
+      } catch (e) { alert('Could not open that report: ' + e.message); }
+    });
+  } else if (tab === 'record') {
+    $('side').innerHTML = '<div class="empty">working out his record…</div>';
+    loadRecord();
+  } else {
+    $('side').innerHTML = '<div class="empty">loading the books…</div>';
+    loadBooks();
+  }
+}
+
+/* ---------------- his record and the monthly reviews ----------------
+ * From belfort-learn.py record --json: every number is worked out there.
+ * A review not yet opened in this browser puts a dot on the tab (and on the
+ * Deck's Markets tab) - the owner asked not to have to remember. */
+const SEEN = 'belfort-review-seen';
+function seenReview() { try { return localStorage.getItem(SEEN); } catch { return null; } }
+function markSeen(name) { try { localStorage.setItem(SEEN, name); } catch {} }
+let R = null, shownReview = null;
+
+async function fetchRecord() {
+  try { const r = await fetch('/api/belfort/record', { cache: 'no-store' }); R = await r.json(); if (!r.ok) throw new Error(R.error || r.status); }
+  catch (e) { R = { error: e.message }; }
+  const latest = R.reviews && R.reviews[0];
+  $('recdot').hidden = !(latest && latest.name !== seenReview());
+  return R;
+}
+
+async function loadRecord() {
+  await fetchRecord();
+  if (tab !== 'record') return;
+  if (R.error) { $('side').innerHTML = `<div class="err">Could not work out his record: ${esc(R.error)}</div>`; return; }
+  const revs = R.reviews || [];
+  if (revs[0]) { markSeen(revs[0].name); $('recdot').hidden = true; }
+  const shown = revs.find(r => r.name === shownReview) || revs[0];
+  const c = R.closed || {}, ps = R.passes || {};
+  const table = (groups, head, won) => {
+    const rows = Object.entries(groups || {}).filter(([, g]) => g.n).sort((a, b) => b[1].n - a[1].n);
+    return rows.length ? `<table><tr><th></th><th>${head}</th><th>${won}</th><th>average</th></tr>${rows.map(([k, g]) =>
+      `<tr><td>${esc(k)}</td><td class="num">${g.n}</td><td class="num">${g.win_rate}%</td><td class="num ${cls(g.avg_pct)}">${pct(g.avg_pct)}</td></tr>`).join('')}</table>`
+      : '<div class="muted" style="margin:4px 0 12px">None yet.</div>';
+  };
+  $('side').innerHTML = `<div class="rec bk">
+    <div class="verdict" style="margin-top:0">Worked out by code from his trades and his calls. A group under ${R.min_sample} is mostly luck.
+      He sees a summary of this every wake; it never changes his rules - the monthly review suggests, you decide.</div>
+    <div class="sect">Closed trades</div>
+    <div class="tr">${c.n ? `${c.n} closed · ${c.won} won (${c.win_rate}%) · average <span class="${cls(c.avg_pct)}">${pct(c.avg_pct)}</span>` : 'None yet.'}</div>
+    <div class="k" style="margin-top:10px">By the news he bought on</div>${table(R.by_catalyst, 'trades', 'won')}
+    <div class="k">By the score he gave</div>${table(R.by_score, 'trades', 'won')}
+    <div class="sect">Names he passed on, 10 trading days later vs SPY</div>
+    <div class="muted">${ps.called || 0} called · ${ps.measured || 0} measured so far (each needs 10 trading days)</div>
+    <div class="k" style="margin-top:10px">By the score he gave</div>${table(ps.by_score, 'calls', 'beat SPY')}
+    <div class="k">By group</div>${table(ps.by_cluster, 'calls', 'beat SPY')}
+    <div class="sect">Monthly reviews</div>
+    ${revs.length ? `<div class="revs">${revs.map(r => `<button data-r="${esc(r.name)}" class="${r === shown ? 'on' : ''}">${esc(r.name.replace(/\.md$/, ''))}</button>`).join('')}</div>${mdToHtml(shown.text)}`
+      : '<div class="muted">The first is written on the 1st of next month, 8:05 AM Eastern.</div>'}
+  </div>`;
+  document.querySelectorAll('.revs [data-r]').forEach(b => b.onclick = () => { shownReview = b.dataset.r; loadRecord(); });
+}
+
+/* ---------------- the two books: his, and the no-AI shadow book ----------------
+ * Every number comes from belfort-trade.py stats --json; nothing is worked
+ * out here. The shadow book's $10,000 is its own account: shown only here,
+ * and part of no total on the Deck. */
+async function loadBooks() {
+  let j;
+  try { j = await (await fetch('/api/belfort/books', { cache: 'no-store' })).json(); }
+  catch (e) { j = { error: e.message }; }
+  if (tab !== 'books') return;
+  if (j.error) { $('side').innerHTML = `<div class="err">Could not read the books: ${esc(j.error)}</div>`; return; }
+  const books = j.books || [];
+  const mine = books.find(b => b.book === 'belfort'), shadow = books.find(b => b.book === 'shadow');
+  const regime = `<div class="muted" style="margin:4px 0 10px">Market regime: <b>${esc(j.regime)}</b> - ${esc(j.regime_why)}</div>`;
+  const d = j.same_days;
+  let html = `<div class="bk"><div class="sect">Belfort (AI)</div>${regime}${mine ? bookStats(mine) + bookPositions(mine) + bookTrades(mine) : ''}
+    <div class="sect">No-AI book</div>`;
+  if (!shadow) {
+    html += `<div class="verdict">The no-AI book starts at Belfort's next wake-up (9:35 AM or
+      3:55 PM Eastern, weekdays): a separate $10,000 that follows his rules without his judgement.</div>`;
+  } else {
+    const pnl = shadow.value - shadow.starting_cash;
+    html += `<div class="verdict">A <b>separate $10,000 paper account</b>, not Belfort's money and not in any total on the
+      Deck. It follows his limits, the market check and his sell rules exactly, but buys the top-ranked candidate
+      instead of judging the news - so it shows whether his judgement adds anything.</div>
+    <div class="stats">
+      <div class="stat"><div class="l">Value</div><div class="v num">${money(shadow.value)}</div></div>
+      <div class="stat"><div class="l">P&amp;L</div><div class="v num ${cls(pnl)}">${money(pnl)}</div>
+        <div class="l ${cls(shadow.return_pct)}">${pct(shadow.return_pct)}</div></div>
+    </div>
+    ${d ? `<div class="sect">Same days, side by side</div>
+      <div class="tr">Since ${esc(d.since)}: <b>Belfort ${d.belfort_pct === null ? '— (from his next wake-up)' : pct(d.belfort_pct)}</b>
+        · <b>No-AI ${pct(d.shadow_pct)}</b> · QQQ ${pct(d.qqq_pct)} · SPY ${pct(d.spy_pct)}</div>` : ''}
+    ${bookStats(shadow)}${bookPositions(shadow)}${bookTrades(shadow)}`;
+  }
+  $('side').innerHTML = html + '</div>';
+}
+
+function bookPositions(b) {
+  if (!b.positions || !b.positions.length) return `<div class="muted" style="margin:8px 0">No open positions.</div>`;
+  return `<table><thead><tr><th>Sym</th><th>Sh</th><th>Entry</th><th>Last</th><th>P&L</th><th>Stop</th></tr></thead><tbody>${
+    b.positions.map(p => `<tr><td><b>${esc(p.symbol)}</b></td><td class="num">${p.shares}</td>
+      <td class="num">${money(p.entry)}</td><td class="num">${money(p.last)}</td>
+      <td class="num ${cls(p.pnl_pct)}">${pct(p.pnl_pct)}</td>
+      <td class="num">${money(p.stop)}</td></tr>`).join('')}</tbody></table>`;
+}
+
+function bookStats(b) {
+  const rules = Object.entries(b.exits_by_rule || {}).filter(([, n]) => n).map(([r, n]) => `${esc(r)} ${n}`).join(' · ');
+  return `<div class="stats">
+      <div class="stat"><div class="l">Return</div><div class="v num ${cls(b.return_pct)}">${pct(b.return_pct)}</div>
+        <div class="l">QQQ same days ${pct(b.qqq_return_pct)} · SPY ${pct(b.spy_return_pct)}</div></div>
+      <div class="stat"><div class="l">Biggest drop</div><div class="v num">${Number(b.max_drawdown_pct).toFixed(2)}%</div>
+        <div class="l">from a peak</div></div>
+      <div class="stat"><div class="l">Closed trades</div><div class="v num">${b.closed}</div>
+        <div class="l">win rate ${b.win_rate === null ? '—' : b.win_rate + '%'}</div></div>
+      <div class="stat"><div class="l">Avg win / loss</div><div class="v num">${pct(b.avg_win_pct)} / ${pct(b.avg_loss_pct)}</div>
+        <div class="l">profit factor ${b.profit_factor ?? '—'} · expectancy ${pct(b.expectancy_pct)}</div></div>
+    </div>
+    <div class="muted">Sells by rule: ${rules || 'none yet'}</div>`;
+}
+
+function bookTrades(b) {
+  if (!b.trades || !b.trades.length) return '';
+  return `<div class="sect">Recent trades</div>` + b.trades.map(t => `<div class="tr">
+    ${esc(String(t.utc || '').slice(0, 10))} · <b>${esc(t.side)} ${t.shares} ${esc(t.symbol)}</b> @ ${money(t.price)}
+    ${has(t.realised_pnl) ? `· <span class="${cls(t.realised_pnl)}">${money(t.realised_pnl)}</span>` : ''}
+    <div class="muted">${esc(t.reason || '')}</div></div>`).join('');
+}
+
+$('tabs').onclick = e => { const t = e.target.closest('[data-t]'); if (!t) return; tab = t.dataset.t; if (tab === 'report') shownReport = null; if (B) side(); };
+load();
+fetchRecord();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

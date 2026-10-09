@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{NAME}} | {{KIND}} in {{TOWN}}</title>
+<meta name="description" content="{{DESCRIPTION}}">
+<link rel="icon" href="img/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600&family=Young+Serif&display=swap">
+<link rel="stylesheet" href="style.css">
+<!-- The intro plays once per visit. This line runs before anything is drawn,
+     so a returning visitor never sees it flash. -->
+<script>try{if(sessionStorage.getItem('intro'))document.documentElement.classList.add('seen');sessionStorage.setItem('intro','1')}catch(e){}</script>
+</head>
+<body>
+
+<!-- INTRO: the business's mark draws itself, the name appears, and the page
+     shows through - about 1.5 seconds, once per visit, never for visitors who
+     ask for less motion. The mark is the same one as img/icon.svg: pick the
+     one in img/marks/ that fits what they make, and paste its <path>s here,
+     in the header, and in the hero background. -->
+<div class="intro" aria-hidden="true">
+  <div class="intro-inner">
+    <svg class="mark" viewBox="0 0 64 64" width="72" height="72">
+      <path pathLength="1" d="M14 30h30v8a15 15 0 0 1-15 15h0a15 15 0 0 1-15-15z"/>
+      <path pathLength="1" d="M44 33h4a6 6 0 0 1 0 12h-5"/>
+      <path pathLength="1" d="M8 58h46"/>
+      <path pathLength="1" d="M22 22c-3-4 3-6 0-10M30 22c-3-4 3-6 0-10M38 22c-3-4 3-6 0-10"/>
+    </svg>
+    <p class="intro-name">{{NAME}}</p>
+  </div>
+</div>
+
+<header class="top">
+  <div class="wrap top-row">
+    <a class="brand" href="#top">
+      <svg class="mark" viewBox="0 0 64 64" width="30" height="30" aria-hidden="true">
+        <path d="M14 30h30v8a15 15 0 0 1-15 15h0a15 15 0 0 1-15-15z"/>
+        <path d="M44 33h4a6 6 0 0 1 0 12h-5"/>
+        <path d="M8 58h46"/>
+        <path d="M22 22c-3-4 3-6 0-10M30 22c-3-4 3-6 0-10M38 22c-3-4 3-6 0-10"/>
+      </svg>
+      <span>{{NAME}}</span>
+    </a>
+    <nav class="nav" aria-label="Sections">
+      <a href="#offer">{{OFFER_NAV}}</a>
+      <a href="#visit">Hours &amp; location</a>
+      <a href="#about">About</a>
+    </nav>
+    <a class="btn btn-small" href="tel:{{PHONE_TEL}}">Call</a>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- HERO: what they sell and where, in their own photo. The headline is
+       never a slogan that would fit any business. -->
+  <section class="hero">
+    <svg class="hero-bg mark" viewBox="0 0 64 64" aria-hidden="true">
+      <path d="M14 30h30v8a15 15 0 0 1-15 15h0a15 15 0 0 1-15-15z"/>
+      <path d="M44 33h4a6 6 0 0 1 0 12h-5"/>
+      <path d="M8 58h46"/>
+      <path d="M22 22c-3-4 3-6 0-10M30 22c-3-4 3-6 0-10M38 22c-3-4 3-6 0-10"/>
+    </svg>
+    <div class="wrap hero-grid">
+      <div class="hero-text">
+        <p class="label">{{KIND}} &middot; {{TOWN}}</p>
+        <h1>{{HEADLINE}}</h1>
+        <p class="lede">{{INTRO}}</p>
+        <div class="actions">
+          <a class="btn" href="tel:{{PHONE_TEL}}">Call {{PHONE}}</a>
+          <a class="btn btn-quiet" href="{{MAPS_URL}}">Get directions</a>
+        </div>
+        <p class="today" hidden>Open today <strong data-today></strong></p>
+      </div>
+      <figure class="hero-photo">
+        <img src="img/{{HERO_IMG}}" alt="{{HERO_ALT}}" width="1200" height="1400">
+      </figure>
+    </div>
+  </section>
+
+  <!-- WHAT THEY OFFER. {{OFFER_NAV}} is one word for what they sell: Menu
+       (food), Services (barbers, salons, trades), Shop (retail), Prices.
+       FAVOURITES: a row that scrolls sideways - four to eight things they are
+       known for (dishes, cuts, jobs, products), each with a photo where they
+       have one. Names and prices exactly as their own menu or price list has
+       them; no price published, no price here. -->
+  <section class="section" id="offer" aria-labelledby="fav-title">
+    <div class="wrap row-head">
+      <div>
+        <p class="label">{{OFFER_NAV}}</p>
+        <h2 id="fav-title">{{FAVOURITES_TITLE}}</h2>
+      </div>
+      <div class="row-arrows">
+        <button class="arrow" type="button" data-scroll="favs" data-dir="-1" aria-label="Scroll back">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+        </button>
+        <button class="arrow" type="button" data-scroll="favs" data-dir="1" aria-label="Scroll forward">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="row" id="favs" tabindex="0" aria-label="{{FAVOURITES_TITLE}}">
+      <!-- repeat: one <article> per favourite -->
+      <article class="card">
+        <img src="img/{{ITEM_IMG}}" alt="{{ITEM_ALT}}" width="600" height="700" loading="lazy">
+        <div class="card-body">
+          <h3>{{ITEM_NAME}}</h3>
+          <p class="price">{{ITEM_PRICE}}</p>
+          <p>{{ITEM_NOTE}}</p>
+        </div>
+      </article>
+      <!-- end repeat -->
+    </div>
+
+    <!-- THE FULL LIST: their sections and items - a menu, a price list, the
+         jobs they do - as they publish it. A trade with no prices lists the
+         work and leaves the price span out. -->
+    <div class="wrap menu">
+      <!-- repeat: one <div class="menu-group"> per section -->
+      <div class="menu-group">
+        <h3>{{SECTION}}</h3>
+        <ul>
+          <!-- repeat: one <li> per item -->
+          <li><span>{{LINE}}</span><span class="dots" aria-hidden="true"></span><span>{{LINE_PRICE}}</span></li>
+          <!-- end repeat -->
+        </ul>
+      </div>
+      <!-- end repeat -->
+      <!-- Keep this link if their full list lives somewhere (a menu PDF,
+           their Facebook, a booking or ordering page); otherwise delete it.
+           MORE_TEXT says where it goes: "See the full menu", "Book online". -->
+      <p class="menu-more"><a href="{{MORE_URL}}">{{MORE_TEXT}}</a></p>
+    </div>
+  </section>
+
+  <!-- A wide photo between sections: their room, their counter, their work.
+       No caption that claims a stock photo is theirs. -->
+  <div class="band">
+    <img src="img/{{BAND_IMG}}" alt="{{BAND_ALT}}" width="2000" height="900" loading="lazy">
+  </div>
+
+  <section class="section" id="about" aria-labelledby="about-title">
+    <div class="wrap about">
+      <div>
+        <p class="label">About</p>
+        <h2 id="about-title">{{ABOUT_TITLE}}</h2>
+      </div>
+      <div class="about-text">
+        <!-- Two or three short paragraphs, every fact from one of their pages
+             (listed in target.json claims). -->
+        <p>{{ABOUT}}</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- WORDS FROM CUSTOMERS: delete this whole section unless every quote is
+       copied word for word from a public review, with the reviewer's name as
+       shown and a link to where it was posted, each listed in target.json
+       claims. Never shorten one into something it did not say, never invent
+       one, and never show a star rating or a count. -->
+  <section class="section section-tint" aria-labelledby="words-title">
+    <div class="wrap row-head">
+      <div>
+        <p class="label">From customers</p>
+        <h2 id="words-title">{{QUOTES_TITLE}}</h2>
+      </div>
+      <div class="row-arrows">
+        <button class="arrow" type="button" data-scroll="words" data-dir="-1" aria-label="Scroll back">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+        </button>
+        <button class="arrow" type="button" data-scroll="words" data-dir="1" aria-label="Scroll forward">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="row" id="words" tabindex="0" aria-label="{{QUOTES_TITLE}}">
+      <!-- repeat: one <figure> per quote -->
+      <figure class="quote">
+        <blockquote>{{QUOTE}}</blockquote>
+        <figcaption>{{QUOTE_NAME}} &middot; <a href="{{QUOTE_URL}}">{{QUOTE_SOURCE}}</a></figcaption>
+      </figure>
+      <!-- end repeat -->
+    </div>
+  </section>
+
+  <section class="section" id="visit" aria-labelledby="visit-title">
+    <div class="wrap visit">
+      <div>
+        <p class="label">Visit</p>
+        <h2 id="visit-title">{{ADDRESS_LINE1}}</h2>
+        <p class="address">{{ADDRESS_LINE2}}</p>
+        <div class="actions">
+          <a class="btn" href="tel:{{PHONE_TEL}}">Call {{PHONE}}</a>
+          <a class="btn btn-quiet" href="{{MAPS_URL}}">Get directions</a>
+        </div>
+      </div>
+      <!-- Their real hours, one row per day, Sunday is data-day="0". A closed
+           day says Closed. Today's row is marked by site.js. -->
+      <table class="hours">
+        <caption>Hours</caption>
+        <tbody>
+          <tr data-day="1"><th scope="row">Monday</th><td>{{MON}}</td></tr>
+          <tr data-day="2"><th scope="row">Tuesday</th><td>{{TUE}}</td></tr>
+          <tr data-day="3"><th scope="row">Wednesday</th><td>{{WED}}</td></tr>
+          <tr data-day="4"><th scope="row">Thursday</th><td>{{THU}}</td></tr>
+          <tr data-day="5"><th scope="row">Friday</th><td>{{FRI}}</td></tr>
+          <tr data-day="6"><th scope="row">Saturday</th><td>{{SAT}}</td></tr>
+          <tr data-day="0"><th scope="row">Sunday</th><td>{{SUN}}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-row">
+    <p class="brand-foot">{{NAME}}</p>
+    <p>{{ADDRESS_LINE1}}, {{ADDRESS_LINE2}}<br><a href="tel:{{PHONE_TEL}}">{{PHONE}}</a></p>
+  </div>
+</footer>
+
+<script src="site.js"></script>
+</body>
+</html>

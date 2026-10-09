@@ -1,0 +1,94 @@
+# Catch a bug on GitHub instead of on the droplet at 10pm.
+#
+# Everything here used to be caught by the droplet, hours later, by a timer,
+# after the model call had been paid for. A syntax error in a verifier, a
+# regex that truncated a model slug, a pattern that read `'schemaChars': 401`
+# as a rejected API key - all of them cheap to catch here and expensive to
+# catch there.
+name: tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # No dependencies by design: the scripts are standard library only, so
+      # the droplet needs nothing installed and neither does this.
+      - name: every script compiles
+        run: python3 -m compileall -q scripts/
+
+      # The Deck (mission-control-api) is Node, and its tests load its
+      # packages - better-sqlite3 among them. Nothing installed them, so 12
+      # Deck tests failed on every push and CI was red for reasons unrelated
+      # to the change being tested; a red that is always red stops being read.
+      # --ignore-scripts: the same install the suite is verified with locally.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: the Deck's packages
+        working-directory: mission-control-api
+        run: npm ci --ignore-scripts
+
+      # Clipper probes video with ffprobe, as it does on the droplet; one of
+      # its tests makes a real file and reads it back. The runner has no
+      # ffmpeg, and that test was the last red one once the Deck's packages
+      # went in (the annotations above named it).
+      - name: ffmpeg, for Clipper
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      # framing.py finds faces with OpenCV, as it does on the droplet. Only
+      # that, not all of clipper/requirements.txt: the transcriber's model is
+      # large and its tests use a stand-in.
+      - name: OpenCV, for Clipper's framing
+        run: python3 -m pip install -q opencv-python-headless==5.0.0.93
+
+      - name: tests
+        shell: bash
+        run: python3 -m unittest discover -s tests -v 2>&1 | tee test-output.txt
+
+      # The job log lives on a host the sessions that fix this code cannot
+      # reach; annotations come back through the API. So a red run names its
+      # failing tests and their errors here, instead of only "exit code 1".
+      - name: name the failures
+        if: failure()
+        shell: bash
+        run: |
+          grep -E "^(FAIL|ERROR): " test-output.txt | head -20 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+          grep -E "^[A-Za-z]*(Error|Exception): " test-output.txt | sort | uniq -c | head -15 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+
+      # Fixtures are captured from a live droplet and committed, and a
+      # credentials file is one bad `git add -A` from being tracked. Either
+      # would be public the moment it is pushed.
+      #
+      # This used to be a grep here, over tests/fixtures/ only. It has moved
+      # into a script so the patterns exist once and so the same check can run
+      # locally, in the test suite, BEFORE the push - by the time this job
+      # fails, the secret is already on GitHub.
+      - name: nothing credential-shaped is tracked
+        run: python3 scripts/check-secrets.py
+
+      # AGENTS.md is generated from a header by scripts/deploy.sh. A tracked
+      # copy would go stale silently and agents would run whichever the merge
+      # happened to win.
+      - name: generated files are not tracked
+        run: |
+          if git ls-files | grep -E 'agents/[^/]+/AGENTS\.md' ; then
+            echo "::error::AGENTS.md is generated - it must stay untracked"
+            exit 1
+          fi
+          echo "no generated AGENTS.md tracked"

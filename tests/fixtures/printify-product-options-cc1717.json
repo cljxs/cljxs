@@ -1,0 +1,256 @@
+{
+ "_source": "emily-printify.py options any on the droplet, 2026-10-05 (dad-s-little-boss-tee, Comfort Colors 1717). Transcribed from the owner's screenshots - a subset: values scrolled off screen (Pepper's code, Light Green's id) are left out, not guessed.",
+ "options": [
+  {
+   "name": "Clothing sizes",
+   "type": "size",
+   "values": [
+    {
+     "id": 14,
+     "title": "S"
+    },
+    {
+     "id": 1547,
+     "title": "M"
+    },
+    {
+     "id": 1548,
+     "title": "L"
+    },
+    {
+     "id": 1549,
+     "title": "XL"
+    },
+    {
+     "id": 18,
+     "title": "2XL"
+    },
+    {
+     "id": 19,
+     "title": "3XL"
+    },
+    {
+     "id": 20,
+     "title": "4XL"
+    }
+   ],
+   "display_in_preview": false
+  },
+  {
+   "name": "Comfort Colors\u00ae Colors",
+   "type": "color",
+   "values": [
+    {
+     "id": 2766,
+     "title": "White",
+     "colors": [
+      "#ffffff"
+     ]
+    },
+    {
+     "id": 3325,
+     "title": "Brick",
+     "colors": [
+      "#914A4A"
+     ]
+    },
+    {
+     "id": 3344,
+     "title": "Ivory",
+     "colors": [
+      "#FFF7E7"
+     ]
+    },
+    {
+     "id": 3351,
+     "title": "Mustard",
+     "colors": [
+      "#D0AE6E"
+     ]
+    },
+    {
+     "id": 3366,
+     "title": "Yam",
+     "colors": [
+      "#C9814F"
+     ]
+    },
+    {
+     "id": 4549,
+     "title": "Espresso",
+     "colors": [
+      "#846b5b"
+     ]
+    },
+    {
+     "id": 2763,
+     "title": "Butter",
+     "colors": [
+      "#F5E1A4"
+     ]
+    },
+    {
+     "id": 3324,
+     "title": "Blue Spruce",
+     "colors": [
+      "#536758"
+     ]
+    },
+    {
+     "id": 2818,
+     "title": "Lagoon Blue",
+     "colors": [
+      "#89E4ED"
+     ]
+    },
+    {
+     "id": 4802,
+     "title": "Sapphire",
+     "colors": [
+      "#03b2d3"
+     ]
+    },
+    {
+     "id": 3329,
+     "title": "Chambray",
+     "colors": [
+      "#E2F7FF"
+     ]
+    },
+    {
+     "id": 3359,
+     "title": "Flo Blue",
+     "colors": [
+      "#7682C2"
+     ]
+    },
+    {
+     "id": 3323,
+     "title": "Blue Jean",
+     "colors": [
+      "#636D82"
+     ]
+    },
+    {
+     "id": 3337,
+     "title": "Graphite",
+     "colors": [
+      "#373231"
+     ]
+    },
+    {
+     "id": 2767,
+     "title": "Black",
+     "colors": [
+      "#000000"
+     ]
+    },
+    {
+     "id": 2765,
+     "title": "Navy",
+     "colors": [
+      "#52525e"
+     ]
+    },
+    {
+     "id": 3363,
+     "title": "Violet",
+     "colors": [
+      "#A88FD7"
+     ]
+    },
+    {
+     "id": 4663,
+     "title": "Neon Violet",
+     "colors": [
+      "#e8ace3"
+     ]
+    },
+    {
+     "id": 3353,
+     "title": "Orchid",
+     "colors": [
+      "#CBB3CC"
+     ]
+    },
+    {
+     "id": 3322,
+     "title": "Blossom",
+     "colors": [
+      "#F8D1E2"
+     ]
+    },
+    {
+     "id": 4800,
+     "title": "Neon Pink",
+     "colors": [
+      "#f57caf"
+     ]
+    },
+    {
+     "id": 2815,
+     "title": "Crunchberry",
+     "colors": [
+      "#EB7CA2"
+     ]
+    },
+    {
+     "id": 3321,
+     "title": "Berry",
+     "colors": [
+      "#875570"
+     ]
+    },
+    {
+     "id": 3365,
+     "title": "Watermelon",
+     "colors": [
+      "#DA665F"
+     ]
+    },
+    {
+     "id": 3330,
+     "title": "Chili",
+     "colors": [
+      "#853F44"
+     ]
+    },
+    {
+     "id": 3332,
+     "title": "Crimson",
+     "colors": [
+      "#B65858"
+     ]
+    },
+    {
+     "id": 2764,
+     "title": "Red",
+     "colors": [
+      "#A80D27"
+     ]
+    }
+   ],
+   "display_in_preview": true
+  }
+ ],
+ "variants": [
+  {
+   "id": 73196,
+   "title": "S / Black",
+   "options": [
+    14,
+    2767
+   ],
+   "is_enabled": false
+  },
+  {
+   "id": 73197,
+   "title": "S / Navy",
+   "options": [
+    14,
+    2765
+   ],
+   "is_enabled": false
+  }
+ ]
+}

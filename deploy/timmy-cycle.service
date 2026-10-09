@@ -1,0 +1,23 @@
+[Unit]
+Description=Timmy agent cycle (THIS one costs fuel - 3x per trading day)
+Documentation=https://github.com/cljxs/cljxs
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WorkingDirectory=/root/ecosystem/agents/timmy
+# A fresh session id per wake is required; reused sessions cause runaway loops.
+#
+# The verifier is the point of this wrapper. systemd only sees the exit code,
+# which cannot distinguish four written reports from a paragraph printed into
+# the chat. Belfort and Scout both shipped that failure and both were logged
+# as successes. Timmy fails loudly instead.
+ExecStart=/bin/bash -lc 'M=/root/ecosystem/agents/timmy/MEMORY.md; \
+B=$(stat -c %%s "$M" 2>/dev/null || echo 0); S=$(date +%%s); \
+/usr/bin/openclaw agent --agent timmy --message "scheduled cycle" --session-id "wake-timmy-$(date +%%s)" --timeout 900 --json; \
+/usr/bin/python3 /root/ecosystem/scripts/timmy-verify.py "$B" "$S"'
+TimeoutStartSec=1200
+StandardOutput=journal
+StandardError=journal

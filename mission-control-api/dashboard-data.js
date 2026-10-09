@@ -1,0 +1,462 @@
+'use strict';
+
+// Read-only aggregation for the Command Deck dashboard.
+// This module NEVER writes inside agents/ — it only reads. The one file it
+// writes is tasks/dashboard-snapshots.json, which is dashboard-owned history.
+
+const fs = require('fs');
+const path = require('path');
+const { openDb, AGENTS_DIR, TASKS_DIR, readLimits } = require('./db');
+
+const SNAPSHOT_PATH = path.join(TASKS_DIR, 'dashboard-snapshots.json');
+const SNAPSHOT_MIN_GAP_MS = 15 * 60 * 1000;
+const SNAPSHOT_MAX_POINTS = 600;
+const STALE_MINUTES = 90;
+
+// Data is only "stale" if it should have been refreshed. The fetcher doesn't
+// run overnight or at weekends, so without this the dashboard would report the
+// system degraded every evening and all weekend.
+function usMarketOpen(now = new Date()) {
+  const et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const day = et.getDay();
+  if (day === 0 || day === 6) return false;
+  const mins = et.getHours() * 60 + et.getMinutes();
+  return mins >= 9 * 60 + 30 && mins <= 16 * 60;
+}
+
+function readJson(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+function firstOf(obj, keys, fallback = null) {
+  for (const k of keys) {
+    if (obj && obj[k] !== undefined && obj[k] !== null) return obj[k];
+  }
+  return fallback;
+}
+
+function num(v) {
+  // ABSENT IS NOT ZERO. Number(null) is 0 and Number('') is 0, and both are
+  // finite, so this returned 0 for a field that was not there at all. That
+  // is how an agent with no recorded starting capital got a baseline of
+  // zero - a number that looks real, reads as "started with nothing", and
+  // turned a $10,000 deposit into a $10,000 gain on the Deck.
+  if (v === null || v === undefined) return null;
+  // An empty string needs no guard of its own: parseFloat('') is NaN, which
+  // the finite check below already turns into null. One was written here and
+  // removed - it could not fail, so no test could hold it up.
+  const n = typeof v === 'string' ? parseFloat(v.replace(/[$,]/g, '')) : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function minutesSince(iso) {
+  if (!iso) return null;
+  const t = Date.parse(String(iso).replace(' ', 'T') + (String(iso).endsWith('Z') ? '' : 'Z'));
+  if (!Number.isFinite(t)) return null;
+  return Math.max(0, Math.round((Date.now() - t) / 60000));
+}
+
+// A folder containing a RETIRED file is an agent that has been stood down.
+// The folder stays - instructions, reports and history are worth keeping - but
+// it gets no card here and no house in the village. Deleting the file brings
+// it back, which beats editing a hardcoded list in two files and forgetting one.
+function isRetired(name) {
+  try { return fs.statSync(path.join(AGENTS_DIR, name, 'RETIRED')).isFile(); }
+  catch { return false; }
+}
+
+function listAgents() {
+  try {
+    return fs.readdirSync(AGENTS_DIR, { withFileTypes: true })
+      .filter(d => d.isDirectory() && !d.name.startsWith('.'))
+      .map(d => d.name)
+      .filter(n => !isRetired(n))
+      .sort();
+  } catch { return []; }
+}
+
+function latestReport(agentDir) {
+  const dir = path.join(agentDir, 'reports');
+  try {
+    const files = fs.readdirSync(dir)
+      .filter(f => !f.startsWith('.') && /\.(md|txt)$/i.test(f))
+      .map(f => ({ f, m: fs.statSync(path.join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.m - a.m);
+    if (!files.length) return { count: 0, name: null, when: null, excerpt: null };
+    const body = fs.readFileSync(path.join(dir, files[0].f), 'utf8');
+    const excerpt = body.split('\n')
+      .map(l => l.replace(/^[#>\-*\s]+/, '').trim())
+      .find(l => l.length > 20) || null;
+    return {
+      count: files.length,
+      name: files[0].f,
+      when: new Date(files[0].m).toISOString().replace('T', ' ').slice(0, 19),
+      excerpt: excerpt ? excerpt.slice(0, 220) : null,
+    };
+  } catch { return { count: 0, name: null, when: null, excerpt: null }; }
+}
+
+function lastMemoryLine(agentDir) {
+  try {
+    const lines = fs.readFileSync(path.join(agentDir, 'MEMORY.md'), 'utf8')
+      .split('\n').map(l => l.trim())
+      .filter(l => l.startsWith('-') && !/no cycles run yet/i.test(l));
+    return lines.length ? lines[lines.length - 1].replace(/^-\s*/, '').slice(0, 200) : null;
+  } catch { return null; }
+}
+
+// Portfolio shapes vary by agent, so every field is looked up by alias.
+function readPortfolio(agentDir) {
+  const dir = path.join(agentDir, 'state');
+  let p = readJson(path.join(dir, 'portfolio.json'));
+  if (!p) {
+    try {
+      const alt = fs.readdirSync(dir).find(f => /portfolio|bankroll|balance/i.test(f) && f.endsWith('.json') && !f.includes('seed'));
+      if (alt) p = readJson(path.join(dir, alt));
+    } catch { /* no state dir */ }
+  }
+  return p;
+}
+
+// The file an agent touches on EVERY run, including one that deliberately
+// produces nothing else. Checked by mtime because its contents are a one-line
+// summary, not a timestamp.
+const HEARTBEATS = ['state/last-run.txt', 'state/.cycle-started', 'state/last_run.txt'];
+
+function heartbeatAt(agentDir) {
+  let newest = null;
+  for (const rel of HEARTBEATS) {
+    try {
+      const st = fs.statSync(path.join(agentDir, rel));
+      if (!newest || st.mtimeMs > newest) newest = st.mtimeMs;
+    } catch { /* not every agent keeps one */ }
+  }
+  // Emily's work lands in builds/<slug>/build.json, not in state/ or reports/,
+  // so drafting a product or reading its publish state moved nothing this
+  // function could see. She showed as 24.5h idle while her newest file was
+  // 7.6h old.
+  try {
+    for (const d of fs.readdirSync(path.join(agentDir, 'builds'), { withFileTypes: true })) {
+      if (!d.isDirectory()) continue;
+      // builds/_removed/ holds builds the owner archived with emily-build.py.
+      // A moved folder keeps its mtime, so without this an archived build
+      // would keep Emily looking active forever. The leading underscore is
+      // the rule both readers use - the gallery's SLUG_RE rejects it too.
+      if (d.name.startsWith('_')) continue;
+      try {
+        const st = fs.statSync(path.join(agentDir, 'builds', d.name, 'build.json'));
+        if (!newest || st.mtimeMs > newest) newest = st.mtimeMs;
+      } catch { /* a build folder without one yet */ }
+    }
+  } catch { /* most agents have no builds/ */ }
+  return newest ? new Date(newest).toISOString() : null;
+}
+
+function markToMarket(agentDir, portfolio) {
+  const quotes = readJson(path.join(agentDir, 'data', 'quotes.json'));
+  const priceOf = sym => {
+    const q = quotes && quotes.quotes && quotes.quotes[sym];
+    return q ? num(q.price) : null;
+  };
+
+  const raw = Array.isArray(portfolio && portfolio.positions) ? portfolio.positions
+    : Array.isArray(portfolio && portfolio.open_bets) ? portfolio.open_bets : [];
+  const rows = [];
+  for (const pos of raw) {
+    const symbol = String(firstOf(pos, ['symbol', 'ticker', 'sym'], '') || '').toUpperCase();
+    if (!symbol) continue;
+    const shares = num(firstOf(pos, ['shares', 'qty', 'quantity', 'units', 'size']));
+    const entry = num(firstOf(pos, ['cost_basis', 'entry_price', 'entry', 'avg_price', 'buy_price', 'price', 'cost']));
+    const live = priceOf(symbol);
+    const cost = shares !== null && entry !== null ? shares * entry : null;
+    const value = shares !== null && live !== null ? shares * live : cost;
+    const pnl = value !== null && cost !== null ? value - cost : null;
+    rows.push({
+      symbol, shares, entry, price: live, cost,
+      value, pnl,
+      pnl_pct: pnl !== null && cost ? (pnl / cost) * 100 : null,
+      priced: live !== null,
+    });
+  }
+  return { rows, quotes_asof: quotes ? quotes.asof_utc : null };
+}
+
+// WHAT DID THIS AGENT START WITH. One answer, one place.
+//
+// Three pieces of code used to decide this and two of them made it up:
+// ace.js fell back to the literal 10000, ace-verify.py falls back to 10000,
+// and this file returned null. So the Deck showed Ace with no percentage
+// while Ace's own panel showed a confident one, computed against a number
+// nobody had read from anywhere.
+//
+// The seed file is a real recorded value and is used when the live file has
+// lost the key. A literal is not, and there is no longer one here: if
+// neither file says, the answer is "unknown", and everything downstream has
+// to cope with that rather than substituting a zero.
+function startingCapital(agentDir, portfolio) {
+  const fromLive = portfolio
+    ? num(firstOf(portfolio, ['starting_cash', 'starting_bankroll', 'start_balance', 'initial'], null))
+    : null;
+  if (fromLive !== null) return fromLive;
+  const dir = path.join(agentDir, 'state');
+  for (const f of ['bankroll.seed.json', 'portfolio.seed.json']) {
+    const seed = readJson(path.join(dir, f));
+    const v = seed
+      ? num(firstOf(seed, ['starting_cash', 'starting_bankroll', 'start_balance', 'initial', 'bankroll', 'cash'], null))
+      : null;
+    if (v !== null) return v;
+  }
+  return null;
+}
+
+
+function buildAgent(name) {
+  const dir = path.join(AGENTS_DIR, name);
+  const portfolio = readPortfolio(dir);
+  const report = latestReport(dir);
+  const memory = lastMemoryLine(dir);
+  const meta = readJson(path.join(dir, 'data', '_meta.json'));
+  const dataAge = meta ? minutesSince(meta.asof_utc) : null;
+
+  const { rows, quotes_asof } = markToMarket(dir, portfolio);
+  const cash = portfolio ? num(firstOf(portfolio, ['cash', 'bankroll', 'balance', 'available_cash'], 0)) ?? 0 : null;
+  const start = startingCapital(dir, portfolio);
+  const held = rows.reduce((s, r) => s + (r.value ?? 0), 0);
+  const value = portfolio ? cash + held : null;
+  const pnl = value !== null && start !== null ? value - start : null;
+
+  const cycles = portfolio ? num(firstOf(portfolio, ['cycle_count', 'cycles', 'runs'], null)) : null;
+  const runs = cycles !== null ? cycles : report.count;
+
+  // Trust whichever is NEWER. An agent that writes its report but forgets to
+  // update its state file would otherwise be reported as days idle when it
+  // actually ran minutes ago - which is exactly what Belfort did on 2026-09-14.
+  const stateRun = portfolio && firstOf(portfolio, ['last_cycle_utc', 'last_run', 'updated_at'], null);
+  const stateAge = minutesSince(stateRun);
+  const reportAge = minutesSince(report.when);
+  // Some agents write a report only when they have something to say. Scout is
+  // told to propose nothing when ideas are already piling up, and such a run
+  // writes state/last-run.txt and nothing else - so the two sources above both
+  // pointed at yesterday and the dashboard called a correct pass "1d ago".
+  // The heartbeat file is the one thing every run touches.
+  const beat = heartbeatAt(dir);
+  const beatAge = minutesSince(beat);
+  const candidates = [[stateAge, stateRun], [reportAge, report.when], [beatAge, beat]]
+    .filter(([age]) => age !== null)
+    .sort((a, b) => a[0] - b[0]);
+  const lastRun = candidates.length ? candidates[0][1] : null;
+  const lastRunAge = candidates.length ? candidates[0][0] : null;
+
+  let status = 'idle';
+  if (!portfolio && report.count === 0) status = 'waiting';
+  else if (dataAge !== null && dataAge > STALE_MINUTES && usMarketOpen()) status = 'stale';
+  else if (lastRunAge !== null && lastRunAge < 20) status = 'active';
+
+  return {
+    name,
+    status,
+    mode: portfolio ? firstOf(portfolio, ['mode'], null) : null,
+    last_run: lastRun,
+    last_run_age_min: lastRunAge,
+    data_age_min: dataAge,
+    quotes_asof,
+    runs,
+    report_count: report.count,
+    latest_report: report.name,
+    headline: report.excerpt || memory || null,
+    memory_line: memory,
+    has_portfolio: Boolean(portfolio),
+    cash, starting_cash: start, value, pnl,
+    pnl_pct: pnl !== null && start ? (pnl / start) * 100 : null,
+    positions: rows,
+  };
+}
+
+// Fury's latest briefing, surfaced on the dashboard so it is read on a phone
+// rather than by SSHing in - which is the entire point of having it.
+function latestBriefing() {
+  const dir = path.join(AGENTS_DIR, 'fury', 'reports');
+  try {
+    const files = fs.readdirSync(dir)
+      .filter(f => f.endsWith('.md'))
+      .map(f => ({ f, m: fs.statSync(path.join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.m - a.m);
+    if (!files.length) return null;
+    const body = fs.readFileSync(path.join(dir, files[0].f), 'utf8');
+    return {
+      name: files[0].f,
+      written: new Date(files[0].m).toISOString().replace('T', ' ').slice(0, 16),
+      age_min: Math.round((Date.now() - files[0].m) / 60000),
+      body: body.slice(0, 4000),
+    };
+  } catch { return null; }
+}
+
+function queueSpend(db) {
+  let byAgent = [];
+  let totalToday = 0;
+  let hasCost = false;
+  try {
+    byAgent = db.prepare(`
+      SELECT COALESCE(assignee,'unassigned') AS agent,
+             COUNT(*) AS runs,
+             COALESCE(SUM(cost_actual),0) AS cost
+      FROM tasks
+      WHERE status = 'done'
+      GROUP BY COALESCE(assignee,'unassigned')
+      ORDER BY cost DESC, runs DESC
+    `).all();
+    const t = db.prepare(`
+      SELECT COALESCE(SUM(cost_actual),0) AS c
+      FROM tasks WHERE status='done' AND date(completed_at) = date('now')
+    `).get();
+    totalToday = t ? t.c : 0;
+    hasCost = byAgent.some(r => r.cost > 0);
+  } catch { /* queue unreadable */ }
+  return { by_agent: byAgent, total_today: totalToday, has_cost_data: hasCost };
+}
+
+function dailyActivity(db, agents) {
+  const map = new Map();
+  try {
+    for (const r of db.prepare(`
+      SELECT date(completed_at) AS d, COUNT(*) AS n
+      FROM tasks WHERE completed_at IS NOT NULL
+      GROUP BY date(completed_at) ORDER BY d DESC LIMIT 14
+    `).all()) {
+      if (r.d) map.set(r.d, (map.get(r.d) || 0) + r.n);
+    }
+  } catch { /* ignore */ }
+
+  // Timer-driven agents never touch the queue, so also count their reports.
+  for (const a of agents) {
+    const dir = path.join(AGENTS_DIR, a.name, 'reports');
+    try {
+      for (const f of fs.readdirSync(dir)) {
+        const d = new Date(fs.statSync(path.join(dir, f)).mtimeMs).toISOString().slice(0, 10);
+        map.set(d, (map.get(d) || 0) + 1);
+      }
+    } catch { /* none */ }
+  }
+  // Emit a complete 14-day window (zeros included) so the chart reads as a
+  // chart from day one instead of a single slab.
+  const out = [];
+  for (let i = 13; i >= 0; i--) {
+    const day = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+    out.push({ d: day, n: map.get(day) || 0 });
+  }
+  return out;
+}
+
+// Dashboard-owned value history. Agents never see this file.
+function snapshotHistory(totalValue, totalStart) {
+  let hist = readJson(SNAPSHOT_PATH);
+  if (!Array.isArray(hist)) hist = [];
+  const now = Date.now();
+  const last = hist[hist.length - 1];
+  if (totalValue !== null && (!last || now - Date.parse(last.t) >= SNAPSHOT_MIN_GAP_MS)) {
+    // The baseline is recorded WITH the value. Without it the series is just
+    // a line that jumps when capital is added, and the jump reads as a gain -
+    // which is exactly what the near-vertical rise on the left of this chart
+    // has always been. Points carrying a baseline can be drawn as profit
+    // instead of as total money in the building.
+    hist.push({ t: new Date(now).toISOString(), v: Number(totalValue.toFixed(2)),
+                b: totalStart === null ? null : Number(totalStart.toFixed(2)) });
+    if (hist.length > SNAPSHOT_MAX_POINTS) hist = hist.slice(-SNAPSHOT_MAX_POINTS);
+    try {
+      fs.mkdirSync(TASKS_DIR, { recursive: true });
+      fs.writeFileSync(SNAPSHOT_PATH, JSON.stringify(hist));
+    } catch { /* read-only fs is fine, just skip history */ }
+  }
+  return hist;
+}
+
+// A DEPOSIT IS NOT A GAIN, and `?? 0` turned one into one.
+//
+// Every agent's VALUE counted towards the total; an agent whose starting
+// capital was unknown contributed zero to the START. Adding Ace's $10,000
+// bankroll therefore moved the total to $20,193.49 against a baseline still
+// holding only Belfort's $10,000, and the Deck reported +101.93% all time on
+// a combined profit of $193.49.
+//
+// So the total start is only summable when EVERY contributor's start is
+// known. When one is not, the combined figure is withheld and the agent is
+// named, rather than being computed from a baseline that silently excludes
+// somebody's capital.
+//
+// Pulled out of build() so it can be tested without a database.
+function combineCapital(withPortfolio) {
+  const value = withPortfolio.length
+    ? withPortfolio.reduce((s, a) => s + a.value, 0) : null;
+  const noStart = withPortfolio.filter(
+    a => a.starting_cash === null || a.starting_cash === undefined);
+  const start = noStart.length ? null
+    : (withPortfolio.reduce((s, a) => s + a.starting_cash, 0) || null);
+  const pnl = value !== null && start !== null ? value - start : null;
+  return {
+    value, start, pnl,
+    pct: pnl !== null && start ? (pnl / start) * 100 : null,
+    noStart: noStart.map(a => a.name),
+  };
+}
+
+
+function build() {
+  const db = openDb();
+  const agents = listAgents().map(buildAgent);
+
+  const withPortfolio = agents.filter(a => a.has_portfolio && a.value !== null);
+  const combined = combineCapital(withPortfolio);
+  const totalValue = combined.value, totalStart = combined.start, totalPnl = combined.pnl;
+  const openPositions = agents.reduce((s, a) => s + a.positions.length, 0);
+
+  let queue = { total: 0, byStatus: {} };
+  try {
+    const rows = db.prepare('SELECT status, COUNT(*) n FROM tasks GROUP BY status').all();
+    queue.byStatus = Object.fromEntries(rows.map(r => [r.status, r.n]));
+    queue.total = rows.reduce((s, r) => s + r.n, 0);
+  } catch { /* ignore */ }
+
+  const spend = queueSpend(db);
+  const history = snapshotHistory(totalValue, totalStart);
+  const daily = dailyActivity(db, agents);   // must run BEFORE the db is closed
+  const stale = agents.filter(a => a.status === 'stale').length;
+
+  db.close();
+
+  return {
+    generated_at: new Date().toISOString().replace('T', ' ').slice(0, 19),
+    health: {
+      api: 'up',
+      queue: queue.total >= 0 ? 'ok' : 'error',
+      agents_total: agents.length,
+      agents_stale: stale,
+      market_open: usMarketOpen(),
+      status: stale > 0 ? 'degraded' : 'healthy',
+    },
+    kpis: {
+      total_value: totalValue,
+      total_pnl: totalPnl,
+      total_pnl_pct: combined.pct,
+      total_start: totalStart,
+      // Named, so the Deck can say WHY there is no combined percentage
+      // instead of showing a blank where a number used to be.
+      start_unknown_for: combined.noStart,
+      open_positions: openPositions,
+      spend_today: spend.total_today,
+      has_cost_data: spend.has_cost_data,
+      runs_total: agents.reduce((s, a) => s + (a.runs ?? 0), 0),
+    },
+    agents,
+    briefing: latestBriefing(),
+    spend,
+    queue,
+    limits: readLimits(),
+    charts: {
+      value_series: history,
+      daily,
+    },
+  };
+}
+
+module.exports = { build, startingCapital, combineCapital };

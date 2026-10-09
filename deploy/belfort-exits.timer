@@ -1,0 +1,9 @@
+[Unit]
+Description=Belfort's midday sell-rule check, 12:35 Eastern on weekdays
+
+[Timer]
+OnCalendar=Mon..Fri 12:35 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target
