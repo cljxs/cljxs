@@ -74,7 +74,11 @@ MIN_CASH_PCT = 5.0          # the owner lowered it from 15% on 2026-10-01
 
 # The exit rules, in percent from cost.
 STOP_LOSS = -10.0           # close, no exceptions, no averaging down
-TAKE_PROFIT = 25.0          # close
+TAKE_PROFIT = 25.0          # sell half - or all of a 1-share position - once
+# Owner, 2026-10-09: half, not all. O'Neil's 20-25% rule says take most or
+# part there and keep the rest on a stop; Minervini and Qullamaggie sell part
+# into strength. The other half stays on the protect stop below, which keeps
+# rising with each new high - so a big run is no longer capped at +25%.
 PROTECT_AT = 8.0            # once a position has been up this much...
 TRAIL = 10.0                # ...its stop follows the highest price, this far below,
                             #    and never below what was paid
@@ -259,7 +263,10 @@ def exit_check(pos, q, qqq=None):
 
     if pnl <= -dist:
         return "stop", f"STOP LOSS: {pnl:+.1f}% from cost ${cb:,.2f} (its stop: -{dist:g}%)", stop
-    if pnl >= TAKE_PROFIT:
+    if pnl >= TAKE_PROFIT and not pos.get("trimmed"):
+        if float(pos.get("shares") or 0) >= 2:
+            return "trim", (f"TAKE PROFIT (half): {pnl:+.1f}% from cost ${cb:,.2f} - the rest rides "
+                            f"its stop"), stop
         return "take", f"TAKE PROFIT: {pnl:+.1f}% from cost ${cb:,.2f}", stop
     if peak_pnl >= PROTECT_AT and px <= stop:
         return "protect", (f"PROTECT GAIN: was up {peak_pnl:+.1f}% (high ${peak:,.2f}), now {pnl:+.1f}%, "
@@ -292,6 +299,27 @@ def exits_due(p):
         if rule:
             out.append((pos["symbol"], rule, reason))
     return out
+
+
+def apply_exits(p):
+    """Sell what exits_due() says, for either book - the one place a due exit
+    becomes a sale. A trim sells half (rounded down) and marks the position,
+    so it is never trimmed twice and its last sale can say what selling it all
+    at the trim would have made."""
+    did = []
+    for sym, rule, reason in exits_due(p):
+        pos = position(p, sym)
+        held = int(float(pos.get("shares") or 0))
+        if rule == "trim":
+            half = held // 2
+            if sell(p, sym, half, None, reason) == 0:
+                px = float(p["trades"][-1]["price"])
+                pos["trimmed"] = {"utc": now(), "price": px, "shares_before": held, "shares_sold": half,
+                                  "realised": float(p["trades"][-1]["realised_pnl"])}
+                did.append(f"sold {half} of {held} {sym}: {reason}")
+        elif sell(p, sym, "all", None, reason) == 0:
+            did.append(f"sold {sym}: {reason}")
+    return did
 
 
 def benchmark(symbol):
@@ -540,6 +568,9 @@ def buy(p, symbol, shares, price=None, reason="", score=0, cited=None, state=Non
 
     p["cash"] = round(float(p["cash"]) - cost, 2)
     if existing and float(existing.get("shares") or 0) > 0:
+        # A new average cost is a new position: it may trim again, and its
+        # half-versus-all comparison no longer means anything.
+        existing.pop("trimmed", None)
         old_sh = float(existing["shares"])
         existing["cost_basis"] = round(
             (old_sh * float(existing["cost_basis"]) + cost) / (old_sh + shares), 2)
@@ -591,6 +622,7 @@ def sell(p, symbol, shares_arg="all", price=None, reason=""):
     # THE BUG THIS SCRIPT EXISTS FOR: the proceeds go back into cash.
     p["cash"] = round(float(p["cash"]) + proceeds, 2)
     pos["shares"] = held - shares
+    trim = pos.get("trimmed") if pos["shares"] <= 0 else None
     if pos["shares"] <= 0:
         # A closed position leaves the book. Leaving zero-share rows in
         # positions is what filled the dashboard with $0.00 lines.
@@ -600,6 +632,11 @@ def sell(p, symbol, shares_arg="all", price=None, reason=""):
                         "shares": shares, "price": round(float(px), 2),
                         "notional": round(proceeds, 2), "realised_pnl": round(realised, 2),
                         "utc": now(), "reason": reason or ""})
+    if trim:
+        # Half at the trim, the rest here - against all of it at the trim.
+        p["trades"][-1]["trim_test"] = {
+            "actual": round(float(trim["realised"]) + realised, 2),
+            "all_at_trim": round((float(trim["price"]) - cb) * float(trim["shares_before"]), 2)}
     print(f"SOLD {shares} {sym} @ ${float(px):,.2f} = ${proceeds:,.2f}  "
           f"realised {realised:+,.2f}   cash now ${float(p['cash']):,.2f}")
     return 0
@@ -627,8 +664,7 @@ def shadow_turn(p):
     """The shadow book's cycle: the exits, then at most one buy - the first
     candidate (candidates.json is ranked by MACD histogram over price) it does not hold
     that every rule allows, sized like Belfort's. Returns what it did."""
-    did = [f"sold {sym}: {reason}" for sym, _, reason in exits_due(p)
-           if sell(p, sym, "all", None, reason) == 0]
+    did = apply_exits(p)
     state, why = regime()
     if state == "unfavorable":
         return did + [f"no buy: regime unfavourable ({why})"]
@@ -653,8 +689,7 @@ def shadow_turn(p):
 def cmd_shadow(a):
     p = load_shadow()
     if a.exits_only:
-        did = [f"sold {sym}: {reason}" for sym, _, reason in exits_due(p)
-               if sell(p, sym, "all", None, reason) == 0] or ["nothing due"]
+        did = apply_exits(p) or ["nothing due"]
         save(p, SHADOW)
         log_equity(p, "shadow")
         print("shadow book, midday exits: " + "; ".join(did))
@@ -743,7 +778,21 @@ def book_stats(p, book, doc=None):
         "exits_by_rule": {name: sum(1 for c in closed if c["rule"] == name)
                           for name in [n for _, n in RULE_NAMES] + ["judgement"]},
         "open": len([x for x in p["positions"] if float(x.get("shares") or 0) > 0]),
+        "trim_test": trim_test(p),
     }
+
+
+def trim_test(p):
+    """Half at +25% and the rest on the stop, against all of it at +25%, over
+    every trimmed position that has closed. The owner's rule (2026-10-09)
+    stays only if this says it earns more on his own trades."""
+    rows = [t["trim_test"] for t in p.get("trades", []) if t.get("trim_test")]
+    if not rows:
+        return None
+    actual = round(sum(r["actual"] for r in rows), 2)
+    all_at = round(sum(r["all_at_trim"] for r in rows), 2)
+    return {"positions": len(rows), "actual": actual, "all_at_trim": all_at,
+            "difference": round(actual - all_at, 2)}
 
 
 def bench_since(doc, symbol, since):
@@ -884,8 +933,10 @@ def board():
                 flips.append(["SELL", f"{why_now} - due at his next check"])
             if stop is not None:
                 flips.append(["SELL", f"if it closes at or under ${stop:,.2f} - its stop"])
-            if cb:
-                flips.append(["SELL", f"at ${cb * (1 + TAKE_PROFIT / 100):,.2f} - take profit (+{TAKE_PROFIT:g}% from cost)"])
+            if cb and not pos.get("trimmed"):
+                part = "half" if float(pos.get("shares") or 0) >= 2 else "all"
+                flips.append(["SELL", f"{part} at ${cb * (1 + TAKE_PROFIT / 100):,.2f} - take profit "
+                                      f"(+{TAKE_PROFIT:g}% from cost)"])
             row = {"shares": float(pos["shares"]), "entry": cb, "stop": stop, "score": pos.get("score"),
                    "pnl_pct": round((float(q["price"]) / cb - 1) * 100, 2) if cb and q.get("price") else None,
                    "catalyst": (pos.get("catalyst") or {}).get("title") if isinstance(pos.get("catalyst"), dict) else None}
@@ -1130,14 +1181,15 @@ def cmd_exits(a):
         print("exits: nothing due" + "".join(
             f"\n  {x['symbol']}: {exit_check(entry_of(p, x), quote(x['symbol']))[1]}" for x in held))
         return 0
-    for sym, rule, reason in due:
-        if not a.apply:
+    if not a.apply:
+        for sym, rule, reason in due:
             print(f"DUE {sym}: {reason}")
-        elif sell(p, sym, "all", None, reason) != 0:
-            return 1
-    if a.apply:
-        save(p)
-    return 0
+        return 0
+    did = apply_exits(p)
+    save(p)
+    for line in did:
+        print(line)
+    return 0 if len(did) == len(due) else 1
 
 
 def summary(p):

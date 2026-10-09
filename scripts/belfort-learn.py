@@ -274,6 +274,13 @@ def review(month=None):
         name = "Belfort (AI)" if b["book"] == "belfort" else "No-AI book"
         lines.append(f"- **{name}** since {b['since']}: {fmt(b['return_pct'])}. QQQ {fmt(b['qqq_return_pct'])}, "
                      f"SPY {fmt(b['spy_return_pct'])} over the same time. Worst drop {b['max_drawdown_pct']:.2f}%.")
+    for name, b in (("Belfort", books[0]), ("No-AI book", books[1] if len(books) > 1 else None)):
+        t = (b or {}).get("trim_test")
+        if t:
+            better = "half, then the stop" if t["difference"] > 0 else "selling it all at +25%"
+            lines.append(f"- **Take profit, {name}:** {t['positions']} trimmed position(s) closed. Half at +25% "
+                         f"and the rest on its stop made ${t['actual']:,.2f}; selling all at +25% would have "
+                         f"made ${t['all_at_trim']:,.2f} ({t['difference']:+,.2f}) - {better} did better.")
     if same:
         lines.append(f"- **Same days** since {same['since']}: Belfort {fmt(same['belfort_pct'])}, no-AI "
                      f"{fmt(same['shadow_pct'])}, QQQ {fmt(same['qqq_pct'])}, SPY {fmt(same.get('spy_pct'))}.")

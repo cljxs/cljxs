@@ -14974,7 +14974,10 @@ class BelfortsSellRulesAreCode(unittest.TestCase):
     def test_stop_loss_and_take_profit(self):
         self.assertEqual(trade.exit_check(self.pos(), self.q(90.0, [100, 95]))[0], "stop")
         self.assertIsNone(trade.exit_check(self.pos(), self.q(90.1, [100, 95]))[0])
-        self.assertEqual(trade.exit_check(self.pos(), self.q(125.0, [110, 120]))[0], "take")
+        self.assertEqual(trade.exit_check(self.pos(), self.q(125.0, [110, 120]))[0], "trim",
+                         "10 shares at +25%: half, not all (owner, 2026-10-09)")
+        self.assertEqual(trade.exit_check(dict(self.pos(), shares=1), self.q(125.0, [110, 120]))[0], "take",
+                         "one share cannot be halved: it all goes")
 
     def test_up_8_percent_then_back_to_cost_is_sold(self):
         # Never below what was paid, once it has been up 8%.
@@ -15056,6 +15059,49 @@ class BelfortsSellRulesAreCode(unittest.TestCase):
         self.assertEqual(trade.book_gap(after)[0], 0)
         self.assertTrue(after["trades"][-1]["reason"].startswith("PROTECT GAIN"))
         self.assertIn("nothing due", self.run_trade("exits", "--apply").stdout)
+
+    def test_half_at_25_percent_then_the_rest_rides_a_rising_stop(self):
+        # Owner, 2026-10-09: "would the stop loss keep rising if the stock keeps
+        # rising" - the walkthrough he was given, run: 4 shares at $100.
+        p = {"starting_cash": 10000.0, "cash": 9600.0, "cycle_count": 1,
+             "trades": [{"side": "BUY", "symbol": "WINR", "shares": 4, "price": 100, "notional": 400,
+                         "utc": "2026-09-21 13:36:00"}],
+             "positions": [dict(self.pos(), symbol="WINR", shares=4)]}
+        self.state.write_text(json.dumps(p))
+        quotes = lambda price, closes: self.quotes.write_text(json.dumps({"quotes": {"WINR": self.q(price, closes)}}))
+        quotes(125.0, [110, 120])
+        r = self.run_trade("exits", "--apply")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("sold 2 of 4 WINR: TAKE PROFIT (half)", r.stdout)
+        after = json.loads(self.state.read_text())
+        pos = after["positions"][0]
+        self.assertEqual((pos["shares"], pos["trimmed"]["price"], pos["trimmed"]["shares_before"]), (2, 125.0, 4))
+        self.assertIn("nothing due", self.run_trade("exits", "--apply").stdout, "trimmed once, never twice")
+
+        # It keeps climbing: the stop keeps rising, 10% under each new high.
+        for high in (140, 175, 200):
+            stop = trade.exit_check(trade.entry_of(after, pos), self.q(float(high), [110, 120, high]))[2]
+            self.assertEqual(stop, round(high * 0.9, 2))
+        # It falls back to the stop from a high of 200: the rest is sold there.
+        quotes(180.0, [110, 120, 150, 200, 185])
+        r = self.run_trade("exits", "--apply")
+        self.assertIn("PROTECT GAIN", r.stdout)
+        done = json.loads(self.state.read_text())
+        self.assertEqual(done["positions"], [])
+        self.assertEqual(trade.book_gap(done)[0], 0)
+        t = done["trades"][-1]["trim_test"]
+        self.assertEqual((t["actual"], t["all_at_trim"]), (50.0 + 160.0, 100.0),
+                         "2 at +$25 and 2 at +$80, against all 4 at +$25")
+        self.assertEqual(trade.trim_test(done)["difference"], 110.0)
+
+    def test_buying_more_starts_a_trimmed_position_over(self):
+        pos = dict(self.pos(), symbol="WINR", shares=2, trimmed={"price": 125.0, "shares_before": 4})
+        p = {"starting_cash": 10000.0, "cash": 9000.0, "trades": [], "positions": [pos]}
+        self.state.write_text(json.dumps(p))
+        self.quotes.write_text(json.dumps({"quotes": {"WINR": dict(self.q(130.0, [125, 130]), atr14=3.0)}}))
+        (self.quotes.parent / "news.json").write_text(json.dumps(fresh_news("WINR")))
+        trade.buy(p, "WINR", 1, 130.0, "TEST: adding", 8, None, ("favorable", "test"))
+        self.assertNotIn("trimmed", p["positions"][0], "a new average cost may trim again")
 
     def test_the_cash_floor_is_5_percent(self):
         self.state.write_text(json.dumps({"starting_cash": 10000.0, "cash": 10000.0, "positions": [], "trades": []}))
@@ -18278,6 +18324,18 @@ class BelfortLearnsFromNumbersNotMemory(unittest.TestCase):
         self.calls(rows)
         tips = self.learn.suggestions(self.learn.record())
         self.assertTrue(any("scored **6** and passed on went on to beat SPY" in t for t in tips), tips)
+
+    def test_the_review_says_whether_trimming_earned_more(self):
+        # Owner, 2026-10-09: half at +25% instead of all - kept only if his own
+        # trades say it earns more. The review is where he reads that.
+        self.book([self.trade("BUY", "NVDA", 4, 100.0, "2026-09-02 13:36:00"),
+                   self.trade("SELL", "NVDA", 2, 125.0, "2026-09-10 13:36:00", realised_pnl=50.0,
+                              reason="TAKE PROFIT (half): +25.0%"),
+                   self.trade("SELL", "NVDA", 2, 115.0, "2026-09-20 13:36:00", realised_pnl=30.0,
+                              reason="PROTECT GAIN", trim_test={"actual": 80.0, "all_at_trim": 100.0})])
+        text = self.learn.review("2026-09")
+        self.assertIn("Half at +25% and the rest on its stop made $80.00; selling all at +25% would have "
+                      "made $100.00 (-20.00) - selling it all at +25% did better.", text)
 
     def test_the_monthly_review_is_written_for_last_month(self):
         self.assertEqual(self.learn.last_month(datetime(2027, 1, 1, 8, 5)), "2026-12")

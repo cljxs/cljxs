@@ -122,7 +122,10 @@ you never sell to dodge one or hold past one.
   daily move (ATR) under the price paid**, never nearer than 5% or further
   than 15%. Positions bought before this rule (no stop stored) keep -10%.
   No averaging down.
-- **Take profit:** sold at **+25%**.
+- **Take profit:** at **+25%**, **half** is sold (all of a 1-share position).
+  The rest stays on its protect stop below and keeps rising with each new
+  high - a winner is no longer capped at +25%. A position is trimmed once;
+  buying more of it starts it over.
 - **Protect a gain:** once a position has been **+8%**, its stop follows the
   highest price since entry, the same distance below it, **never below what
   you paid**.
