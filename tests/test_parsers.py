@@ -17694,6 +17694,73 @@ class LettersAndColoursOnAGarment(unittest.TestCase):
         self.assertEqual(self.alpha_at(w, px, cx, cy - 6), 0, "the inside of the O is transparent")
         self.assertNotEqual(self.alpha_at(w, px, cx, cy), 0, "the near-background dot survives")
 
+    def disc_with_o(self, disc=True, size=320):
+        """Your sticker's case (2026-10-09, "NOPE."): white background, a grey
+        disc in the mockup's own measured grey (194, 199, 199), and a bold
+        black O whose inside the image model drew white - with soft edges
+        between every colour, as generated art has."""
+        k = load(f"knockout_disc_{disc}", "knockout.py")
+        GREY, BLACK, WHITE = (194, 199, 199), (25, 25, 25), (255, 255, 255)
+        c = size // 2
+        mix = lambda a, b, t: tuple(round(x + (y - x) * t) for x, y in zip(a, b))
+        px = bytearray()
+        for y in range(size):
+            for x in range(size):
+                r = ((x - c) ** 2 + (y - c) ** 2) ** 0.5
+                base = GREY if disc and r < c - 6 else WHITE
+                if 18 <= r <= 40:
+                    col = BLACK                                  # the stroke of the O
+                elif 16 <= r < 18:
+                    col = mix(WHITE, BLACK, (r - 16) / 2)         # soft inner edge
+                elif 40 < r <= 42:
+                    col = mix(BLACK, base, (r - 40) / 2)          # soft outer edge
+                elif r < 16:
+                    col = WHITE                                   # the inside, drawn white
+                else:
+                    col = base
+                px += bytes(col) + b"\xff"
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        k.encode(d / "in.png", size, size, px)
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knockout.py"), str(d / "in.png"), str(d / "out.png"),
+                            "--counters", "--keep-specks"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        w, h, out = k.decode(d / "out.png")
+        mid = ((h // 2) * w + w // 2) * 4
+        return r.stdout, tuple(out[mid:mid + 4])
+
+    def test_a_letter_on_a_disc_keeps_the_discs_colour_inside(self):
+        said, centre = self.disc_with_o(disc=True)
+        self.assertEqual(centre, (194, 199, 199, 255), "grey inside the O, as around it - not white vinyl")
+        self.assertIn("filled", said)
+
+    def test_a_glint_in_an_eye_is_not_painted_over(self):
+        # White inside yellow inside a black outline, on a big grey face: the
+        # shape of a letter hole, but the black around it is a thin line, not a
+        # field - so the glint is cleared (white vinyl), never filled black.
+        k = load("knockout_eye", "knockout.py")
+        size, c = 320, 160
+        px = bytearray()
+        for y in range(size):
+            for x in range(size):
+                r = ((x - c) ** 2 + (y - c) ** 2) ** 0.5
+                col = ((255, 255, 255) if r < 8 else (235, 190, 40) if r < 30 else (20, 20, 20) if r < 36
+                       else (194, 199, 199) if r < c - 6 else (255, 255, 255))
+                px += bytes(col) + b"\xff"
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        k.encode(d / "in.png", size, size, px)
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knockout.py"), str(d / "in.png"), str(d / "out.png"),
+                            "--counters", "--keep-specks"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        w, h, out = k.decode(d / "out.png")
+        mid = ((h // 2) * w + w // 2) * 4
+        self.assertEqual(out[mid + 3], 0, "the glint is cleared, as before - not filled with the outline's black")
+
+    def test_a_letter_on_nothing_still_has_its_inside_cleared(self):
+        said, centre = self.disc_with_o(disc=False)
+        self.assertEqual(centre[3], 0, "an O straight on the sticker: its inside is cleared, as before")
+
     def test_a_badge_keeps_a_big_enclosed_field(self):
         # A frame enclosing more than COUNTER_MAX_PCT of the image in the
         # background colour: that is the design, and only --holes clears it.

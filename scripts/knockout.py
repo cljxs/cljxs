@@ -485,7 +485,96 @@ def all_over_verdict(w, h, px):
 COUNTER_MAX_PCT = 2.0
 
 
-def holes(w, h, px, bg, tolerance=DEFAULT_TOLERANCE, max_pct=None):
+# What surrounds a letter decides what its hole should be. "NOPE." on a grey
+# disc (2026-10-09): the image model drew the inside of the O and the P white,
+# the background colour, and clearing it printed white vinyl inside grey - the
+# letters looked filled in. When the shape around a hole stands on a backdrop
+# of its own, the hole takes the backdrop's colour; when it stands on nothing
+# (the background, cleared), the hole is cleared as before.
+BACKDROP_MIN_OPAQUE = 0.6       # share of the pixels around the letter that must be opaque
+STROKE_MAX_PCT = 5.0            # a "letter" bigger than this is not one; leave the hole alone
+# ...and the backdrop must be a FIELD - a disc, a banner - not a thin line. A
+# white glint in a cartoon eye is also white inside a colour inside a black
+# outline; filling it with the outline's black would erase it. A disc covers a
+# good part of a sticker; an eye's outline does not.
+FIELD_MIN_PCT = 20.0
+
+
+def _ring(w, h, start, k1, k2, exclude):
+    """Pixels at 4-connected distance k1..k2 from the set `start`, not in `exclude`."""
+    dist = {i: 0 for i in start}
+    q, out = deque(start), []
+    while q:
+        i = q.popleft()
+        d = dist[i]
+        if d >= k2:
+            continue
+        x, y = i % w, i // w
+        for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+            if 0 <= nx < w and 0 <= ny < h:
+                n = ny * w + nx
+                if n not in dist:
+                    dist[n] = d + 1
+                    q.append(n)
+                    if d + 1 >= k1 and n not in exclude:
+                        out.append(n)
+    return out
+
+
+def _median(px, idx):
+    cs = sorted(idx, key=lambda i: px[i * 4] + px[i * 4 + 1] + px[i * 4 + 2])
+    m = cs[len(cs) // 2] * 4
+    return px[m], px[m + 1], px[m + 2]
+
+
+def backdrop(w, h, px, piece, tolerance=DEFAULT_TOLERANCE):
+    """The colour around the shape that encloses `piece`, or None when that
+    shape stands on nothing - the background, or what knockout cleared.
+
+    The letter is the colour two or three pixels out from the hole (past its
+    anti-aliased edge); it is grown to its whole glyph, and what lies two or
+    three pixels outside the glyph is what the letter sits on."""
+    inside = set(piece)
+    near = [i for i in _ring(w, h, piece, 2, 3, inside) if px[i * 4 + 3]]
+    if not near:
+        return None
+    sr, sg, sb = _median(px, near)
+    like = lambda i: px[i * 4 + 3] and abs(px[i * 4] - sr) <= tolerance \
+        and abs(px[i * 4 + 1] - sg) <= tolerance and abs(px[i * 4 + 2] - sb) <= tolerance
+    glyph = {i for i in _ring(w, h, piece, 1, 3, inside) if like(i)}
+    q, cap = deque(glyph), w * h * STROKE_MAX_PCT / 100.0
+    while q:
+        i = q.popleft()
+        x, y = i % w, i // w
+        for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+            if 0 <= nx < w and 0 <= ny < h:
+                n = ny * w + nx
+                if n not in glyph and n not in inside and like(n):
+                    glyph.add(n)
+                    if len(glyph) > cap:
+                        return None
+                    q.append(n)
+    around = _ring(w, h, glyph | inside, 2, 3, glyph | inside)
+    opaque = [i for i in around if px[i * 4 + 3]]
+    if not around or len(opaque) < BACKDROP_MIN_OPAQUE * len(around):
+        return None
+    c = _median(px, opaque)
+    near_c = lambda i: px[i * 4 + 3] and all(abs(px[i * 4 + k] - c[k]) <= tolerance for k in range(3))
+    field = {i for i in opaque if near_c(i)}
+    q, need = deque(field), w * h * FIELD_MIN_PCT / 100.0
+    while q and len(field) < need:
+        i = q.popleft()
+        x, y = i % w, i // w
+        for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+            if 0 <= nx < w and 0 <= ny < h:
+                n = ny * w + nx
+                if n not in field and near_c(n):
+                    field.add(n)
+                    q.append(n)
+    return c if len(field) >= need else None
+
+
+def holes(w, h, px, bg, tolerance=DEFAULT_TOLERANCE, max_pct=None, report=None):
     """Clear background left ENCLOSED by the art. Returns pixels cleared.
 
     knockout() floods inward from the border, so background it cannot reach -
@@ -494,6 +583,10 @@ def holes(w, h, px, bg, tolerance=DEFAULT_TOLERANCE, max_pct=None):
     letters: "WILD & FREE ON THE TRAIL" (2026-10-05) on eight tee colours. Only
     the closest matches go - half the flood's tolerance - so lettering in a
     shade near the background is not eaten with it.
+
+    A hole whose letter stands on a backdrop of its own (a disc, a banner) is
+    filled with that backdrop's colour instead of cleared - see backdrop().
+    `report`, a dict, is given "filled": pixels filled that way.
     """
     br, bg_, bb = bg
     tight = max(4, tolerance // 2)
@@ -503,16 +596,11 @@ def holes(w, h, px, bg, tolerance=DEFAULT_TOLERANCE, max_pct=None):
         return px[j + 3] and abs(px[j] - br) <= tight and abs(px[j + 1] - bg_) <= tight \
             and abs(px[j + 2] - bb) <= tight
 
-    cleared = 0
-    if max_pct is None:
-        for i in range(w * h):
-            if match(i):
-                px[i * 4 + 3] = 0
-                cleared += 1
-        return cleared
-    # Only pieces no bigger than max_pct of the frame: four-connected runs of
-    # enclosed background, each measured before any of it is cleared.
-    limit, seen = w * h * max_pct / 100.0, bytearray(w * h)
+    # Pieces: four-connected runs of enclosed background, each measured and
+    # judged before any of it changes. With max_pct, bigger pieces stay - a
+    # big enclosed field can be the design itself (the inside of a badge).
+    limit = None if max_pct is None else w * h * max_pct / 100.0
+    seen, cleared, filled = bytearray(w * h), 0, 0
     for start in range(w * h):
         if seen[start] or not match(start):
             continue
@@ -528,10 +616,20 @@ def holes(w, h, px, bg, tolerance=DEFAULT_TOLERANCE, max_pct=None):
                     if not seen[n] and match(n):
                         seen[n] = 1
                         q.append(n)
-        if len(piece) <= limit:
-            for i in piece:
+        if limit is not None and len(piece) > limit:
+            continue
+        c = backdrop(w, h, px, piece, tolerance)
+        for i in piece:
+            if c:
+                px[i * 4], px[i * 4 + 1], px[i * 4 + 2] = c
+            else:
                 px[i * 4 + 3] = 0
+        if c:
+            filled += len(piece)
+        else:
             cleared += len(piece)
+    if report is not None:
+        report["filled"] = filled
     return cleared
 
 
@@ -617,12 +715,13 @@ def main():
     # A garment prints whatever is opaque, so background the flood could not
     # reach goes too. Not on a sticker: the white inside a badge can be the
     # design, and the vinyl under it is white anyway.
-    if "--holes" in sys.argv:
-        n = holes(w, h, px, background_colour(w, h, px), tol)
-        print(f"holes: cleared {n:,} px of background enclosed by the art")
-    elif "--counters" in sys.argv:
-        n = holes(w, h, px, background_colour(w, h, px), tol, COUNTER_MAX_PCT)
-        print(f"counters: cleared {n:,} px of background inside letters and small gaps")
+    if "--holes" in sys.argv or "--counters" in sys.argv:
+        rep = {}
+        cap = COUNTER_MAX_PCT if "--counters" in sys.argv else None
+        n = holes(w, h, px, background_colour(w, h, px), tol, cap, rep)
+        what = "background enclosed by the art" if cap is None else "background inside letters and small gaps"
+        print(f"{'holes' if cap is None else 'counters'}: cleared {n:,} px of {what}; "
+              f"filled {rep['filled']:,} px with the colour the letter sits on")
 
     if "--keep-specks" not in sys.argv:
         wiped, parts, why = despeckle(w, h, px)
