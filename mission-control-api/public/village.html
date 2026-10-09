@@ -3202,7 +3202,8 @@ function drawPost(k){
         <button class="yes" data-clip="approve" data-id="${k.id}">Approve &amp; post</button>
         <button data-clip="edit" data-id="${k.id}">Edit text</button>
         <button data-clip="redraft" data-id="${k.id}">New draft</button>
-        <button class="no" data-clip="reject" data-id="${k.id}">Reject</button></div>
+        <button class="no" data-clip="reject" data-id="${k.id}">Reject</button>
+        <button data-clip="recut" data-id="${k.id}">Fix subtitles</button></div>
       <div class="muted">${dl}</div>`;
   }
   const pubs = (k.publications || []).map(u => {
@@ -3287,6 +3288,9 @@ async function clipCard(kind, id, platform){
     if (!body) return;
   } else if (kind === 'posted') {
     if (!confirm('Mark this clip as posted on TikTok? It will not be offered again.')) return;
+  } else if (kind === 'recut') {
+    if (!confirm('Cut this clip again so its subtitles use your corrected spellings? '
+        + 'It takes a minute or two; the clip keeps its number.')) return;
   }
   clipBusy = true;
   document.querySelectorAll('#clipClips button').forEach(b => b.disabled = true);

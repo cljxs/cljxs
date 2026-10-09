@@ -56,12 +56,16 @@ def stage_transcribe(conn, paths, cfg, video):
     return "transcribed"
 
 
+def spellings_of(conn, video):
+    src = conn.execute("SELECT spellings FROM sources WHERE id = ?", (video["source_id"],)).fetchone()
+    return json.loads(src["spellings"]) if src and src["spellings"] else []
+
+
 def words_of(conn, paths, video):
     """A video's transcript words with its source's spellings applied - the
     one way every stage reads them, so what was scored is what is captioned."""
-    src = conn.execute("SELECT spellings FROM sources WHERE id = ?", (video["source_id"],)).fetchone()
     words = json.loads((folder(paths, video) / "transcript.json").read_text())["words"]
-    return transcribe.respell(words, json.loads(src["spellings"]) if src and src["spellings"] else [])
+    return transcribe.respell(words, spellings_of(conn, video))
 
 
 def already_a_clip(cfg, video):
@@ -136,6 +140,62 @@ def stage_find(conn, paths, cfg, video):
     return "found"
 
 
+def cut_clip(cfg, video, src, c, words, out, conn):
+    """Render one chosen moment to `out` and return its meta - the one way a
+    clip is cut, for the first render and for recut() alike."""
+    cut = conn.execute("SELECT * FROM cutlist WHERE id = ?", (c["cut_id"],)).fetchone() if c["cut_id"] else None
+    scfg = render.source_cfg(cfg, src)
+    hook = cut["hook"] if cut and cut["hook"] else None
+    top = render.hook_top(render.check_watermark(src["watermark"], scfg) if src["watermark"] else None) \
+        if hook else captions.HOOK_TOP
+    ass = captions.build(words, c["start"], c["end"], cfg["caption_style"],
+                         cfg["caption_uppercase"], cfg["caption_max_words"],
+                         cfg["caption_max_chars"], hook=hook, hook_top=top)
+    info = render.render(video["media_path"], out, c["start"], c["end"], ass,
+                         scfg, watermark=src["watermark"])
+    return {"source": src["name"], "rights": src["rights"], "evidence": src["evidence"],
+            "watermark": Path(src["watermark"]).name if src["watermark"] else None,
+            "hook": hook, "campaign_key": cut["key"] if cut else None,
+            "framing": info.get("framing"),
+            "attribution": src["attribution"], "video_title": video["title"],
+            "origin": video["origin"], "start": c["start"], "end": c["end"],
+            "score": c["score"], "scorer": c["scorer"],
+            "features": json.loads(c["features"]), "reasons": json.loads(c["reasons"]),
+            "text": c["text"], "width": info["width"], "height": info["height"],
+            "duration": info["duration"]}
+
+
+def recut(conn, paths, cfg, clip_id):
+    """Cut a clip again, same moment and same number, with the source's
+    spellings as they are now. Owner, 2026-10-09: the subtitles burned into a
+    clip said "Amber Woolf" after the post text was fixed to Wolves. Refused
+    once it is posted anywhere: what is out there and the file must match."""
+    clip = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
+    if not clip:
+        raise ValueError(f"no clip {clip_id}")
+    if clip["status"] not in ("rendered", "approved") or conn.execute(
+            "SELECT 1 FROM publications WHERE clip_id = ? AND status = 'posted'", (clip_id,)).fetchone():
+        raise ValueError(f"clip {clip_id} is already posted - a posted video cannot change")
+    video = conn.execute("SELECT * FROM videos WHERE id = ?", (clip["video_id"],)).fetchone()
+    src = conn.execute("SELECT * FROM sources WHERE id = ?", (video["source_id"],)).fetchone()
+    c = conn.execute("SELECT * FROM candidates WHERE id = ?", (clip["candidate_id"],)).fetchone()
+    out = Path(clip["path"])
+    tmp = out.with_name(out.stem + ".recut" + out.suffix)
+    meta = cut_clip(cfg, video, src, c, words_of(conn, paths, video), tmp, conn)
+    meta["text"] = transcribe.respell_text(c["text"], spellings_of(conn, video))
+    # Everything the render wrote beside the video - the subtitle file too -
+    # takes the clip's own name, or the old subtitles stay on disk as the
+    # clip's and a stray 05.recut.ass is left behind (found by the test).
+    for f in list(out.parent.glob(tmp.stem + ".*")):
+        f.replace(out.with_suffix(f.suffix))
+    out.with_suffix(".json").write_text(json.dumps(meta, indent=1))
+    with conn:
+        conn.execute("UPDATE clips SET meta = ? WHERE id = ?", (db.as_json(meta), clip_id))
+    db.event(conn, "render", f"clip {clip['rank']} recut with the current spellings",
+             video_id=video["id"], clip_id=clip_id)
+    return meta
+
+
 def stage_render(conn, paths, cfg, video):
     words = words_of(conn, paths, video)
     src = conn.execute("SELECT * FROM sources WHERE id = ?", (video["source_id"],)).fetchone()
@@ -153,26 +213,7 @@ def stage_render(conn, paths, cfg, video):
         rank = conn.execute("SELECT COALESCE(MAX(rank), 0) + 1 FROM clips WHERE video_id = ?",
                             (video["id"],)).fetchone()[0]
         out = out_dir / f"{rank:02d}.mp4"
-        cut = conn.execute("SELECT * FROM cutlist WHERE id = ?", (c["cut_id"],)).fetchone() if c["cut_id"] else None
-        scfg = render.source_cfg(cfg, src)
-        hook = cut["hook"] if cut and cut["hook"] else None
-        top = render.hook_top(render.check_watermark(src["watermark"], scfg) if src["watermark"] else None) \
-            if hook else captions.HOOK_TOP
-        ass = captions.build(words, c["start"], c["end"], cfg["caption_style"],
-                             cfg["caption_uppercase"], cfg["caption_max_words"],
-                             cfg["caption_max_chars"], hook=hook, hook_top=top)
-        info = render.render(video["media_path"], out, c["start"], c["end"], ass,
-                             scfg, watermark=src["watermark"])
-        meta = {"source": src["name"], "rights": src["rights"], "evidence": src["evidence"],
-                "watermark": Path(src["watermark"]).name if src["watermark"] else None,
-                "hook": hook, "campaign_key": cut["key"] if cut else None,
-                "framing": info.get("framing"),
-                "attribution": src["attribution"], "video_title": video["title"],
-                "origin": video["origin"], "start": c["start"], "end": c["end"],
-                "score": c["score"], "scorer": c["scorer"],
-                "features": json.loads(c["features"]), "reasons": json.loads(c["reasons"]),
-                "text": c["text"], "width": info["width"], "height": info["height"],
-                "duration": info["duration"]}
+        meta = cut_clip(cfg, video, src, c, words, out, conn)
         out.with_suffix(".json").write_text(json.dumps(meta, indent=1))
         with conn:
             conn.execute("INSERT INTO clips (video_id, candidate_id, rank, path, start, end, score, "

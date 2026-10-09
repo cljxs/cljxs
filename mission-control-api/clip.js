@@ -122,6 +122,13 @@ function register(app) {
     reply(res, await clipper(['copy', req.params.id, '--redo'], 90000));
   });
 
+  // The same moment cut again, with the subtitles respelled - after a name
+  // was fixed in the source's spellings (owner, 2026-10-09: "Amber Woolf").
+  app.post('/api/clip/recut/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    reply(res, await clipper(['recut', req.params.id], REMAKE_TIMEOUT_MS));
+  });
+
   app.post('/api/clip/posted/:id/:platform', async (req, res) => {
     const { id, platform } = req.params;
     if (!ID_RE.test(id || '') || !PLATFORMS.includes(platform)) {

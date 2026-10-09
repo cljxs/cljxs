@@ -5513,8 +5513,9 @@ class ClipHasAStudio(unittest.TestCase):
         panel = self.html.split("function drawPost(", 1)[1].split("async function clipAct(", 1)[0]
         self.assertNotIn("onclick=", panel)
         js = (ROOT / "mission-control-api" / "clip.js").read_text()
-        for route in ("approve", "reject", "edit", "redraft", "posted"):
+        for route in ("approve", "reject", "edit", "redraft", "posted", "recut"):
             self.assertIn(f"app.post('/api/clip/{route}/", js)
+        self.assertIn('data-clip="recut"', self.html, "Fix subtitles is on the card")
 
     def test_approve_answers_before_the_upload(self):
         # 2026-10-07: the route waited for the YouTube upload, Safari gave up

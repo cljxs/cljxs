@@ -844,6 +844,36 @@ class Posting(EndToEnd):
         postcopy.write(self.conn, cfg, self.clip["id"], redo=True, call=model, key="k", left=0.5)
         self.assertIn("a clutch Kuminga role around Wolves's style", seen[0])
 
+    def test_recut_burns_in_the_spellings_fixed_since(self):
+        # 2026-10-09: the post said Wolves, the video still said "Amber Woolf".
+        from unittest import mock
+        self.ready()
+        word = next(x for x in json.loads(self.clip["meta"])["text"].split() if len(x.strip(".,")) > 5).strip(".,")
+        self.cli("source", "rules", "tao", "--spell", f"Zebrafish: {word.lower()}")
+        path, mtime = Path(self.clip["path"]), Path(self.clip["path"]).stat().st_mtime_ns
+        seen = []
+        real = captions.build
+        def spy(words, *a, **k):
+            seen.append(" ".join(w["word"].strip() for w in words))
+            return real(words, *a, **k)
+        with mock.patch.object(captions, "build", spy):
+            code, said = self.cli("recut", str(self.clip["id"]))
+        self.assertEqual(code, 0, said)
+        self.assertIn("Zebrafish", seen[0], "the subtitles were built from the corrected words")
+        row = self.conn.execute("SELECT * FROM clips WHERE id = ?", (self.clip["id"],)).fetchone()
+        self.assertEqual((row["rank"], row["path"]), (self.clip["rank"], self.clip["path"]), "same number, same file")
+        self.assertNotEqual(path.stat().st_mtime_ns, mtime, "the file was cut again")
+        self.assertIn("Zebrafish", json.loads(row["meta"])["text"])
+        self.assertFalse(list(path.parent.glob("*.recut.*")), "no half-made file left behind")
+        self.assertIn("zebrafish", path.with_suffix(".ass").read_text().lower(), "the clip's own subtitle file")
+
+    def test_a_posted_clip_is_never_recut(self):
+        self.ready()
+        publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
+        code, said = self.cli("recut", str(self.clip["id"]))
+        self.assertNotEqual(code, 0)
+        self.assertIn("already posted", said)
+
     def test_your_edit_is_never_overwritten(self):
         self.ready()
         postcopy.edit(self.conn, self.clip["id"], title="My title", hashtags="#mine")

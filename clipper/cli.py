@@ -502,6 +502,14 @@ def cmd_deck(a):
     return 0
 
 
+def cmd_recut(a):
+    cfg, paths, conn = open_all()
+    pipeline.recut(conn, paths, cfg, a.clip)
+    print(f"clip {a.clip} cut again with the current spellings - its subtitles now match them. "
+          f"Reload Clip's studio to see it.")
+    return 0
+
+
 def cmd_remake(a):
     cfg, paths, conn = open_all()
     clip = trends.remake(conn, paths, cfg, a.trend)
@@ -611,6 +619,9 @@ def main(argv=None):
     x = sub.add_parser("pickup", help="ingest new videos from the sources' Dropbox folders")
     x.add_argument("--run", action="store_true", help="and render them")
     x.set_defaults(fn=cmd_pickup)
+    x = sub.add_parser("recut", help="cut a clip again with the source's spellings as they are now")
+    x.add_argument("clip", type=int)
+    x.set_defaults(fn=cmd_recut)
     m = sub.add_parser("remake")
     m.add_argument("trend", type=int)
     m.set_defaults(fn=cmd_remake)
