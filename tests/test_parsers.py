@@ -18112,6 +18112,41 @@ class LettersAndColoursOnAGarment(unittest.TestCase):
         ea._catalogue_entry = lambda product: (ep, {"variant_titles": ["11oz", "15oz"]})
         self.assertNotIn("garments in these colours", ea.directed("x", "mug"))
 
+    def test_the_ink_asked_for_suits_light_dark_and_mixed_colours(self):
+        # 2026-10-12: "dark, saturated ink" was asked for on the embroidered
+        # crewneck's Ice Purple, Navy Blue, Salt and Pepper and Terra Brown -
+        # dark thread, which vanishes on two of them.
+        ea = load("emily_assets_shade", "emily-assets.py")
+        ep = load("emily_printify_shade", "emily-printify.py")
+        def said(titles, title="Unisex Heavy Blend Crewneck Sweatshirt", hexes=None):
+            entry = {"variant_titles": titles, "blueprint_title": title}
+            if hexes:
+                entry["colour_hex"] = hexes
+            ea._catalogue_entry = lambda product: (ep, entry)
+            return ea.ink_direction("x")
+        nantucket = ["XS / Ice Purple", "XS / Navy Blue", "XS / Salt and Pepper", "XS / Terra Brown"]
+        mixed = said(nantucket, "Unisex Nantucket Crewneck Sweatshirt (Embroidery)")
+        self.assertIn("stitched on garments", mixed)
+        self.assertIn("mid-tone, saturated colours", mixed)
+        self.assertNotIn("use dark, saturated", mixed)
+        dark = said(["S / Black", "S / Navy", "S / Charcoal"])
+        self.assertIn("use light, bright ink", dark)
+        light = said(["S / White", "S / Ivory", "S / Sand"])
+        self.assertIn("use dark, saturated ink", light)
+        # A code Printify gave wins over the name.
+        self.assertIn("use light, bright ink", said(["S / Mystery"], hexes={"Mystery": "#151515"}))
+
+    def test_shade_reads_the_code_first_then_the_name(self):
+        ep = load("emily_printify_shade2", "emily-printify.py")
+        for c, want in [("Navy Blue", "dark"), ("Terra Brown", "dark"), ("Ice Purple", "light"),
+                        ("Sport Grey", "light"), ("Salt and Pepper", None), ("Moss", None)]:
+            self.assertEqual(ep.shade(c), want, c)
+        self.assertEqual(ep.shade("Sand", {"Sand": "#1A1A1A"}), "dark")
+        self.assertEqual(ep.shade("Navy", {"Navy": "#F0F0F0"}), "light")
+        # The line sits where white and black ink contrast equally.
+        l = ep.DARK_BELOW
+        self.assertAlmostEqual(ep.contrast(l, 1.0), ep.contrast(l, 0.0), delta=0.05)
+
     def test_the_raw_variants_dump_exists(self):
         src = (SCRIPTS / "emily-printify.py").read_text()
         self.assertIn('p.add_argument("--raw"', src)

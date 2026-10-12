@@ -894,6 +894,37 @@ def contrast(l1, l2):
     return (hi + 0.05) / (lo + 0.05)
 
 
+# LIGHT OR DARK, before there is a design to measure. The art prompt has to
+# say what ink to use, and "dark, saturated ink" for every garment asked for
+# dark thread on Navy and Terra Brown (2026-10-12), where it vanishes. A
+# colour is dark when white ink stands out on it more than black does - the
+# luminance where the two contrasts are equal, about 0.18. Its code comes
+# from Printify once a draft has taught the catalogue (colour_hex); before
+# that, from its name.
+DARK_BELOW = 0.179
+DARK_WORDS = ("black", "navy", "charcoal", "graphite", "dark", "forest", "maroon", "burgundy",
+              "brown", "chocolate", "espresso", "midnight", "deep", "olive", "military", "pepper heather")
+LIGHT_WORDS = ("white", "ivory", "cream", "natural", "sand", "pink", "light", "ash", "butter",
+               "yellow", "ice", "mint", "sky", "peach", "beige", "khaki", "oatmeal", "bone",
+               "sport grey", "heather grey", "silver", "lavender", "baby")
+
+
+def shade(colour, hex_by_colour=None):
+    """'light', 'dark' or None (not known) for a garment colour."""
+    code = (hex_by_colour or {}).get(colour)
+    if code:
+        try:
+            return "dark" if luminance(code) < DARK_BELOW else "light"
+        except (ValueError, TypeError):
+            pass
+    low = str(colour or "").lower()
+    if any(w in low for w in DARK_WORDS):
+        return "dark"
+    if any(w in low for w in LIGHT_WORDS):
+        return "light"
+    return None
+
+
 def ink_sample(path, step=3):
     """Luminance of every `step`th visible pixel of a cut-out, or None."""
     try:

@@ -430,13 +430,17 @@ def _size_of(path):
 
 
 def ink_direction(product):
-    """The garment colours this design prints on, and what that asks of it.
+    """The garment colours this design goes on, and what that asks of it.
 
     "WILD & FREE ON THE TRAIL" (2026-10-05) was drawn in pale cream and
     printed on eight tee colours, five of them light: the words vanished on
-    White, Ivory and Butter. Nothing told the model what it was printing on.
-    The colours are the catalogue's own - the ones the owner picked - read
-    from the variant titles. Empty for anything that is not worn."""
+    White, Ivory and Butter. So the prompt names the colours. But "dark ink"
+    for all of them asked for dark thread on the embroidered crewneck's Navy
+    and Terra Brown (2026-10-12), where it vanishes too. emily-printify
+    decides which colours are light and which dark (shade); this asks for
+    the ink that reads on them - dark on light, light on dark, and on a mix,
+    mid-tone colours that stand out on both, which is also what the draft's
+    colour check keeps. Empty for anything that is not worn."""
     mod, entry = _catalogue_entry(product)
     if not entry or not mod.is_garment(entry):
         return ""
@@ -447,10 +451,22 @@ def ink_direction(product):
             colours.append(c)
     if not colours:
         return ""
-    return (f"This is printed on garments in these colours: {', '.join(colours)}. "
-            f"Every element - above all any words - must be clearly readable on "
-            f"every one of them: use dark, saturated ink with strong contrast. "
-            f"No white, cream, beige or pale lettering.")
+    ink = "thread" if mod.is_embroidered(entry) else "ink"
+    made = "stitched" if ink == "thread" else "printed"
+    shades = {mod.shade(c, entry.get("colour_hex")) for c in colours} - {None}
+    head = f"This is {made} on garments in these colours: {', '.join(colours)}. "
+    if shades == {"dark"}:
+        return (head + f"They are all dark. Every element - above all any words - must be "
+                f"clearly readable on every one of them: use light, bright {ink} with strong "
+                f"contrast. No black, navy, brown or dark lettering.")
+    if shades == {"light", "dark"}:
+        return (head + f"They run from light to dark, so no pale and no dark {ink} reads on all "
+                f"of them. Use mid-tone, saturated colours that stand out on both - "
+                f"teal, orange, kelly green, red, royal blue. No white, cream, pastel, black, navy "
+                f"or dark brown elements, above all in any words.")
+    return (head + f"Every element - above all any words - must be clearly readable on every "
+            f"one of them: use dark, saturated {ink} with strong contrast. No white, cream, "
+            f"beige or pale lettering.")
 
 
 def directed(prompt, product=""):
