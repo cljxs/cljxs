@@ -55,6 +55,7 @@ import random
 import re
 import ssl
 import sys
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -198,6 +199,7 @@ def column_of(keys, stat):
 
 
 LOG_CACHE = {}
+RAW_LOGS = {}                     # the same fetches, unparsed - recent_games() reads dates
 
 
 def game_values(athlete_id, season=None):
@@ -218,6 +220,7 @@ def game_values(athlete_id, season=None):
     except Exception:
         LOG_CACHE[key] = {}
         return {}
+    RAW_LOGS[key] = log
     LOG_CACHE[key] = values_from_log(log)
     return LOG_CACHE[key]
 
@@ -245,6 +248,67 @@ def values_from_log(log):
                     except (TypeError, ValueError):
                         continue
     return out
+
+
+# His last few games of a market, shown beside the forecast (owner,
+# 2026-10-12: "if I'm in passing yards show me passing yards for the last 5
+# games"). Shown, never used: the percentages come from every game in the
+# sample, and five games are a glance, not a model.
+RECENT_GAMES = 5
+
+
+def recent_games(logs, n=RECENT_GAMES):
+    """{market: [{date, opp, at, result, value}]} - newest first, across logs.
+
+    Sorted by ESPN's own gameDate rather than by the order the log lists
+    games in: a season's log is one season, and the newest five can straddle
+    two (a quarterback four games into this season reaches back into last
+    December for the fifth). A game a market has no number for is skipped
+    for that market only.
+    """
+    games = []
+    for log in logs or []:
+        names = log.get("names") or []
+        cols = {m: column_of(names, spec["stat"]) for m, spec in MARKETS.items()}
+        meta = log.get("events") or {}
+        for st in (log.get("seasonTypes") or []):
+            for cat in (st.get("categories") or []):
+                for ev in (cat.get("events") or []):
+                    info = meta.get(str(ev.get("eventId"))) or {}
+                    when = str(info.get("gameDate") or "")
+                    if not when:
+                        continue
+                    games.append((when, info, ev.get("stats") or [], cols))
+    games.sort(key=lambda g: g[0], reverse=True)
+    out = {m: [] for m in MARKETS}
+    seen = set()
+    for when, info, stats, cols in games:
+        if (when, info.get("id")) in seen:
+            continue
+        seen.add((when, info.get("id")))
+        for market, idx in cols.items():
+            if idx is None or idx >= len(stats) or len(out[market]) >= n:
+                continue
+            try:
+                value = float(stats[idx])
+            except (TypeError, ValueError):
+                continue
+            out[market].append({
+                "date": when[:10],
+                "opp": ((info.get("opponent") or {}).get("abbreviation")) or "?",
+                "at": info.get("atVs") or "",
+                "result": info.get("gameResult") or "",
+                "value": value,
+            })
+    return out
+
+
+def recent_for(athlete_id, now=None):
+    """recent_games() over the logs samples_for() has already fetched."""
+    now = now or datetime.now(timezone.utc)
+    keys = [(str(athlete_id), None)] + [(str(athlete_id), now.year - b)
+                                        for b in range(1, SEASONS_BACK + 1)]
+    return recent_games([RAW_LOGS[k] for k in keys if k in RAW_LOGS])
 
 
 def games_in(log):
@@ -707,7 +771,7 @@ def fixture_of(summary):
 
 
 def rows_for_player(event_id, fixture, kickoff, aid, name, pos, team,
-                    samples, seasons, avail, injury=None, lines=None):
+                    samples, seasons, avail, injury=None, lines=None, recent=None):
     """One row per market this player actually has a history in."""
     rows = []
     for market, spec in MARKETS.items():
@@ -738,6 +802,9 @@ def rows_for_player(event_id, fixture, kickoff, aid, name, pos, team,
             # The book's line, for reading beside the percentages. Stored
             # after they are computed and read by nothing that computes them.
             "line": (lines or {}).get(market),
+            # His last games of this market, newest first - to look at, not
+            # computed from (RECENT_GAMES).
+            "recent": (recent or {}).get(market) or [],
             "coarse": is_coarse(probs, thresholds),
             "counts": counts, "bandwidth": round(h, 2),
             "resamples": RESAMPLES, "interval_span": INTERVAL_SPAN,
@@ -801,7 +868,7 @@ def cmd_forecast(event_id):
         avail = availability(played_in.get(tid), current)
         mine = {m: v for (a, m), v in lines.items() if a == aid}
         rows = rows_for_player(event_id, fixture, kickoff, aid, name, pos, team,
-                               samples, seasons, avail, injury, mine)
+                               samples, seasons, avail, injury, mine, recent_for(aid, now))
         if not rows:
             print(f"  {name:<24} {pos:<3} {team:<4} SKIPPED - no market he "
                   f"reaches in a quarter of his games")
@@ -1189,6 +1256,211 @@ def cmd_markets():
     return 0
 
 
+# THE WEATHER AT EACH GAME (owner, 2026-10-12). Shown beside a game, never
+# folded into a percentage - nothing here has measured what rain or wind does
+# to a player's numbers, and a guess at it would read like a model.
+#
+# ESPN's scoreboard carries a sky ("Intermittent clouds") and a temperature
+# for a game a few days out, and whether its stadium is indoors - but no wind
+# and no chance of rain, which are what move a passing game. Open-Meteo has
+# both, hourly, free and with no key: one request for every outdoor game,
+# from each stadium's town, found once by name and kept.
+METEO = "https://api.open-meteo.com/v1/forecast"
+GEOCODE = "https://geocoding-api.open-meteo.com/v1/search"
+PLACES = ROOT / "agents" / "ace" / "data" / "places.json"
+WEATHER = ROOT / "agents" / "ace" / "data" / "weather.json"
+WEATHER_FRESH_MIN = 60            # a forecast this new is not asked for again
+GAME_HOURS = 3                    # the weather over the game, not just at kickoff
+METEO_DAYS = 16                   # Open-Meteo's furthest forecast
+# Where the labels start. Believed, from what bettors and broadcasters
+# usually call windy or wet for football - not measured here.
+WINDY_MPH = 15
+GUSTY_MPH = 25
+RAIN_PCT = 50
+SHOW_RAIN_PCT = 20                # below this, the chance of rain is not worth printing
+
+# WMO weather codes, as Open-Meteo sends them.
+SNOW_CODES = {71, 73, 75, 77, 85, 86}
+RAIN_CODES = {51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99}
+CLEAR_CODES = {0, 1}
+CODE_SKY = [((0,), "Clear"), ((1,), "Mostly clear"), ((2,), "Partly cloudy"), ((3,), "Overcast"),
+            ((45, 48), "Fog"), ((51, 53, 55, 56, 57), "Drizzle"), ((61, 63, 65, 66, 67), "Rain"),
+            ((71, 73, 75, 77), "Snow"), ((80, 81, 82), "Showers"), ((85, 86), "Snow showers"),
+            ((95, 96, 99), "Thunderstorms")]
+US_STATES = {
+    "AL": "Alabama", "AZ": "Arizona", "CA": "California", "CO": "Colorado", "FL": "Florida",
+    "GA": "Georgia", "IL": "Illinois", "IN": "Indiana", "LA": "Louisiana", "MA": "Massachusetts",
+    "MD": "Maryland", "MI": "Michigan", "MN": "Minnesota", "MO": "Missouri", "NC": "North Carolina",
+    "NJ": "New Jersey", "NV": "Nevada", "NY": "New York", "OH": "Ohio", "PA": "Pennsylvania",
+    "TN": "Tennessee", "TX": "Texas", "WA": "Washington", "WI": "Wisconsin", "DC": "District of Columbia",
+}
+
+
+def sky_of_code(code):
+    for codes, text in CODE_SKY:
+        if code in codes:
+            return text
+    return None
+
+
+def game_hours(hourly, kickoff_utc, hours=GAME_HOURS):
+    """{temp_f, rain_pct, wind_mph, gust_mph, code} over the game's hours, or None.
+
+    Temperature at kickoff; wind, gusts and the chance of rain at their worst
+    while the game is on; the code that matters most (snow, then rain, then
+    the kickoff hour's). None when the game is past the forecast's end."""
+    times = (hourly or {}).get("time") or []
+    start = str(kickoff_utc or "")[:13]               # "2026-10-13T00"
+    idx = [i for i, t in enumerate(times) if t[:13] >= start][:hours]
+    if not idx or times[idx[0]][:13] != start:
+        return None
+    col = lambda k: [(hourly.get(k) or [None] * len(times))[i] for i in idx]
+    worst = lambda k: max((v for v in col(k) if v is not None), default=None)
+    codes = [c for c in col("weather_code") if c is not None]
+    code = next((c for c in codes if c in SNOW_CODES), None) \
+        or next((c for c in codes if c in RAIN_CODES), None) or (codes[0] if codes else None)
+    return {"temp_f": col("temperature_2m")[0], "rain_pct": worst("precipitation_probability"),
+            "wind_mph": worst("wind_speed_10m"), "gust_mph": worst("wind_gusts_10m"), "code": code}
+
+
+def weather_view(espn, hour, indoor):
+    """What the page shows for one game. Pure: ESPN's weather block, the game's
+    hours from game_hours() (or None) and whether the stadium is indoors.
+
+    `kind` is the one the icon shows - snow, then rain, then wind, else sun or
+    cloud; `kinds` all that apply, so a wet AND windy game says both."""
+    if indoor:
+        return {"kind": "dome", "kinds": ["dome"], "label": "Indoors - weather does not reach the field",
+                "sky": None, "temp_f": None, "rain_pct": None, "wind_mph": None, "gust_mph": None}
+    espn = espn or {}
+    hour = hour or {}
+    sky = str(espn.get("displayValue") or "") or sky_of_code(hour.get("code")) or ""
+    temp = hour.get("temp_f") if hour.get("temp_f") is not None else espn.get("temperature")
+    rain, wind, gust, code = (hour.get("rain_pct"), hour.get("wind_mph"),
+                              hour.get("gust_mph"), hour.get("code"))
+    if not sky and temp is None and wind is None:
+        return {"kind": "unknown", "kinds": [], "label": "No forecast yet",
+                "sky": None, "temp_f": None, "rain_pct": None, "wind_mph": None, "gust_mph": None}
+    low = sky.lower()
+    kinds = []
+    if code in SNOW_CODES or "snow" in low or "flurr" in low:
+        kinds.append("snow")
+    elif (rain is not None and rain >= RAIN_PCT) or (code in RAIN_CODES and (rain or 0) >= SHOW_RAIN_PCT) \
+            or any(w in low for w in ("rain", "shower", "storm", "drizzle")):
+        kinds.append("rain")
+    if (wind or 0) >= WINDY_MPH or (gust or 0) >= GUSTY_MPH or "wind" in low:
+        kinds.append("wind")
+    if not kinds:
+        kinds.append("sun" if code in CLEAR_CODES or any(w in low for w in ("sun", "clear"))
+                     else "cloud")
+    parts = [sky] if sky else []
+    if temp is not None:
+        parts.append(f"{temp:.0f}\u00b0F")
+    if rain is not None and rain >= SHOW_RAIN_PCT:
+        parts.append(f"rain {rain:.0f}%")
+    if wind is not None:
+        parts.append(f"wind {wind:.0f} mph" + (f", gusts {gust:.0f}" if gust is not None
+                                               and gust >= max(GUSTY_MPH, wind + 8) else ""))
+    return {"kind": kinds[0], "kinds": kinds, "label": " \u00b7 ".join(parts), "sky": sky or None,
+            "temp_f": temp, "rain_pct": rain, "wind_mph": wind, "gust_mph": gust}
+
+
+def place_query(venue):
+    """(town, ISO country code or None, state's full name or None) to look a
+    stadium's town up by. ESPN writes "Orchard Park", "NY", "USA"."""
+    country = str((venue or {}).get("country") or "")
+    code = "US" if country in ("USA", "United States") else None
+    return (str((venue or {}).get("city") or ""), code,
+            US_STATES.get(str((venue or {}).get("state") or "").upper()))
+
+
+def pick_place(results, state):
+    """(lat, lon) of the geocoder's answer in the right state - three towns
+    are called Orchard Park - or its first answer when no state is known."""
+    rows = [r for r in (results or []) if r.get("latitude") is not None]
+    if state:
+        rows = [r for r in rows if r.get("admin1") == state] or []
+    return (rows[0]["latitude"], rows[0]["longitude"]) if rows else None
+
+
+def _read(path):
+    try:
+        d = json.loads(Path(path).read_text())
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write(path, data):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(str(path) + ".tmp")
+    tmp.write_text(json.dumps(data, indent=1) + "\n")
+    tmp.replace(path)
+
+
+def attach_weather(games, fetch=None, now=None):
+    """Give every game this week its "weather". Never raises: a game whose
+    forecast cannot be had shows ESPN's sky alone, or "No forecast yet"."""
+    fetch = fetch or get
+    now = now or datetime.now(timezone.utc)
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    cache, places = _read(WEATHER), _read(PLACES)
+    want = []
+    for g in games:
+        venue = g.get("venue") or {}
+        if g.get("state") != "pre" or venue.get("indoor"):
+            g["weather"] = weather_view(g.get("espn_weather"), None, venue.get("indoor")) \
+                if g.get("state") == "pre" else None
+            continue
+        old = cache.get(g["event_id"]) or {}
+        try:
+            age = (now - datetime.strptime(old.get("fetched_utc", ""), "%Y-%m-%dT%H:%M:%SZ")
+                   .replace(tzinfo=timezone.utc)).total_seconds() / 60
+        except ValueError:
+            age = None
+        if age is not None and age < WEATHER_FRESH_MIN and old.get("kickoff_utc") == g.get("kickoff_utc"):
+            g["weather"] = weather_view(g.get("espn_weather"), old.get("hour"), False)
+            continue
+        town, code, state = place_query(venue)
+        key = "|".join(str(x or "") for x in (town, state, venue.get("country")))
+        if key not in places and town:
+            try:
+                q = urllib.parse.urlencode({k: v for k, v in (("name", town), ("count", 10),
+                                            ("language", "en"), ("format", "json"),
+                                            ("countryCode", code)) if v})
+                places[key] = pick_place(fetch(f"{GEOCODE}?{q}").get("results"), state)
+            except Exception as exc:
+                print(f"weather: could not place {town}: {exc}", file=sys.stderr)
+        want.append((g, places.get(key)))
+    located = [(g, ll) for g, ll in want if ll]
+    hours = {}
+    if located:
+        q = urllib.parse.urlencode({
+            "latitude": ",".join(f"{ll[0]:.4f}" for _g, ll in located),
+            "longitude": ",".join(f"{ll[1]:.4f}" for _g, ll in located),
+            "hourly": "temperature_2m,precipitation_probability,wind_speed_10m,wind_gusts_10m,weather_code",
+            "temperature_unit": "fahrenheit", "wind_speed_unit": "mph", "timezone": "UTC",
+            "forecast_days": METEO_DAYS})
+        try:
+            got = fetch(f"{METEO}?{q}")
+            got = got if isinstance(got, list) else [got]
+            for (g, _ll), one in zip(located, got):
+                hours[g["event_id"]] = game_hours(one.get("hourly"), g.get("kickoff_utc"))
+        except Exception as exc:
+            print(f"weather: Open-Meteo did not answer: {exc}", file=sys.stderr)
+    for g, _ll in want:
+        hour = hours.get(g["event_id"])
+        if g["event_id"] in hours:
+            cache[g["event_id"]] = {"fetched_utc": stamp, "kickoff_utc": g.get("kickoff_utc"), "hour": hour}
+        g["weather"] = weather_view(g.get("espn_weather"), hour, False)
+    try:
+        _write(PLACES, places)
+        _write(WEATHER, cache)
+    except OSError as exc:
+        print(f"weather: not saved ({exc})", file=sys.stderr)
+    return games
+
+
 def week_games(board):
     """This week's games off ESPN's NFL scoreboard, Thursday to Monday.
 
@@ -1223,6 +1495,16 @@ def week_games(board):
             "time_et": et.strftime("%-I:%M %p") if et else None,
             "status": kind.get("name"), "state": kind.get("state"),
             "detail": kind.get("shortDetail"),
+            # For attach_weather(): where it is played and what ESPN says the
+            # sky will do. The venue's own name is shown with the weather.
+            "venue": {k: v for k, v in {
+                "name": (comp.get("venue") or {}).get("fullName"),
+                "indoor": bool((comp.get("venue") or {}).get("indoor")),
+                **((comp.get("venue") or {}).get("address") or {})}.items()
+                if k in ("name", "indoor", "city", "state", "country")},
+            "espn_weather": {k: (e.get("weather") or {}).get(k)
+                             for k in ("displayValue", "temperature", "conditionId")}
+                            if e.get("weather") else None,
         })
     out.sort(key=lambda g: str(g["kickoff_utc"] or ""))
     return out
@@ -1235,7 +1517,7 @@ def cmd_week(as_json=False):
     except Exception as exc:
         print(f"cannot read this week's scoreboard: {exc}", file=sys.stderr)
         return 1
-    games = week_games(board)
+    games = attach_weather(week_games(board))
     have = {}
     for f in load().get("forecasts") or []:
         have[str(f.get("event_id"))] = have.get(str(f.get("event_id")), 0) + 1

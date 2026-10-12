@@ -292,6 +292,12 @@ app.get('/markets', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'markets.html'));
 });
 
+// Peter: the player-prop forecasts, in the same style. The village opens it
+// inside the hall; the Deck links to it as its own tab.
+app.get('/peter', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'peter.html'));
+});
+
 app.get('/village', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'village.html'));
 });

@@ -4455,6 +4455,164 @@ class ForecastsAreGradedOrTheyAreDecoration(unittest.TestCase):
         self.assertTrue(by["receptions"]["coarse"])
 
 
+class PeterShowsTheLastFiveGames(unittest.TestCase):
+    """Owner, 2026-10-12: "if I'm in passing yards show me passing yards for
+    the last 5 games." The game logs props-forecast already reads carry each
+    game's date and opponent; these are Patrick Mahomes's real logs, captured
+    that day - four games into 2026, so the fifth is last December's."""
+
+    def setUp(self):
+        self.m = load("props_recent", "props-forecast.py")
+        self.logs = [json.loads((FIXTURES / f"espn-nfl-gamelog-3139477-{y}.json").read_text())
+                     for y in (2026, 2025)]
+
+    def test_the_real_last_five_newest_first_across_two_seasons(self):
+        got = self.m.recent_games(self.logs)["passing_yards"]
+        self.assertEqual([g["value"] for g in got], [225.0, 246.0, 382.0, 184.0, 189.0])
+        self.assertEqual([g["date"] for g in got],
+                         ["2026-10-04", "2026-09-27", "2026-09-21", "2026-09-15", "2025-12-14"])
+        self.assertEqual((got[0]["opp"], got[0]["at"], got[0]["result"]), ("LV", "@", "W"))
+        self.assertEqual(got[4]["opp"], "LAC")
+
+    def test_order_comes_from_the_dates_not_the_order_given(self):
+        # Last season handed over first must not put December ahead of October.
+        got = self.m.recent_games(list(reversed(self.logs)))["passing_yards"]
+        self.assertEqual(got[0]["date"], "2026-10-04")
+
+    def test_every_market_gets_its_own_and_the_count_is_capped(self):
+        got = self.m.recent_games(self.logs)
+        self.assertEqual(len(got["rushing_yards"]), self.m.RECENT_GAMES)
+        self.assertEqual(got["receptions"], [], "a quarterback's log has no receptions column")
+        self.assertEqual(len(self.m.recent_games(self.logs, n=2)["passing_yards"]), 2)
+
+    def test_the_row_carries_them_and_the_percentages_ignore_them(self):
+        spread = [5.0, 25.0, 45.0, 55.0, 65.0, 75.0, 85.0, 95.0, 105.0, 115.0]
+        recent = {"receiving_yards": [{"date": "2026-10-04", "opp": "LV", "at": "@",
+                                       "result": "W", "value": 999.0}]}
+        args = ("1", "A @ B", None, "2", "A Receiver", "WR", "AAA",
+                {"receiving_yards": spread}, ["2026"], None)
+        with_ = self.m.rows_for_player(*args, recent=recent)[0]
+        without = self.m.rows_for_player(*args)[0]
+        self.assertEqual(with_["recent"], recent["receiving_yards"])
+        self.assertEqual(without["recent"], [])
+        self.assertEqual(with_["probabilities"], without["probabilities"], "shown, never used")
+
+    def test_the_forecast_run_hands_them_over(self):
+        src = (SCRIPTS / "props-forecast.py").read_text().split("def cmd_forecast(", 1)[1]
+        self.assertIn("recent_for(aid, now))", src)
+
+
+class PeterShowsTheWeather(unittest.TestCase):
+    """Owner, 2026-10-12: weather for each game - sunny, rainy, windy. ESPN's
+    scoreboard has a sky and a temperature but no wind or rain chance, so
+    Open-Meteo is asked too. Fixtures: the real week-5 scoreboard (a dome, an
+    outdoor game to come), Open-Meteo's real hourly forecast for Orchard Park
+    and Inglewood, and its real geocoder answer for "Orchard Park" - three
+    towns, only one in New York."""
+
+    def setUp(self):
+        self.m = load("props_weather", "props-forecast.py")
+        self.meteo = json.loads((FIXTURES / "open-meteo-forecast-2-places.json").read_text())
+
+    def view(self, sky=None, **hour):
+        return self.m.weather_view({"displayValue": sky} if sky else None,
+                                   hour or None, False)
+
+    def test_each_kind_from_its_own_signal(self):
+        self.assertEqual(self.m.weather_view(None, None, True)["kind"], "dome")
+        self.assertEqual(self.view(rain_pct=70, wind_mph=5, code=61)["kind"], "rain")
+        self.assertEqual(self.view(rain_pct=10, wind_mph=18, code=3)["kind"], "wind")
+        self.assertEqual(self.view(rain_pct=10, wind_mph=8, gust_mph=27, code=3)["kind"], "wind")
+        self.assertEqual(self.view(rain_pct=40, wind_mph=6, code=73)["kind"], "snow")
+        self.assertEqual(self.view(rain_pct=0, wind_mph=4, code=0)["kind"], "sun")
+        self.assertEqual(self.view("Sunny")["kind"], "sun")
+        self.assertEqual(self.view("Intermittent clouds")["kind"], "cloud")
+        self.assertEqual(self.view("Showers")["kind"], "rain")
+        self.assertEqual(self.m.weather_view(None, None, False)["kind"], "unknown")
+
+    def test_wet_and_windy_says_both(self):
+        w = self.view(rain_pct=80, wind_mph=21, gust_mph=34, code=63)
+        self.assertEqual(w["kinds"], ["rain", "wind"])
+        self.assertIn("rain 80%", w["label"])
+        self.assertIn("wind 21 mph, gusts 34", w["label"])
+
+    def test_the_games_hours_from_the_real_forecast(self):
+        hourly = self.meteo[1]["hourly"]                  # Inglewood
+        i = hourly["time"].index("2026-10-13T00:00")
+        got = self.m.game_hours(hourly, "2026-10-13T00:15Z")
+        self.assertEqual(got["temp_f"], hourly["temperature_2m"][i])
+        self.assertEqual(got["wind_mph"], max(hourly["wind_speed_10m"][i:i + 3]))
+        self.assertEqual(got["gust_mph"], max(hourly["wind_gusts_10m"][i:i + 3]))
+        self.assertEqual(got["rain_pct"], max(hourly["precipitation_probability"][i:i + 3]))
+        self.assertIsNone(self.m.game_hours(hourly, "2026-12-25T18:00Z"), "past the forecast's end")
+
+    def test_the_right_orchard_park(self):
+        res = json.loads((FIXTURES / "open-meteo-geocode-orchard-park.json").read_text())["results"]
+        self.assertEqual(self.m.pick_place(res, "New York"), (42.76756, -78.74392))
+        self.assertIsNone(self.m.pick_place(res, "Ohio"))
+        self.assertEqual(self.m.place_query({"city": "Orchard Park", "state": "NY", "country": "USA"}),
+                         ("Orchard Park", "US", "New York"))
+
+    def test_the_real_scoreboard_says_dome_and_sky(self):
+        board = json.loads((FIXTURES / "espn-nfl-scoreboard-2026-wk5-venues.json").read_text())
+        games = {g["fixture"]: g for g in self.m.week_games(board)}
+        self.assertTrue(games["TB @ DAL"]["venue"]["indoor"])
+        self.assertFalse(games["BUF @ LAR"]["venue"]["indoor"])
+        self.assertEqual(games["BUF @ LAR"]["venue"]["city"], "Inglewood")
+        self.assertEqual(games["BUF @ LAR"]["espn_weather"]["displayValue"], "Intermittent clouds")
+
+    def test_one_request_for_every_outdoor_game_and_an_hour_of_rest(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.m.PLACES, self.m.WEATHER = Path(d) / "places.json", Path(d) / "weather.json"
+            geo = json.loads((FIXTURES / "open-meteo-geocode-orchard-park.json").read_text())
+            asked = []
+
+            def fetch(url):
+                asked.append(url)
+                return geo if "geocoding" in url else self.meteo[0]
+
+            def week():
+                return [
+                    {"event_id": "1", "state": "pre", "kickoff_utc": "2026-10-12T17:00Z",
+                     "venue": {"city": "Orchard Park", "state": "NY", "country": "USA", "indoor": False},
+                     "espn_weather": {"displayValue": "Cloudy", "temperature": 60}},
+                    {"event_id": "2", "state": "pre", "kickoff_utc": "2026-10-12T17:00Z",
+                     "venue": {"city": "Arlington", "state": "TX", "indoor": True}},
+                    {"event_id": "3", "state": "post", "kickoff_utc": "2026-10-11T17:00Z",
+                     "venue": {"city": "Green Bay", "state": "WI", "indoor": False}}]
+            now = datetime(2026, 10, 12, 12, 0, tzinfo=timezone.utc)
+            games = self.m.attach_weather(week(), fetch=fetch, now=now)
+            self.assertEqual(games[1]["weather"]["kind"], "dome")
+            self.assertIsNone(games[2]["weather"], "a played game keeps no weather")
+            w = games[0]["weather"]
+            self.assertEqual(w["sky"], "Cloudy")
+            self.assertIsNotNone(w["wind_mph"])
+            self.assertEqual(sum(u.startswith(self.m.METEO) for u in asked), 1, "one forecast request")
+            self.assertEqual(sum(u.startswith(self.m.GEOCODE) for u in asked), 1, "the town, looked up once")
+            asked.clear()
+            again = self.m.attach_weather(week(), fetch=fetch, now=now + timedelta(minutes=30))
+            self.assertEqual(asked, [], "within the hour nothing is asked again")
+            self.assertEqual(again[0]["weather"], w)
+
+    def test_a_dead_weather_service_leaves_espns_sky(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.m.PLACES, self.m.WEATHER = Path(d) / "places.json", Path(d) / "weather.json"
+            def fetch(url):
+                raise OSError("HTTP Error 429: Too Many Requests")
+            g = [{"event_id": "1", "state": "pre", "kickoff_utc": "2026-10-12T17:00Z",
+                  "venue": {"city": "Orchard Park", "state": "NY", "country": "USA", "indoor": False},
+                  "espn_weather": {"displayValue": "Light rain", "temperature": 52}}]
+            with contextlib.redirect_stderr(io.StringIO()):
+                w = self.m.attach_weather(g, fetch=fetch)[0]["weather"]
+        self.assertEqual((w["kind"], w["sky"], w["temp_f"]), ("rain", "Light rain", 52))
+
+    def test_the_page_draws_and_decides_nothing(self):
+        html = (ROOT / "mission-control-api" / "public" / "peter.html").read_text()
+        self.assertIn("w.kinds.map(k => WX_ICON[k]", html)
+        for word in ("WINDY", ">= 15", "rain_pct >"):
+            self.assertNotIn(word, html, "the thresholds live in props-forecast.py")
+
+
 class TheForecastCardShowsNoPrice(unittest.TestCase):
     """The village renders forecasts as cards, shaped after a tool the owner
     was shown. The one thing they must never grow is a price beside the
@@ -4465,7 +4623,9 @@ class TheForecastCardShowsNoPrice(unittest.TestCase):
 
     def setUp(self):
         self.js = (ROOT / "mission-control-api" / "ace.js").read_text()
-        self.html = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        # The cards moved to Peter's page (2026-10-12); the hall's door opens it.
+        self.html = (ROOT / "mission-control-api" / "public" / "peter.html").read_text()
+        self.village = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
 
     def test_the_endpoint_serves_the_forecasts(self):
         self.assertIn("/api/ace/forecasts", self.js)
@@ -4522,15 +4682,14 @@ class TheForecastCardShowsNoPrice(unittest.TestCase):
         self.assertIn("awaiting the final score", card)
         self.assertIn("f.actual !== null", card)
 
-    def test_the_panel_is_loaded_when_the_hall_is_entered(self):
-        # Assert the CALL, not the name: `function openPropsPanel(){` contains
-        # "openPropsPanel()" as a substring, so a version of this asserting
-        # the bare name passed on the definition of a function nothing
-        # invoked. It used to hang off Ace's door; it hangs off the hall's.
+    def test_the_page_is_opened_when_the_hall_is_entered(self):
+        # Assert the CALL, not the name: a version asserting a bare function
+        # name passed on the definition of a function nothing invoked. The
+        # hall's door opens Peter's page in a frame, and the page loads.
         self.assertIn('id="propsBody"', self.html)
-        self.assertRegex(self.html,
-                         r"name === PROPS_DOOR\) return openPropsPanel\(\);")
-        self.assertRegex(self.html, r"loadProps\(\);\n\}")
+        self.assertRegex(self.village, r"name === PROPS_DOOR\) return openPeter\(\);")
+        self.assertIn("peter: '/peter?embed=1'", self.village)
+        self.assertRegex(self.html, r"\nloadWeek\(\);\nloadProps\(\);\n")
 
     def test_the_label_does_not_wrap_mid_phrase(self):
         # It rendered as "MODEL FORECAST · NOT / A BET", which reads as two
@@ -5399,7 +5558,7 @@ class ThePropsHallIsItsOwnBuilding(unittest.TestCase):
         before = body.split("DATA.agents", 1)[0]
         self.assertIn("PROPS_DOOR", before,
                       "the hall must be handled before the agent lookup")
-        self.assertIn("openPropsPanel()", before)
+        self.assertIn("openPeter()", before)
 
     def test_ace_no_longer_carries_the_forecasts(self):
         self.assertNotIn("aceForecasts", self.html)
@@ -5614,7 +5773,7 @@ class NothingGrowsThroughAWall(unittest.TestCase):
         m = re.search(r"PROPS_PLOT = \{ x: ([\d.]+), y: ([\d.]+) \}", self.html)
         x, y = float(m.group(1)), float(m.group(2))
         yield ("the props hall", x, y, 160 / T, 124 / T, y * T + 124,
-               max(96, len("Player Props") * 10 + 22) / T)
+               max(96, len(re.search(r"PROPS_DOOR = '([^']+)'", self.html).group(1)) * 10 + 22) / T)
         m = re.search(r"CLIP_PLOT = \{ x: ([\d.]+), y: ([\d.]+) \}", self.html)
         x, y = float(m.group(1)), float(m.group(2))
         yield ("Clip's studio", x, y, 144 / T, 124 / T, y * T + 124,
@@ -12044,7 +12203,7 @@ class ThePropsHallIsNotRebuiltUnderYourFingers(unittest.TestCase):
     def test_game_buttons_carry_data_not_code(self):
         # esc() does not escape quotes, so a fixture inside an inline onclick
         # string would be one apostrophe from breaking the page.
-        src = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        src = (ROOT / "mission-control-api" / "public" / "peter.html").read_text()
         body = src.split("function drawWeek(", 1)[1].split("\nfunction ", 1)[0]
         self.assertIn('data-event="', body)
         self.assertNotIn("onclick", body)
@@ -12055,11 +12214,11 @@ class ThePropsHallIsNotRebuiltUnderYourFingers(unittest.TestCase):
         node = shutil.which("node")
         if not node:
             self.skipTest("node is not installed")
-        src = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        src = (ROOT / "mission-control-api" / "public" / "peter.html").read_text()
         esc = re.search(r"const esc = .*\n", src).group(0)
         # A top-level function ends at the first "}" in column 0.
         fns = "".join(re.search(rf"^function {n}\(.*?^\}}\n", src, re.S | re.M).group(0)
-                      for n in ("fcTile", "forecastCard"))
+                      for n in ("recentChart", "fcTile", "forecastCard"))
         js = esc + fns + f"process.stdout.write(forecastCard({json.dumps(row)}));"
         r = subprocess.run([node, "-e", js], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -12068,6 +12227,18 @@ class ThePropsHallIsNotRebuiltUnderYourFingers(unittest.TestCase):
     ROW = {"player": "Nico Collins", "team": "HOU", "market": "receptions", "unit": "rec",
            "probabilities": {"3": 86.7, "4": 66.1}, "interval": {"3": [81, 92], "4": [54, 77]},
            "sample_mean": 4.8, "p25": 3, "p75": 7, "sample_games": 17, "actual": None}
+
+    def test_the_card_draws_the_last_five_against_its_bar(self):
+        # Owner, 2026-10-12. Oldest on the left, so the row is read as time.
+        recent = [{"date": "2026-10-04", "opp": "LV", "at": "@", "result": "W", "value": 6},
+                  {"date": "2026-09-27", "opp": "MIA", "at": "@", "result": "W", "value": 2},
+                  {"date": "2026-09-21", "opp": "IND", "at": "vs", "result": "W", "value": 5}]
+        html = self.card(dict(self.ROW, recent=recent))
+        self.assertIn("Last 3 · receptions · 2 of 3 at 3+", html)      # the card leads with 3+
+        self.assertEqual(html.count("<rect"), 3)
+        self.assertLess(html.index(">IND<"), html.index(">@MIA<"))
+        self.assertLess(html.index(">@MIA<"), html.index(">@LV<"))
+        self.assertIn("Shows after this game is forecast again", self.card(dict(self.ROW, recent=[])))
 
     def test_the_cards_show_the_injury_flag(self):
         html = self.card(dict(self.ROW, injury={"status": "Questionable", "date": "2026-09-23"}))
@@ -18816,9 +18987,21 @@ class TheMarketsPageIsWiredInOnePlace(unittest.TestCase):
         self.assertIn("app.use('/shared'", server)
         self.assertIn('href="/markets"', (self.API / "public" / "dashboard.html").read_text())
         village = (self.API / "public" / "village.html").read_text()
-        self.assertIn("f.src = '/markets?embed=1'", village)
+        self.assertIn("belfort: '/markets?embed=1'", village)
         self.assertIn("'markets-close'", (self.API / "public" / "markets.html").read_text())
         self.assertIn("app.get('/api/belfort/board'", (self.API / "belfort.js").read_text())
+
+    def test_peters_page_has_the_same_two_doors(self):
+        # Owner, 2026-10-12: the Props Hall renamed Peter, its screen in the
+        # Markets page's style - so it is wired the same way.
+        server = (self.API / "server.js").read_text()
+        self.assertIn("app.get('/peter'", server)
+        self.assertIn('href="/peter"', (self.API / "public" / "dashboard.html").read_text())
+        village = (self.API / "public" / "village.html").read_text()
+        self.assertIn("peter: '/peter?embed=1'", village)
+        self.assertIn("e.data.type === 'peter-close'", village)
+        self.assertIn("type: 'peter-close'", (self.API / "public" / "peter.html").read_text())
+        self.assertIn("const PROPS_DOOR = 'Peter';", village)
 
     def test_the_markdown_renderer_is_one_file(self):
         for page in ("dashboard.html", "village.html", "markets.html"):
