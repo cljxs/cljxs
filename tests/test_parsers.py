@@ -18689,6 +18689,37 @@ class BelfortsListIsOneTableAndARefusedFetchIsLoud(unittest.TestCase):
         page = (ROOT / "mission-control-api" / "public" / "markets.html").read_text()
         self.assertIn("B.data_warning", page)
 
+    def test_a_refusal_waits_properly_before_asking_again(self):
+        # 2026-10-12: checking 31 symbols at 0.35 s apart, the 30th was refused
+        # (429). A 1.5 s pause asks again inside the same window.
+        f = load("belfort_fetch_429", "belfort-fetch.py")
+        waits, calls = [], []
+        def urlopen(req, timeout=None, context=None):
+            calls.append(1)
+            raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", {}, None)
+        with unittest.mock.patch.object(f.urllib.request, "urlopen", urlopen), \
+             unittest.mock.patch.object(f.time, "sleep", waits.append):
+            with self.assertRaises(urllib.error.HTTPError):
+                f.http_get("https://example.invalid/x")
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(waits, [f.RATE_LIMIT_WAIT, 2 * f.RATE_LIMIT_WAIT])
+        self.assertGreaterEqual(f.REQUEST_GAP, 0.6)
+
+    def test_the_names_added_2026_10_12_are_watched_in_their_groups(self):
+        # Owner's list, each checked live with `belfort-fetch.py check` first.
+        want = {"UNH": "healthcare", "NVO": "healthcare", "OSCR": "healthcare",
+                "SNDK": "semiconductors", "RDDT": "consumer internet", "GRAB": "consumer internet",
+                "KO": "consumer and retail", "NBIS": "AI infrastructure and power",
+                "IREN": "AI infrastructure and power", "BE": "AI infrastructure and power",
+                "OKLO": "AI infrastructure and power", "IONQ": "quantum", "INFQ": "quantum",
+                "SOFI": "fintech", "PYPL": "fintech", "LMND": "fintech", "ONDS": "drones and defense"}
+        fetch = load("belfort_fetch_added", "belfort-fetch.py")
+        for sym, group in want.items():
+            self.assertIn(sym, fetch.UNIVERSE, sym)
+            self.assertEqual(self.trade.cluster_of(sym), group, sym)
+        self.assertEqual(len(fetch.UNIVERSE), 70)
+        self.assertNotIn("ORCK", fetch.UNIVERSE, "no such symbol")
+
     def test_a_name_or_two_failing_is_not_an_alarm(self):
         self.assertIsNone(self.fetch.health(53, [{"symbol": "AAA", "error": "timeout"}] * 5))
         self.assertIn("6 of 53", self.fetch.health(53, [{"symbol": "AAA", "error": "x"}] * 6))

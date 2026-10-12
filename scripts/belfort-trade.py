@@ -112,19 +112,27 @@ EARNINGS_BLACKOUT_DAYS = 5
 # and MU at 20% each is 60% in one trade. Check a new name first:
 #   python3 scripts/belfort-fetch.py check SYM [SYM ...]
 CLUSTERS = {
-    "semiconductors": ["NVDA", "AMD", "AVGO", "MU", "TSM", "SMCI", "ARM", "QCOM", "INTC", "MRVL"],
+    "semiconductors": ["NVDA", "AMD", "AVGO", "MU", "TSM", "SMCI", "ARM", "QCOM", "INTC", "MRVL",
+                       "SNDK"],
     "software and security": ["PLTR", "NET", "DDOG", "SNOW", "CRWD", "ZS", "PANW", "MDB"],
     "mega-cap": ["META", "GOOGL", "AMZN", "MSFT", "AAPL"],
     "crypto and high-beta": ["COIN", "HOOD", "TSLA"],
-    "consumer internet": ["SHOP", "UBER", "ABNB", "RBLX"],
+    "consumer internet": ["SHOP", "UBER", "ABNB", "RBLX", "RDDT", "GRAB"],
     # Added 2026-10-06.
-    "healthcare": ["LLY", "ISRG", "VRTX", "ABBV", "HIMS"],
+    "healthcare": ["LLY", "ISRG", "VRTX", "ABBV", "HIMS", "UNH", "NVO", "OSCR"],
     "financials": ["JPM", "GS", "V", "MA"],
     "industrials and energy": ["GE", "CAT", "ETN", "XOM"],
-    "consumer and retail": ["COST", "NFLX", "WMT", "NKE"],
+    "consumer and retail": ["COST", "NFLX", "WMT", "NKE", "KO"],
     # Owner, 2026-10-08. SpaceX listed 2026-06-12 as SPCX; 82 trading days by
     # the day it was added, past the 60 the signals need.
     "space": ["SPCX", "RKLB", "ASTS", "LUNR", "PL", "RDW"],
+    # Owner, 2026-10-12 - each checked with `belfort-fetch.py check` that day.
+    # The AI build-out's other half: rented GPU clouds and the power for them,
+    # which rise and fall on the same data-centre spending news.
+    "AI infrastructure and power": ["NBIS", "IREN", "BE", "OKLO"],
+    "quantum": ["IONQ", "INFQ"],            # INFQ: 165 trading days by then
+    "fintech": ["SOFI", "PYPL", "LMND"],
+    "drones and defense": ["ONDS"],
 }
 CLUSTER_CAP_PCT = 40.0
 MAX_POSITIONS = 8

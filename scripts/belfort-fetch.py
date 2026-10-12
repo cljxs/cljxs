@@ -58,7 +58,11 @@ BENCHMARKS = ["QQQ", "SPY"]
 UA = "Mozilla/5.0 (compatible; belfort-fetch/1.0)"
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=1y&interval=1d"
 NEWS_URL = "https://feeds.finance.yahoo.com/rss/2.0/headline?s={syms}&region=US&lang=en-US"
-REQUEST_GAP = 0.35          # be polite to a free endpoint
+# Be polite to a free endpoint. 0.35 s was fine for 53 names; checking 31
+# symbols at that pace on 2026-10-12 had the 30th refused (429) - and the
+# list grew to 70 that day. About a minute a run at this pace.
+REQUEST_GAP = 0.6
+RATE_LIMIT_WAIT = 8.0       # seconds before retrying a request refused as too many
 TIMEOUT = 20
 # Daily closes kept per name: the memory belfort-trade.py's exit rules read
 # (the highest close since entry, trading days held).
@@ -104,7 +108,10 @@ def http_get(url, retries=2, ua=None):
         except Exception as exc:
             last = exc
             if attempt < retries:
-                time.sleep(1.5 * (attempt + 1))
+                # Refused as too many requests: a short pause only asks again
+                # inside the same window, so it waits properly.
+                limited = getattr(exc, "code", None) == 429
+                time.sleep((RATE_LIMIT_WAIT if limited else 1.5) * (attempt + 1))
     raise last
 
 

@@ -149,9 +149,8 @@ you never sell to dodge one or hold past one.
   in any one name
 - **No new buy within 5 trading days of the name's earnings** (`show` lists
   who reports soon; `data/earnings.json` has the dates)
-- **At most 40%** in one cluster: semiconductors, software and security,
-  mega-cap, crypto and high-beta, consumer internet, healthcare, financials,
-  industrials and energy, consumer and retail, space (`show` prints yours)
+- **At most 40%** in one cluster of names that move together - chips,
+  software, space, quantum and so on; `show` prints the groups and yours
 - **Market regime** (QQQ against its 50-day average, and how many of the names
   are above theirs): favourable = normal sizing; mixed = at most 10% in a
   new buy; unfavourable = no buys
