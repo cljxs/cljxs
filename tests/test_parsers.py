@@ -6017,7 +6017,8 @@ class OneScreenPerMarket(unittest.TestCase):
 
     def setUp(self):
         self.m = load("props_forecast", "props-forecast.py")
-        self.html = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        # Peter's page since 2026-10-12; the village's panel is gone.
+        self.html = (ROOT / "mission-control-api" / "public" / "peter.html").read_text()
         self.js = (ROOT / "mission-control-api" / "ace.js").read_text()
         self.tmp = tempfile.TemporaryDirectory()
         self.m.STORE = Path(self.tmp.name) / "forecasts.json"
@@ -6056,14 +6057,14 @@ class OneScreenPerMarket(unittest.TestCase):
         # The whole point. If any market name is spelled out in the page, the
         # two lists have already started to drift.
         panel = self.html.split("function propsTabs(", 1)[1].split(
-            "\nasync function loadAceLedger", 1)[0]
+            "\n/* ---------------- wiring", 1)[0]
         for market in self.m.MARKETS:
             self.assertNotIn(market, panel,
                              f"{market} is named in the page; it belongs to MARKETS")
 
     def test_the_tabs_are_built_from_the_catalogue(self):
         panel = self.html.split("function propsTabs(", 1)[1].split(
-            "\nasync function loadAceLedger", 1)[0]
+            "\n/* ---------------- wiring", 1)[0]
         self.assertIn("PROPS.markets", panel)
         self.assertIn("propsPick(", panel)
 
@@ -12382,7 +12383,7 @@ class TheBooksLineIsShownAndNeverUsed(unittest.TestCase):
         body = body.split("def cmd_forecast(", 1)[1].split("\ndef ", 1)[0]
         self.assertEqual(body.count("book_lines(event_id)"), 1, "fetched once per run")
         self.assertIn("if a == aid", body)
-        self.assertIn("avail, injury, mine)", body)
+        self.assertIn("avail, injury, mine, recent_for(aid, now))", body)
 
     def test_best_shows_it(self):
         row = self.m.rows_for_player("1", "A @ B", None, "2", "A Receiver", "WR", "AAA",
