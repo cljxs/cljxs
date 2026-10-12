@@ -980,22 +980,28 @@ def board():
                      for n in news if str(n.get("symbol", "")).upper() == sym][:8],
         }
 
+    # The race is his whole run against the market's (owner, 2026-10-12: "since
+    # belfort first started"). It was the no-AI book's days once that book
+    # existed - Belfort +0.17% "since 2026-10-01" beside an account up 5.26%.
+    # The no-AI book began later, so its bar in this race would be a different
+    # stretch of the market; it is the aside below instead, on its own days.
+    mine = books[0]
+    late = [d for d in (mine["qqq_from"], mine["spy_from"]) if d and mine["since"] and d > mine["since"]]
+    basis = f"since his start, {mine['since'] or 'the start'}" + (
+        f" (benchmark prices from {max(late)})" if late else "")
+    race = [("Belfort (AI)", mine["return_pct"]), ("QQQ", mine["qqq_return_pct"]),
+            ("SPY", mine["spy_return_pct"])]
+    aside = None
     if same and same.get("belfort_pct") is not None:
-        basis = f"same days, since {same['since']}"
-        race = [("Belfort (AI)", same["belfort_pct"]), ("No-AI book", same["shadow_pct"]), ("QQQ", same["qqq_pct"]),
-                ("SPY", same["spy_pct"])]
-    else:
-        mine = books[0]
-        basis = f"since {mine['since'] or 'the start'}"
-        race = [("Belfort (AI)", mine["return_pct"]), ("QQQ", mine["qqq_return_pct"]), ("SPY", mine["spy_return_pct"])]
-        if len(books) > 1:
-            race.insert(1, ("No-AI book", books[1]["return_pct"]))
+        aside = {"since": same["since"], "rows": [{"name": "Belfort (AI)", "pct": same["belfort_pct"]},
+                                                   {"name": "No-AI book", "pct": same["shadow_pct"]}]}
     vals = [v for _, v in race if v is not None]
     reports = sorted(REPORTS.glob("*.md"), key=report_order, reverse=True) if REPORTS.is_dir() else []
     return {
         "asof_utc": doc.get("asof_utc"), "regime": state, "regime_why": why,
         "showdown": {"basis": basis, "rows": [{"name": n, "pct": v} for n, v in race],
-                     "spread": round(max(vals) - min(vals), 2) if len(vals) > 1 else None},
+                     "spread": round(max(vals) - min(vals), 2) if len(vals) > 1 else None,
+                     "aside": aside},
         "books": [{k: b[k] for k in ("book", "value", "return_pct", "open")} for b in books],
         "account": account(p, quotes),
         "watch": [ticker(s) for s in order if s in quotes],

@@ -147,6 +147,7 @@
     <div class="showtop"><div class="k">The showdown — <span id="basis">…</span></div>
       <div class="k">Spread <b id="spread" style="color:var(--ink)">—</b></div></div>
     <div id="race"><div class="empty">loading…</div></div>
+    <div class="k" id="aside" style="margin-top:8px"></div>
   </div>
   <div class="status" id="status"><span><span class="dot"></span>loading</span></div>
   <div class="grid">
@@ -208,7 +209,11 @@ function render() {
     <div><div class="l">Today</div><div class="v num ${cls(a.today)}">${signed(a.today)} <span style="font-size:13px">${pct(a.today_pct)}</span></div></div>
     <div><div class="l">Cash</div><div class="v num">${money(a.cash)}</div></div>` : '';
   const sd = B.showdown || {};
-  $('basis').textContent = 'Belfort vs the no-AI book vs QQQ and SPY · ' + (sd.basis || '');
+  $('basis').textContent = 'Belfort vs QQQ and SPY · ' + (sd.basis || '');
+  // The no-AI book started later: its own days, beside Belfort's over the same ones.
+  const as = sd.aside;
+  $('aside').innerHTML = as ? `Same days since ${esc(as.since)}: ` + as.rows.map(r =>
+    `${esc(r.name)} <b class="num ${cls(r.pct)}">${pct(r.pct)}</b>`).join(' · ') : '';
   $('spread').textContent = has(sd.spread) ? sd.spread.toFixed(2) + '%' : '—';
   const rows = sd.rows || [];
   const scale = Math.max(1, ...rows.map(r => Math.abs(r.pct || 0)));

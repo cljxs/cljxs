@@ -18813,6 +18813,38 @@ class TheShortlistIsWhatHeReads(TheMarketsPageDrawsBelfortsOwnNumbers):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("SPY", [row["name"] for row in json.loads(r.stdout)["showdown"]["rows"]])
 
+    def test_the_race_runs_from_his_first_day(self):
+        # Owner, 2026-10-12: the race read "same days, since 2026-10-01" - the
+        # no-AI book's start - and showed Belfort +0.17% beside an account up
+        # 5.26%. It is his whole run against QQQ and SPY's over the same days;
+        # the later-started no-AI book is set aside on its own days.
+        state = self.root / "agents" / "belfort" / "state"
+        state.mkdir(parents=True, exist_ok=True)
+        trade = load("belfort_trade_race", "belfort-trade.py")
+        hist = json.loads((self.data / "quotes.json").read_text())["benchmarks"]["QQQ"]["history"]
+        start, later = hist[2][0], hist[-6][0]
+        (state / "portfolio.json").write_text(json.dumps({
+            "starting_cash": 10000.0, "cash": 10526.10, "created_utc": f"{start} 13:00:00",
+            "positions": [], "trades": []}))
+        (state / trade.SHADOW.name).write_text(json.dumps({
+            "starting_cash": 10000.0, "cash": 9746.0, "created_utc": f"{later} 13:00:00",
+            "positions": [], "trades": []}))
+        (state / trade.EQUITY.name).write_text(
+            json.dumps({"book": "belfort", "utc": f"{later} 20:00:00", "value": 10508.23}) + "\n")
+        r = subprocess.run([sys.executable, str(SCRIPTS / "belfort-trade.py"), "board"],
+                           capture_output=True, text=True, env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sd = json.loads(r.stdout)["showdown"]
+        rows = {x["name"]: x["pct"] for x in sd["rows"]}
+        self.assertEqual(list(rows), ["Belfort (AI)", "QQQ", "SPY"])
+        self.assertEqual(rows["Belfort (AI)"], 5.26, "his account since his start")
+        doc = json.loads((self.data / "quotes.json").read_text())
+        self.assertEqual(rows["QQQ"], trade.bench_since(doc, "QQQ", start)[0])
+        self.assertIn(f"since his start, {start}", sd["basis"])
+        aside = {x["name"]: x["pct"] for x in sd["aside"]["rows"]}
+        self.assertEqual(sd["aside"]["since"], later)
+        self.assertEqual(aside, {"Belfort (AI)": 0.17, "No-AI book": -2.54})
+
 
 class BelfortLearnsFromNumbersNotMemory(unittest.TestCase):
     """Owner, 2026-10-07: "Does it learn from its wins and losses?" It did
