@@ -129,6 +129,31 @@ function register(app) {
     reply(res, await clipper(['recut', req.params.id], REMAKE_TIMEOUT_MS));
   });
 
+  // Fix subtitles (owner, 2026-10-12): the clip's captions, one per line,
+  // for the editor - and the corrected lines back, saved and the clip cut
+  // again. The lines go to clipper as one JSON argument, never a shell string.
+  app.get('/api/clip/subtitles/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ error: 'bad id' });
+    const r = await clipper(['subtitles', req.params.id]);
+    if (r.code !== 0) return res.status(400).json({ error: (r.stderr || r.stdout).trim().slice(-400) });
+    try { res.json(JSON.parse(r.stdout)); }
+    catch { res.status(500).json({ error: 'clipper printed something that is not JSON' }); }
+  });
+
+  app.post('/api/clip/subtitles/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    const b = req.body || {};
+    if (b.reset === true) return reply(res, await clipper(['subtitles', req.params.id, '--reset'], REMAKE_TIMEOUT_MS));
+    const lines = b.lines;
+    // The shape only: how many lines and how long is clipper's to refuse
+    // (pipeline.set_subtitles), so the two cannot disagree.
+    if (!Array.isArray(lines) || lines.some(l => typeof l !== 'string')) {
+      return res.status(400).json({ ok: false, error: 'lines must be a list of caption lines' });
+    }
+    reply(res, await clipper(['subtitles', req.params.id, '--set-json', JSON.stringify(lines)],
+                             REMAKE_TIMEOUT_MS));
+  });
+
   app.post('/api/clip/posted/:id/:platform', async (req, res) => {
     const { id, platform } = req.params;
     if (!ID_RE.test(id || '') || !PLATFORMS.includes(platform)) {

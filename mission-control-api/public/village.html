@@ -104,21 +104,25 @@
   #lb.on{display:flex}
   /* The post editor: full width on an iPad, 17px+ text so Safari never zooms,
      the whole caption visible without scrolling inside a one-line box. */
-  #ed{position:fixed;inset:0;z-index:30;display:none;align-items:flex-start;justify-content:center;
+  #ed,#sed{position:fixed;inset:0;z-index:30;display:none;align-items:flex-start;justify-content:center;
     background:rgba(5,8,14,.72);padding:4vh 14px;overflow-y:auto}
-  #ed.on{display:flex}
-  #edbox{width:min(760px,100%);background:var(--card);border:1px solid var(--line);border-radius:16px;
+  #ed.on,#sed.on{display:flex}
+  #edbox,#sedbox{width:min(760px,100%);background:var(--card);border:1px solid var(--line);border-radius:16px;
     padding:20px 20px 16px}
-  #edbox h2{margin:0 0 10px;font-size:20px}
-  #edbox label{display:block;margin:14px 0 6px;font-size:13px;letter-spacing:.04em;color:var(--mute);
+  #edbox h2,#sedbox h2{margin:0 0 10px;font-size:20px}
+  #edbox label,#sedbox label{display:block;margin:14px 0 6px;font-size:13px;letter-spacing:.04em;color:var(--mute);
     text-transform:uppercase}
-  #edbox .edn{float:right;text-transform:none;letter-spacing:0}
-  #edbox input,#edbox textarea{width:100%;box-sizing:border-box;font-family:inherit;font-size:17px;
+  #edbox .edn,#sedbox .edn{float:right;text-transform:none;letter-spacing:0}
+  #sedbox .edn.bad{color:var(--down)}
+  /* Fix subtitles: one caption a line, numbered, tall enough to read the
+     whole clip's captions without scrolling inside the box on an iPad. */
+  #sedText{min-height:52vh;font-family:ui-monospace,Menlo,monospace!important;font-size:17px!important}
+  #edbox input,#edbox textarea,#sedbox textarea{width:100%;box-sizing:border-box;font-family:inherit;font-size:17px;
     line-height:1.45;color:inherit;
     background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:10px;padding:12px 14px;
     resize:vertical}
   #edbox textarea#edCaption{min-height:170px}
-  #edbox input:focus,#edbox textarea:focus{outline:2px solid rgba(52,211,153,.6);outline-offset:1px}
+  #edbox input:focus,#edbox textarea:focus,#sedbox textarea:focus{outline:2px solid rgba(52,211,153,.6);outline-offset:1px}
   .edacts{display:flex;gap:12px;margin-top:18px}
   .edacts button{flex:1;padding:15px;border-radius:12px;font-size:17px;font-weight:600;
     background:transparent;color:inherit;border:1px solid var(--line)}
@@ -292,6 +296,18 @@
     <label for="edTags">Hashtags <span class="edn">spaces between</span></label>
     <textarea id="edTags" rows="2" autocapitalize="none" autocorrect="off" spellcheck="false"></textarea>
     <div class="edacts"><button id="edCancel">Cancel</button><button id="edSave" class="yes">Save</button></div>
+  </div>
+</div>
+
+<div id="sed">
+  <div id="sedbox">
+    <h2>Fix the subtitles</h2>
+    <div class="muted">One line per caption, in the order they appear. Fix the words and keep the
+      lines - each line stays at its moment in the clip. An empty line removes that caption.</div>
+    <label for="sedText">Subtitles <span class="edn" id="sedN"></span></label>
+    <textarea id="sedText" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+    <div class="edacts"><button id="sedCancel">Cancel</button><button id="sedReset">Back to transcript</button>
+      <button id="sedSave" class="yes">Remake video</button></div>
   </div>
 </div>
 
@@ -2909,10 +2925,67 @@ function editPost(post){
   });
 }
 
+// Fix subtitles (owner, 2026-10-12): every caption burned into the clip, one
+// per line, to correct by hand; Remake video saves them and cuts it again.
+// Resolves with {lines} or {reset: true}, or null when cancelled.
+function editSubtitles(sub){
+  return new Promise(resolve => {
+    const box = $('sedText'), want = sub.lines.length;
+    box.value = sub.lines.map(l => l.text).join('\n');
+    const read = () => {
+      const got = box.value.split('\n');
+      // A trailing newline is not a caption; an emptied last caption is.
+      while (got.length > want && got[got.length - 1].trim() === '') got.pop();
+      return got;
+    };
+    const count = () => {
+      const n = read().length;
+      $('sedN').textContent = n === want ? `${want} captions${sub.edited ? ' · your edits' : ''}`
+                                         : `${n} lines - should be ${want}`;
+      $('sedN').classList.toggle('bad', n !== want);
+    };
+    box.oninput = count;
+    const done = v => { $('sed').classList.remove('on'); resolve(v); };
+    $('sedCancel').onclick = () => done(null);
+    $('sedReset').onclick = () => {
+      if (confirm('Throw away your edits and use the transcript again?')) done({ reset: true });
+    };
+    $('sedSave').onclick = () => {
+      const lines = read();
+      if (lines.length !== want) {
+        alert(`This clip has ${want} captions and the box has ${lines.length} lines. Keep one line per `
+            + 'caption - leave a line empty to remove that caption.');
+        return;
+      }
+      done({ lines });
+    };
+    $('sed').classList.add('on');
+    count();
+    box.focus();
+  });
+}
+
+async function fixSubtitles(id){
+  let sub;
+  try {
+    const r = await fetch(`/api/clip/subtitles/${encodeURIComponent(id)}`, { cache: 'no-store' });
+    sub = await r.json();
+    if (!r.ok) throw new Error(sub.error || r.status);
+  } catch (e) { alert('Could not read the subtitles: ' + e.message); return; }
+  const body = await editSubtitles(sub);
+  if (!body) return;
+  clipBusy = true;
+  document.querySelectorAll('#clipClips button').forEach(b => b.disabled = true);
+  try { await clipPost(`/api/clip/subtitles/${encodeURIComponent(id)}`, body); }
+  catch (e) { alert('Could not reach the API: ' + e.message); }
+  finally { clipBusy = false; loadClip(); }
+}
+
 async function clipCard(kind, id, platform){
   if (clipBusy) return;
   const k = ((CLIP && CLIP.clips) || []).find(c => String(c.id) === String(id));
   if (kind === 'copytiktok') { if (k && k.post) copyText(k.post.tiktok); return; }
+  if (kind === 'recut') return fixSubtitles(id);
   let body = null;
   if (kind === 'approve') {
     const where = ((CLIP && CLIP.platforms) || []).join(' and ');
@@ -2929,9 +3002,6 @@ async function clipCard(kind, id, platform){
     if (!body) return;
   } else if (kind === 'posted') {
     if (!confirm('Mark this clip as posted on TikTok? It will not be offered again.')) return;
-  } else if (kind === 'recut') {
-    if (!confirm('Cut this clip again so its subtitles use your corrected spellings? '
-        + 'It takes a minute or two; the clip keeps its number.')) return;
   }
   clipBusy = true;
   document.querySelectorAll('#clipClips button').forEach(b => b.disabled = true);

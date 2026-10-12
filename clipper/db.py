@@ -268,6 +268,13 @@ MIGRATIONS = [
     """
     ALTER TABLE sources ADD COLUMN avoid TEXT;
     """,
+    # 12 - a clip's subtitles as the owner corrected them by hand (fix
+    # subtitles, 2026-10-12): JSON [{word, start, end}] on the source's clock,
+    # used instead of the transcript for that clip's captions. NULL is the
+    # transcript, with the source's spellings.
+    """
+    ALTER TABLE clips ADD COLUMN subtitles TEXT;
+    """,
 ]
 
 

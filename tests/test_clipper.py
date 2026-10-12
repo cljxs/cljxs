@@ -10,6 +10,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -933,12 +934,81 @@ class Posting(EndToEnd):
         self.assertFalse(list(path.parent.glob("*.recut.*")), "no half-made file left behind")
         self.assertIn("zebrafish", path.with_suffix(".ass").read_text().lower(), "the clip's own subtitle file")
 
+    # Fix subtitles (owner, 2026-10-12): "a text box of all the subtitles from
+    # the video and i can fix them manually... remake video".
+
+    def subs(self, *more):
+        code, said = self.cli("subtitles", str(self.clip["id"]), *more)
+        self.assertEqual(code, 0, said)
+        return said
+
+    def listing(self):
+        return json.loads(self.subs().strip().splitlines()[-1])
+
+    def dialogue(self):
+        ass = Path(self.clip["path"]).with_suffix(".ass").read_text()
+        # ASS: ten fields, the text last - commas inside it stay in it.
+        return [l.split(",", 9)[9] for l in ass.splitlines() if l.startswith("Dialogue: 0,")]
+
+    def test_the_box_holds_exactly_the_captions_burned_in(self):
+        self.ready()
+        got = self.listing()
+        self.assertFalse(got["edited"])
+        # Each caption is on screen once per word (the lit word moves), so the
+        # distinct captions, in order, are what the box lists.
+        shown = []
+        for d in self.dialogue():
+            text = re.sub(r"\{[^}]*\}", "", d).lower()
+            if not shown or shown[-1] != text:
+                shown.append(text)
+        self.assertEqual([l["text"].lower() for l in got["lines"]], shown)
+
+    def test_your_lines_are_burned_in_and_kept(self):
+        self.ready()
+        lines = [l["text"] for l in self.listing()["lines"]]
+        first_was, gone = lines[0], lines[1]
+        lines[0], lines[1] = "Zebra fish", ""
+        self.subs("--set-json", json.dumps(lines))
+        caps = " ".join(re.sub(r"\{[^}]*\}", "", d) for d in self.dialogue())
+        self.assertIn("ZEBRA FISH", caps, "the clip was cut again with your words")
+        self.assertNotIn(gone.upper(), caps.replace("ZEBRA FISH", ""), "an empty line removes its caption")
+        after = self.listing()
+        self.assertTrue(after["edited"])
+        self.assertEqual(after["lines"][0]["text"], "Zebra fish")
+        self.assertEqual(len(after["lines"]), len(lines) - 1)
+        row = self.conn.execute("SELECT * FROM clips WHERE id = ?", (self.clip["id"],)).fetchone()
+        self.assertEqual(row["path"], self.clip["path"], "same number, same file")
+        # The fixed line keeps its moment: it starts when the caption it replaced did.
+        own = json.loads(row["subtitles"])
+        self.assertEqual(own[0]["word"], "Zebra")
+        self.assertNotEqual(first_was, "Zebra fish")
+
+    def test_a_box_with_lines_added_or_lost_is_refused_and_nothing_saved(self):
+        self.ready()
+        lines = [l["text"] for l in self.listing()["lines"]]
+        code, said = self.cli("subtitles", str(self.clip["id"]), "--set-json", json.dumps(lines + ["extra"]))
+        self.assertNotEqual(code, 0)
+        self.assertIn("keep one line per caption", said)
+        self.assertIsNone(self.conn.execute("SELECT subtitles FROM clips WHERE id = ?",
+                                            (self.clip["id"],)).fetchone()[0])
+
+    def test_back_to_the_transcript(self):
+        self.ready()
+        lines = [l["text"] for l in self.listing()["lines"]]
+        self.subs("--set-json", json.dumps(["Zebra fish"] + lines[1:]))
+        self.subs("--reset")
+        self.assertFalse(self.listing()["edited"])
+        self.assertNotIn("ZEBRA", " ".join(self.dialogue()))
+
     def test_a_posted_clip_is_never_recut(self):
         self.ready()
         publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
         code, said = self.cli("recut", str(self.clip["id"]))
         self.assertNotEqual(code, 0)
         self.assertIn("already posted", said)
+        code, said = self.cli("subtitles", str(self.clip["id"]), "--set-json", "[]")
+        self.assertNotEqual(code, 0)
+        self.assertIn("already posted", said, "nor its subtitles changed")
 
     def test_your_edit_is_never_overwritten(self):
         self.ready()

@@ -70,14 +70,26 @@ def hook_height():
     return HOOK_LINES * int(HOOK_SIZE * 1.25) + 2 * 14
 
 
+def inside(words, clip_start, clip_end):
+    """The words a clip shows: those inside it, shifted to start at 0."""
+    return [dict(w, start=w["start"] - clip_start, end=w["end"] - clip_start)
+            for w in words if w["start"] >= clip_start - 0.01 and w["end"] <= clip_end + 0.01]
+
+
+def lines(words, clip_start, clip_end, max_words=3, max_chars=18):
+    """[{start, end, text}] - the captions exactly as build() puts them on
+    screen, one per line, clip clock. What the owner edits (fix subtitles)."""
+    return [{"start": round(g[0]["start"], 2), "end": round(g[-1]["end"], 2),
+             "text": " ".join(w["word"].strip() for w in g)}
+            for g in chunks(inside(words, clip_start, clip_end), max_words, max_chars)]
+
+
 def build(words, clip_start, clip_end, style="bold-yellow", upper=True, max_words=3,
           max_chars=18, pop=True, hook=None, hook_top=HOOK_TOP):
     """The whole .ass file for one clip. `words` are transcript words (source
     clock); only those inside the clip are used, shifted to start at 0."""
     st = STYLES[style]
-    inside = [dict(w, start=w["start"] - clip_start, end=w["end"] - clip_start)
-              for w in words if w["start"] >= clip_start - 0.01 and w["end"] <= clip_end + 0.01]
-    groups = chunks(inside, max_words, max_chars)
+    groups = chunks(inside(words, clip_start, clip_end), max_words, max_chars)
     border = 3 if st["box"] else 1
     back = "&H99000000" if st["box"] else "&H80000000"
     lines = [

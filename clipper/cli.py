@@ -510,6 +510,26 @@ def cmd_recut(a):
     return 0
 
 
+def cmd_subtitles(a):
+    """A clip's captions, one per line - or the owner's corrected ones saved
+    and the clip cut again with them (the village's Fix subtitles box)."""
+    cfg, paths, conn = open_all()
+    if a.reset or a.set_json is not None:
+        texts = None
+        if a.set_json is not None:
+            texts = json.loads(a.set_json)
+            if not isinstance(texts, list):
+                raise ValueError("--set-json takes a JSON list of caption lines")
+        pipeline.set_subtitles(conn, paths, cfg, a.clip, texts, reset=a.reset)
+        print(f"clip {a.clip} cut again with "
+              + ("the transcript's subtitles" if a.reset else "your subtitles")
+              + " - reload Clip's studio to see it.")
+        return 0
+    lines, edited = pipeline.subtitle_lines(conn, paths, cfg, a.clip)
+    print(json.dumps({"clip": a.clip, "edited": edited, "lines": lines}))
+    return 0
+
+
 def cmd_remake(a):
     cfg, paths, conn = open_all()
     clip = trends.remake(conn, paths, cfg, a.trend)
@@ -622,6 +642,12 @@ def main(argv=None):
     x = sub.add_parser("recut", help="cut a clip again with the source's spellings as they are now")
     x.add_argument("clip", type=int)
     x.set_defaults(fn=cmd_recut)
+    x = sub.add_parser("subtitles", help="a clip's captions as JSON; --set-json saves your fixed "
+                                         "lines and cuts it again; --reset goes back to the transcript")
+    x.add_argument("clip", type=int)
+    x.add_argument("--set-json", dest="set_json", default=None)
+    x.add_argument("--reset", action="store_true")
+    x.set_defaults(fn=cmd_subtitles)
     m = sub.add_parser("remake")
     m.add_argument("trend", type=int)
     m.set_defaults(fn=cmd_remake)

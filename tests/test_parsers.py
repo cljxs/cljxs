@@ -5676,6 +5676,22 @@ class ClipHasAStudio(unittest.TestCase):
             self.assertIn(f"app.post('/api/clip/{route}/", js)
         self.assertIn('data-clip="recut"', self.html, "Fix subtitles is on the card")
 
+    def test_fix_subtitles_opens_the_text_box(self):
+        # Owner, 2026-10-12: "a text box of all the subtitles... fix them
+        # manually... remake video". The button opens the editor rather than
+        # re-cutting straight away; the lines go to clipper as one JSON
+        # argument, never through a shell.
+        self.assertIn("if (kind === 'recut') return fixSubtitles(id);", self.html)
+        body = self.html.split("function editSubtitles(", 1)[1].split("\nasync function clipCard(", 1)[0]
+        self.assertIn("lines.length !== want", body, "a lost or added line is caught before sending")
+        self.assertIn('id="sedText" autocapitalize="off" autocorrect="off"', self.html,
+                      "iOS must not 'correct' a name back")
+        js = (ROOT / "mission-control-api" / "clip.js").read_text()
+        self.assertIn("app.get('/api/clip/subtitles/:id'", js)
+        route = js.split("app.post('/api/clip/subtitles/:id'", 1)[1].split("app.post(", 1)[0]
+        self.assertIn("['subtitles', req.params.id, '--set-json', JSON.stringify(lines)]", route)
+        self.assertIn("['subtitles', req.params.id, '--reset']", route)
+
     def test_approve_answers_before_the_upload(self):
         # 2026-10-07: the route waited for the YouTube upload, Safari gave up
         # first ("Could not reach the API: Load failed") and nothing was recorded.

@@ -165,23 +165,99 @@ def cut_clip(cfg, video, src, c, words, out, conn):
             "duration": info["duration"]}
 
 
+def clip_words(conn, paths, video, clip):
+    """The words a clip's captions are made from: the owner's own, when they
+    corrected them by hand, else the transcript with the source's spellings."""
+    own = json.loads(clip["subtitles"]) if clip["subtitles"] else None
+    return own or words_of(conn, paths, video)
+
+
+def _clip_parts(conn, clip_id):
+    clip = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
+    if not clip:
+        raise ValueError(f"no clip {clip_id}")
+    video = conn.execute("SELECT * FROM videos WHERE id = ?", (clip["video_id"],)).fetchone()
+    c = conn.execute("SELECT * FROM candidates WHERE id = ?", (clip["candidate_id"],)).fetchone()
+    return clip, video, c
+
+
+def subtitle_lines(conn, paths, cfg, clip_id):
+    """(lines, edited) - the clip's captions as they are burned in, one per
+    line, and whether they are the owner's own."""
+    clip, video, c = _clip_parts(conn, clip_id)
+    return (captions.lines(clip_words(conn, paths, video, clip), c["start"], c["end"],
+                           cfg["caption_max_words"], cfg["caption_max_chars"]),
+            bool(clip["subtitles"]))
+
+
+def spread(text, start, end):
+    """A corrected caption's words over the time its line was on screen, each
+    for a share of it as long as the word - so a fixed line keeps its place in
+    the clip whatever its words now are."""
+    ws = text.split()
+    if not ws:
+        return []
+    total = sum(len(w) + 1 for w in ws)
+    out, t = [], start
+    for w in ws:
+        d = (end - start) * (len(w) + 1) / total
+        out.append({"word": w, "start": round(t, 3), "end": round(t + d, 3)})
+        t += d
+    return out
+
+
+SUBTITLE_LINES_MAX = 400
+SUBTITLE_LINE_CHARS = 120
+
+
+def set_subtitles(conn, paths, cfg, clip_id, texts=None, reset=False):
+    """The owner's corrected captions, one text per line subtitle_lines() gave,
+    in order; an empty one removes that caption. Saved on the clip and the
+    clip cut again with them. reset=True goes back to the transcript. Owner,
+    2026-10-12: "a text box of all the subtitles... fix them manually...
+    remake video"."""
+    clip, video, c = _clip_parts(conn, clip_id)
+    _postable(conn, clip)
+    if reset:
+        with conn:
+            conn.execute("UPDATE clips SET subtitles = NULL WHERE id = ?", (clip_id,))
+        return recut(conn, paths, cfg, clip_id)
+    lines, _edited = subtitle_lines(conn, paths, cfg, clip_id)
+    texts = [str(t if t is not None else "").strip() for t in (texts or [])]
+    if len(texts) != len(lines):
+        raise ValueError(f"this clip has {len(lines)} captions and {len(texts)} lines came back - "
+                         f"keep one line per caption, in order (leave a line empty to remove "
+                         f"that caption)")
+    if len(texts) > SUBTITLE_LINES_MAX or any(len(t) > SUBTITLE_LINE_CHARS for t in texts):
+        raise ValueError(f"a caption line is limited to {SUBTITLE_LINE_CHARS} characters")
+    if texts != [l["text"] for l in lines]:
+        own = []
+        for line, text in zip(lines, texts):
+            own += spread(text, c["start"] + line["start"], c["start"] + line["end"])
+        with conn:
+            conn.execute("UPDATE clips SET subtitles = ? WHERE id = ?", (json.dumps(own), clip_id))
+    return recut(conn, paths, cfg, clip_id)
+
+
+def _postable(conn, clip):
+    """Refuse once the clip is out anywhere: what is posted and the file must match."""
+    if clip["status"] not in ("rendered", "approved") or conn.execute(
+            "SELECT 1 FROM publications WHERE clip_id = ? AND status = 'posted'", (clip["id"],)).fetchone():
+        raise ValueError(f"clip {clip['id']} is already posted - a posted video cannot change")
+
+
 def recut(conn, paths, cfg, clip_id):
     """Cut a clip again, same moment and same number, with the source's
     spellings as they are now. Owner, 2026-10-09: the subtitles burned into a
     clip said "Amber Woolf" after the post text was fixed to Wolves. Refused
     once it is posted anywhere: what is out there and the file must match."""
-    clip = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
-    if not clip:
-        raise ValueError(f"no clip {clip_id}")
-    if clip["status"] not in ("rendered", "approved") or conn.execute(
-            "SELECT 1 FROM publications WHERE clip_id = ? AND status = 'posted'", (clip_id,)).fetchone():
-        raise ValueError(f"clip {clip_id} is already posted - a posted video cannot change")
-    video = conn.execute("SELECT * FROM videos WHERE id = ?", (clip["video_id"],)).fetchone()
+    clip, video, c = _clip_parts(conn, clip_id)
+    _postable(conn, clip)
     src = conn.execute("SELECT * FROM sources WHERE id = ?", (video["source_id"],)).fetchone()
-    c = conn.execute("SELECT * FROM candidates WHERE id = ?", (clip["candidate_id"],)).fetchone()
     out = Path(clip["path"])
     tmp = out.with_name(out.stem + ".recut" + out.suffix)
-    meta = cut_clip(cfg, video, src, c, words_of(conn, paths, video), tmp, conn)
+    # The owner's corrected subtitles when there are any (set_subtitles).
+    meta = cut_clip(cfg, video, src, c, clip_words(conn, paths, video, clip), tmp, conn)
     meta["text"] = transcribe.respell_text(c["text"], spellings_of(conn, video))
     # Everything the render wrote beside the video - the subtitle file too -
     # takes the clip's own name, or the old subtitles stay on disk as the
@@ -191,7 +267,8 @@ def recut(conn, paths, cfg, clip_id):
     out.with_suffix(".json").write_text(json.dumps(meta, indent=1))
     with conn:
         conn.execute("UPDATE clips SET meta = ? WHERE id = ?", (db.as_json(meta), clip_id))
-    db.event(conn, "render", f"clip {clip['rank']} recut with the current spellings",
+    db.event(conn, "render", f"clip {clip['rank']} recut with "
+             + ("your corrected subtitles" if clip["subtitles"] else "the current spellings"),
              video_id=video["id"], clip_id=clip_id)
     return meta
 
