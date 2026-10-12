@@ -14005,9 +14005,15 @@ class TheListingAuditNamesWhatToFix(unittest.TestCase):
         four = self.GOOD["tags"][:9] + ["tote", "library", "floral", "vintage"]
         self.assertIn("4 one-word tags", self.said(tags=four))
 
-    def test_a_tag_unrelated_to_the_title_is_named(self):
+    def test_tags_unrelated_to_the_title_are_named_when_most_are(self):
+        # One stray tag is a synonym or a style - how tags are meant to work
+        # (2026-10-12). Most of them straying is a title and tags at odds.
         tags = self.GOOD["tags"][:12] + ["halloween decor"]
-        self.assertIn("share no word with the title (halloween decor)", self.said(tags=tags))
+        self.assertNotIn("share no word", self.said(tags=tags))
+        odd = self.GOOD["tags"][:6] + ["seafoam blue", "daily carry", "plant print", "eco grocery",
+                                       "beach day", "summer style", "ocean wave"]
+        self.assertIn("7 of 13 tags share no word with the title (seafoam blue, daily carry",
+                      self.said(tags=odd))
 
     def test_a_short_title_or_one_without_a_tag_up_front(self):
         self.assertIn("title uses 21 of 140", self.said(title="Organizer Insert Tote"))
@@ -14037,6 +14043,66 @@ class TheListingAuditNamesWhatToFix(unittest.TestCase):
 
     def test_etsys_own_limits(self):
         self.assertEqual((self.sr.TAG_SLOTS, self.sr.TAG_MAX, self.sr.TITLE_MAX), (13, 20, 140))
+
+
+class TheAuditFlagsWhatNeedsWork(unittest.TestCase):
+    """2026-10-12: the audit said 26 of 27 listings needed fixes and none broke
+    an Etsy rule. Nearly all of it was one tag like "gift for her" or "eco
+    friendly" not sharing a word with the title - which is what a recipient or
+    occasion tag is for - and 54-59-character titles called short. The real
+    work, the 26- and 28-character titles, was lost in it. Listings below are
+    the shop's own, from that day's audit output."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.sr = load("store_report_needs", "store-report.py")
+
+    def said(self, title, tags, desc=None):
+        row = {"title": title, "tags": tags,
+               "description": desc or (title + " " + "word " * 60)}
+        return " | ".join(m for _, m in self.sr.audit_listing(row))
+
+    def test_a_recipient_or_occasion_tag_is_not_a_stray(self):
+        title = "Navy Wave Print Tote Bag | Modern Seaside Pattern, Durable Polyester"
+        tags = ["navy tote bag", "wave print tote", "seaside tote", "modern tote bag", "beach bag",
+                "pattern tote", "polyester tote", "navy wave bag", "print tote bag", "seaside bag",
+                "gift for her", "eco friendly", "wave tote"]
+        self.assertEqual(self.said(title, tags), "")
+        for t in ("gift for her", "Halloween gift", "pet lover gift", "bridal shower",
+                  "teacher gift", "father day tee", "gift for coworker"):
+            self.assertTrue(self.sr.OCCASION_RE.search(t), t)
+        for t in ("eco friendly", "seafoam blue", "school bag", "giftwrap"):
+            self.assertFalse(self.sr.OCCASION_RE.search(t), t)
+
+    def test_a_gift_heavy_tag_set_is_still_not_at_odds_with_its_title(self):
+        title = "Workplace Humor Sticker Set | Meeting Survivor, Email Meme"
+        tags = ["workplace humor", "humor sticker", "meeting survivor", "email meme", "sticker set",
+                "office humor", "gift for coworker", "boss gift", "birthday gift", "teacher gift",
+                "christmas gift", "retirement gift", "gift for her"]
+        self.assertNotIn("share no word", self.said(title, tags))
+
+    def test_a_54_character_title_is_not_short_and_26_is(self):
+        tags = ["geometric tote"] * 1
+        self.assertNotIn("title uses", self.said("Geometric Noir Pattern Tote Bag | Dark Abstract Shapes", tags))
+        self.assertIn("title uses 26 of 140", self.said("Town Landmark Pattern Tote", tags))
+
+    def test_etsys_escaped_text_is_read_as_the_shop_shows_it(self):
+        self.assertEqual(self.sr.plain("Dad&#39;s Boss T-Shirt | Circle Logo"), "Dad's Boss T-Shirt | Circle Logo")
+        self.assertEqual(self.sr.plain("Crying Cat Sticker | &quot;It&#39;s Fine I&#39;m Fine&quot;"),
+                         'Crying Cat Sticker | "It\'s Fine I\'m Fine"')
+
+    def test_days_already_saved_are_read_plain_too(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.sr.STORE, was = Path(d), self.sr.STORE
+            try:
+                (Path(d) / "2026-10-12.json").write_text(json.dumps({"day": "2026-10-12", "listings": [
+                    {"title": "Dad&#39;s Boss T-Shirt", "tags": ["dad&#39;s gift"],
+                     "description": "&quot;Boss&quot;"}]}))
+                r = self.sr.snapshots()[-1]["listings"][0]
+            finally:
+                self.sr.STORE = was
+        self.assertEqual((r["title"], r["tags"], r["description"]),
+                         ("Dad's Boss T-Shirt", ["dad's gift"], '"Boss"'))
 
 
 class ListingVideosAreMadeWithinEtsysLimits(unittest.TestCase):

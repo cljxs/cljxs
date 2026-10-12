@@ -26,6 +26,7 @@ latest two through summary() here, so the sums exist once.
 Standard library only.
 """
 
+import html
 import importlib.util
 import json
 import os
@@ -74,20 +75,27 @@ def pick_shop(results, name):
     return None
 
 
+def plain(text):
+    """Etsy's API hands text back HTML-escaped: "Dad&#39;s Boss T-Shirt",
+    "&quot;It&#39;s Fine&quot;" (2026-10-12, the Deck and the audit both
+    showing it). The shop shows an apostrophe; so does everything here."""
+    return html.unescape(str(text or ""))
+
+
 def snapshot_row(listing):
     """One listing, reduced to what the report reads."""
     ms = _ms()
     return {
         "listing_id": listing.get("listing_id"),
-        "title": str(listing.get("title") or "")[:140],
+        "title": plain(listing.get("title"))[:140],
         "views": listing.get("views") if isinstance(listing.get("views"), int) else None,
         "favs": listing.get("num_favorers") if isinstance(listing.get("num_favorers"), int) else None,
         "price": ms.price_of(listing),
         "age_days": round(ms.age_days(listing), 1) if ms.age_days(listing) is not None else None,
         "url": listing.get("url"),
         # Kept for the pins: a pin is written from the listing's own words.
-        "tags": [str(t) for t in (listing.get("tags") or []) if str(t).strip()][:13],
-        "description": str(listing.get("description") or "")[:600],
+        "tags": [plain(t) for t in (listing.get("tags") or []) if str(t).strip()][:13],
+        "description": plain(listing.get("description"))[:600],
     }
 
 
@@ -166,6 +174,14 @@ def snapshots():
         except Exception:
             continue
         if isinstance(d, dict) and isinstance(d.get("listings"), list):
+            # Days saved before plain() existed carry the escapes.
+            for r in d["listings"]:
+                if isinstance(r, dict):
+                    for k in ("title", "description"):
+                        if isinstance(r.get(k), str):
+                            r[k] = plain(r[k])
+                    if isinstance(r.get("tags"), list):
+                        r["tags"] = [plain(t) for t in r["tags"]]
             out.append(d)
     return out
 
@@ -270,8 +286,23 @@ TAG_SLOTS = 13            # LIMIT
 TAG_MAX = 20              # LIMIT, characters
 TITLE_MAX = 140           # LIMIT, characters
 TITLE_SEEN = 40           # ADVICE: what a search result shows of a title
-TITLE_SHORT = 60          # ADVICE: a title this short leaves search phrases unused
+# ADVICE: a title shorter than what search shows wastes the part people see.
+# It was 60, which flagged 54-59-character titles as short (2026-10-12) -
+# while Etsy's own advice is now shorter, plainer titles.
+TITLE_SHORT = TITLE_SEEN
 ONE_WORD_TAGS_MAX = 3     # ADVICE: shoppers buy on long phrases
+# ADVICE: title and tags say different things only when most tags miss the
+# title. Two or three that do are how tags are meant to work - a synonym, a
+# style, an occasion. Flagging any one of them made 26 of 27 listings "need
+# fixes" (2026-10-12), nearly all for "gift for her" and "eco friendly".
+STRAY_SHARE = 0.5
+# Who it is for and when it is given: searches the title is not meant to
+# carry, so never counted as a tag straying from it.
+OCCASION_RE = re.compile(
+    r"\b(gifts?|lovers?|owners?|for (?:her|him|them|mom|dad|teens?|kids|men|women|coworkers?|"
+    r"hikers?|teachers?|friends?)|birthday|christmas|xmas|halloween|thanksgiving|valentines?|"
+    r"easter|wedding|bridal|shower|anniversary|graduation|retirement|mothers?|fathers?|"
+    r"mom|dad|teacher)\b", re.I)
 DESCRIPTION_MIN_WORDS = 50
 DESCRIPTION_OPENING = 160  # ADVICE: characters Google shows as the snippet
 
@@ -324,9 +355,10 @@ def audit_listing(r):
         out.append(("ADVICE", f"{len(single)} one-word tags ({', '.join(single)}) - shoppers "
                               f"buy on phrases of three or more words"))
     title_words = {_stem(w) for w in _keywords(title)}
-    stray = [t for t in tags if not ({_stem(w) for w in _keywords(t)} & title_words)]
-    if stray:
-        out.append(("ADVICE", f"{len(stray)} tag(s) share no word with the title "
+    stray = [t for t in tags if not ({_stem(w) for w in _keywords(t)} & title_words)
+             and not OCCASION_RE.search(t)]
+    if tags and len(stray) > STRAY_SHARE * len(tags):
+        out.append(("ADVICE", f"{len(stray)} of {len(tags)} tags share no word with the title "
                               f"({', '.join(stray[:4])}{'...' if len(stray) > 4 else ''}) - "
                               f"title and tags work best saying the same thing"))
 
