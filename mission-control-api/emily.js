@@ -164,8 +164,10 @@ function describe(slug) {
     });
   }
   images.sort((a, b) => {
-    // cover first, then design, then mockups in name order.
-    const rank = n => (n.startsWith('cover') ? 0 : n.startsWith('design') ? 1 : 2);
+    // What prints first: design.png, then its cut-out, then anything else.
+    // A cover.png went first (2026-10-12) - a quilt star Emily drew on her
+    // own and nothing uploads - so the card showed a design Printify never got.
+    const rank = n => (n === 'design.png' ? 0 : n.startsWith('design') ? 1 : 2);
     return rank(a.name) - rank(b.name) || a.name.localeCompare(b.name);
   });
 

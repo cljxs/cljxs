@@ -128,13 +128,17 @@ suggest or mention a price, and do not run `market-price`, `costs` or
    `"art_generated": "yes"`. A file you typed is not an image; naming it `.png`
    only makes it a text file that lies about what it is.
 
-   If you want different art, or you need a `cover.png` or mockups, the ONLY
-   way to make one is this command — it is the thing that actually calls an
-   image model:
+   **Do not draw a `cover.png` or mockups.** Only `design.png` goes to
+   Printify, and the listing photos are Printify's own mockups of it. A cover
+   you drew is a second design nobody prints: one showed a red-and-blue quilt
+   star on the gallery card while the sweatshirt printed a patchwork frame
+   (2026-10-12). If the design itself is wrong, the ONLY way to redraw it is
+   this command — it is the thing that actually calls an image model:
 
    ```
    python3 ../../scripts/emily-assets.py --prompt "<vivid art direction>" \
-     --out builds/<slug>/cover.png --size 1024
+     --out builds/<slug>/design.png --size 1024 \
+     --product <the task's product> --name "<the idea's name>"
    ```
 
    It reports `"mode":"generated"` (real art) or `"mode":"placeholder"` (a

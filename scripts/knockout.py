@@ -715,6 +715,16 @@ def main():
     # A garment prints whatever is opaque, so background the flood could not
     # reach goes too. Not on a sticker: the white inside a badge can be the
     # design, and the vinyl under it is white anyway.
+    # Specks first, while the holes are still filled. A speck is a mark on
+    # the BACKGROUND; once the holes are cleared, lettering inside the art
+    # stands alone too, and looks exactly like one. "STITCH BY STITCH" sat on
+    # a cream panel inside a patchwork frame (2026-10-12): the panel was
+    # cleared as a hole, each letter became its own small piece, and all 41
+    # were removed as stray marks - the sweatshirt printed an empty frame.
+    if "--keep-specks" not in sys.argv:
+        wiped, parts, why = despeckle(w, h, px)
+        print(f"despeckle: {why}")
+
     if "--holes" in sys.argv or "--counters" in sys.argv:
         rep = {}
         cap = COUNTER_MAX_PCT if "--counters" in sys.argv else None
@@ -722,10 +732,6 @@ def main():
         what = "background enclosed by the art" if cap is None else "background inside letters and small gaps"
         print(f"{'holes' if cap is None else 'counters'}: cleared {n:,} px of {what}; "
               f"filled {rep['filled']:,} px with the colour the letter sits on")
-
-    if "--keep-specks" not in sys.argv:
-        wiped, parts, why = despeckle(w, h, px)
-        print(f"despeckle: {why}")
 
     tw, th, px = trim(w, h, px)
     if (tw, th) != (w, h):

@@ -16911,6 +16911,47 @@ class ScoutsProductIsEmilysProduct(unittest.TestCase):
         self.assertIn('"product": emily_key(a.product) or a.product.strip()', src)
 
 
+class LetteringInsideTheArtIsNotASpeck(unittest.TestCase):
+    """2026-10-12: "STITCH BY STITCH" sat on a cream panel inside a patchwork
+    frame, on a cream background. The garment cut cleared the panel as an
+    enclosed hole - right - and only then looked for specks: every letter now
+    stood alone, small, and all 41 pieces were removed as stray marks. The
+    sweatshirt printed an empty frame. Reproduced on the real design (from the
+    owner's screenshot); this is the same layout, small: a frame, a panel in
+    the background colour, six letter strokes on it - each, like a real
+    letter, under 1.5% of the art - and one real stray mark outside."""
+
+    BG, INK = (232, 213, 183), (40, 40, 45)
+
+    def setUp(self):
+        self.k = load("knockout_letters", "knockout.py")
+        w, h = 200, 100
+        px = bytearray()
+        for y in range(h):
+            for x in range(w):
+                frame = 20 <= x < 180 and 20 <= y < 80 and not (30 <= x < 170 and 30 <= y < 70)
+                letter = 44 <= y < 56 and any(a <= x < a + 5 for a in (50, 70, 90, 110, 130, 150))
+                speck = 5 <= x < 8 and 5 <= y < 8
+                px += bytes(self.INK if (frame or letter or speck) else self.BG) + b"\xff"
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        self.src, self.out = Path(d.name) / "d.png", Path(d.name) / "cut.png"
+        self.k.encode(self.src, w, h, px)
+
+    def opaque_pieces(self):
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knockout.py"), str(self.src), str(self.out),
+                            "--holes"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        w, h, px = self.k.decode(self.out)
+        return [size for size, _ in self.k.components(w, h, px)], r.stdout
+
+    def test_the_letters_survive_and_the_stray_mark_does_not(self):
+        sizes, said = self.opaque_pieces()
+        self.assertEqual(len(sizes), 7, f"the frame and six letters: {sizes}\n{said}")
+        self.assertEqual(sorted(sizes)[:6], [60] * 6, "each letter whole")
+        self.assertIn("removed 1 stray mark", said)
+
+
 class EmbroideryIsItsOwnProduct(unittest.TestCase):
     """2026-10-10: Scout kept proposing "embroidered sweatshirt" ideas, and the
     word "sweatshirt" in them found Emily's PRINTED sweatshirt. Approved, she
@@ -17922,6 +17963,15 @@ class LettersAndColoursOnAGarment(unittest.TestCase):
         xs, ys = [p[0] for p in opaque], [p[1] for p in opaque]
         self.assertNotEqual(self.alpha_at(w, px, (min(xs) + max(xs)) // 2, (min(ys) + max(ys)) // 2 - 6), 0,
                             "with neither flag, the enclosed background is kept")
+
+    def test_the_card_shows_the_design_that_prints_first(self):
+        # A cover.png Emily drew on her own (a quilt star) led the card while
+        # the sweatshirt printed the patchwork frame (2026-10-12).
+        js = (ROOT / "mission-control-api/emily.js").read_text()
+        self.assertIn("n === 'design.png' ? 0", js)
+        h = (ROOT / "agents/emily/_emily-agents-header.md").read_text()
+        self.assertIn("Do not draw a `cover.png`", h)
+        self.assertNotIn("--out builds/<slug>/cover.png", h)
 
     def test_draft_asks_for_holes_on_garments_and_counters_elsewhere(self):
         body = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
