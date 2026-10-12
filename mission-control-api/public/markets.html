@@ -228,7 +228,9 @@ function render() {
   $('status').innerHTML = `<span><span class="dot" style="background:${B.regime === 'unfavorable' ? 'var(--down)' : B.regime === 'favorable' ? 'var(--up)' : 'var(--warn)'}"></span>Market ${esc(B.regime)}</span>
     <span>${esc(B.regime_why || '')}</span>
     <span>${B.watch.length} watched</span>
-    <span>Data ${asof ? asof.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : '—'} · every 10 min, market hours</span>`;
+    <span>Data ${asof ? asof.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : '—'} · every 10 min, market hours</span>`
+    + (B.data_warning ? `<span class="err">⚠ ${esc(B.data_warning)}</span>`
+       : (B.stale || []).length ? `<span style="color:var(--warn)">old prices: ${esc(B.stale.join(', '))}</span>` : '');
 
   $('wcount').textContent = B.watch.length;
   $('watch').innerHTML = B.watch.map(w => `<div class="w ${w.symbol === sel ? 'on' : ''}" data-s="${esc(w.symbol)}">

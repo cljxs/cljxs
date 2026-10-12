@@ -58,6 +58,7 @@ NEWS = ROOT / "agents" / "belfort" / "data" / "news.json"
 CANDIDATES = ROOT / "agents" / "belfort" / "data" / "candidates.json"
 EARNINGS = ROOT / "agents" / "belfort" / "data" / "earnings.json"
 BARS = ROOT / "agents" / "belfort" / "data" / "bars.json"
+FETCH_META = ROOT / "agents" / "belfort" / "data" / "_meta.json"
 REPORTS = ROOT / "agents" / "belfort" / "reports"
 # His call on each candidate, every wake (owner, 2026-10-06: "I want it to say
 # for each stock why it passed"). He writes CALLS_IN; `calls` files it in CALLS.
@@ -101,16 +102,22 @@ RISK_PER_TRADE_PCT = 1.0
 # an overnight earnings gap goes straight through any stop.
 EARNINGS_BLACKOUT_DAYS = 5
 
-# Names that move together, so a cap on one name is not a cap on one bet:
-# NVDA, AMD and MU at 20% each is 60% in one trade. A name not listed is its
-# own cluster.
+# THE LIST. Every name Belfort watches, by the group it moves with - one
+# table (owner, 2026-10-12: more names are coming). belfort-fetch.py's
+# UNIVERSE is read off it (universe()), so a name added here is fetched,
+# screened and capped, and a name cannot be watched without a group: the
+# list and the groups used to be two tables, kept in step by hand.
+#
+# The groups exist so a cap on one name is not a cap on one bet: NVDA, AMD
+# and MU at 20% each is 60% in one trade. Check a new name first:
+#   python3 scripts/belfort-fetch.py check SYM [SYM ...]
 CLUSTERS = {
     "semiconductors": ["NVDA", "AMD", "AVGO", "MU", "TSM", "SMCI", "ARM", "QCOM", "INTC", "MRVL"],
     "software and security": ["PLTR", "NET", "DDOG", "SNOW", "CRWD", "ZS", "PANW", "MDB"],
     "mega-cap": ["META", "GOOGL", "AMZN", "MSFT", "AAPL"],
     "crypto and high-beta": ["COIN", "HOOD", "TSLA"],
     "consumer internet": ["SHOP", "UBER", "ABNB", "RBLX"],
-    # Added 2026-10-06 with the names in belfort-fetch.py's UNIVERSE.
+    # Added 2026-10-06.
     "healthcare": ["LLY", "ISRG", "VRTX", "ABBV", "HIMS"],
     "financials": ["JPM", "GS", "V", "MA"],
     "industrials and energy": ["GE", "CAT", "ETN", "XOM"],
@@ -182,6 +189,14 @@ def regime(doc=None):
     if not above or not rising:
         return "neutral", why
     return "favorable", why
+
+
+def universe():
+    """Every watched name, in the table's order - what belfort-fetch.py fetches."""
+    out = []
+    for members in CLUSTERS.values():
+        out += [m.upper() for m in members if m.upper() not in out]
+    return out
 
 
 def cluster_of(symbol):
@@ -999,6 +1014,10 @@ def board():
     reports = sorted(REPORTS.glob("*.md"), key=report_order, reverse=True) if REPORTS.is_dir() else []
     return {
         "asof_utc": doc.get("asof_utc"), "regime": state, "regime_why": why,
+        # The last data run's own verdict (belfort-fetch.py health), and the
+        # names on old prices - said on the page, not only in a log.
+        "data_warning": _doc(FETCH_META).get("health"),
+        "stale": sorted(sym for sym, q in quotes.items() if isinstance(q, dict) and q.get("stale")),
         "showdown": {"basis": basis, "rows": [{"name": n, "pct": v} for n, v in race],
                      "spread": round(max(vals) - min(vals), 2) if len(vals) > 1 else None,
                      "aside": aside},

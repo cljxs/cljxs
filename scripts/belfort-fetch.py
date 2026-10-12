@@ -28,20 +28,21 @@ import et_time  # noqa: E402
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
 DATA_DIR = ROOT / "agents" / "belfort" / "data"
 
-# US names, all well above $5B market cap. The first 30 are tech and
-# momentum; the owner added the four groups after them on 2026-10-06 because
-# most of what Belfort picked was chips. Every name needs a cluster in
-# belfort-trade.py's CLUSTERS, or the 40% cap cannot see it.
-UNIVERSE = [
-    "NVDA", "AMD", "AVGO", "MU", "TSM", "SMCI", "ARM", "QCOM", "INTC", "MRVL",
-    "PLTR", "COIN", "HOOD", "SHOP", "NET", "DDOG", "SNOW", "CRWD", "ZS", "PANW",
-    "MDB", "TSLA", "META", "GOOGL", "AMZN", "MSFT", "AAPL", "UBER", "ABNB", "RBLX",
-    "LLY", "ISRG", "VRTX", "ABBV", "HIMS",
-    "JPM", "GS", "V", "MA",
-    "GE", "CAT", "ETN", "XOM",
-    "COST", "NFLX", "WMT", "NKE",
-    "SPCX", "RKLB", "ASTS", "LUNR", "PL", "RDW",
-]
+def _trade():
+    """belfort-trade.py - the groups and the list live with the cap that uses
+    them. Loaded by path: the hyphen keeps it from a normal import."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("belfort_trade_list",
+                                                  Path(__file__).resolve().parent / "belfort-trade.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# The names fetched: belfort-trade.py's CLUSTERS table, read off it. US
+# names, all well above $5B market cap; the first 30 tech and momentum, the
+# rest added by group as the owner asked.
+UNIVERSE = _trade().universe()
 
 # What Belfort is shown each wake. Code screens every name; he judges at most
 # MAX_CANDIDATES of those that pass, no more than CANDIDATES_PER_CLUSTER from
@@ -358,14 +359,8 @@ def momentum(q):
 
 
 def _cluster_of():
-    """belfort-trade.py's cluster_of: the groups live with the cap that uses
-    them. Loaded by path - the hyphen keeps it from a normal import."""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("belfort_trade_clusters",
-                                                  Path(__file__).resolve().parent / "belfort-trade.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.cluster_of
+    """belfort-trade.py's cluster_of."""
+    return _trade().cluster_of
 
 
 def shortlist(quotes, cluster_of=None):
@@ -417,6 +412,11 @@ def main():
         log("no quotes fetched at all — leaving previous data files untouched")
         return 1
 
+    # A name whose fetch failed keeps its last good quote, marked stale -
+    # dropped, a held name would vanish from the stops and the page for a run.
+    # A stale name is never a candidate: a buy is not made on old numbers.
+    quotes.update(carried(quotes, failures, DATA_DIR / "quotes.json"))
+
     benchmarks = {}
     for sym in BENCHMARKS:
         time.sleep(REQUEST_GAP)
@@ -427,7 +427,7 @@ def main():
             log(f"{sym}: FAILED — {exc}")
 
     # Pre-screen in plain code so the agent reasons over a short list.
-    candidates, left_out = shortlist(quotes.values())
+    candidates, left_out = shortlist([q for q in quotes.values() if not q.get("stale")])
 
     charts = {sym: q.pop("_chart") for sym, q in list(quotes.items()) + list(benchmarks.items())
               if "_chart" in q}
@@ -487,8 +487,10 @@ def main():
         "slot": et_time.slot("belfort", now_et),
         "report_name": et_time.report_name("belfort", now_et),
         "universe_size": len(UNIVERSE),
-        "fetched_ok": len(quotes),
+        "fetched_ok": len(quotes) - sum(1 for q in quotes.values() if q.get("stale")),
         "failed": failures,
+        "took_seconds": round((datetime.now(timezone.utc) - started).total_seconds()),
+        "health": health(len(UNIVERSE), failures),
         "news_items": len(news),
         "source": "Yahoo Finance public chart endpoint (no API key)",
     }, indent=1) + "\n")
@@ -497,8 +499,100 @@ def main():
         f" ({len(left_out)} more passed), {len(news)} headlines")
     if failures:
         log(f"{len(failures)} failed: {[f['symbol'] for f in failures]}")
+    h = health(len(UNIVERSE), failures)
+    if h:
+        log(f"WARNING: {h}")
     return 0
 
 
+# More than this share of the list failing in one run is not bad luck on a
+# name or two - it is the free price service refusing us (likely as the list
+# grows), and it is said loudly: in the log and on the Markets page.
+FAIL_WARN_SHARE = 0.10
+
+
+def health(size, failures):
+    """None when the run was healthy, else one sentence saying what went wrong."""
+    names = [f for f in failures if f.get("symbol") not in BENCHMARKS]
+    if not size or len(names) <= FAIL_WARN_SHARE * size:
+        return None
+    limited = sum(1 for f in names if "429" in str(f.get("error")) or "Too Many" in str(f.get("error")))
+    return (f"{len(names)} of {size} names were not refreshed this run"
+            + (f" - {limited} refused as too many requests (rate-limited)" if limited else "")
+            + "; their last good prices are kept and marked stale, and none of them can be bought")
+
+
+def carried(fresh, failures, path):
+    """{symbol: last good quote, marked stale} for each failed name the last
+    quotes.json had. Stale since the run that last fetched it."""
+    try:
+        old = json.loads(Path(path).read_text())
+    except Exception:
+        return {}
+    out = {}
+    for f in failures:
+        sym = f.get("symbol")
+        q = (old.get("quotes") or {}).get(sym)
+        if sym in fresh or not isinstance(q, dict):
+            continue
+        # Carried twice, it is still stale since the run that last fetched it.
+        out[sym] = dict(q, stale=True, stale_since=q.get("stale_since") or old.get("asof_utc"))
+    return out
+
+
+# Checking a name before it joins the list (owner, 2026-10-12: "i will give
+# you a bunch of stock symbols"). The signals need MIN_HISTORY daily closes.
+MIN_HISTORY = 60
+
+
+def check_symbol(sym, get=None):
+    """(ok, one line) for a name someone wants to add."""
+    get = get or http_get
+    sym = sym.upper().strip()
+    if sym in UNIVERSE:
+        return False, f"{sym}: already watched, in {_trade().cluster_of(sym)}"
+    try:
+        payload = json.loads(get(CHART_URL.format(sym=sym)))
+    except urllib.error.HTTPError as exc:
+        try:
+            payload = json.loads(exc.read())
+        except Exception:
+            return False, f"{sym}: the price service answered {exc.code}"
+    except Exception as exc:
+        return False, f"{sym}: could not be read ({str(exc)[:80]})"
+    chart = payload.get("chart") or {}
+    if not chart.get("result"):
+        why = (chart.get("error") or {}).get("description") or "no data"
+        return False, f"{sym}: not found - {why}"
+    r = chart["result"][0]
+    meta = r.get("meta") or {}
+    closes = [c for c in ((r.get("indicators") or {}).get("quote") or [{}])[0].get("close") or [] if c is not None]
+    kind = str(meta.get("instrumentType") or "")
+    name = meta.get("longName") or meta.get("shortName") or ""
+    if kind and kind != "EQUITY":
+        return False, f"{sym}: {name} is {'an' if kind[:1] in 'AEIOU' else 'a'} {kind}, not a company's stock"
+    if len(closes) < MIN_HISTORY:
+        return False, f"{sym}: {name} has {len(closes)} trading days of prices - the signals need {MIN_HISTORY}"
+    return True, f"{sym}: {name}, {len(closes)} trading days, last ${closes[-1]:,.2f} - ok"
+
+
+def cmd_check(symbols):
+    if not symbols:
+        print("usage: belfort-fetch.py check SYM [SYM ...]", file=sys.stderr)
+        return 2
+    bad = 0
+    for i, sym in enumerate(symbols):
+        ok, line = check_symbol(sym)
+        print(("  " if ok else "  NO  ") + line)
+        bad += not ok
+        if i < len(symbols) - 1:
+            time.sleep(REQUEST_GAP)
+    print(f"\n{len(symbols) - bad} of {len(symbols)} can be added. The list is CLUSTERS in "
+          f"scripts/belfort-trade.py; each name goes in the group it moves with.")
+    return 1 if bad else 0
+
+
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["check"]:
+        sys.exit(cmd_check(sys.argv[2:]))
     sys.exit(main())

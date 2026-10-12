@@ -18603,6 +18603,122 @@ class TheMarketsPageDrawsBelfortsOwnNumbers(unittest.TestCase):
         self.assertIn("Belfort (AI)", [r["name"] for r in b["showdown"]["rows"]])
 
 
+
+class BelfortsListIsOneTableAndARefusedFetchIsLoud(unittest.TestCase):
+    """Owner, 2026-10-12: the list will grow (53 now, maybe 200 later). The
+    list and its groups were two tables kept in step by hand; the list is now
+    read off the groups. Four times the requests to a free price service will
+    be refused sometimes, and a refused name used to vanish from quotes.json
+    for that run - a held name with it. It now keeps its last good price,
+    marked stale, is never offered as a buy, and a run with more than a tenth
+    of the list refused says so on the Markets page. Real TSM closes and
+    Yahoo's real answer for a symbol that does not exist."""
+
+    TSM = TheMarketsPageDrawsBelfortsOwnNumbers.TSM
+
+    def setUp(self):
+        TheMarketsPageDrawsBelfortsOwnNumbers.setUp(self)
+        self.addCleanup(self.tmp.cleanup)
+        self.trade = load("belfort_trade_onelist", "belfort-trade.py")
+
+    def run_fetch(self, refuse=()):
+        def get(url, retries=2, ua=None):
+            if any(f"/chart/{sym}?" in url for sym in refuse):
+                raise OSError("HTTP Error 429: Too Many Requests")
+            return json.dumps(self.TSM).encode()
+        self.fetch.http_get = get
+        out = io.StringIO()
+        with contextlib.redirect_stderr(out), contextlib.redirect_stdout(out):
+            self.fetch.main()
+        return out.getvalue()
+
+    def doc(self, name):
+        return json.loads((self.data / name).read_text())
+
+    def test_the_list_is_read_off_the_groups(self):
+        fetch = load("belfort_fetch_onelist", "belfort-fetch.py")
+        self.assertEqual(fetch.UNIVERSE, self.trade.universe())
+        members = [m for ms in self.trade.CLUSTERS.values() for m in ms]
+        self.assertEqual(sorted(fetch.UNIVERSE), sorted(set(members)))
+        self.trade.CLUSTERS["semiconductors"] = self.trade.CLUSTERS["semiconductors"] + ["SNDK"]
+        self.assertIn("SNDK", self.trade.universe(), "a name added to a group is watched")
+        src = (SCRIPTS / "belfort-fetch.py").read_text()
+        self.assertIn("UNIVERSE = _trade().universe()", src)
+        self.assertNotIn('UNIVERSE = [\n    "NVDA"', src, "no second list")
+
+    def test_a_refused_name_keeps_its_last_price_marked_stale(self):
+        first = self.doc("quotes.json")["asof_utc"]
+        said = self.run_fetch(refuse=("NVDA",))
+        q = self.doc("quotes.json")["quotes"]
+        self.assertEqual(sorted(q), ["NVDA", "TSM"], "a refused name does not vanish")
+        self.assertTrue(q["NVDA"]["stale"])
+        self.assertEqual(q["NVDA"]["stale_since"], first)
+        self.assertNotIn("stale", q["TSM"])
+        cands = [c["symbol"] for c in self.doc("candidates.json")["candidates"]]
+        self.assertNotIn("NVDA", cands, "never a buy on old numbers")
+        meta = self.doc("_meta.json")
+        self.assertEqual(meta["fetched_ok"], 1)
+        self.assertIn("1 of 2 names were not refreshed", meta["health"])
+        self.assertIn("rate-limited", meta["health"])
+        self.assertIn("WARNING: 1 of 2", said)
+        # Refused again: still stale since the run that last fetched it, not
+        # since the run before this one (stamped apart - runs here share a second).
+        doc = self.doc("quotes.json")
+        doc["asof_utc"] = "2026-01-01 00:00:00"
+        (self.data / "quotes.json").write_text(json.dumps(doc))
+        self.run_fetch(refuse=("NVDA",))
+        self.assertEqual(self.doc("quotes.json")["quotes"]["NVDA"]["stale_since"], first)
+        # Back: fresh, and the warning gone.
+        self.run_fetch()
+        self.assertNotIn("stale", self.doc("quotes.json")["quotes"]["NVDA"])
+        self.assertIsNone(self.doc("_meta.json")["health"])
+
+    def test_the_page_says_so(self):
+        self.run_fetch(refuse=("NVDA",))
+        state = self.root / "agents" / "belfort" / "state"
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "portfolio.json").write_text(json.dumps({"starting_cash": 10000.0, "cash": 10000.0,
+                                                           "created_utc": "2026-09-01 13:00:00",
+                                                           "positions": [], "trades": []}))
+        r = subprocess.run([sys.executable, str(SCRIPTS / "belfort-trade.py"), "board"],
+                           capture_output=True, text=True, env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        b = json.loads(r.stdout)
+        self.assertIn("not refreshed", b["data_warning"])
+        self.assertEqual(b["stale"], ["NVDA"])
+        page = (ROOT / "mission-control-api" / "public" / "markets.html").read_text()
+        self.assertIn("B.data_warning", page)
+
+    def test_a_name_or_two_failing_is_not_an_alarm(self):
+        self.assertIsNone(self.fetch.health(53, [{"symbol": "AAA", "error": "timeout"}] * 5))
+        self.assertIn("6 of 53", self.fetch.health(53, [{"symbol": "AAA", "error": "x"}] * 6))
+        self.assertIsNone(self.fetch.health(53, [{"symbol": "QQQ", "error": "x"}] * 9),
+                          "a benchmark is not one of the names")
+
+    def test_a_new_name_is_checked_before_it_joins(self):
+        tsm = json.dumps(self.TSM).encode()
+        missing = (FIXTURES / "belfort-yahoo-chart-404.json").read_bytes()
+        self.fetch.UNIVERSE = ["NVDA"]
+        ok, line = self.fetch.check_symbol("tsm", get=lambda url: tsm)
+        self.assertTrue(ok, line)
+        self.assertIn("Taiwan Semiconductor", line)
+        ok, line = self.fetch.check_symbol("ZZZZQQ", get=lambda url: missing)
+        self.assertFalse(ok)
+        self.assertIn("not found - No data found", line)
+        etf = json.loads(tsm)
+        etf["chart"]["result"][0]["meta"]["instrumentType"] = "ETF"
+        ok, line = self.fetch.check_symbol("TSM", get=lambda url: json.dumps(etf).encode())
+        self.assertIn("is an ETF, not a company's stock", line)
+        young = json.loads(tsm)
+        r = young["chart"]["result"][0]
+        r["indicators"]["quote"][0]["close"] = r["indicators"]["quote"][0]["close"][-40:]
+        ok, line = self.fetch.check_symbol("TSM", get=lambda url: json.dumps(young).encode())
+        self.assertIn("the signals need 60", line)
+        self.fetch.UNIVERSE = ["TSM"]
+        self.fetch._trade = lambda: types.SimpleNamespace(cluster_of=lambda s: "semiconductors")
+        ok, line = self.fetch.check_symbol("TSM", get=lambda url: tsm)
+        self.assertEqual((ok, line), (False, "TSM: already watched, in semiconductors"))
+
 class TheMarketsPageShowsHisMoney(TheMarketsPageDrawsBelfortsOwnNumbers):
     """Owner, 2026-10-07: "add the money value at the top". The dollars come
     from board(), off the same cash and market_value() as the book - the page

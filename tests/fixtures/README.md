@@ -31,6 +31,7 @@ Provenance of each file, and how to refresh it:
 | `espn-nfl-scoreboard-2026-wk5-venues.json` | ESPN's week-5 scoreboard, three games: BUF @ LAR to come (with ESPN's `weather` block), TB @ DAL in a dome (`venue.indoor` true), CHI @ GB played | fetched 2026-10-12, link, logo, broadcast and odds blocks removed |
 | `open-meteo-forecast-2-places.json` | Open-Meteo's hourly forecast for Orchard Park and Inglewood in one request (a list, one per place): temperature, chance of rain, wind, gusts, WMO code | fetched 2026-10-12, trimmed to 72 hours |
 | `open-meteo-geocode-orchard-park.json` | Open-Meteo's geocoder for "Orchard Park", US: three towns, only one in New York | fetched 2026-10-12 |
+| `belfort-yahoo-chart-404.json` | Yahoo's chart endpoint for a symbol that does not exist: `result: null` and `No data found, symbol may be delisted` | fetched 2026-10-12 for ZZZZQQ; `belfort-fetch.py check` reads it as not found |
 | `schema-dump-401.log` | a tool-schema dump containing `401` as a VALUE | format captured from a real `last-run.py` dump; the `401` line is the one that caused the false positive |
 
 `scripts/capture-fixtures.py` refreshes these from the live droplet and
