@@ -31,10 +31,11 @@ genuine +2% edge still shows a loss about 4 times in 10 after 500 bets.
 
 ## Gate 2 — bets and closing-line value
 
-* **What:** bets placed under the rules in `_ace-agents-header.md`: cited fresh
-  news, price not yet moved 2 points on it, estimate pulled 60% toward the
-  market and still 2 points (or 3% of it) clear, sides between 30% and 75%,
-  flat $100.
+* **What:** bets placed under the rules in `_ace-agents-header.md`: estimate
+  pulled 60% toward the market and still 2 points (or 3% of it) clear, sides
+  between 30% and 75%, flat $100 - placed by code from the blind estimates
+  since 2026-10-12 (see the change log; before that, cited fresh news was
+  also required).
 * **Scored by:** closing-line value — the price taken, valued at the closing
   no-vig chance — against Pinnacle's close where there is one (the headline),
   DraftKings' otherwise (reported alongside). Also: the share of bets that beat
@@ -69,7 +70,7 @@ fresh-news bettor matches Ace, the model adds nothing.
 | Shrink toward the market | 60% (the estimate keeps 40% of its distance) |
 | Bar | +2 points, or 3% of the market's chance if larger, and EV > 0 |
 | Bet range | market chance 30–75% |
-| Fresh news | 24 hours or less; price moved less than 2 points toward the side since |
+| Fresh news | optional since 2026-10-12; when cited: 24 hours or less, price moved less than 2 points toward the side since |
 | Betting window | games starting within 12 hours |
 | Blind window | games starting within 30 hours |
 | Close | last price before the start, re-read every 5 minutes in the last 2 hours |
@@ -85,3 +86,12 @@ fresh-news bettor matches Ace, the model adds nothing.
   11:30 ET (owner's decision), so noon ET college kickoffs and Sunday's 13:00
   NFL games are inside the 12-hour betting window at some wake. Every number
   in the table above is unchanged.
+* 2026-10-12 — a rule change, the owner's decision: **news is no longer
+  required for a bet.** Under the cited-news rule there was not one bet in a
+  month, so Gate 2 had nothing to measure. Bets are now placed by code from
+  Ace's blind estimates (made before he sees a price) wherever one clears the
+  bar at the current price; he may still bet by hand on the same bar, and
+  news he cites is still checked. The shrink, bar, range, stake, cap and both
+  stops are unchanged. Gate 2 now measures the blind estimates' edge over the
+  close; the fresh-news baseline stays in the comparison, so it still shows
+  whether news alone would have done as well.

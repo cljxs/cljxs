@@ -3764,14 +3764,15 @@ class AWeekOfPassesShouldSayHowClose(unittest.TestCase):
         a = A()
         a.number, a.why, a.my_pct, a.stake = "1", "SP scratched", None, None
         self.assertEqual(self.m.record(a, "bet"), 1)
-        # With one, it is judged on what a bet needs next - the news it cites -
-        # not sent back for the estimate it now has.
-        a.my_pct = 71.0
+        # With one, it is judged on what a bet needs next, not sent back for
+        # the estimate it now has. (News is no longer one of those needs -
+        # owner, 2026-10-12.)
+        a.my_pct, a.event = 71.0, None
         err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            self.assertEqual(self.m.record(a, "bet"), 1)
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            self.m.record(a, "bet")
         self.assertNotIn("--my-pct", err.getvalue())
-        self.assertIn("--event", err.getvalue())
+        self.assertNotIn("--event", err.getvalue())
 
     def test_a_bet_is_refused_for_bet_reasons_not_pass_reasons(self):
         # Guarding the pass rule on status is what keeps the advice correct.
@@ -14956,12 +14957,72 @@ class AceBetsByTheReviewedBar(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("flat 1% of the starting bankroll", said)
 
-    def test_a_bet_without_news_is_refused_and_told_the_ids(self):
+    def test_a_bet_without_news_goes_on_the_bar_alone(self):
+        # Owner, 2026-10-12: no bet in a month under the cited-news rule -
+        # "change ace to just bet using the math rule". The bar still decides.
         code, said = self.act("bet", number="2", my_pct=52.0)
-        self.assertEqual(code, 1)
-        self.assertIn("This row has: iabc12 (FAV QB One, Out)", said)
+        self.assertEqual(code, 0, said)
+        self.assertIn("on the bar alone", said)
+        self.assertIsNone(self.bets()[0].get("event"))
+        self.assertEqual(self.rows()["DOG ML"]["status"], "bet")
+
+    def test_news_that_is_cited_is_still_checked(self):
         code, said = self.act("bet", number="2", my_pct=52.0, event="nope")
+        self.assertEqual(code, 1)
         self.assertIn("no fresh injury 'nope'", said)
+
+    # --- the math rule: bets from the blind estimates, by the bar --------
+
+    def blind(self, home_pct):
+        (self.m.AGENT / "data" / "blind.json").write_text(json.dumps({"games": [
+            {"n": 1, "sport": "nfl", "match": "DOG @ FAV", "starts_utc": self.start}]}))
+        (self.m.AGENT / "state" / "blind.jsonl").write_text(json.dumps(
+            {"utc": self.now.strftime("%Y-%m-%dT%H:%M:%SZ"), "sport": "nfl", "match": "DOG @ FAV",
+             "starts_utc": self.start, "key": f"nfl|DOG @ FAV|{self.start}", "home_pct": home_pct}) + "\n")
+
+    def math(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            n = self.m.math_bets()
+        return n, out.getvalue()
+
+    def test_the_side_the_blind_estimate_clears_is_bet(self):
+        # Blind: FAV (home) 40%, so DOG 60% against the market's 42% -> counts
+        # 49.2%, +7.2 pts, EV +23% at +150. FAV at 40% vs 58% is no bet.
+        self.blind(40.0)
+        picks = self.m.math_picks(json.loads(self.m.CANDIDATES.read_text())["candidates"],
+                                  self.m.blind_done())
+        self.assertEqual([(n, pct) for n, pct, _v in picks], [(2, 60.0)])
+        n, said = self.math()
+        self.assertEqual(n, 1, said)
+        bet = self.bets()[0]
+        self.assertEqual((bet["selection"], bet["my_pct"], bet["p_used"]), ("DOG ML", 60.0, 49.2))
+        self.assertIn("math rule: blind estimate 60%", self.rows()["DOG ML"]["why_not"][0])
+        self.assertEqual(self.math()[0], 0, "one bet a game - run again, nothing new")
+
+    def test_an_estimate_near_the_market_bets_nothing(self):
+        self.blind(57.0)                                   # DOG 43% vs 42%: +0.4 pts
+        self.assertEqual(self.math()[0], 0)
+        self.assertEqual(self.bets(), [])
+
+    def test_no_bets_while_a_blind_estimate_is_owed(self):
+        # Game 1 estimated (and clearing), game 2 on the sheet and not: every
+        # estimate comes before any price-driven bet, these included.
+        self.blind(40.0)
+        sheet = json.loads((self.m.AGENT / "data" / "blind.json").read_text())
+        sheet["games"].append({"n": 2, "sport": "nfl", "match": "B @ A", "starts_utc": self.start})
+        (self.m.AGENT / "data" / "blind.json").write_text(json.dumps(sheet))
+        self.assertEqual(self.math()[0], 0)
+        self.assertEqual(self.bets(), [])
+
+    def test_giving_the_last_blind_estimate_places_them(self):
+        self.blind(40.0)
+        (self.m.AGENT / "state" / "blind.jsonl").unlink()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            self.assertEqual(self.m.cmd_blind(types.SimpleNamespace(pairs="1:40")), 0)
+        self.assertIn("math rule: 1 bet(s) placed", out.getvalue())
+        self.assertEqual(self.bets()[0]["selection"], "DOG ML")
 
     def test_news_the_price_already_has_is_refused(self):
         self.prices_seen(before=39.0)                          # 39.0 -> 42.0 since the report

@@ -19,9 +19,8 @@ when there is one, Pinnacle's (`sharp_pct`), the sharper book.
 
 If you catch yourself reasoning "my estimate says 58%, the line says 54%, that's
 value" — stop. The bar pulls your estimate most of the way back to the market
-before it measures anything, and refuses any bet that does not cite a real,
-fresh piece of news the price has not moved on. `ace-judge.py` does all of this
-arithmetic for you.
+before it measures anything, and only what still clears it is bet.
+`ace-judge.py` does all of this arithmetic for you.
 
 ## What you are for
 
@@ -108,7 +107,7 @@ second chance. That has three consequences:
    ```
    python3 ../../scripts/ace-judge.py pass 1-6,9 --why "no fresh news on any of them"
    python3 ../../scripts/ace-judge.py pass 14 --my-pct 71.0 --why "SP scratched, but the price already moved"
-   python3 ../../scripts/ace-judge.py bet  5 --my-pct 50 --event i7740ce --why "..."
+   python3 ../../scripts/ace-judge.py bet  5 --my-pct 50 --why "..."          # --event ID optional
    python3 ../../scripts/ace-judge.py rest --why "nothing cleared the bar"
    python3 ../../scripts/ace-judge.py verdict "No picks - nothing cleared the bar."
    ```
@@ -152,26 +151,34 @@ second chance. That has three consequences:
    dashboard the cycle ran, and it is the last thing you do before the
    sign-off.
 
-## The only bet worth making
+## How bets are made now (owner, 2026-10-12)
 
-`ace-judge.py bet` checks every one of these and refuses with the reason:
+**The math rule bets for you.** The moment your last blind estimate is in,
+`ace-judge.py blind` measures every game against the bar at its current price
+and bets each side that clears it, best expected value first, up to the
+open-bet cap. It prints what it placed; those rows are already in the ledger.
+No news is needed. (Under the old cited-news rule there was not one bet in a
+month.)
 
-1. **It cites real news, by id:** `--event ID`, one of that row's
-   `fresh_injuries` — reported 24 hours ago or less. Something that happened,
-   not something you computed. No fresh injury on the row, no bet.
-2. **The price has not already moved on it.** If DraftKings' chance for your
-   side has risen 2 points or more since the news was reported, the market has
-   it, and the bet is refused. If no price was seen before the news, nothing
-   shows it is unpriced, and the bet is refused.
-3. **Your estimate clears the bar after it is pulled toward the market.** Your
-   `--my-pct` counts as only 40% of its distance from the market's chance
-   (Pinnacle's when there is one, else DraftKings'): 50% against a 42.8% market
+So **your blind numbers are the bets.** Give each game your honest chance -
+not a number nudged toward a bet you would like, or away from one you would
+not. You cannot see a price on the blind sheet, which is the point.
+
+The bar, for those and for any bet you place by hand:
+
+1. **Your estimate is pulled toward the market first.** It
+   counts as only 40% of its distance from the market's chance (Pinnacle's
+   when there is one, else DraftKings'): 50% against a 42.8% market
    counts as 45.7%. That must beat the market by **at least 2 points** (or 3%
    of it, if more), and still be positive expected value at the price.
-4. **Only sides the market gives 30–75%.** No long shots, no heavy favourites —
+2. **Only sides the market gives 30–75%.** No long shots, no heavy favourites —
    where an estimating error costs most.
-5. The game has not started, and the price is re-read from ESPN at the moment
-   of the bet. You bet at the price it is now, not at the one you read.
+3. The game has not started, and the price is re-read from ESPN at the moment
+   of the bet. A bet is booked at the price it is now.
+4. **News is optional.** `--event ID` (one of the row's `fresh_injuries`) is
+   still checked when you give it - real, 24 hours or less, the price not
+   already moved 2 points toward the side - and kept on the bet. Without it,
+   the bar decides.
 
 ## Staking — computed, never chosen
 
@@ -193,10 +200,11 @@ second chance. That has three consequences:
 
 ## What a good day looks like
 
-You give every game on the blind sheet an honest number, read a few context
-files, find nothing clearing the bar, and write two honest paragraphs on what
-you passed and why. **That is a winning day.** Log it and stop. The blind
-numbers are the most valuable thing you produce; most days you bet nothing.
+You give every game on the blind sheet an honest number, see what the math
+rule placed, read a few context files, and write two honest paragraphs on what
+was bet and what was passed and why. Log it and stop. The blind numbers are the
+most valuable thing you produce - they are both the calibration record and,
+now, the bets.
 
 ## Finishing
 

@@ -338,10 +338,15 @@ def record(a, status):
         if not verdict["clears"]:
             print(f"refused: {verdict['why']}. Pass it with this estimate instead.", file=sys.stderr)
             return 1
-        event, why_not = cited_event(src, getattr(a, "event", None), current_pct=src.get("novig_pct"))
-        if why_not:
-            print(f"refused: {why_not}.", file=sys.stderr)
-            return 1
+        # News is no longer required (owner, 2026-10-12: no bet in a month
+        # under the cited-news rule). Cited, it is still checked - real,
+        # fresh, unpriced - and kept on the bet; uncited, the bar decides.
+        event = None
+        if getattr(a, "event", None):
+            event, why_not = cited_event(src, a.event, current_pct=src.get("novig_pct"))
+            if why_not:
+                print(f"refused: {why_not}.", file=sys.stderr)
+                return 1
         shadow, shadow_pct = kelly_stake(verdict["p_used"], src.get("price"), b.starting_bankroll())
         placed = {"sport": src.get("sport"), "event_id": src.get("event_id"), "match": src.get("match"),
                   "selection": src.get("selection"), "side": src.get("side"),
@@ -402,9 +407,10 @@ def record(a, status):
         if r.get("ev_pct") is not None:
             edge += f", EV {r['ev_pct']:+.1f}%"
         if status == "bet":
-            edge += (f", counted as {r['p_used']:g}%, stake ${r['stake']:,.2f} flat, citing "
-                     f"{placed['event']['player']} ({placed['event']['status']}) - booked at "
-                     f"{r['price']} ({placed['price_source']})")
+            ev_ = placed["event"]
+            edge += (f", counted as {r['p_used']:g}%, stake ${r['stake']:,.2f} flat, "
+                     + (f"citing {ev_['player']} ({ev_['status']})" if ev_ else "on the bar alone")
+                     + f" - booked at {r['price']} ({placed['price_source']})")
         print(f"{status.upper()}: {r['selection']} ({r['match']}) at {r['price']}"
               f"{edge} - {a.why}")
     else:
@@ -708,11 +714,77 @@ def cmd_blind(a):
     print(f"recorded {len(got)} blind estimate(s)." + (
         f" Still owed: {', '.join(str(n) for n in left)}." if left else
         " Every game on the sheet is estimated - `ace-judge.py list` shows the prices now."))
+    if not left and CANDIDATES.exists():
+        n = math_bets()
+        print(f"math rule: {n} bet(s) placed from your blind estimates" + (
+            " - they are in the ledger already; judge the rest." if n else
+            " - none cleared the bar at the current prices."))
     return 0
 
 
 def cmd_bet(a):
     return record(a, "bet")
+
+
+# THE MATH RULE (owner, 2026-10-12: "he hasn't placed a single bet in 1
+# month, something has to change"). Every game Ace estimated blind - before
+# any price - is measured against the bar at its price, and each that clears
+# is bet, best expected value first, until the open-bet cap. No news needed;
+# the bar, the 30-75% range, the flat stake, the cap, one bet a game and both
+# stops all still apply, because each bet goes through record() - the one
+# way a bet is placed - exactly as a hand-placed one does.
+def math_picks(rows, estimates):
+    """[(row number, side %, bar verdict)] that clear the bar on the prices
+    in `rows`, best EV first. `estimates` is {game key: home %}."""
+    out = []
+    for n, r in enumerate(rows, start=1):
+        home = estimates.get(_clv().game_key(r.get("sport"), r.get("match"), r.get("starts_utc")))
+        if home is None or r.get("side") not in ("home", "away"):
+            continue
+        pct = round(float(home) if r["side"] == "home" else 100.0 - float(home), 1)
+        v = bar(pct, r)
+        if v["clears"]:
+            out.append((n, pct, v))
+    return sorted(out, key=lambda x: -(x[2]["ev_pct"] or 0))
+
+
+def math_bets():
+    """Place the math rule's bets for this cycle. Returns how many were placed.
+    While any blind estimate is still owed, record() refuses every bet (its
+    blind gate), so none is placed - the gate is kept in one place."""
+    try:
+        doc = json.loads(CANDIDATES.read_text())
+    except Exception:
+        return 0
+    rows = rows_of(doc)
+    placed = 0
+    for n, pct, v in math_picks(rows, blind_done()):
+        r = rows[n - 1]
+        if any(key(x) == key(r) and x.get("status") == "bet" for x in rows_of(load_ledger())):
+            continue
+        why_not = book().refusal(r.get("sport"), r.get("event_id"), r.get("selection"), r.get("match"))
+        if why_not and "cap" in why_not:
+            print(f"math rule: stopping - {why_not}.")
+            break
+        if why_not:
+            print(f"math rule: not {r.get('selection')} - {why_not}.")
+            continue
+        ns = argparse.Namespace(number=str(n), my_pct=pct, event=None, stake=None,
+                                why=(f"math rule: blind estimate {pct:g}% counts as {v['p_used']:g}% "
+                                     f"vs the market's {v['q']:.1f}% ({v['q_source']})"))
+        if record(ns, "bet") == 0:
+            placed += 1
+    return placed
+
+
+def cmd_math(a):
+    if blind_missing():
+        print("the math rule bets from the blind estimates - give them first "
+              "(ace-judge.py blind).", file=sys.stderr)
+        return 1
+    n = math_bets()
+    print(f"math rule: {n} bet(s) placed this run.")
+    return 0
 
 
 def cmd_rest(a):
@@ -859,12 +931,16 @@ def main():
         s.add_argument("--my-pct", type=float, dest="my_pct")
         s.add_argument("--why", default="")
         s.add_argument("--stake", type=float)
-        s.add_argument("--event", help="the id of the fresh injury a bet is built on")
+        s.add_argument("--event", help="optional: the id of fresh news the bet is built on - "
+                                       "checked when given, not required (2026-10-12)")
         s.set_defaults(fn=fn)
 
     bl = sub.add_parser("blind", help="home-win chances from data/blind.json, before any price")
     bl.add_argument("pairs", help='"1:55,2:41,..." - game number : home team\'s chance')
     bl.set_defaults(fn=cmd_blind)
+
+    sub.add_parser("math", help="bet every game whose blind estimate clears the bar "
+                                "(runs by itself once the blind estimates are in)").set_defaults(fn=cmd_math)
 
     r = sub.add_parser("rest")
     r.add_argument("--my-pct", type=float, dest="my_pct")
