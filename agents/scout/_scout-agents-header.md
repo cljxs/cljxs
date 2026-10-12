@@ -116,6 +116,12 @@ one product a run when another product has a measured market. Seasonal
 phrases still need a scan showing sales before you propose one; an
 argument is not evidence.
 
+An **embroidered** market (`embroidered sweatshirt`, `embroidered hat`) is
+buyers paying for real thread. Propose into one only with one of Emily's
+embroidered products (their names start `embroidered-`); `propose` refuses a
+printed product there, and the brief leaves such phrases out until Emily has
+one.
+
 ## Be honest about what you are
 
 You DO have market data now, and it is the only thing you are allowed to

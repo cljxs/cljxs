@@ -314,9 +314,13 @@ def emily_key(product):
             return None
         if key:
             return key
+        # The guesses below find only the kind the text asks for - resolve()'s
+        # rule: "embroidered sweatshirt jacket" is not the printed sweatshirt
+        # (2026-10-10), even though every word of "sweatshirt" is in it.
+        stitched = mod.says_embroidered(product)
+        pool = {k: e for k, e in mod.products(cat) if mod.is_embroidered(e) == stitched}
         have = set(mod.words(product))
-        hits = sorted((k for k, _e in mod.products(cat)
-                       if mod.words(k) and set(mod.words(k)) <= have),
+        hits = sorted((k for k in pool if mod.words(k) and set(mod.words(k)) <= have),
                       key=lambda k: -len(mod.words(k)))
         if hits and not (len(hits) > 1 and len(mod.words(hits[0])) == len(mod.words(hits[1]))):
             return hits[0]
@@ -324,9 +328,25 @@ def emily_key(product):
         # tee -> tshirt, when Emily has a tshirt.
         bl = _module("blanks_key", "blanks.py")
         fam = bl.family(mod.product_word(str(product or "")))
-        return fam if fam and fam in dict(mod.products(cat)) else None
+        return fam if fam and fam in pool else None
     except Exception:
         return None
+
+
+def _stitched_market(text):
+    try:
+        return _module("emily_printify", "emily-printify.py").says_embroidered(text)
+    except Exception:
+        return False
+
+
+def _stitched_product(product):
+    """Is the entry this product names one of Emily's embroidered ones?"""
+    try:
+        mod = _module("emily_printify", "emily-printify.py")
+        return mod.is_embroidered(dict(mod.products(mod.read_catalog())).get(emily_key(product)))
+    except Exception:
+        return False
 
 
 def emily_products():
@@ -841,6 +861,18 @@ def cmd_propose(argv):
               f"  She can make: {', '.join(have)}.\n"
               f"  Propose one of those, or nothing.\n\n  Nothing was written.",
               file=sys.stderr)
+        return 2
+
+    # 5. STITCHED MARKET, PRINTED PRODUCT? Proposed as "sweatshirt" for the
+    # phrase "embroidered sweatshirt jacket" (2026-10-10), the idea would be
+    # built as a print of stitching and sold to buyers paying for thread.
+    if have and _stitched_market(a.phrase) and not _stitched_product(a.product):
+        made = [k for k in have if _stitched_product(k)]
+        print(f"REFUSED - {a.phrase!r} is a market for real embroidery, and "
+              f"{a.product.strip()!r} is printed.\n"
+              + (f"  Propose it as: {', '.join(made)}." if made else
+                 "  Emily has no embroidered product yet.")
+              + "\n\n  Nothing was written.", file=sys.stderr)
         return 2
 
     tier, what, why = ipc.risky(a.phrase + " " + a.title)

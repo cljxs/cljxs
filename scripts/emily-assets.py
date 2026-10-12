@@ -242,6 +242,27 @@ def all_over(product):
     return bool(entry) and mod.is_all_over(entry)
 
 
+# Stitched, not printed. Printify turns the file into stitches - one thread
+# colour per flat colour - on a chest patch 1200x1200, about four inches.
+# What prints beautifully (a gradient, a hairline, small lettering) is what
+# thread cannot do. And the model must not draw stitches: the file is what
+# gets stitched, so drawn thread would be embroidered as a picture of thread.
+EMBROIDERY_DIRECTION = (
+    "This design will be machine-EMBROIDERED in thread on a small chest patch "
+    "about 4 inches square. Draw it as flat art made for embroidery: no more "
+    "than 6 solid colours, bold simple shapes with thick lines, no gradients, "
+    "no shading, no texture, no thin lines and no fine detail. Any words: "
+    "three or fewer, short, bold and large. Do NOT draw stitches, thread or "
+    "fabric - the flat artwork itself is what gets stitched."
+)
+
+
+def embroidered(product):
+    """Is this product stitched? emily-printify decides, from its blueprint."""
+    mod, entry = _catalogue_entry(product)
+    return bool(entry) and mod.is_embroidered(entry)
+
+
 def shape(product):
     """The aspect ratio to ask the model for, or None to leave it the model's.
 
@@ -441,6 +462,7 @@ def directed(prompt, product=""):
     ink = ink_direction(product)
     return (f"{prompt.strip()}\n\n"
             f"{ALL_OVER_DIRECTION if all_over(product) else PRINT_DIRECTION}"
+            + (f"\n\n{EMBROIDERY_DIRECTION}" if embroidered(product) else "")
             + (f"\n\n{ink}" if ink else ""))
 
 

@@ -165,6 +165,12 @@ suggest or mention a price, and do not run `market-price`, `costs` or
    `--product` is the product named in your task, letter for letter. The
    command refuses any other - the owner chose it when approving the idea.
 
+   Say what the buyer receives. Only Printify's embroidery blueprints are
+   stitched (set up as `embroidered-...`); everything else is printed, and the command
+   refuses copy that calls a printed product "embroidered". For an
+   embroidered product, the design is a small chest patch in a few solid
+   thread colours - write the copy for that.
+
    Repeat `--tag` for each tag. Quotes, apostrophes and line breaks in your
    copy are fine — the command does the escaping, which is the entire reason
    it exists.

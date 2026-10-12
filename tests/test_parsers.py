@@ -10576,7 +10576,9 @@ class AToteIsNotASticker(unittest.TestCase):
             if not l.lstrip().startswith("#"))
         providers = code.split("def cmd_providers")[1].split("\ndef ")[0]
         self.assertNotIn("--product sticker", providers)
-        self.assertIn("product_word", providers)
+        self.assertIn("suggested_name(title)", providers)
+        suggest = code.split("def suggested_name")[1].split("\ndef ")[0]
+        self.assertIn("product_word(title)", suggest)
 
 
 class TheFeeTableIsNotAProduct(unittest.TestCase):
@@ -16843,6 +16845,145 @@ class ScoutsProductIsEmilysProduct(unittest.TestCase):
         self.assertIn('"product": emily_key(a.product) or a.product.strip()', src)
 
 
+class EmbroideryIsItsOwnProduct(unittest.TestCase):
+    """2026-10-10: Scout kept proposing "embroidered sweatshirt" ideas, and the
+    word "sweatshirt" in them found Emily's PRINTED sweatshirt. Approved, she
+    would have printed a picture of stitching and sold it to buyers paying
+    $53 for thread. Printify does real embroidery as separate blueprints, and
+    the first one's variants (fixture, 2026-10-12) have no "front" at all -
+    only a 1200x1200 "front_left_chest". And `providers` suggested saving it
+    as plain "sweatshirt", over the printed one."""
+
+    PRINTED = dict(ScoutsProductIsEmilysProduct.CAT)
+    STITCHED = dict(PRINTED, **{"embroidered-sweatshirt": {
+        "blueprint_id": 1687, "provider_id": 99, "position": "front_left_chest",
+        "blueprint_title": "Unisex Nantucket Crewneck Sweatshirt (Embroidery)",
+        "variant_ids": [116088], "variant_titles": ["XS / Ice Purple"]}})
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "agents/emily/state").mkdir(parents=True)
+        os.environ["ECOSYSTEM_ROOT"] = str(self.root)
+        self.addCleanup(os.environ.pop, "ECOSYSTEM_ROOT", None)
+        self.payload = json.loads((FIXTURES / "printify-variants-embroidery-1687-99.json").read_text())
+
+    def catalogue(self, cat):
+        (self.root / "agents/emily/state/printify-catalog.json").write_text(json.dumps(cat))
+
+    def scout(self, cat):
+        self.catalogue(cat)
+        return load("scout_ideas_stitch", "scout-ideas.py")
+
+    def printify(self, cat=None):
+        if cat is not None:
+            self.catalogue(cat)
+        return load("emily_printify_stitch", "emily-printify.py")
+
+    # --- Scout --------------------------------------------------------------
+
+    def test_an_embroidery_market_is_not_the_printed_sweatshirt(self):
+        m = self.scout(self.PRINTED)
+        self.assertIsNone(m.emily_key("embroidered sweatshirt jacket"))
+        self.assertIs(m.product_of_phrase("embroidered sweatshirt jacket"), False,
+                      "the brief leaves it out: Emily cannot make it")
+        self.assertIsNone(m.emily_key("embroidered hat"))
+
+    def test_with_an_embroidered_product_it_goes_there(self):
+        m = self.scout(self.STITCHED)
+        for said in ("embroidered sweatshirt jacket", "embroidered sweatshirt",
+                     "embroidered crewneck", "embroidered-sweatshirt"):
+            self.assertEqual(m.emily_key(said), "embroidered-sweatshirt", said)
+
+    def test_plain_words_still_find_the_printed_one(self):
+        # The stitched blueprint's title also ends in "Crewneck Sweatshirt".
+        m = self.scout(self.STITCHED)
+        for said, key in [("sweatshirt", "sweatshirt"), ("crewneck", "sweatshirt"),
+                          ("crewneck sweatshirt", "sweatshirt"), ("hooded sweatshirt", "hoodie"),
+                          ("bookish sweatshirt", "sweatshirt")]:
+            self.assertEqual(m.emily_key(said), key, said)
+
+    def test_propose_refuses_a_printed_product_for_a_stitched_market(self):
+        m = self.scout(self.STITCHED)
+        self.assertTrue(m._stitched_market("embroidered sweatshirt jacket"))
+        self.assertFalse(m._stitched_product("sweatshirt"))
+        self.assertTrue(m._stitched_product("embroidered-sweatshirt"))
+        src = (SCRIPTS / "scout-ideas.py").read_text().split("def cmd_propose(", 1)[1].split("\ndef ", 1)[0]
+        self.assertLess(src.index("_stitched_market(a.phrase) and not _stitched_product(a.product)"),
+                        src.index("write"), "refused before anything is written")
+
+    # --- the catalogue ------------------------------------------------------
+
+    def test_the_real_variant_places_on_its_chest_spot(self):
+        ep = self.printify()
+        self.assertEqual(ep.placement_position(self.payload["variants"]), "front_left_chest")
+        self.assertEqual(ep.front_sizes(self.payload, "front_left_chest"), {116088: (1200, 1200)})
+        self.assertEqual(ep.front_sizes(self.payload), {}, "it has no front")
+        entry = self.STITCHED["embroidered-sweatshirt"]
+        areas = ep.print_areas("IMG", (1024, 1024), [116088], entry,
+                               ep.front_sizes(self.payload, ep.position_of(entry)))
+        self.assertEqual(areas[0]["placeholders"][0]["position"], "front_left_chest")
+        self.assertEqual(ep.print_areas("IMG", (1024, 1024), [1], {})[0]["placeholders"][0]["position"],
+                         "front", "printed products are unchanged")
+
+    def test_printed_variants_still_place_on_the_front(self):
+        ep = self.printify()
+        self.assertEqual(ep.placement_position([{"placeholders": [{"position": "back"}, {"position": "front"}]}]),
+                         "front")
+
+    def test_resolve_keeps_the_two_kinds_apart(self):
+        ep = self.printify()
+        self.assertEqual(ep.resolve(self.STITCHED, "crewneck sweatshirt")[0], "sweatshirt")
+        self.assertEqual(ep.resolve(self.STITCHED, "embroidered sweatshirt")[0], "embroidered-sweatshirt")
+        self.assertEqual(ep.resolve(self.PRINTED, "embroidered sweatshirt"), (None, None))
+
+    def test_providers_suggests_its_own_name(self):
+        ep = self.printify()
+        self.assertEqual(ep.suggested_name("Unisex Nantucket Crewneck Sweatshirt (Embroidery)"),
+                         "embroidered-sweatshirt")
+        self.assertEqual(ep.suggested_name("Unisex Heavy Blend™ Crewneck Sweatshirt"), "sweatshirt")
+
+    def test_pick_will_not_save_stitched_over_printed(self):
+        ep = self.printify(self.PRINTED)
+        ep.CATALOG = self.root / "agents/emily/state/printify-catalog.json"
+        bp = {"title": "Unisex Nantucket Crewneck Sweatshirt (Embroidery)"}
+        ep.call = lambda path, *a, **k: bp if path.endswith("1687.json") else self.payload
+        a = types.SimpleNamespace(product="sweatshirt", blueprint="1687", provider="99", variants="",
+                               colors="", limit=12, alias="", no_cutout=False)
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            ep.cmd_pick(a)
+        self.assertEqual(json.loads(ep.CATALOG.read_text())["sweatshirt"]["blueprint_id"], 49)
+        a.product = "embroidered-sweatshirt"
+        with contextlib.redirect_stdout(io.StringIO()):
+            ep.cmd_pick(a)
+        saved = json.loads(ep.CATALOG.read_text())["embroidered-sweatshirt"]
+        self.assertEqual(saved["position"], "front_left_chest")
+
+    # --- the words ----------------------------------------------------------
+
+    def test_a_print_is_never_listed_as_embroidered(self):
+        self.catalogue(self.STITCHED)
+        el = load("emily_listing_stitch", "emily-listing.py")
+        copy = {"title": "Embroidered Hiking Crewneck", "description": "x", "tags": ["hiking"]}
+        got = el.stitch_problems(dict(copy, product_type="sweatshirt"))
+        self.assertEqual(len(got), 1)
+        self.assertIn("printed, not embroidered", got[0])
+        self.assertEqual(el.stitch_problems(dict(copy, product_type="embroidered-sweatshirt")), [])
+        self.assertEqual(el.stitch_problems({"title": "Hiking Crewneck", "tags": ["stitch"],
+                                             "product_type": "sweatshirt"}), [],
+                         "Stitch the character is not a claim")
+        draft = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("if claim and not is_embroidered(cat):", draft)
+
+    def test_the_art_is_drawn_for_thread(self):
+        self.catalogue(self.STITCHED)
+        ea = load("emily_assets_stitch", "emily-assets.py")
+        self.assertIn(ea.EMBROIDERY_DIRECTION, ea.directed("x", "embroidered-sweatshirt"))
+        self.assertNotIn(ea.EMBROIDERY_DIRECTION, ea.directed("x", "sweatshirt"))
+        self.assertIn("Do NOT draw stitches", ea.EMBROIDERY_DIRECTION)
+
+
 class TheFirstTestDraftsPrintRight(unittest.TestCase):
     """The owner's first end-to-end run (2026-10-02) drafted two products and
     both were wrong in ways no check caught:
@@ -16983,7 +17124,9 @@ class TheFirstTestDraftsPrintRight(unittest.TestCase):
         (state / "ideas.json").write_text('{"ideas":[]}')
         (state / "scans/s.json").write_text(json.dumps({
             "seed": "bookish sweatshirt", "scanned_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "rows": [{"phrase": "bookish sweatshirt embroidered", "supply": 5000, "heat": 0.05, "pull": 0.04,
+            # Not "... embroidered" any more: that market is refused a printed
+            # sweatshirt (EmbroideryIsItsOwnProduct).
+            "rows": [{"phrase": "bookish sweatshirt reader", "supply": 5000, "heat": 0.05, "pull": 0.04,
                       "price": 40.0, "match": 1.0, "selling": 8, "sales_n": 10, "reviews": 60,
                       "returned": 25, "heat_n": 25, "pull_n": 25, "score": 0.02}], "excluded": []}))
         (root / "agents/emily/state").mkdir(parents=True)
@@ -16994,7 +17137,7 @@ class TheFirstTestDraftsPrintRight(unittest.TestCase):
 
         def propose(product):
             return subprocess.run([sys.executable, str(SCRIPTS / "scout-ideas.py"), "propose",
-                                   "--phrase", "bookish sweatshirt embroidered",
+                                   "--phrase", "bookish sweatshirt reader",
                                    "--title", "Threaded Spine Chest Emblem", "--product", product],
                                   capture_output=True, text=True, env=env)
         r = propose("embroidered chest emblem")

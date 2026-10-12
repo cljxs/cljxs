@@ -102,6 +102,26 @@ def ordered_product(d):
         return None
 
 
+def stitch_problems(listing):
+    """[problem] if the copy calls a printed product embroidered. Checked here,
+    where Emily can rewrite it, with the same function the draft refuses on."""
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "emily_printify_stitch", Path(__file__).resolve().parent / "emily-printify.py")
+        ep = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ep)
+        claim = ep.listing_claims_embroidery(listing)
+        if not claim:
+            return []
+        _key, entry = ep.resolve(ep.read_catalog(), listing.get("product_type"))
+    except Exception:
+        return []                 # an unreadable catalogue is the draft's to refuse
+    if entry and not ep.is_embroidered(entry):
+        return [f"the copy says {claim!r}, and this product is printed, not "
+                f"embroidered - describe what the buyer will receive"]
+    return []
+
+
 def cmd_listing(a):
     d = build_dir(a.build_dir)
     if d is None:
@@ -125,7 +145,7 @@ def cmd_listing(a):
 
     # Checked with the verifier's own function, before anything is written. A
     # file that exists and fails is worse than no file: it looks like work.
-    problems = ev.listing_problems(listing)
+    problems = ev.listing_problems(listing) + stitch_problems(listing)
     if problems:
         print("not written - this listing would fail the build:", file=sys.stderr)
         for p in problems:

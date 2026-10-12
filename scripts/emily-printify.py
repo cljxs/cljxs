@@ -187,6 +187,16 @@ def product_word(title):
     return None
 
 
+def suggested_name(title):
+    """The catalogue name `providers` suggests for a blueprint. An embroidery
+    blueprint gets its own: suggested as plain "sweatshirt" (2026-10-12), it
+    would have overwritten the printed sweatshirt the shop already had."""
+    word = product_word(title)
+    if word and is_embroidered({"blueprint_title": title}):
+        return f"embroidered-{word}"
+    return word
+
+
 def cmd_providers(a):
     ps = call(f"/catalog/blueprints/{a.blueprint_id}/print_providers.json")
     for p in ps:
@@ -197,7 +207,7 @@ def cmd_providers(a):
         title = call(f"/catalog/blueprints/{a.blueprint_id}.json").get("title") or ""
     except Exception:
         title = ""
-    word = product_word(title)
+    word = suggested_name(title)
     print(f"\nBlueprint {a.blueprint_id} is {title!r}." if title else "")
     if word:
         print(f"\nPick a provider, then save the pair (once, ever):\n"
@@ -342,7 +352,8 @@ def title_answers_to(blueprint_title, product_type):
     Every word asked for must be in the title, and the head must be the
     garment.
     """
-    have = words(blueprint_title)
+    # "... Crewneck Sweatshirt (Embroidery)": the decoration is not the garment.
+    have = words(re.sub(r"\(\s*embroidery\s*\)", " ", str(blueprint_title or ""), flags=re.I))
     asked = words(product_type)
     if not have or not asked:
         return False
@@ -376,13 +387,18 @@ def resolve(cat, product_type):
         if str(key).lower() == str(product_type).lower():
             return key, entry
 
-    hits = [k for k, _e in products(cat) if " ".join(words(k)) == want]
+    # Past the exact key, a word finds only its own kind: "embroidered
+    # sweatshirt" never the printed one, "crewneck sweatshirt" never the
+    # stitched one - whose title also ends in Sweatshirt.
+    stitched = says_embroidered(product_type)
+    pool = [(k, e) for k, e in products(cat) if is_embroidered(e) == stitched]
+    plain = " ".join(w for w in words(EMBROIDERY_RE.sub(" ", str(product_type))))
+    hits = [k for k, _e in pool if " ".join(words(k)) in (want, plain)]
     if not hits:
-        hits = [k for k, e in products(cat)
-                if any(" ".join(words(x)) == want for x in (e.get("aliases") or []))]
-    if not hits:
-        hits = [k for k, e in products(cat)
-                if title_answers_to(e.get("blueprint_title"), product_type)]
+        hits = [k for k, e in pool
+                if any(" ".join(words(x)) in (want, plain) for x in (e.get("aliases") or []))]
+    if not hits and plain:
+        hits = [k for k, e in pool if title_answers_to(e.get("blueprint_title"), plain)]
 
     if len(hits) > 1:
         raise Ambiguous(product_type, sorted(hits))
@@ -612,6 +628,21 @@ def cmd_pick(a):
     blueprint_title = bp.get("title") or ""
 
     cat = read_catalog()
+    old = cat.get(a.product)
+    if isinstance(old, dict) and old.get("blueprint_id") and \
+            is_embroidered(old) != is_embroidered({"blueprint_title": blueprint_title}):
+        kind = "embroidered" if is_embroidered(old) else "printed"
+        print(f"'{a.product}' is already your {kind} {old.get('blueprint_title') or 'product'}.\n"
+              f"  Saving {blueprint_title!r} over it would turn every {a.product} build "
+              f"into the other kind.\n  Give it its own name, e.g. --product "
+              f"{'embroidered-' + a.product if kind == 'printed' else a.product + '-printed'}",
+              file=sys.stderr)
+        sys.exit(1)
+    position = placement_position(all_v)
+    if not position:
+        print("these variants share no print position - nothing to place art in.",
+              file=sys.stderr)
+        sys.exit(1)
     cat[a.product] = {
         "blueprint_id": int(a.blueprint),
         "blueprint_title": blueprint_title,
@@ -627,6 +658,8 @@ def cmd_pick(a):
         "variant_titles": [v.get("title") for v in chosen],
         "chosen_at": _now(),
     }
+    if position != "front":
+        cat[a.product]["position"] = position
     # Recorded only when asked for. Absent means the default, and the default
     # is to cut the background out - see needs_cutout().
     if getattr(a, "no_cutout", False):
@@ -710,6 +743,58 @@ def is_all_over(entry):
     return bool(re.search(r"\baop\b|\ball[- ]over\b", title, re.I))
 
 
+# EMBROIDERY. Stitched, not printed - and a different market.
+#
+# Scout kept proposing "embroidered sweatshirt" ideas (2026-10-10) and the
+# word "sweatshirt" in them found Emily's PRINTED sweatshirt: approved, she
+# would have printed a picture of stitching and sold it into a market whose
+# buyers pay $53 for real thread. Printify sells real embroidery as separate
+# blueprints - "Unisex Nantucket Crewneck Sweatshirt (Embroidery)" - so which
+# one a catalogue entry is comes from its own blueprint title, like
+# is_all_over, and which one a piece of text asks for from its words.
+# "stitched", not "stitch": Stitch is also a cartoon character.
+EMBROIDERY_RE = re.compile(r"\bembroider\w*|\bstitched\b", re.I)
+
+
+def is_embroidered(entry):
+    """Is this catalogue entry stitched rather than printed?"""
+    return bool(EMBROIDERY_RE.search(str((entry or {}).get("blueprint_title") or "")))
+
+
+def says_embroidered(text):
+    """Does this text - a phrase, a product word, a listing - ask for or
+    claim embroidery?"""
+    return bool(EMBROIDERY_RE.search(str(text or "")))
+
+
+def listing_claims_embroidery(listing):
+    """The first title, description or tag text that claims embroidery, or None."""
+    listing = listing if isinstance(listing, dict) else {}
+    for text in [listing.get("title"), listing.get("description")] + list(listing.get("tags") or []):
+        m = EMBROIDERY_RE.search(str(text or ""))
+        if m:
+            return m.group(0)
+    return None
+
+
+def position_of(entry):
+    """The print area the art goes in. "front" for everything printed; an
+    embroidery blueprint has no front - 1687 stitches only "front_left_chest",
+    1200x1200 - so `pick` records the one Printify gave it."""
+    return str((entry or {}).get("position") or "front")
+
+
+def placement_position(variants):
+    """The position `pick` records: "front" when the variants have one, else
+    the position every variant shares (an embroidery chest spot), else None."""
+    seen = [[ph.get("position") for ph in v.get("placeholders") or [] if ph.get("position")]
+            for v in variants or []]
+    if not seen or any("front" in s for s in seen):
+        return "front"
+    common = set(seen[0]).intersection(*map(set, seen[1:]))
+    return sorted(common)[0] if common else None
+
+
 # WHERE THE ART GOES.
 #
 # draft used to place every file the same way: one image, centred, scale 1.
@@ -727,17 +812,18 @@ def is_all_over(entry):
 # from Printify's own variants endpoint, per variant, recorded by `layout`.
 # The one fact Printify does not publish - that this sheet folds - is
 # recorded by the person who has seen the canvas, with `layout --folded`.
-def front_sizes(payload):
-    """{variant_id: (width, height)} of each variant's "front" print area.
+def front_sizes(payload, position="front"):
+    """{variant_id: (width, height)} of each variant's print area - "front",
+    or the entry's own position (position_of).
 
     Read from GET /catalog/blueprints/B/print_providers/P/variants.json, where
     each variant carries placeholders: [{"position", "width", "height"}].
-    A variant with no front placeholder is left out rather than invented.
+    A variant with no such placeholder is left out rather than invented.
     """
     out = {}
     for v in (payload or {}).get("variants") or []:
         for ph in v.get("placeholders") or []:
-            if ph.get("position") == "front" and ph.get("width") and ph.get("height"):
+            if ph.get("position") == position and ph.get("width") and ph.get("height"):
                 out[int(v["id"])] = (int(ph["width"]), int(ph["height"]))
     return out
 
@@ -943,7 +1029,7 @@ def print_areas(image_id, image, variant_ids, entry, measured=None, reach=None):
             groups.setdefault(tuple(measured[v]), []).append(v)
         top, rnd = is_garment(entry), is_round(entry)
         return [{"variant_ids": vids, "placeholders": [{
-                    "position": "front",
+                    "position": position_of(entry),
                     "images": fit_images(image_id, image, area, top, rnd, reach)}]}
                 for area, vids in sorted(groups.items())]
     if not sizes:
@@ -956,7 +1042,7 @@ def print_areas(image_id, image, variant_ids, entry, measured=None, reach=None):
                   if is_round(entry) and image else
                   [{"id": image_id, "x": 0.5, "y": 0.5, "scale": 1, "angle": 0}])
         return [{"variant_ids": list(variant_ids), "placeholders": [{
-            "position": "front", "images": images}]}]
+            "position": position_of(entry), "images": images}]}]
     folded = bool(entry.get("folded"))
     groups = {}
     for v in variant_ids:
@@ -964,7 +1050,7 @@ def print_areas(image_id, image, variant_ids, entry, measured=None, reach=None):
             raise KeyError(v)
         groups.setdefault(sizes[v], []).append(v)
     return [{"variant_ids": vids, "placeholders": [{
-                "position": "front",
+                "position": position_of(entry),
                 "images": layout_images(image_id, image, area, folded)}]}
             for area, vids in sorted(groups.items())]
 
@@ -1634,7 +1720,7 @@ def cmd_layout(a):
 
     payload = call(f"/catalog/blueprints/{entry['blueprint_id']}/print_providers/"
                    f"{entry['provider_id']}/variants.json")
-    sizes = front_sizes(payload)
+    sizes = front_sizes(payload, position_of(entry))
     ours = {v: sizes[v] for v in entry.get("variant_ids") or [] if v in sizes}
     missing = [v for v in entry.get("variant_ids") or [] if v not in sizes]
     if missing:
@@ -1806,6 +1892,17 @@ def cmd_draft(a):
     for line in blank_warning(d, cat_key, cat, product_type):
         print(line)
 
+    # A print never goes up described as embroidery. The words are Emily's
+    # and the product is code's, so code compares them: a listing saying
+    # "embroidered" on a printed sweatshirt is a buyer paying for thread and
+    # receiving ink.
+    claim = listing_claims_embroidery(listing)
+    if claim and not is_embroidered(cat):
+        print(f"not drafting: the listing calls it embroidered ({claim!r}) and "
+              f"'{cat_key}' is printed.\n  Take the claim out of listing.json, or "
+              f"draft it on an embroidered product.", file=sys.stderr)
+        sys.exit(1)
+
     # An all-over print is placed from its real print-area size, and there is
     # no safe default: scale 1 centred is what put a wildflower field on the
     # bottom of the bag and left both faces blank.
@@ -1960,7 +2057,8 @@ def cmd_draft(a):
     if not cat.get("print_sizes"):
         try:
             measured = front_sizes(call(f"/catalog/blueprints/{cat['blueprint_id']}"
-                                        f"/print_providers/{cat['provider_id']}/variants.json"))
+                                        f"/print_providers/{cat['provider_id']}/variants.json"),
+                                   position_of(cat))
         except (Exception, SystemExit) as exc:
             print(f"note: print area not read ({type(exc).__name__}) - placing the "
                   f"art centred at full width")
