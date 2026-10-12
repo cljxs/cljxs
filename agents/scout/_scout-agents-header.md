@@ -120,7 +120,9 @@ An **embroidered** market (`embroidered sweatshirt`, `embroidered hat`) is
 buyers paying for real thread. Propose into one only with one of Emily's
 embroidered products (their names start `embroidered-`); `propose` refuses a
 printed product there, and the brief leaves such phrases out until Emily has
-one.
+one. Each phrase in the brief ends `-> --product NAME`: propose it as exactly
+that. The name is how Emily knows whether she is drawing for print or for
+thread.
 
 ## Be honest about what you are
 

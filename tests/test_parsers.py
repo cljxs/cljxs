@@ -17020,6 +17020,31 @@ class EmbroideryIsItsOwnProduct(unittest.TestCase):
         self.assertLess(src.index("_stitched_market(a.phrase) and not _stitched_product(a.product)"),
                         src.index("write"), "refused before anything is written")
 
+    def test_the_brief_tells_scout_which_product_each_market_is(self):
+        # 2026-10-12: the brief listed "embroidered sweatshirt jacket" under
+        # SWEATSHIRT, beside the printed markets, with nothing saying which
+        # product to propose - so Scout would try the printed one.
+        self.catalogue(self.STITCHED)
+        state = self.root / "agents/scout/state"
+        (state / "scans").mkdir(parents=True)
+        (state / "ideas.json").write_text('{"ideas":[]}')
+        row = lambda p, price: {"phrase": p, "supply": 5000, "heat": 0.05, "pull": 0.04, "price": price,
+                                "match": 1.0, "selling": 8, "sales_n": 10, "reviews": 60, "returned": 25,
+                                "heat_n": 25, "pull_n": 25, "score": 0.02}
+        (state / "scans/s.json").write_text(json.dumps({
+            "seed": "sweatshirt", "excluded": [],
+            "scanned_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "rows": [row("embroidered sweatshirt jacket", 52.99), row("bookish sweatshirt", 38.0)]}))
+        out = subprocess.run([sys.executable, str(SCRIPTS / "scout-ideas.py"), "brief"], capture_output=True,
+                             text=True, env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root))).stdout
+        parts = re.split(r"\n  ([A-Z][A-Z -]+) \(\d+ phrases? measured\):", out)
+        groups = dict(zip(parts[1::2], parts[2::2]))
+        self.assertIn("EMBROIDERED SWEATSHIRT", groups, out)
+        self.assertRegex(groups["EMBROIDERED SWEATSHIRT"],
+                         r"embroidered sweatshirt jacket .*-> --product embroidered-sweatshirt")
+        self.assertRegex(groups.get("SWEATSHIRT", ""), r"bookish sweatshirt .*-> --product sweatshirt\n")
+        self.assertNotIn("embroidered", groups.get("SWEATSHIRT", ""))
+
     # --- the catalogue ------------------------------------------------------
 
     def test_the_real_variant_places_on_its_chest_spot(self):

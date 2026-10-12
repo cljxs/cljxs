@@ -279,7 +279,11 @@ def product_kind(product):
         mod = _module("emily_printify", "emily-printify.py")
         entry = dict(mod.products(mod.read_catalog())).get(key) or {}
         word = mod.product_word(entry.get("blueprint_title") or key or product)
-        return _module("blanks_key", "blanks.py").family(word) or key or str(product).lower()
+        kind = _module("blanks_key", "blanks.py").family(word) or key or str(product).lower()
+        # Stitched is its own kind: listed under SWEATSHIRT (2026-10-12), the
+        # embroidery markets sat beside the printed ones, and nothing in the
+        # brief said which product to propose them as.
+        return f"embroidered {kind}" if mod.is_embroidered(entry) else kind
     except Exception:
         return key or str(product).lower()
 
@@ -1023,7 +1027,11 @@ def cmd_brief(_argv):
             tail = f"  - already has: {'; '.join(have)[:90]}" if have else ""
             price = row.get("price")
             money = (f"; x ${price:,.2f} = ${sales_value(row):,} of sales" if price else "")
-            print(f"    {phrase}  ({row.get('supply') or 0:,} listings; {sales_line(row)}{money}){tail}")
+            # The product to propose it as, by its catalogue name - the name is
+            # what tells Emily printed or stitched, all the way to the draft.
+            key = product_of_phrase(phrase)
+            as_ = f"  -> --product {key}" if key else ""
+            print(f"    {phrase}  ({row.get('supply') or 0:,} listings; {sales_line(row)}{money}){as_}{tail}")
     print("- Most money first: reviews x the typical price. 'sold' counts top listings with a\n"
           "  review in the window - a review is a purchase, so it is a floor on sales, never a forecast.")
     if len(groups) > 1:
