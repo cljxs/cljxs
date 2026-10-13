@@ -7221,6 +7221,33 @@ class OneNightIsNotACalibration(unittest.TestCase):
         src = (SCRIPTS / "props-forecast.py").read_text()
         self.assertNotIn("n < 50", src)
 
+    # --- Peter's report card reads the same numbers (2026-10-13) ---------------
+
+    def test_the_page_and_the_command_line_hold_one_set_of_numbers(self):
+        # The Grade button shows `calibration --json`; the terminal shows the
+        # text. One function feeds both, so a row on the page is a row there.
+        games = self.m.MIN_GAMES_TO_JUDGE
+        text = self.report(games, per_game=4)
+        r = self.m.calibration_report(self.rows(games, per_game=4))
+        self.assertEqual((r["games"], r["calls"], r["thin"]), (games, games * 4 * 4, None))
+        for b in r["buckets"]:
+            said = f"{b['from']}-{b['to']}%"
+            self.assertIn(f"  {said:<10}{b['predicted']:>9.1f}%{b['observed']:>9.1f}%", text)
+        self.assertEqual([m["market"] for m in r["markets"]], ["receiving_yards", "receptions"])
+
+    def test_a_thin_sample_holds_the_market_split_back_on_the_page_too(self):
+        r = self.m.calibration_report(self.rows(1))
+        self.assertTrue(r["thin"].strip().startswith("NOT A CALIBRATION YET"))
+        self.assertIsNone(r["markets"], "held back, as the text holds it back")
+        self.assertEqual(r["market_count"], 2)
+
+    def test_nothing_graded_is_none_not_an_empty_table(self):
+        rows = self.rows(1)
+        for f in rows:
+            f["actual"], f["graded_utc"] = None, None
+        r = self.m.calibration_report(rows)
+        self.assertIsNone(r)
+
     # --- counting the games -------------------------------------------------
 
     def test_games_are_counted_by_fixture_not_by_row(self):
@@ -12129,6 +12156,10 @@ class TheDeckRunsTheForecastForAClickedGame(unittest.TestCase):
         "    print('partial', flush=True); print('boom', file=sys.stderr); sys.exit(1)\n"
         "elif cmd == 'forecast':\n"
         "    time.sleep(0.6); print('ran ' + sys.argv[2])\n"
+        "elif cmd == 'grade':\n"
+        "    time.sleep(0.6); print('  J. Love  receiving_yards  58 yds'); print('\\n1 graded, 0 still waiting on a final score.')\n"
+        "elif cmd == 'calibration' and '--json' in sys.argv:\n"
+        "    print(json.dumps({'graded': 1, 'games': 1, 'calls': 3, 'buckets': []}))\n"
     )
 
     def setUp(self):
@@ -12215,6 +12246,46 @@ class TheDeckRunsTheForecastForAClickedGame(unittest.TestCase):
         self.assertEqual(out["done"]["state"], "failed")
         self.assertEqual(out["done"]["code"], 1)
         self.assertIn("boom", out["done"]["log"])
+
+    # --- Peter's Grade button (owner, 2026-10-13: "a checker button in
+    # Peter's house that grades the bets") ---------------------------------
+
+    def test_grade_runs_as_a_job_and_says_what_it_did(self):
+        out = self.drive(
+            "out.s = await call('POST', '/api/props/grade');"
+            "out.done = await wait();")
+        self.assertEqual(out["s"]["status"], 202)
+        self.assertEqual(out["s"]["body"]["job"]["kind"], "grade")
+        self.assertEqual(out["done"]["state"], "done")
+        self.assertIn("1 graded, 0 still waiting", out["done"]["log"])
+
+    def test_grading_and_forecasting_never_write_the_file_at_once(self):
+        # Both rewrite forecasts.json; the later save would drop the other's rows.
+        out = self.drive(
+            "out.a = await call('POST', '/api/props/grade');"
+            "out.b = await call('POST', '/api/props/forecast', {event_id: '401872948'});"
+            "out.c = await call('POST', '/api/props/grade');"
+            "await wait();"
+            "out.d = await call('POST', '/api/props/forecast', {event_id: '401872948'});"
+            "out.e = await call('POST', '/api/props/grade');"
+            "await wait();")
+        self.assertEqual(out["b"]["status"], 409)
+        self.assertIn("grading", out["b"]["body"]["error"])
+        self.assertEqual(out["c"]["status"], 409)
+        self.assertEqual(out["d"]["status"], 202, "a finished grade must not block a forecast")
+        self.assertEqual(out["e"]["status"], 409)
+        self.assertIn("forecasting", out["e"]["body"]["error"])
+
+    def test_the_report_card_is_the_scripts_own(self):
+        out = self.drive("out.c = await call('GET', '/api/props/calibration');")
+        self.assertEqual(out["c"]["body"], {"available": True, "report":
+                         {"graded": 1, "games": 1, "calls": 3, "buckets": []}})
+
+    def test_the_page_has_the_button_and_reads_the_report(self):
+        page = (self.API / "public" / "peter.html").read_text()
+        self.assertIn('id="gradeBtn"', page)
+        self.assertIn("fetch('/api/props/grade', {method:'POST'})", page)
+        self.assertIn("fetch('/api/props/calibration'", page)
 
     def test_the_process_gets_an_argument_list_not_a_shell(self):
         src = (self.API / "props.js").read_text()

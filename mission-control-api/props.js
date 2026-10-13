@@ -1,7 +1,7 @@
 'use strict';
 
-// The Props Hall's game picker: this week's NFL games, and a button that runs
-// props-forecast.py for one of them.
+// Peter's desk: this week's NFL games, a button that runs props-forecast.py
+// for one of them, and one that grades every finished game.
 //
 // Nothing here knows football. The week, its kickoff times in Eastern and the
 // forecasts themselves all come from props-forecast.py, which is the one place
@@ -53,13 +53,20 @@ function python(args, timeout) {
   });
 }
 
+// The one job slot runs either kind: a forecast for one game, or grading
+// every finished one. Both rewrite forecasts.json, so they queue behind each
+// other exactly as two forecasts do.
 function startRun(eventId, fixture) {
+  return startJob('forecast', ['forecast', eventId], eventId, fixture);
+}
+
+function startJob(kind, args, eventId, fixture) {
   job = {
-    event_id: eventId, fixture: fixture || null, state: 'running',
+    kind, event_id: eventId || null, fixture: fixture || null, state: 'running',
     started_utc: new Date().toISOString(), finished_utc: null, code: null, log: '',
   };
   const mine = job;
-  python(['forecast', eventId], RUN_TIMEOUT_MS).then(r => {
+  python(args, RUN_TIMEOUT_MS).then(r => {
     mine.state = r.ok ? 'done' : 'failed';
     mine.code = r.code;
     mine.finished_utc = new Date().toISOString();
@@ -88,13 +95,37 @@ function register(app) {
     const eventId = String((req.body || {}).event_id || '');
     if (!EVENT_RE.test(eventId)) return res.status(400).json({ error: 'bad event id' });
     if (job && job.state === 'running') {
-      return res.status(409).json({ error: `already forecasting ${job.fixture || job.event_id}`, job });
+      return res.status(409).json({ error: job.kind === 'grade' ? 'grading - forecast when it finishes'
+        : `already forecasting ${job.fixture || job.event_id}`, job });
     }
     const fixture = String((req.body || {}).fixture || '').slice(0, 40) || null;
     res.status(202).json({ job: startRun(eventId, fixture) });
   });
 
   app.get('/api/props/job', (req, res) => res.json({ job }));
+
+  // Peter's Grade button: fill in the final stat for every forecast whose
+  // game is over, from ESPN's box scores. No model, nothing spent.
+  app.post('/api/props/grade', (req, res) => {
+    if (job && job.state === 'running') {
+      return res.status(409).json({ error: job.kind === 'grade' ? 'already grading'
+        : `forecasting ${job.fixture || job.event_id} - grade when it finishes`, job });
+    }
+    res.status(202).json({ job: startJob('grade', ['grade']) });
+  });
+
+  // The calibration as numbers - props-forecast.py's own report, so the
+  // page and the command line cannot disagree. Read-only, no network.
+  app.get('/api/props/calibration', async (req, res) => {
+    const r = await python(['calibration', '--json'], 60000);
+    let report = null;
+    try { report = r.ok ? JSON.parse(r.stdout) : null; } catch { report = null; }
+    if (!r.ok) {
+      return res.json({ available: false, reason: tail(r.stderr || r.stdout, 5).trim()
+        || 'the calibration could not be worked out' });
+    }
+    res.json({ available: true, report });
+  });
 }
 
 // _reset is for tests: the job is module state and each test wants a clean one.

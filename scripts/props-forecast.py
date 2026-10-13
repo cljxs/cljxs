@@ -7,7 +7,7 @@ scorekeeping that says whether they are any good.
     props-forecast.py forecast 401872947     write forecasts for one game
     props-forecast.py best 401872947         the strongest claim per player
     props-forecast.py grade                  score the ones whose game is over
-    props-forecast.py calibration            when it says 70%, does it happen?
+    props-forecast.py calibration [--json]   when it says 70%, does it happen?
     props-forecast.py markets                what it prices, and off which stat
 
 NO MODEL IS CALLED. This is arithmetic over ESPN's free game logs: take the
@@ -1192,42 +1192,71 @@ def too_thin_to_judge(games, calls):
             f"about {MIN_GAMES_TO_JUDGE} games.")
 
 
-def cmd_calibration():
-    data = load()
-    done = [f for f in data["forecasts"] if f.get("actual") is not None]
-    if not done:
-        print("nothing graded yet. Forecast a game, wait for it to finish, "
-              "then:\n  python3 scripts/props-forecast.py grade")
-        return 1
+def calibration_report(forecasts):
+    """The calibration, as numbers: what `calibration` prints and what
+    Peter's Grade button shows, from one function so the two cannot differ.
 
+    None when nothing is graded yet. `markets` is None while the sample is
+    too thin to split (see too_thin_to_judge) - held back, not empty.
+    """
+    done = [f for f in forecasts if f.get("actual") is not None]
+    if not done:
+        return None
     rows = buckets(done)
     n = sum(b["n"] for b in rows.values())
     games = games_graded(done)
-    print(f"{plural(len(done), 'graded forecast')} from "
-          f"{plural(games, 'game')}, {plural(n, 'threshold call')}\n")
     thin = too_thin_to_judge(games, n)
-    if thin:
-        print(thin + "\n")
-    print(f"  {'said':<10}{'predicted':>10}{'happened':>10}{'gap':>8}{'calls':>7}")
-    print("  " + "-" * 45)
-    for lo, b in rows.items():
-        print(f"  {f'{lo}-{lo + 9}%':<10}{b['predicted']:>9.1f}%{b['observed']:>9.1f}%"
-              f"{b['gap']:>+8.1f}{b['n']:>7}")
-
-    markets = by_market(done)
-    if len(markets) > 1 and not thin:
-        print(f"\n  {'market':<20}{'predicted':>10}{'happened':>10}{'gap':>8}"
-              f"{'calls':>7}")
-        print("  " + "-" * 55)
-        for market, rs in markets.items():
+    split = by_market(done)
+    markets = None
+    if len(split) > 1 and not thin:
+        markets = []
+        for market, rs in split.items():
             mb = buckets(rs)
             calls = sum(b["n"] for b in mb.values())
             pred = sum(b["predicted"] * b["n"] for b in mb.values()) / calls
             obs = 100.0 * sum(b["hits"] for b in mb.values()) / calls
-            print(f"  {market:<20}{pred:>9.1f}%{obs:>9.1f}%{obs - pred:>+8.1f}"
-                  f"{calls:>7}")
+            markets.append({"market": market, "predicted": round(pred, 1),
+                            "observed": round(obs, 1), "gap": round(obs - pred, 1),
+                            "calls": calls})
+    return {"graded": len(done), "games": games, "calls": n,
+            "waiting": sum(1 for f in forecasts if f.get("actual") is None
+                           and f.get("graded_utc") is None),
+            "min_games": MIN_GAMES_TO_JUDGE, "thin": thin,
+            "buckets": [{"from": lo, "to": lo + 9, **b} for lo, b in rows.items()],
+            "markets": markets, "market_count": len(split)}
 
-    elif len(markets) > 1:
+
+def cmd_calibration(as_json=False):
+    r = calibration_report(load()["forecasts"])
+    if as_json:
+        print(json.dumps(r))
+        return 0
+    if r is None:
+        print("nothing graded yet. Forecast a game, wait for it to finish, "
+              "then:\n  python3 scripts/props-forecast.py grade")
+        return 1
+
+    games, n, thin = r["games"], r["calls"], r["thin"]
+    print(f"{plural(r['graded'], 'graded forecast')} from "
+          f"{plural(games, 'game')}, {plural(n, 'threshold call')}\n")
+    if thin:
+        print(thin + "\n")
+    print(f"  {'said':<10}{'predicted':>10}{'happened':>10}{'gap':>8}{'calls':>7}")
+    print("  " + "-" * 45)
+    for b in r["buckets"]:
+        said = f"{b['from']}-{b['to']}%"
+        print(f"  {said:<10}{b['predicted']:>9.1f}%{b['observed']:>9.1f}%"
+              f"{b['gap']:>+8.1f}{b['n']:>7}")
+
+    if r["markets"]:
+        print(f"\n  {'market':<20}{'predicted':>10}{'happened':>10}{'gap':>8}"
+              f"{'calls':>7}")
+        print("  " + "-" * 55)
+        for m in r["markets"]:
+            print(f"  {m['market']:<20}{m['predicted']:>9.1f}%{m['observed']:>9.1f}%"
+                  f"{m['gap']:>+8.1f}{m['calls']:>7}")
+
+    elif r["market_count"] > 1:
         # The per-market split divides an already-thin sample seven ways. A
         # table of six-call rows invites exactly the reading it cannot support.
         print(f"\n  The per-market breakdown is held back until "
@@ -1551,7 +1580,7 @@ def main():
     if cmd == "grade":
         return cmd_grade()
     if cmd == "calibration":
-        return cmd_calibration()
+        return cmd_calibration("--json" in sys.argv)
     if cmd == "markets":
         return cmd_markets()
     print("usage: props-forecast.py week | forecast <event_id> | "

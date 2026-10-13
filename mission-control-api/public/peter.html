@@ -116,6 +116,15 @@
   .grun pre{white-space:pre-wrap;font-size:11px;max-height:280px;overflow:auto;color:var(--mute)}
   .grun summary{cursor:pointer;color:var(--mute);margin-top:6px}
 
+  /* the report card: props-forecast.py's calibration, drawn */
+  .cal{width:100%;border-collapse:collapse;margin-top:8px;font-size:12px}
+  .cal th{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);font-weight:400;text-align:right;padding:4px 6px;border-bottom:1px solid var(--line)}
+  .cal th:first-child,.cal td:first-child{text-align:left}
+  .cal td{text-align:right;padding:5px 6px;border-bottom:1px solid var(--line)}
+  .gap-ok{color:var(--up)} .gap-over{color:var(--down)} .gap-under{color:var(--warn)}
+  .thin{color:var(--warn);font-size:11.5px;line-height:1.55;margin-top:8px}
+  .gradebig{font-size:22px;font-weight:800;color:var(--gold2)}
+
   @media (max-width:1180px){ .grid{grid-template-columns:260px minmax(0,1fr)} .right{grid-column:1 / -1} }
   @media (max-width:760px){
     body{padding:6px} .grid{grid-template-columns:1fr;padding:10px}
@@ -130,6 +139,7 @@
     <div class="who">Peter · NFL player props · model forecasts · no odds</div>
     <div class="acct" id="acct"></div>
     <div class="sp"></div>
+    <button class="btn" id="gradeBtn" title="Score every forecast whose game is over">✓ Grade</button>
     <a class="btn" id="back" href="/dashboard">← Deck</a>
     <button class="btn" id="close" style="display:none">✕ Esc</button>
   </div>
@@ -142,6 +152,7 @@
     </div>
     <div class="center" id="propsBody"><div class="box empty">loading the forecasts…</div></div>
     <div class="right">
+      <div class="box" id="gradeBox"><div class="empty">loading the report card…</div></div>
       <div class="box" id="gameBox"><div class="empty">Pick a game.</div></div>
       <div class="box note">
         <div class="k" style="margin-bottom:6px">How to read a card</div>
@@ -176,6 +187,7 @@ let WEEK = null;           // /api/props/week
 let propsTab = null;
 let propsEvent = null;     // the game picked, or null for every forecast
 let propsPoll = null;
+let CAL = null;            // /api/props/calibration
 
 /* ---- the weather: props-forecast.py names the kind, this only picks a picture ---- */
 const WX_ICON = { sun: '☀️', cloud: '⛅', rain: '🌧️', snow: '❄️', wind: '💨', dome: '🏟️' };
@@ -308,6 +320,7 @@ async function loadWeek(){
   const job = WEEK && WEEK.job;
   if(job && job.state === 'running'){ propsEvent = propsEvent || job.event_id; watchJob(); }
   drawGame(job);
+  drawGrade(job);
 }
 
 function drawWeek(){
@@ -424,11 +437,95 @@ function watchJob(){
     let job;
     try{ job = (await (await fetch('/api/props/job', {cache:'no-store'})).json()).job; }
     catch(e){ return; }
-    if(!job || job.state === 'running'){ drawGame(job); return; }
+    if(!job || job.state === 'running'){ drawGame(job); drawGrade(job); return; }
     clearInterval(propsPoll);
     await loadWeek();                 // the row counts have changed
     loadProps();
+    loadCalibration(job);
   }, 3000);
+}
+
+/* ---------------- the report card ---------------- */
+
+// Grading fills in the final stat for every forecast whose game is over;
+// the calibration then asks whether "70%" happened about 70% of the time.
+// Both are props-forecast.py's - this draws its numbers and nothing else.
+async function gradeNow(){
+  let r, d;
+  try{
+    r = await fetch('/api/props/grade', {method:'POST'});
+    d = await r.json();
+  }catch(e){ drawGrade({kind:'grade', state:'failed', code:'-', log:'the Deck could not be reached'}); return; }
+  drawGrade(d.job && d.job.kind === 'grade' ? d.job : null, r.status === 409 ? d.error : '');
+  $('gradeBox').scrollIntoView({behavior:'smooth', block:'nearest'});
+  watchJob();
+}
+
+async function loadCalibration(job){
+  try{ CAL = await (await fetch('/api/props/calibration', {cache:'no-store'})).json(); }
+  catch(e){ CAL = {available:false, reason:'the Deck could not be reached'}; }
+  drawGrade(job);
+}
+
+function lastLine(text){
+  return String(text || '').trim().split('\n').filter(l => l.trim()).pop() || '';
+}
+
+// Within five points either way reads as honest; the colour is only that.
+function gapClass(g){ return Math.abs(g) <= 5 ? 'gap-ok' : g < 0 ? 'gap-over' : 'gap-under'; }
+const sgn = x => (x > 0 ? '+' : '') + Number(x).toFixed(1);
+
+// The script's warning is wrapped for a terminal; here its first line is the
+// headline and the rest one paragraph.
+function thinNote(text){
+  const lines = String(text).split('\n').map(l => l.trim()).filter(Boolean);
+  return `<div class="thin"><b>${esc(lines[0] || '')}</b><br>${esc(lines.slice(1).join(' '))}</div>`;
+}
+
+let gradeJob = null;
+function drawGrade(job, note){
+  if(job && job.kind === 'grade') gradeJob = job;
+  const host = $('gradeBox');
+  if(!host) return;
+  const j = gradeJob;
+  const grading = j && j.state === 'running';
+  $('gradeBtn').disabled = !!grading;
+  $('gradeBtn').textContent = grading ? 'Grading…' : '✓ Grade';
+  const run = grading ? `<div class="grun">Grading… reading the final box scores from ESPN.</div>`
+    : j && j.state === 'failed' ? `<div class="grun">Grading did not finish (exit ${esc(j.code)}).
+        <details><summary>what the script said</summary><pre>${esc(j.log)}</pre></details></div>`
+    : j && j.state === 'done' ? `<div class="grun">${esc(lastLine(j.log))}
+        <details><summary>every forecast it scored</summary><pre>${esc(j.log)}</pre></details></div>`
+    : note ? `<div class="grun">${esc(note)}</div>` : '';
+  let body;
+  if(!CAL){ body = `<div class="note">loading…</div>`; }
+  else if(!CAL.available){ body = `<div class="note">${esc(CAL.reason)}</div>`; }
+  else if(!CAL.report){
+    body = `<div class="note" style="margin-top:6px">Nothing graded yet. Press Grade once a game
+      you forecast is final - the scores come from ESPN's box score.</div>`;
+  } else {
+    const c = CAL.report;
+    const rows = c.buckets.map(b => `<tr><td>${esc(b.from)}–${esc(b.to)}%</td>
+      <td class="num">${Number(b.predicted).toFixed(1)}%</td><td class="num">${Number(b.observed).toFixed(1)}%</td>
+      <td class="num ${gapClass(b.gap)}">${sgn(b.gap)}</td><td class="num">${esc(b.n)}</td></tr>`).join('');
+    const markets = c.markets
+      ? `<table class="cal"><tr><th>Market</th><th>Said</th><th>Happened</th><th>Gap</th><th>Calls</th></tr>`
+        + c.markets.map(m => `<tr><td>${esc(String(m.market).replace(/_/g, ' '))}</td>
+          <td class="num">${Number(m.predicted).toFixed(1)}%</td><td class="num">${Number(m.observed).toFixed(1)}%</td>
+          <td class="num ${gapClass(m.gap)}">${sgn(m.gap)}</td><td class="num">${esc(m.calls)}</td></tr>`).join('') + `</table>`
+      : c.market_count > 1 ? `<div class="note" style="margin-top:8px">By market: held back until ${esc(c.min_games)} games -
+          split this thin, every row would be noise.</div>` : '';
+    body = `<div class="gradebig num">${esc(c.graded)} graded</div>
+      <div class="muted">from ${esc(c.games)} game${c.games === 1 ? '' : 's'} · ${esc(c.calls)} calls${
+        c.waiting ? ` · ${esc(c.waiting)} waiting on a final` : ''}</div>
+      ${c.thin ? thinNote(c.thin) : ''}
+      <table class="cal"><tr><th>He said</th><th>Avg</th><th>Happened</th><th>Gap</th><th>Calls</th></tr>${rows}</table>
+      ${markets}
+      <div class="note" style="margin-top:8px">A gap near zero means his percentages mean what they say.
+        <span class="gap-over">Negative</span>: too confident - the one that would cost money.
+        <span class="gap-under">Positive</span>: too cautious. Green is within 5 points.</div>`;
+  }
+  host.innerHTML = `<div class="k">Report card · when he says 70%, does it happen?</div>${run}${body}`;
 }
 
 /* ---------------- the forecasts ---------------- */
@@ -491,6 +588,7 @@ function drawProps(){
 /* ---------------- wiring ---------------- */
 
 $('gsearch').oninput = drawWeek;
+$('gradeBtn').onclick = gradeNow;
 // One listener each, reading data attributes: a fixture inside an inline
 // onclick string would be one apostrophe from breaking the page.
 $('gameList').onclick = e => { const b = e.target.closest('[data-event]'); if(b) pickGame(b.dataset.event); };
@@ -498,6 +596,7 @@ $('gameBox').onclick = e => { const b = e.target.closest('[data-rerun]'); if(b) 
 $('propsBody').onclick = e => { const b = e.target.closest('[data-tab]'); if(b) propsPick(b.dataset.tab); };
 loadWeek();
 loadProps();
+loadCalibration();
 </script>
 </body>
 </html>
