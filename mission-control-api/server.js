@@ -299,6 +299,12 @@ app.get('/peter', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'peter.html'));
 });
 
+// Paul's studio: his prospects to approve, his builds and pitches (owner,
+// 2026-10-13). Opened from his house in the village.
+app.get('/paul', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'paul.html'));
+});
+
 // Bolt: the crypto paper book, the same style again (owner, 2026-10-13).
 app.get('/bolt', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'bolt.html'));

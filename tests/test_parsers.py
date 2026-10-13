@@ -5612,29 +5612,39 @@ class ThePropsHallIsItsOwnBuilding(unittest.TestCase):
 
 class PaulHasAWorkshop(unittest.TestCase):
     """Owner, 2026-10-08: show Paul's builds in the village, from an iPad,
-    where the droplet's folders cannot be opened."""
+    where the droplet's folders cannot be opened. 2026-10-13: his house
+    opens his studio page (/paul) - prospects to approve or reject, then
+    his work and drafts - like Belfort's and Bolt's open theirs."""
 
     def setUp(self):
         self.html = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
         self.js = (ROOT / "mission-control-api" / "paul.js").read_text()
+        self.page = (ROOT / "mission-control-api" / "public" / "paul.html").read_text()
 
-    def test_his_house_opens_the_workshop_before_the_agent_lookup(self):
+    def test_his_house_opens_the_studio_before_the_agent_lookup(self):
         body = self.html.split("function openPanel(name) {", 1)[1]
         before = body.split("(DATA.agents || []).find", 1)[0]
-        self.assertIn("if (name === 'paul') return openPaulPanel();", before)
+        self.assertIn("if (name === 'paul') return openFrame('paul');", before)
+        self.assertIn("paul: '/paul?embed=1'", self.html)
+        self.assertIn("'paul-close'", self.html)
+        self.assertIn("type: 'paul-close'", self.page)
+        self.assertIn("app.get('/paul'", (ROOT / "mission-control-api" / "server.js").read_text())
 
-    def test_the_panel_shows_the_site_screenshots_and_pitch_escaped(self):
-        draw = self.html.split("function drawPaul(){", 1)[1].split("\nfunction ", 1)[0]
-        self.assertIn("/paul/site/${encodeURIComponent(b.slug)}/", draw)
-        self.assertIn("/api/paul/shot/${encodeURIComponent(b.slug)}/${n}", draw)
-        self.assertIn("${esc(b.draft)}", draw)
-        self.assertIn("${esc(b.name)}", draw)
-        self.assertNotIn("onclick=", draw)
+    def test_the_page_shows_the_site_screenshots_and_pitch_escaped(self):
+        self.assertIn("/paul/site/${encodeURIComponent(b.slug)}/", self.page)
+        self.assertIn("/api/paul/shot/${encodeURIComponent(b.slug)}/${n}", self.page)
+        self.assertIn("${esc(b.draft)}", self.page)
+        self.assertIn("${esc(p.why || '')}", self.page)
+        self.assertNotIn("onclick=", self.page)
 
-    def test_the_routes_hold_no_rules_and_read_only_his_folders(self):
+    def test_the_routes_hold_no_rules_and_take_only_a_number(self):
         self.assertIn("'paul.py'), 'deck']", self.js)
         self.assertNotIn(".exec(", self.js)
-        self.assertNotIn("app.post(", self.js, "read-only: sending and marking stay in the terminal")
+        self.assertIn("const ID_RE = /^\\d{1,6}$/;", self.js)
+        self.assertIn("paul(['approve', req.params.id, '--build'])", self.js)
+        self.assertIn("paul(['reject', req.params.id])", self.js)
+        self.assertIn("paul(['find'])", self.js)
+        self.assertEqual(self.js.count("app.post("), 3, "approve, reject, find - nothing that sends or marks")
         self.assertIn("const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,80}$/;", self.js)
         self.assertIn("dotfiles: 'deny'", self.js)
         server = (ROOT / "mission-control-api" / "server.js").read_text()

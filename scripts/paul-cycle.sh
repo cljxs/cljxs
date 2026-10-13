@@ -1,7 +1,10 @@
 #!/bin/bash
-# Paul's cycle: one business, once a day. With "dry" as the argument - or
-# after `paul.py dry-next` - it is a dry cycle: the same work, built locally
-# only, nothing deployed and nothing recorded as contacted.
+# Paul's cycle, once a day or when the owner presses Approve + build. Code
+# decides what it is for (paul.py cycle_plan): finding prospects for the
+# owner to choose from, building one the owner approved, or finishing what
+# is in work/ - and holds without waking a model when prospects are waiting
+# on the owner. With "dry" as the argument - or after `paul.py dry-next` - a
+# build is local only: nothing deployed and nothing recorded as contacted.
 #
 #   scripts/paul-cycle.sh          the scheduled run (paul-cycle.timer)
 #   scripts/paul-cycle.sh dry      a dry cycle, by hand

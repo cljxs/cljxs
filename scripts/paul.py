@@ -2,8 +2,9 @@
 """
 paul.py - everything in Paul's cycle that is not a judgement call.
 
-Paul finds one local business with no website or a weak one, builds it a
-site, and drafts a pitch that the owner sends. Choosing the business,
+Paul finds local businesses with no website or a weak one, the owner picks
+which ones (prospects: Approve + build, Reject), and Paul builds each a
+site and drafts a pitch that the owner sends. Choosing the business,
 designing the site and writing the words are the model's job. Everything
 else lives here, because CLAUDE.md's two rules were each learned the
 expensive way: anything a script can do exactly, a script does; and an
@@ -14,7 +15,7 @@ writes four things - work/target.json, work/site/, work/draft.md and
 state/last-run.txt - and this file does the rest.
 
     the owner     init  sender  preflight  status  mark  exclude
-                  teardown  go-live  dry-next  revise
+                  teardown  go-live  dry-next  revise  prospects  approve  reject  find
     the wrapper   should-run  brief  finish        (scripts/paul-cycle.sh)
     Paul itself   seen  check
 
@@ -1897,7 +1898,18 @@ def cmd_deck(a):
             break
     lr = A("state", "last-run.txt")
     live = read_json(A("state", "live.json"))
+    kind, detail = cycle_plan()
+    plan = {"kind": kind, "detail": (detail.get("name") if kind == "build" else detail)}
+    snd, _missing = load_sender()
+    try:
+        activity = [l.lstrip("- ").strip() for l in A("MEMORY.md").read_text().splitlines()
+                    if l.strip().startswith("-")][-20:][::-1]
+    except OSError:
+        activity = []
     print(json.dumps({
+        "prospects": list(reversed(load_prospects())),
+        "plan": plan, "activity": activity,
+        "studio": {k: snd.get(k) for k in ("studio", "email", "area", "website") if snd.get(k)},
         "today": today(),
         "last_run": lr.read_text().strip() if lr.is_file() else None,
         "go_live": bool(live), "dry_next": A("state", "dry-next").is_file(),
@@ -2094,6 +2106,12 @@ def cmd_revise(a):
     return 0
 
 
+def mark_dry_next():
+    m = A("state", "dry-next")
+    m.parent.mkdir(parents=True, exist_ok=True)
+    m.write_text(today() + "\n")
+
+
 def cmd_dry_next(a):
     m = A("state", "dry-next")
     if a.take:
@@ -2101,8 +2119,7 @@ def cmd_dry_next(a):
             m.unlink()
             return 0
         return 1
-    m.parent.mkdir(parents=True, exist_ok=True)
-    m.write_text(today() + "\n")
+    mark_dry_next()
     print("the next paul-cycle.service run will be a dry cycle:")
     print("  systemctl start --no-block paul-cycle.service")
     return 0
@@ -2111,6 +2128,243 @@ def cmd_dry_next(a):
 # --------------------------------------------------------------------------
 # commands: the wrapper
 # --------------------------------------------------------------------------
+
+# --------------------------------------------------------------------------
+# prospects: Paul finds, the owner picks, Paul builds (owner, 2026-10-13)
+# --------------------------------------------------------------------------
+#
+# Paul used to choose a business and build it in one cycle, so every site
+# the owner would not have chosen was paid for anyway. Now a cycle is one of
+# three, and code decides which (cycle_plan):
+#
+#   scout   find new prospects - research only, nothing built - until
+#           PROSPECT_POOL wait for the owner
+#   build   build the oldest prospect the owner approved
+#   resume  finish what is in work/ (an interrupted build, or a site the
+#           owner sent back with `revise`)
+#
+# and when the pool is full and nothing is approved, no model is woken.
+
+PROSPECT_POOL = 5
+PROSPECT_FIELDS = ("name", "category", "kind", "address", "phone", "hours", "current_site",
+                   "problems", "channel", "contact", "sources", "why", "links")
+
+
+def load_prospects():
+    d = read_json(A("state", "prospects.json"), {}) or {}
+    return d.get("prospects") if isinstance(d.get("prospects"), list) else []
+
+
+def save_prospects(rows):
+    write_json(A("state", "prospects.json"), {"prospects": rows})
+
+
+def cycle_plan():
+    """(kind, detail): what the next cycle is for. detail is the approved
+    prospect for "build", how many to find for "scout", why for "hold"."""
+    work = A("work")
+    if work.is_dir() and any(work.iterdir()):
+        return "resume", None
+    rows = load_prospects()
+    approved = sorted((p for p in rows if p.get("status") == "approved"),
+                      key=lambda p: str(p.get("decided") or ""))
+    if approved:
+        return "build", approved[0]
+    waiting = [p for p in rows if p.get("status") == "waiting"]
+    if len(waiting) < PROSPECT_POOL:
+        return "scout", PROSPECT_POOL - len(waiting)
+    return "hold", (f"{len(waiting)} prospects are waiting for your call - approve or reject "
+                    f"them in Paul's house")
+
+
+def find_prospect(rows, key):
+    """(prospect, error): by id, or by a part of the name that fits one."""
+    key = str(key or "").strip()
+    if key.isdigit():
+        hit = [p for p in rows if str(p.get("id")) == key]
+    else:
+        n = norm_name(key)
+        hit = [p for p in rows if n and n in norm_name(p.get("name"))]
+    if not hit:
+        return None, f'no prospect matches "{key}" - `paul.py prospects` lists them'
+    if len(hit) > 1:
+        return None, f'"{key}" fits more than one: ' + "; ".join(
+            f"{p['id']} {p['name']}" for p in hit)
+    return hit[0], ""
+
+
+def prospect_problems(p, rows, get=http_get):
+    """Why this prospect cannot go on the list, [] when it can. The build's
+    own rules (validate_target) are the prospect's too - one set, so a
+    prospect that passes here is one a build can start from."""
+    if not isinstance(p, dict):
+        return ["not a JSON object"]
+    errs = [e for e in validate_target({**p, "status": "built", "layout": "-"})
+            if '"layout"' not in e]
+    if not str(p.get("why") or "").strip():
+        errs.append('"why" is empty - one line on why this business, for the owner')
+    if errs:
+        return errs
+    if seen_row(p["name"], p.get("phone", "")):
+        return ["already contacted or excluded (contacted.csv)"]
+    n, ph = norm_name(p["name"]), norm_phone(p.get("phone"))
+    for q in rows:
+        if norm_name(q.get("name")) == n or (ph and len(ph) >= 7 and norm_phone(q.get("phone")) == ph):
+            return [f"already a prospect ({q.get('status')}, {q.get('found')})"]
+    rows_v, _page = verify_problems(p, get)
+    bad = [d for code, verdict, d in rows_v if verdict == "contradicted"]
+    if bad:
+        return [f"its website says otherwise: {bad[0]}"]
+    if p.get("channel") == "email" and "@" in str(p.get("contact")):
+        verdict, detail = mail_verdict(p["contact"], get)
+        if verdict == "none":
+            return [f"the email would bounce ({detail}) - reach them another way"]
+    return []
+
+
+def prospects_file_problems(get=http_get):
+    """(good, dropped, error) for work/prospects.json, read the same way by
+    Paul's check and by finish."""
+    d = read_json(A("work", "prospects.json"))
+    if d is None:
+        return [], [], ("work/prospects.json is missing or not JSON - write "
+                        '{"prospects": [...]} (or {"prospects": [], "why": "..."})')
+    if not isinstance(d, dict) or not isinstance(d.get("prospects"), list):
+        return [], [], 'work/prospects.json must be {"prospects": [...]}'
+    if not d["prospects"] and not str(d.get("why") or "").strip():
+        return [], [], 'no prospects and no "why" - say what you looked at'
+    rows, good, dropped = load_prospects(), [], []
+    for p in d["prospects"]:
+        errs = prospect_problems(p, rows + good, get)
+        if errs:
+            dropped.append(((p or {}).get("name") if isinstance(p, dict) else "?", errs))
+        else:
+            good.append({k: p.get(k) for k in PROSPECT_FIELDS if p.get(k) is not None})
+    return good, dropped, None
+
+
+def finish_scout(cyc, get=http_get):
+    started = float(cyc.get("started") or 0)
+    ok_line, why = remember.written_this_cycle(A("state", "last-run.txt"), started)
+    good, dropped, err = prospects_file_problems(get)
+    day = today()
+    if err:
+        record(f"prospects not filed - {err}"[:300])
+        print(f"PAUL'S PROSPECTS: {err}")
+        return 1
+    rows = load_prospects()
+    nxt = max([int(p.get("id") or 0) for p in rows] + [0]) + 1
+    for i, p in enumerate(good):
+        p.update(id=nxt + i, found=day, status="waiting")
+    save_prospects(rows + good)
+    lines = [f"# Paul - {day} - prospects", "",
+             f"{len(good)} added for your call, {len(dropped)} dropped by code.", ""]
+    lines += [f"- {p['id']}. {p['name']} ({p.get('category')}) - {p.get('why')}" for p in good]
+    lines += [f"- dropped {n}: {'; '.join(e[:2])}" for n, e in dropped]
+    why_none = (read_json(A("work", "prospects.json"), {}) or {}).get("why")
+    if not good and why_none:
+        lines += ["", f"Why none: {why_none}"]
+    _report(f"{day}-prospects.md", lines)
+    names = ", ".join(p["name"] for p in good) or "none"
+    record((f"found {len(good)} prospect(s): {names}" + (f" ({len(dropped)} dropped)" if dropped else ""))[:300])
+    shutil.rmtree(A("work"), ignore_errors=True)
+    print(f"prospects: {len(good)} added, {len(dropped)} dropped")
+    for n, e in dropped:
+        print(f"  dropped {n}: {'; '.join(e[:2])}")
+    if not ok_line:
+        print(f"PAUL RECORDED NOTHING ({why})")
+        return 1
+    return 0
+
+
+def close_prospect(pid, b):
+    """A build cycle's outcome, onto the prospect it built."""
+    rows = load_prospects()
+    for p in rows:
+        if str(p.get("id")) == str(pid):
+            if b.get("outcome") == "built":
+                p.update(status="built", slug=b.get("slug"), built=b.get("day"), mode=b.get("mode"))
+            else:
+                p.update(status="not built", built=b.get("day"),
+                         note=str(b.get("why") or b.get("outcome") or "")[:300])
+    save_prospects(rows)
+
+
+def start_cycle(run=subprocess.run):
+    """Start Paul's cycle now, the way the timer does. The Deck's Approve +
+    build and Find buttons, and the GM's run_scout, all start a unit."""
+    try:
+        r = run(["systemctl", "start", "--no-block", "paul-cycle.service"],
+                capture_output=True, text=True, timeout=30)
+        return r.returncode == 0, (r.stderr or r.stdout or "").strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+
+
+def cmd_prospects(a):
+    rows = load_prospects()
+    if not rows:
+        print("no prospects yet - the next cycle finds some")
+        return 0
+    for p in rows:
+        print(f"{p['id']:>3}  {p['status']:<10} {p['name']} ({p.get('category')}) - {p.get('why')}")
+    kind, detail = cycle_plan()
+    print(f"\nnext cycle: {kind}" + (f" {detail['name']}" if kind == "build" else
+                                     f" (find {detail})" if kind == "scout" else
+                                     f" - {detail}" if kind == "hold" else ""))
+    return 0
+
+
+def cmd_approve(a, run=subprocess.run):
+    rows = load_prospects()
+    p, err = find_prospect(rows, a.who)
+    if not p:
+        print(err)
+        return 1
+    if p.get("status") not in ("waiting", "rejected"):
+        print(f"{p['name']} is already {p['status']}")
+        return 1
+    p.update(status="approved", decided=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    save_prospects(rows)
+    record(f"approved by the owner: {p['name']}")
+    print(f"approved: {p['name']} - the next cycle builds it")
+    if a.build:
+        # Not live yet: the build is a dry one - built here, nothing published.
+        live = bool(read_json(A("state", "live.json")))
+        if not live:
+            mark_dry_next()
+        ok, detail = start_cycle(run)
+        print(("started Paul's cycle now" + ("" if live else " (a dry run - you have not gone live)"))
+              if ok else f"could not start the cycle ({detail}) - it runs at its usual time")
+    return 0
+
+
+def cmd_reject(a):
+    rows = load_prospects()
+    p, err = find_prospect(rows, a.who)
+    if not p:
+        print(err)
+        return 1
+    if p.get("status") not in ("waiting", "approved"):
+        print(f"{p['name']} is already {p['status']}")
+        return 1
+    p.update(status="rejected", decided=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+             note=" ".join(a.why or [])[:300] or None)
+    save_prospects(rows)
+    record(f"rejected by the owner: {p['name']}")
+    print(f"rejected: {p['name']} - never proposed again")
+    return 0
+
+
+def cmd_find(a, run=subprocess.run):
+    kind, detail = cycle_plan()
+    if kind == "hold":
+        print(detail)
+        return 1
+    ok, err = start_cycle(run)
+    print(f"started Paul's cycle now: {kind}" if ok else f"could not start the cycle ({err})")
+    return 0 if ok else 1
+
 
 def hold_reason(dry):
     """Why the model should not be woken now, or None. Decided by code
@@ -2121,7 +2375,11 @@ def hold_reason(dry):
                 f"python3 scripts/paul.py sender")
     if not A("AGENTS.md").is_file():
         return "agents/paul/AGENTS.md is missing - scripts/deploy.sh paul"
-    if not dry:
+    kind, detail = cycle_plan()
+    if kind == "hold":
+        return detail
+    # Scouting publishes nothing and contacts nobody, so it needs no go-live.
+    if not dry and kind != "scout":
         if not read_json(A("state", "live.json")):
             return "live cycles start after you have seen a dry cycle - python3 scripts/paul.py go-live"
         if not vercel_token():
@@ -2173,7 +2431,7 @@ def cmd_brief(a, get=http_get):
     if work.is_dir() and any(work.iterdir()):
         newest = max(p.stat().st_mtime for p in work.rglob("*")) if any(work.rglob("*")) else 0
         old = (time.time() - newest) / 86400
-        t = read_json(work / "target.json", {}) or {}
+        t = read_json(work / "target.json", {}) or read_json(work / "prospect.json", {}) or {}
         if (work / "REVISE.md").is_file():
             resume = (f'work/ holds "{t.get("name") or "a business"}", sent back by the owner '
                       f"to fix - read work/REVISE.md first and fix every point in it. Same "
@@ -2186,15 +2444,29 @@ def cmd_brief(a, get=http_get):
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(work), str(dest))
             resume = f"none (a build older than {RESUME_DAYS} days was moved to sites/_abandoned/)"
+    kind, detail = cycle_plan()
+    if kind == "build":
+        A("work").mkdir(parents=True, exist_ok=True)
+        write_json(A("work", "prospect.json"), detail)
     A("work").mkdir(parents=True, exist_ok=True)
     # Kept to the millisecond. Whole seconds let a line written in the same
     # second just BEFORE the cycle began pass as this cycle's - a dry run
     # started right after a hold was signed off on the hold's line.
+    # A build of an approved prospect that was interrupted resumes as one:
+    # its id rides along in work/prospect.json, so finish still closes it.
+    pid = (detail.get("id") if kind == "build" else
+           (read_json(A("work", "prospect.json"), {}) or {}).get("id"))
     save_cycle({"started": round(time.time(), 3), "mode": "dry" if a.dry else "live",
-                "day": today(), "passes": 0, "resume": resume != "none"})
+                "day": today(), "passes": 0, "resume": resume != "none", "kind": kind,
+                "prospect": pid})
 
     rows = contacted()
     recent = [f"{r['business']} | {norm_phone(r['phone']) or '-'}" for r in rows[-15:]]
+    if kind == "scout":
+        # Every prospect ever listed, whatever the owner said: a rejected one
+        # is never proposed again, and a waiting one not twice.
+        recent += [f"{p['name']} | {norm_phone(p.get('phone')) or '-'} (prospect, {p.get('status')})"
+                   for p in load_prospects()[-20:]]
     lays = [f"{b.get('day')} {b.get('kind')}: {b.get('layout')}" for b in builds()
             if b.get("outcome") == "built"][-3:]
     refs = references(get)
@@ -2214,6 +2486,11 @@ def cmd_brief(a, get=http_get):
           f"offer        ${s.get('price', '?')}, one time. It covers {OFFER_COVERS}.",
           "             The pitch states that exact price and what it covers, in your words.",
           f"resume       {resume}",
+          *([f"cycle        SCOUT: find {detail} new prospect(s) for the owner to choose from",
+             "             and write work/prospects.json. Build nothing this cycle."] if kind == "scout" else
+            [f"cycle        BUILD: the owner approved {detail['name']}. Start from",
+             "             work/prospect.json - skip finding a target - and build it."] if kind == "build" else
+            ["cycle        RESUME: finish what is in work/ (see resume)"]),
           *([f"FOCUS        {KIND_WORDS[focus_kind()]} only (kind \"{focus_kind()}\"). Code refuses",
              "             any other kind; none good enough is a valid no-target day."]
             if focus_kind() else []),
@@ -2252,8 +2529,31 @@ def cmd_seen(a):
     return 1
 
 
+def check_scout(cyc, get=http_get):
+    good, dropped, err = prospects_file_problems(get)
+    ok_line, why = remember.written_this_cycle(A("state", "last-run.txt"), float(cyc.get("started") or 0))
+    if err:
+        print(f"PROSPECTS: {err}")
+        return 1
+    print(f"PROSPECTS: {len(good)} would be filed, {len(dropped)} dropped by code")
+    for p in good:
+        print(f"  + {p['name']} ({p.get('category')}) - {p.get('why')}")
+    for n, e in dropped:
+        print(f"  - {n}: {'; '.join(e[:3])}")
+    if dropped:
+        print("Fix or replace the dropped ones if you can, then check again; whatever passes is filed.")
+    if not ok_line:
+        print(f"MEMORY: MISSING - {why}. Write your one line to state/last-run.txt, then check again.")
+        return 1
+    print(f"MEMORY: {A('state', 'last-run.txt').read_text().strip()[:160]}")
+    print("\nAll deliverables present. Paste the lines above as your sign-off.")
+    return 0
+
+
 def cmd_check(a, get=http_get):
     cyc = load_cycle()
+    if cyc.get("kind") == "scout":
+        return check_scout(cyc, get)
     started = float(cyc.get("started") or 0)
     tp = A("work", "target.json")
     t = read_json(tp)
@@ -2344,6 +2644,18 @@ def _report(name, lines):
 
 def cmd_finish(a, get=http_get, api=None, browser=None, sleep=time.sleep):
     cyc = load_cycle()
+    if cyc.get("kind") == "scout":
+        return finish_scout(cyc, get)
+    before = len(builds())
+    rc = finish_build(a, get, api, browser, sleep)
+    done = builds()[before:]
+    if cyc.get("prospect") is not None and done:
+        close_prospect(cyc["prospect"], done[-1])
+    return rc
+
+
+def finish_build(a, get=http_get, api=None, browser=None, sleep=time.sleep):
+    cyc = load_cycle()
     started = float(cyc.get("started") or 0)
     if not started:
         print("finish: no state/current-cycle.json - this runs after a cycle, from paul-cycle.sh")
@@ -2379,7 +2691,8 @@ def cmd_finish(a, get=http_get, api=None, browser=None, sleep=time.sleep):
         reason = (t or {}).get("why") or line
         _report(f"{day}-no-target.md", [f"# Paul - {day} - no target{' (dry run)' if dry else ''}",
                                          "", reason])
-        log_build({"day": day, "mode": "dry" if dry else "live", "outcome": "no-target"})
+        log_build({"day": day, "mode": "dry" if dry else "live", "outcome": "no-target",
+                   "why": str(reason)[:300]})
         record(f"no target - {reason}"[:300])
         if A("work").is_dir():
             shutil.rmtree(A("work"))
@@ -2399,6 +2712,7 @@ def cmd_finish(a, get=http_get, api=None, browser=None, sleep=time.sleep):
                  f"Why: {reason}", "", f"The work is kept in {dest.relative_to(A()) if dest else '-'}."]
                 + [f"- {e}" for e in errs])
         log_build({"day": day, "mode": "dry" if dry else "live", "outcome": "below-bar",
+                   "why": str(reason)[:300],
                    "name": t.get("name")})
         record(f"below bar, not shipped: {t.get('name') or '?'} - {reason}"[:300])
         print(f"not shipped: {reason}")
@@ -2537,6 +2851,14 @@ def main(argv=None):
     p = sub.add_parser("revise", help="send a finished site back to Paul with what to fix")
     p.add_argument("who", help="the slug, or (part of) the business name")
     p.add_argument("notes", nargs="+", help="what to fix, in your words")
+    sub.add_parser("prospects", help="the businesses Paul found, and what the next cycle does")
+    p = sub.add_parser("approve", help="approve a prospect for Paul to build")
+    p.add_argument("who", help="its number, or part of its name")
+    p.add_argument("--build", action="store_true", help="and start the cycle now")
+    p = sub.add_parser("reject", help="reject a prospect - never proposed again")
+    p.add_argument("who", help="its number, or part of its name")
+    p.add_argument("why", nargs="*")
+    sub.add_parser("find", help="start a cycle now (whatever cycle_plan says it is for)")
     p = sub.add_parser("dry-next", help="make the next paul-cycle.service run a dry cycle")
     p.add_argument("--take", action="store_true", help=argparse.SUPPRESS)
     sub.add_parser("deck", help="(village) everything the Paul panel shows, as JSON")
@@ -2559,7 +2881,8 @@ def main(argv=None):
     return {"init": cmd_init, "sender": cmd_sender, "preflight": cmd_preflight,
             "status": cmd_status, "mark": cmd_mark, "exclude": cmd_exclude,
             "teardown": cmd_teardown, "go-live": cmd_go_live, "dry-next": cmd_dry_next,
-            "revise": cmd_revise,
+            "revise": cmd_revise, "prospects": cmd_prospects, "approve": cmd_approve,
+            "reject": cmd_reject, "find": cmd_find,
             "focus": cmd_focus, "deck": cmd_deck,
             "should-run": cmd_should_run, "brief": cmd_brief, "finish": cmd_finish,
             "seen": cmd_seen, "check": cmd_check}[a.cmd](a)

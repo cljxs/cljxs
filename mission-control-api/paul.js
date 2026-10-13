@@ -4,8 +4,9 @@
 // computer, and the site itself to open and click through.
 //
 // No rules here. Everything comes from `python3 scripts/paul.py deck`, the
-// same code `paul.py status` uses. Read-only: nothing here sends, deploys or
-// marks anything - those stay with you in the terminal.
+// same code `paul.py status` uses. Three buttons write, each by running the
+// paul.py command that does it (owner, 2026-10-13): Approve + build, Reject,
+// and Find prospects. Nothing here sends, deploys or marks a pitch.
 
 const { execFile } = require('child_process');
 const express = require('express');
@@ -25,7 +26,32 @@ function deck() {
   });
 }
 
+const ID_RE = /^\d{1,6}$/;
+
+function paul(args, timeout = 60000) {
+  return new Promise(resolve => {
+    execFile('python3', [path.join(ROOT, 'scripts', 'paul.py'), ...args], { cwd: ROOT, timeout },
+      (err, stdout, stderr) => resolve({ ok: !err, out: (String(stdout || '') + String(stderr || '')).trim() }));
+  });
+}
+
 function register(app) {
+  // A prospect's number only - never a name, never anything a shell could read.
+  app.post('/api/paul/prospects/:id/approve', async (req, res) => {
+    if (!ID_RE.test(req.params.id)) return res.status(400).json({ error: 'bad id' });
+    const r = await paul(['approve', req.params.id, '--build']);
+    res.status(r.ok ? 200 : 409).json(r);
+  });
+  app.post('/api/paul/prospects/:id/reject', async (req, res) => {
+    if (!ID_RE.test(req.params.id)) return res.status(400).json({ error: 'bad id' });
+    const r = await paul(['reject', req.params.id]);
+    res.status(r.ok ? 200 : 409).json(r);
+  });
+  app.post('/api/paul/find', async (req, res) => {
+    const r = await paul(['find']);
+    res.status(r.ok ? 200 : 409).json(r);
+  });
+
   app.get('/api/paul', async (req, res) => {
     const r = await deck();
     if (r.err) return res.json({ ok: false, error: (r.stderr || r.stdout || String(r.err)).trim().slice(-400) });

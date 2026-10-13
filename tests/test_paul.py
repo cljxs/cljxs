@@ -514,10 +514,22 @@ class HoldWithoutWaking(PaulCase):
         paul.A("state", "sender.json").unlink()
         self.assertIn("sender", paul.hold_reason(dry=True))
 
+    def approved(self):
+        # Since 2026-10-13 a build is of a prospect the owner approved; the
+        # live gates below are a build's, not a scouting cycle's.
+        paul.save_prospects([dict(id=1, name="Rosa's Tailoring", status="approved",
+                                  decided="2026-10-13T12:00:00Z")])
+
     def test_live_waits_for_go_live(self):
+        self.approved()
         self.assertIn("go-live", paul.hold_reason(dry=False))
 
+    def test_scouting_needs_no_go_live(self):
+        # Finding prospects publishes nothing and contacts nobody.
+        self.assertIsNone(paul.hold_reason(dry=False))
+
     def test_five_unsent_pitches_hold(self):
+        self.approved()
         paul.write_json(paul.A("state", "live.json"), {"since": "2026-10-01"})
         paul.find_browser = lambda: "/usr/bin/true"
         for n in range(paul.MAX_WAITING):
@@ -530,6 +542,7 @@ class HoldWithoutWaking(PaulCase):
         self.assertIn("allowance", paul.hold_reason(dry=True))
 
     def test_a_hold_is_one_memory_line_not_one_a_day(self):
+        self.approved()
         for _ in range(3):
             self.run_quiet(paul.cmd_should_run, self.args(dry=False, record=True))
         mem = paul.A("MEMORY.md").read_text()
@@ -1427,3 +1440,200 @@ class TheOwnerSendsASiteBack(PaulCase):
     def test_paul_is_told_what_to_do_with_it(self):
         header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
         self.assertIn("work/REVISE.md", header)
+
+
+def prospect(**over):
+    """A prospect as Paul writes one in a scouting cycle: the build's facts,
+    minus the site, plus a line for the owner."""
+    t = target()
+    p = {k: t[k] for k in ("name", "category", "kind", "address", "phone", "hours", "current_site",
+                           "problems", "channel", "contact", "sources")}
+    p.update(links={"facebook": "https://facebook.com/rosastailoring"},
+             why="Sewing by hand since 1998, no website of her own.")
+    p.update(over)
+    return p
+
+
+class TheOwnerPicksPaulBuilds(PaulCase):
+    """Owner, 2026-10-13 (after another ecosystem's "Paul's Studio"): Paul
+    lists prospects, the owner presses Approve + build or Reject, and only an
+    approved business is built. Before, every cycle chose and built in one go,
+    so a site the owner would never have picked was paid for anyway. Code
+    decides which kind of cycle comes next (cycle_plan)."""
+
+    def seed(self, *rows):
+        paul.save_prospects([dict(id=i + 1, found="2026-10-13", **r) for i, r in enumerate(rows)])
+
+    # --- which cycle -------------------------------------------------------
+
+    def test_the_plan(self):
+        self.assertEqual(paul.cycle_plan(), ("scout", paul.PROSPECT_POOL))
+        self.seed(*[dict(prospect(name=f"B{n}", phone=f"(512) 444-01{n}0"), status="waiting") for n in range(3)])
+        self.assertEqual(paul.cycle_plan(), ("scout", paul.PROSPECT_POOL - 3))
+        self.seed(*[dict(prospect(name=f"B{n}"), status="waiting") for n in range(paul.PROSPECT_POOL)])
+        kind, why = paul.cycle_plan()
+        self.assertEqual(kind, "hold")
+        self.assertIn("waiting for your call", why)
+        self.assertIn("waiting for your call", paul.hold_reason(dry=True), "no model is woken")
+
+    def test_an_approved_one_is_built_first_oldest_first(self):
+        self.seed(dict(prospect(name="Later"), status="approved", decided="2026-10-13T15:00:00Z"),
+                  dict(prospect(name="Sooner"), status="approved", decided="2026-10-13T09:00:00Z"),
+                  dict(prospect(name="Waiting"), status="waiting"))
+        kind, p = paul.cycle_plan()
+        self.assertEqual((kind, p["name"]), ("build", "Sooner"))
+
+    def test_work_in_progress_comes_before_anything(self):
+        self.seed(dict(prospect(), status="approved", decided="x"))
+        self.work()
+        self.assertEqual(paul.cycle_plan()[0], "resume")
+
+    # --- the brief ---------------------------------------------------------
+
+    def test_a_scouting_brief(self):
+        self.seed(dict(prospect(name="Old One"), status="rejected"))
+        _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
+        self.assertIn(f"SCOUT: find {paul.PROSPECT_POOL - 0} new prospect(s)", facts)
+        self.assertIn("Old One | 5124440199 (prospect, rejected)", facts, "a rejected prospect is on the skip list")
+        self.assertEqual(paul.load_cycle()["kind"], "scout")
+
+    def test_a_building_brief_hands_paul_the_approved_business(self):
+        self.seed(dict(prospect(), status="approved", decided="2026-10-13T09:00:00Z"))
+        _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
+        self.assertIn("BUILD: the owner approved Rosa's Tailoring", facts)
+        self.assertEqual(paul.read_json(paul.A("work", "prospect.json"))["name"], "Rosa's Tailoring")
+        self.assertEqual((paul.load_cycle()["kind"], paul.load_cycle()["prospect"]), ("build", 1))
+
+    def test_an_interrupted_build_still_closes_its_prospect(self):
+        self.seed(dict(prospect(), status="approved", decided="x"))
+        self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)    # work/prospect.json
+        _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
+        self.assertIn("RESUME", facts)
+        self.assertEqual(paul.load_cycle()["prospect"], 1, "or it is built again tomorrow")
+
+    # --- a scouting cycle's files -------------------------------------------
+
+    def scouted(self, rows, why=None):
+        paul.save_cycle({"started": time.time() - 5, "kind": "scout", "mode": "dry", "day": paul.today()})
+        paul.write_json(paul.A("work", "prospects.json"), {"prospects": rows, **({"why": why} if why else {})})
+        paul.A("state", "last-run.txt").write_text("2026-10-13 | prospects: found some\n")
+
+    def test_good_prospects_are_filed_for_the_owner_and_bad_ones_dropped(self):
+        paul.append_row(paul.A("state", "contacted.csv"), paul.CONTACTED_FIELDS,
+                        {"slug": "x", "business": "Already Pitched", "phone": "(512) 444-9999", "status": "sent"})
+        no_source = prospect(name="Unsourced Cafe", phone="(512) 444-0001")
+        no_source["sources"] = {}
+        self.scouted([prospect(), prospect(name="Already Pitched", phone="(512) 444-9999"),
+                      no_source, prospect(name="Rosa's Tailoring LLC"), prospect(name="No Why", why="",
+                                                                               phone="(512) 444-0002")])
+        rc, out = self.run_quiet(paul.cmd_finish, self.args(dry=True), get=offline)
+        self.assertEqual(rc, 0, out)
+        rows = paul.load_prospects()
+        self.assertEqual([(p["id"], p["name"], p["status"]) for p in rows], [(1, "Rosa's Tailoring", "waiting")])
+        self.assertIn("1 added, 4 dropped", out)
+        self.assertIn("found 1 prospect(s): Rosa's Tailoring (4 dropped)", paul.A("MEMORY.md").read_text())
+        self.assertFalse(paul.A("work").exists())
+        self.assertTrue(next(paul.A("reports").glob("*-prospects.md")).is_file())
+
+    def test_a_problem_their_own_site_disproves_is_dropped(self):
+        # Paul says the domain is dead; it loads.
+        p = prospect(current_site="https://rosas.test", problems=[{"code": "dead-domain", "evidence": "x"}])
+        self.scouted([p])
+        rc, out = self.run_quiet(paul.cmd_finish, self.args(dry=True),
+                                 get=lambda url, **kw: page("<html><body>Rosa's Tailoring</body></html>", 200, url))
+        self.assertEqual(paul.load_prospects(), [])
+        self.assertIn("its website says otherwise", out)
+
+    def test_none_found_needs_a_why(self):
+        self.scouted([], why="nine checked, all had good sites")
+        self.assertEqual(self.run_quiet(paul.cmd_finish, self.args(dry=True), get=offline)[0], 0)
+        self.scouted([])
+        rc, out = self.run_quiet(paul.cmd_finish, self.args(dry=True), get=offline)
+        self.assertEqual(rc, 1)
+        self.assertIn('no "why"', out)
+
+    def test_pauls_check_reads_the_prospects_the_same_way(self):
+        self.scouted([prospect(), prospect(name="X", sources={})])
+        rc, out = self.run_quiet(paul.cmd_check, self.args(), get=offline)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("1 would be filed, 1 dropped", out)
+
+    # --- the owner's buttons -------------------------------------------------
+
+    def test_approve_and_build_starts_a_dry_cycle_until_he_goes_live(self):
+        self.seed(dict(prospect(), status="waiting"))
+        ran = []
+        rc, out = self.run_quiet(paul.cmd_approve, self.args(who="1", build=True),
+                                 run=lambda cmd, **kw: ran.append(cmd) or types.SimpleNamespace(returncode=0, stdout="", stderr=""))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(paul.load_prospects()[0]["status"], "approved")
+        self.assertEqual(ran, [["systemctl", "start", "--no-block", "paul-cycle.service"]])
+        self.assertTrue(paul.A("state", "dry-next").is_file(), "not live: the build is a dry one")
+        self.assertIn("a dry run", out)
+
+    def test_live_approval_builds_live(self):
+        self.seed(dict(prospect(), status="waiting"))
+        paul.write_json(paul.A("state", "live.json"), {"since": "2026-10-01"})
+        self.run_quiet(paul.cmd_approve, self.args(who="Rosa", build=True),
+                       run=lambda cmd, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""))
+        self.assertFalse(paul.A("state", "dry-next").exists())
+
+    def test_reject_is_for_good(self):
+        self.seed(dict(prospect(), status="waiting"))
+        self.assertEqual(self.run_quiet(paul.cmd_reject, self.args(who="1", why=["not", "a", "fit"]))[0], 0)
+        self.assertEqual(paul.load_prospects()[0]["status"], "rejected")
+        self.scouted([prospect()])
+        self.run_quiet(paul.cmd_finish, self.args(dry=True), get=offline)
+        self.assertEqual(len(paul.load_prospects()), 1, "never proposed again")
+
+    def test_a_built_one_cannot_be_rejected_after_the_fact(self):
+        self.seed(dict(prospect(), status="built", slug="rosas-tailoring-concept-abc123"))
+        rc, out = self.run_quiet(paul.cmd_reject, self.args(who="1", why=[]))
+        self.assertEqual(rc, 1)
+        self.assertIn("already built", out)
+        self.assertEqual(paul.load_prospects()[0]["status"], "built")
+
+    def test_a_name_that_fits_two_is_refused(self):
+        self.seed(dict(prospect(name="Rosa's Tailoring"), status="waiting"),
+                  dict(prospect(name="Rosa's Bakery", phone="(512) 444-0003"), status="waiting"))
+        rc, out = self.run_quiet(paul.cmd_approve, self.args(who="Rosa", build=False))
+        self.assertEqual(rc, 1)
+        self.assertIn("more than one", out)
+
+    # --- a build closes its prospect -----------------------------------------
+
+    def build_cycle(self):
+        self.seed(dict(prospect(), status="approved", decided="x"))
+        self.work(cycle_mode="dry")
+        cyc = paul.load_cycle()
+        cyc.update(kind="build", prospect=1)
+        paul.save_cycle(cyc)
+
+    def test_a_built_site_marks_its_prospect_built(self):
+        self.build_cycle()
+        rc, out = self.run_quiet(paul.cmd_finish, self.args(dry=True), get=offline, api=FakeVercel())
+        self.assertEqual(rc, 0, out)
+        p = paul.load_prospects()[0]
+        self.assertEqual(p["status"], "built")
+        self.assertTrue((paul.A("sites", p["slug"]) / "index.html").is_file())
+        self.assertEqual(paul.cycle_plan()[0], "scout", "nothing approved is left")
+
+    def test_one_that_could_not_be_built_says_why(self):
+        self.build_cycle()
+        paul.write_json(paul.A("work", "target.json"), {"status": "below-bar", "why": "they closed in August"})
+        self.run_quiet(paul.cmd_finish, self.args(dry=True), get=offline, api=FakeVercel())
+        p = paul.load_prospects()[0]
+        self.assertEqual((p["status"], p["note"]), ("not built", "they closed in August"))
+
+    def test_the_studio_reads_it_all_from_deck(self):
+        self.seed(dict(prospect(), status="waiting"))
+        _rc, out = self.run_quiet(paul.cmd_deck, self.args())
+        d = json.loads(out)
+        self.assertEqual(d["prospects"][0]["name"], "Rosa's Tailoring")
+        self.assertEqual(d["plan"], {"kind": "scout", "detail": paul.PROSPECT_POOL - 1})
+        self.assertEqual(d["studio"]["studio"], SENDER["studio"])
+
+    def test_paul_is_told_about_all_three(self):
+        header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
+        for word in ("SCOUT", "BUILD", "RESUME", "work/prospects.json", "work/prospect.json"):
+            self.assertIn(word, header)

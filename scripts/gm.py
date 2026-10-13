@@ -128,8 +128,9 @@ ROLES = {
     "ace":     "places paper sports bets on its own schedule.",
     "fury":    "writes the morning briefing, in plain code.",
     "bolt":    "paper-trades crypto every 10 minutes, in plain code - no model.",
-    "paul":    "builds a preview website for one local business a day and drafts a "
-               "pitch for the owner to send. Never contacts anyone.",
+    "paul":    "finds local businesses for the owner to approve, builds a preview "
+               "website for each one approved, and drafts a pitch for the owner to send. "
+               "Never contacts anyone.",
 }
 
 # THE ONLY JOBS AN APPROVED PROPOSAL CAN SEND. Each is a command that already
