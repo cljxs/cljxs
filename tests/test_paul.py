@@ -66,7 +66,9 @@ of the work. It's here: [PREVIEW URL]
 
 If you like it, it's yours for a flat $350, one time: your own photos and
 wording, one round of changes, and set up on your own web address, with no
-monthly fees. The photos are placeholders until you send me yours.
+monthly fees. The only cost after that is about $15 a year to renew the name
+with the registrar. The photos are placeholders until you send me yours. You can
+change the pictures and colours any time, and later add a button to request a quote.
 """
 
 
@@ -1637,3 +1639,109 @@ class TheOwnerPicksPaulBuilds(PaulCase):
         header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
         for word in ("SCOUT", "BUILD", "RESUME", "work/prospects.json", "work/prospect.json"):
             self.assertIn(word, header)
+
+
+class ThePitchSaysWhatItCostsAndWhatCanChange(PaulCase):
+    """Owner, 2026-10-13: "put in the pitch that the website will have a
+    yearly fee", and "that they can change the pictures or colors and
+    potentially add features like booking haircuts for the barbershop".
+    "No monthly fees" alone let a buyer think there was no cost at all."""
+
+    def errs(self, draft, t=None):
+        return paul.check_draft(draft, t or target())[0]
+
+    def test_the_test_pitch_passes(self):
+        self.assertEqual(self.errs(DRAFT), [])
+
+    def test_the_yearly_fee_must_be_said(self):
+        d = DRAFT.replace("about $15 a year to renew the name\nwith the registrar", "nothing")
+        self.assertTrue(any("once a year" in e for e in self.errs(d)), self.errs(d))
+        for ok in ("$15 yearly", "$15 per year", "an annual $15", "$15/yr"):
+            with self.subTest(ok):
+                self.assertFalse([e for e in self.errs(d.replace("nothing", ok)) if "once a year" in e])
+
+    def test_the_fee_is_the_one_other_price_allowed(self):
+        self.assertFalse([e for e in self.errs(DRAFT) if "remove $" in e])
+        d = DRAFT.replace("about $15 a year", "about $20 a year")
+        self.assertTrue(any("remove $20" in e for e in self.errs(d)), self.errs(d))
+
+    def test_photos_and_colours_are_theirs_to_change(self):
+        d = DRAFT.replace("change the pictures and colours any time", "call me any time")
+        self.assertTrue(any("photos and the colours" in e for e in self.errs(d)), self.errs(d))
+
+    def test_a_barbershop_is_offered_booking(self):
+        barber = target(kind="salon", category="barbershop")
+        self.assertTrue(any("online booking" in e for e in self.errs(DRAFT, barber)))
+        d = DRAFT.replace("a button to request a quote", "a button to book a haircut")
+        self.assertFalse([e for e in self.errs(d, barber) if "feature" in e])
+
+    def test_paul_is_told_the_fee_and_the_ideas(self):
+        _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
+        self.assertIn(f"about ${paul.DOMAIN_FEE} a year", facts)
+        self.assertIn("online booking", facts)
+        header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
+        self.assertIn("booking haircuts, for a barbershop", header)
+
+
+class TheOwnerCanRemoveABusinessForGood(PaulCase):
+    """Owner, 2026-10-13: "get rid of the bakery site completely, I don't want
+    to see it anymore." Every trace in his studio goes - site, draft,
+    screenshots, report, build log line, prospect card, a live preview - and
+    he never picks it again."""
+
+    def make(self, name, slug, kind="food"):
+        site, box = paul.A("sites", slug), paul.A("outbox", slug)
+        site.mkdir(parents=True)
+        box.mkdir(parents=True)
+        (site / "index.html").write_text(INDEX)
+        paul.write_json(box / "target.json", target(name=name, kind=kind))
+        (box / "draft.md").write_text("Channel: email\nTo: x@y.test\n\nHello.\n")
+        (box / "mobile.png").write_bytes(b"png")
+        paul.A("reports").mkdir(exist_ok=True)
+        (paul.A("reports") / f"2026-10-05-{slug}.md").write_text(f"# {name}\n")
+        paul.log_build({"day": "2026-10-05", "mode": "dry", "outcome": "built", "slug": slug,
+                        "name": name, "kind": kind})
+
+    def setUp(self):
+        super().setUp()
+        self.make("Milkbox Bakery", "milkbox-bakery-concept-abc123")
+        paul.record("DRY: Milkbox Bakery | built locally, not deployed")
+        self.make("Rosa's Tailoring", "rosas-tailoring-concept-def456", kind="trade")
+        paul.save_prospects([dict(prospect(name="Milkbox Bakery", phone="(512) 444-0007"), id=1,
+                                  status="built", found="2026-10-05")])
+
+    def test_without_yes_it_only_lists(self):
+        rc, out = self.run_quiet(paul.cmd_remove, self.args(who="bakery", yes=False))
+        self.assertEqual(rc, 0)
+        self.assertIn("nothing deleted", out)
+        self.assertTrue(paul.A("sites", "milkbox-bakery-concept-abc123").is_dir())
+
+    def test_it_is_gone_everywhere_and_never_picked_again(self):
+        rc, out = self.run_quiet(paul.cmd_remove, self.args(who="bakery", yes=True))
+        self.assertEqual(rc, 0, out)
+        for gone in (paul.A("sites", "milkbox-bakery-concept-abc123"), paul.A("outbox", "milkbox-bakery-concept-abc123"),
+                     paul.A("reports", "2026-10-05-milkbox-bakery-concept-abc123.md")):
+            self.assertFalse(gone.exists(), gone)
+        self.assertEqual([b["name"] for b in paul.builds()], ["Rosa's Tailoring"])
+        self.assertEqual(paul.load_prospects(), [])
+        self.assertTrue(paul.A("sites", "rosas-tailoring-concept-def456").is_dir(), "the others stay")
+        _rc, deck = self.run_quiet(paul.cmd_deck, self.args())
+        self.assertNotIn("Milkbox", deck)
+        self.assertEqual(paul.seen_row("Milkbox Bakery")["status"], "do-not-contact")
+
+    def test_a_live_preview_comes_down_first(self):
+        paul.append_row(paul.A("state", "deployments.csv"), paul.DEPLOY_FIELDS,
+                        {"slug": "milkbox-bakery-concept-abc123", "preview_url": "https://m.vercel.app",
+                         "business": "Milkbox Bakery", "deployed": "2026-10-05", "status": "live"})
+        api = FakeVercel()
+        rc, out = self.run_quiet(paul.cmd_remove, self.args(who="Milkbox", yes=True), api=api)
+        self.assertEqual(rc, 0, out)
+        self.assertIn(("DELETE", "/v9/projects/milkbox-bakery-concept-abc123"),
+                      [(c.method, c.path.split("?")[0]) for c in api.calls])
+        self.assertEqual(paul.deployments()[0]["status"], "removed")
+
+    def test_a_name_that_fits_two_is_refused(self):
+        rc, out = self.run_quiet(paul.cmd_remove, self.args(who="a", yes=True))
+        self.assertEqual(rc, 1)
+        self.assertIn("more than one", out)
+        self.assertEqual(len(paul.builds()), 2)

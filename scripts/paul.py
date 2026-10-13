@@ -16,6 +16,7 @@ state/last-run.txt - and this file does the rest.
 
     the owner     init  sender  preflight  status  mark  exclude
                   teardown  go-live  dry-next  revise  prospects  approve  reject  find
+                  remove
     the wrapper   should-run  brief  finish        (scripts/paul-cycle.sh)
     Paul itself   seen  check
 
@@ -100,7 +101,7 @@ MAX_WAITING = 5           # unsent pitches before code stops building more
 DEFAULT_MIN_LEFT = 0.50   # dollars of today's AI allowance a cycle needs to start
 MAX_IMAGE_BYTES = 2_000_000
 MAX_SITE_BYTES = 8_000_000
-MAX_DRAFT_WORDS = 170
+MAX_DRAFT_WORDS = 200     # was 170; the yearly fee and the changes line need room
 MIN_DRAFT_WORDS = 25
 
 OPT_OUT = "If this isn't for you, just say so and I won't follow up."
@@ -121,6 +122,26 @@ SENDER_FIELDS = ("area", "name", "studio", "email", "phone", "address", "price")
 # keep, no strings attached".
 OFFER_COVERS = ("the site with their own photos and wording, one round of changes, set up "
                 "on their own web address, and no monthly fees")
+
+# THE ONE ONGOING COST (owner, 2026-10-13): a web address renews once a year,
+# paid by the business to its registrar - roughly $10-20 for a .com, so the
+# pitch says "about $15 a year". Hosting a plain site like Paul's is free.
+# "No monthly fees" alone let a buyer think there was no cost at all.
+DOMAIN_FEE = 15
+YEARLY_RE = re.compile(r"\b(a|per|each|every)\s+year\b|\byearly\b|\bannual(ly)?\b|/\s?(yr|year)\b", re.I)
+
+# WHAT THEY CAN CHANGE AND ADD (owner, 2026-10-13): every pitch says the
+# photos and colours are theirs to change, and names one feature that fits
+# their kind of business that could be added later - booking haircuts, for
+# the barbershop. A feature is a link to a service they choose (a booking
+# app, an ordering page), never a form on the site: the no-forms rule holds.
+FEATURE_IDEAS = {
+    "salon":  ("online booking - a Book button that opens the booking app they choose", r"\bbook"),
+    "food":   ("their menu online, or a link to order ahead", r"\bmenu\b|\border"),
+    "trade":  ("a button to request a quote by text or email", r"\bquote"),
+    "retail": ("a page showing what they sell, with photos", r"\bproducts?\b|\bshop\b|\bcatalog"),
+    "other":  ("online booking, or a way to request a quote", r"\bbook|\bquote"),
+}
 FREEBIE = ("no strings attached", "yours to keep", "for free", "free of charge", "at no cost",
            "no charge", "on the house", "free website", "free site")
 
@@ -1087,11 +1108,15 @@ def offer_problems(body):
     said = {digits(m) for m in re.findall(r"\$\s?(\d[\d,]*)(?:\.\d\d)?", body)}
     if price not in said:
         errs.append(f"the pitch must state the price: ${price}, one time")
-    other = sorted(said - {price}, key=int)
+    other = sorted(said - {price, str(DOMAIN_FEE)}, key=int)
     if other:
-        errs.append(f"the only price is ${price} - remove ${', $'.join(other)}")
+        errs.append(f"the only prices are ${price} and the ${DOMAIN_FEE} yearly web address - "
+                    f"remove ${', $'.join(other)}")
     if "monthly" not in low:
         errs.append('say there are no monthly fees - it is the selling point')
+    if not YEARLY_RE.search(body):
+        errs.append(f"say the one cost that stays: their web address renews once a year, "
+                    f"about ${DOMAIN_FEE}, paid to the registrar")
     if not any(w in low for w in ("web address", "domain", "own address")):
         errs.append("say it goes live on their own web address")
     gave = [f for f in FREEBIE if f in low]
@@ -1128,6 +1153,13 @@ def check_draft(text, t):
     if EM_DASH in body:
         errs.append("em dashes in the pitch read as AI-written - use a comma or a full stop")
     errs += offer_problems(body)
+    low = body.lower()
+    if not (re.search(r"\b(photos?|pictures?|images?)\b", low) and re.search(r"\bcolou?rs?\b", low)):
+        errs.append("say they can change the photos and the colours")
+    kind = (t or {}).get("kind")
+    if kind in FEATURE_IDEAS and not re.search(FEATURE_IDEAS[kind][1], low):
+        errs.append(f"name one feature they could add later - for a {kind} business: "
+                    f"{FEATURE_IDEAS[kind][0]}")
     # Owner, 2026-10-06: Paul's prospects have no working site, so their
     # photos sit behind Facebook's or Instagram's login, and an all-stock
     # preview is the usual case (College Hill Barbers, Milkbox). Fine for a
@@ -1955,6 +1987,86 @@ def cmd_exclude(a):
     return 0
 
 
+def cmd_remove(a, api=None):
+    """Delete a business's builds completely (owner, 2026-10-13: "get rid of
+    the bakery site completely, I don't want to see it anymore"): its site
+    folders, drafts and screenshots, its reports, its lines in the build log
+    and its prospect card, and a live preview comes down first. It stays in
+    contacted.csv - added as do-not-contact if it was never there - so Paul
+    never picks it again; that file is never shown in his studio."""
+    n = norm_name(a.who)
+    if not n:
+        print("say which business")
+        return 2
+    log = builds()
+    hit = [b for b in log if n in norm_name(b.get("name")) or b.get("slug") == a.who]
+    names = sorted({b.get("name") for b in hit if b.get("name")})
+    for tj in A("outbox").glob("*/target.json") if A("outbox").is_dir() else []:
+        nm = (read_json(tj, {}) or {}).get("name")
+        if nm and n in norm_name(nm) and nm not in names:
+            names.append(nm)
+    pros = [p for p in load_prospects() if n in norm_name(p.get("name"))]
+    names = sorted(set(names) | {p["name"] for p in pros})
+    if not names:
+        print(f'nothing of Paul\'s matches "{a.who}"')
+        return 1
+    if len(names) > 1:
+        print(f'"{a.who}" matches more than one business - say which: ' + "; ".join(names))
+        return 1
+    name = names[0]
+    slugs = {b["slug"] for b in log if b.get("name") == name and b.get("slug")}
+    slugs |= {tj.parent.name for tj in A("outbox").glob("*/target.json")
+              if (read_json(tj, {}) or {}).get("name") == name}
+    short = make_slug(name, suffix="x").rsplit("-concept-", 1)[0]
+    paths = [A("sites", sl) for sl in slugs] + [A("outbox", sl) for sl in slugs]
+    paths += [A("outbox", "_failed", sl) for sl in slugs]
+    for folder in ("_below-bar", "_abandoned"):
+        paths += [d for d in A("sites", folder).glob(f"*-{short}-*")] if A("sites", folder).is_dir() else []
+    reports = [r for r in A("reports").glob("*.md") if any(sl in r.name for sl in slugs)
+               or f"-{short}-" in r.name] if A("reports").is_dir() else []
+    paths = [p for p in paths + reports if p.exists()]
+    live = [d for d in deployments() if d["slug"] in slugs and d.get("status") == "live"]
+    print(f"{name}: {len(paths)} file(s)/folder(s), {sum(1 for b in log if b.get('name') == name)} "
+          f"build log line(s), {len(pros)} prospect card(s), {len(live)} live preview(s)")
+    for p in paths:
+        print(f"  {p.relative_to(A())}")
+    if not a.yes:
+        print(f'nothing deleted - run again with --yes to delete it all')
+        return 0
+    if live:
+        token = vercel_token()
+        if not token:
+            print("!! a preview is live and there is no VERCEL_TOKEN to take it down - nothing deleted")
+            return 1
+        deps = deployments()
+        for d in deps:
+            if d["slug"] in slugs and d.get("status") == "live":
+                ok, detail = vercel_remove(d["slug"], token, vercel_team() or None, api=api)
+                if not ok:
+                    print(f"!! could not take down {d['preview_url']}: {detail} - nothing deleted")
+                    return 1
+                d["status"], d["removed"] = "removed", today()
+        write_rows(A("state", "deployments.csv"), DEPLOY_FIELDS, deps)
+    for p in paths:
+        shutil.rmtree(p) if p.is_dir() else p.unlink()
+    kept = [b for b in log if b.get("name") != name]
+    A("state", "builds.jsonl").write_text("".join(json.dumps(b) + "\n" for b in kept))
+    save_prospects([p for p in load_prospects() if p.get("name") != name])
+    if not seen_row(name):
+        append_row(A("state", "contacted.csv"), CONTACTED_FIELDS,
+                   {"date": today(), "business": name, "area": load_sender()[0].get("area", ""),
+                    "status": "do-not-contact"})
+    # His log lines about it go too: the studio's Activity tab reads them.
+    # contacted.csv already keeps it from ever being picked again.
+    for mem in (A("MEMORY.md"), A("memory-archive.md")):
+        if mem.is_file():
+            lines = mem.read_text().splitlines(keepends=True)
+            mem.write_text("".join(l for l in lines if norm_name(name) not in norm_name(l)))
+    record("removed one business at the owner's request - every build deleted, never picked again")
+    print(f"deleted. {name} is gone from Paul's studio, and he will never pick it again.")
+    return 0
+
+
 def teardown(only=None, list_only=False, day=None, api=None):
     """Take down every preview that is due. Free - no model involved."""
     day = day or today()
@@ -2484,6 +2596,11 @@ def cmd_brief(a, get=http_get):
           f"area         {s.get('area', '?')}",
           f"studio       {s.get('studio', '?')} - code writes the footer and the signature",
           f"offer        ${s.get('price', '?')}, one time. It covers {OFFER_COVERS}.",
+          f"yearly       the one cost that stays: their web address, about ${DOMAIN_FEE} a year,",
+          "             paid to the registrar - say so. Hosting is free.",
+          "changes      say they can change the photos and colours, and name one feature",
+          "             they could add later that fits them:",
+          *[f"             {k:<7}{v[0]}" for k, v in FEATURE_IDEAS.items()],
           "             The pitch states that exact price and what it covers, in your words.",
           f"resume       {resume}",
           *([f"cycle        SCOUT: find {detail} new prospect(s) for the owner to choose from",
@@ -2859,6 +2976,9 @@ def main(argv=None):
     p.add_argument("who", help="its number, or part of its name")
     p.add_argument("why", nargs="*")
     sub.add_parser("find", help="start a cycle now (whatever cycle_plan says it is for)")
+    p = sub.add_parser("remove", help="delete every build of one business, for good")
+    p.add_argument("who", help="part of the business name, or a slug")
+    p.add_argument("--yes", action="store_true", help="really delete (without it, only lists)")
     p = sub.add_parser("dry-next", help="make the next paul-cycle.service run a dry cycle")
     p.add_argument("--take", action="store_true", help=argparse.SUPPRESS)
     sub.add_parser("deck", help="(village) everything the Paul panel shows, as JSON")
@@ -2882,7 +3002,7 @@ def main(argv=None):
             "status": cmd_status, "mark": cmd_mark, "exclude": cmd_exclude,
             "teardown": cmd_teardown, "go-live": cmd_go_live, "dry-next": cmd_dry_next,
             "revise": cmd_revise, "prospects": cmd_prospects, "approve": cmd_approve,
-            "reject": cmd_reject, "find": cmd_find,
+            "reject": cmd_reject, "find": cmd_find, "remove": cmd_remove,
             "focus": cmd_focus, "deck": cmd_deck,
             "should-run": cmd_should_run, "brief": cmd_brief, "finish": cmd_finish,
             "seen": cmd_seen, "check": cmd_check}[a.cmd](a)
