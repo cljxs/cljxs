@@ -80,7 +80,7 @@ MIN_VOLUME_24H = 5e8
 
 STARTING_CASH = 10000.0
 FEE_PCT = 0.1                 # each way: a typical exchange's taker fee
-TARGET_PCT = 25.0             # of the account, per new position
+TARGET_PCT = 15.0             # of the account, per new position (owner, 2026-10-13: was 25)
 CASH_FLOOR_PCT = 5.0          # always kept in cash, after the fee (owner, 2026-10-13: was 25)
 MIN_TRADE = 100.0             # a position smaller than this is not worth the fees
 
@@ -334,7 +334,7 @@ def rolling(xs, n):
 
 
 def size_for(book, eq):
-    """What a new position may cost: a quarter of the account, never taking
+    """What a new position may cost: 15% of the account, never taking
     cash under the floor once the fee is paid."""
     room = (book["cash"] - eq * CASH_FLOOR_PCT / 100.0) / (1 + FEE_PCT / 100.0)
     return max(0.0, min(eq * TARGET_PCT / 100.0, room))

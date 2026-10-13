@@ -19664,13 +19664,13 @@ class BoltExitsAtTheTicksPrice(BoltBase):
 
 
 class BoltBuysOnTheFourHourCycle(BoltBase):
-    def test_one_buy_a_cycle_the_best_scorer_at_a_quarter_of_the_account(self):
+    def test_one_buy_a_cycle_the_best_scorer_at_15_percent_of_the_account(self):
         book = self.b.seed(self.T0)
         good = self.coin(price=100, ma20=99, ma50=95, ch1=0.4, ch24=5, ch7=2)
         ev = self.b.run(book, self.market(SOL=good, ETH=dict(good, change_7d=-1.0)), self.T0)
         self.assertIn("bought SOL", ev["cycle"]["action"])
         self.assertEqual(len(book["positions"]), 1, "at most one a cycle")
-        self.assertAlmostEqual(book["trades"][0]["notional"], 2500.0)
+        self.assertAlmostEqual(book["trades"][0]["notional"], 1500.0, msg="15% (owner, 2026-10-13: was 25%)")
         later = self.b.run(book, self.market(ETH=good), self.T0 + timedelta(minutes=10))
         self.assertIsNone(later["cycle"], "the next tick in the same 4 hours buys nothing")
         nxt = self.b.run(book, self.market(ETH=good), self.T0 + timedelta(hours=4))
@@ -19683,39 +19683,40 @@ class BoltBuysOnTheFourHourCycle(BoltBase):
         self.assertIn("nothing scored 7+", ev["cycle"]["action"])
 
     def test_the_cash_floor_holds_after_the_fee(self):
-        # Owner, 2026-10-13: 5% kept in cash (it was 25%). Three quarter-size
-        # buys, then a fourth cut to what the floor leaves, then none.
+        # Owner, 2026-10-13: 5% kept in cash (it was 25%), 15% a buy (it was
+        # 25%). Six full buys, a seventh cut to what the floor leaves, then none.
         book = self.b.seed(self.T0)
         good = self.coin(price=100, ma20=99, ma50=95, ch1=0.4, ch24=5, ch7=2)
-        for h, sym in enumerate(("SOL", "ETH", "BNB", "XRP")):
-            self.b.run(book, self.market(**{sym: good}), self.T0 + timedelta(hours=4 * h))
+        coins, up = ("SOL", "ETH", "BNB", "XRP", "ADA", "BTC", "LINK"), {}
+        for h, sym in enumerate(coins):
+            self.b.run(book, self.market(**dict(up, **{sym: good})), self.T0 + timedelta(hours=4 * h))
+            up[sym] = 103.0                               # +3%: not dead money at a day old
         eq = self.b.equity(book)
-        self.assertEqual(len(book["positions"]), 4)
-        self.assertLess(book["trades"][-1]["notional"], 2400, "the fourth is cut to fit")
+        self.assertEqual(len(book["positions"]), 7)
+        for t in book["trades"][:6]:
+            self.assertAlmostEqual(t["notional"], 1500, delta=60, msg="15% of the account at the time")
+        self.assertLess(book["trades"][-1]["notional"], 1400, "the seventh is cut to fit")
         self.assertGreaterEqual(book["cash"], eq * 0.05, "never under the floor")
         self.assertLess(book["cash"], eq * 0.05 + 1.0, "and spent down to it")
-        ev = self.b.run(book, self.market(ADA=good), self.T0 + timedelta(hours=16))
+        ev = self.b.run(book, self.market(**dict(up, DOT=good)), self.T0 + timedelta(hours=28))
         self.assertIn("cash floor", ev["cycle"]["action"])
         self.assertEqual(self.b.problems(book), [])
 
     def test_no_limit_on_how_many_he_holds(self):
-        # Owner, 2026-10-13: "hold however many coins it wants". With the cash
-        # for it, a sixth coin is bought like the first.
+        # Owner, 2026-10-13: "hold however many coins it wants". Cash is the
+        # only bound: once a sale or a gain refills it, he keeps buying, up
+        # to all ten - one of each.
         book = self.b.seed(self.T0)
-        book["starting_cash"] = book["cash"] = 1_000_000.0
-        book["halt"]["reference"] = 1_000_000.0
         good = self.coin(price=100, ma20=99, ma50=95, ch1=0.4, ch24=5, ch7=2)
-        for h, sym in enumerate(("SOL", "ETH", "BNB", "XRP", "ADA", "BTC")):
-            self.b.run(book, self.market(**{sym: good}), self.T0 + timedelta(hours=4 * h))
-        self.assertEqual(len(book["positions"]), 4, "a quarter each: the floor stops the fifth")
-        book["cash"] += 3_000_000.0                       # as if gains had come back to cash
-        book["trades"].append({"side": "sell", "symbol": "Z", "qty": 0, "notional": 3_000_000.0,
-                               "fee": 0.0, "utc": self.b.iso(self.T0)})
-        up = {s: 105.0 for s in ("SOL", "ETH", "BNB", "XRP")}   # +5%: not dead money at a day old
-        for h, sym in enumerate(("ADA", "BTC", "LINK")):
-            self.b.run(book, self.market(**dict(up, **{sym: good})), self.T0 + timedelta(hours=24 + 4 * h))
-            up[sym] = 105.0
-        self.assertEqual(len(book["positions"]), 7, "no cap on the count")
+        up, hour = {}, 0
+        for sym in self.b.UNIVERSE:
+            if sym == "LINK":                             # cash runs low here; refill it
+                book["cash"] += 10_000.0
+                book["trades"].append({"side": "sell", "symbol": "Z", "qty": 0, "notional": 10_000.0,
+                                       "fee": 0.0, "utc": self.b.iso(self.T0)})
+            self.b.run(book, self.market(**dict(up, **{sym: good})), self.T0 + timedelta(hours=hour))
+            up[sym], hour = 103.0, hour + 4
+        self.assertEqual(len(book["positions"]), 10, "no cap on the count")
         self.assertEqual(self.b.problems(book), [])
 
     def test_no_buying_into_a_btc_dump(self):
