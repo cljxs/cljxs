@@ -1229,6 +1229,27 @@ class ClosingTheCycle(unittest.TestCase):
                               f"{f} must publish CYCLES_BEFORE or signoff cannot check it")
 
 
+class TheWakeMessageNamesTheLastStep(unittest.TestCase):
+    """2026-10-12, Belfort's close: report written, calls filed - the two
+    things his wake message named - and then he stopped. No memory line, no
+    signoff, and the verifier failed a cycle that had done its trading. A
+    small model follows the message it is handed more reliably than step 7
+    of AGENTS.md. Ace's message always ended on signoff.py."""
+
+    def message(self, f):
+        src = (SCRIPTS / f).read_text()
+        start = src.index("--message")
+        return src[start:src.index("--session-id", start)]
+
+    def test_both_wake_messages_end_on_signoff(self):
+        for f, agent in (("ace-cycle.sh", "ace"), ("belfort-cycle.sh", "belfort")):
+            with self.subTest(wrapper=f):
+                self.assertIn(f"scripts/signoff.py {agent}", self.message(f))
+
+    def test_belfort_is_told_to_record_his_line(self):
+        self.assertIn("scripts/remember.py belfort", self.message("belfort-cycle.sh"))
+
+
 class TheVerdictLine(unittest.TestCase):
     """The village shows one sentence per cycle: the ledger's verdict line.
     ace-verify noted its absence on every passing run; signoff checked nothing,
@@ -19335,7 +19356,8 @@ class BelfortLearnsFromNumbersNotMemory(unittest.TestCase):
         sh = (SCRIPTS / "belfort-cycle.sh").read_text()
         self.assertIn('RECORD="$(python3 "$ROOT/scripts/belfort-learn.py" record', sh)
         self.assertLess(sh.index("RECORD="), sh.index("openclaw agent"))
-        self.assertIn("\n$RECORD\"", sh)
+        msg = sh[sh.index("--message"):sh.index("--session-id")]
+        self.assertIn("\n$RECORD\n", msg, "in the wake message, on its own line")
         timer = (ROOT / "deploy" / "belfort-review.timer").read_text()
         self.assertIn("OnCalendar=*-*-01 08:05 America/New_York", timer)
         self.assertIn("Persistent=true", timer)

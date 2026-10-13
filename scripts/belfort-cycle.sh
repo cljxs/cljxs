@@ -79,6 +79,11 @@ OWED="$(python3 "$ROOT/scripts/belfort-trade.py" calls --owed 2>/dev/null)" || O
 # score, and what the names he passed on did next. Code's numbers, not his
 # memory of them. Running it also measures any pass that has come due.
 RECORD="$(python3 "$ROOT/scripts/belfort-learn.py" record 2>/dev/null)" || RECORD="(your record could not be worked out this wake)"
+# The wake message names every deliverable, the last one included. On
+# 2026-10-12 the close cycle wrote the report and the calls - the two things
+# this message named - and stopped: no memory line, no signoff, and the
+# verifier failed a cycle that had otherwise done its job. Ace's message has
+# always ended on signoff.py; Belfort's did not.
 openclaw agent --agent belfort \
   --message "Scheduled cycle. This wake's report is a NEW file: reports/$REPORT - write it there. Do not edit an earlier report, even one from today.
 
@@ -86,7 +91,9 @@ The exit rules were already applied by code before you woke:
 $EXITS
 Report these sales as they are; do not sell for those rules again. You judge only a broken thesis.
 Candidates owed a call this wake (one line each in state/calls.txt, then belfort-trade.py calls): $OWED
-$RECORD" \
+$RECORD
+
+Before you stop: record one line with python3 ../../scripts/remember.py belfort \"<one short line>\" and finish by running python3 ../../scripts/signoff.py belfort - it lists anything MISSING, and the cycle is not done until it lists nothing." \
   --session-id "wake-belfort-$STARTED" \
   --timeout 600 --json 2>&1 | tee "$LOG"
 # The agent's own exit code is deliberately not checked here. It exits 0 for
