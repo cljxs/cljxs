@@ -52,6 +52,12 @@ every photo, and each file can be written in one go.
 
 ## 1. Find one target
 
+**Sent back by the owner?** If FACTS `resume` says the owner sent a site
+back, there is no new target today. Read `work/REVISE.md` and fix every
+point in it in `work/site/`, keeping what works. Update `work/target.json`
+if the photos or claims change, write a new `work/draft.md`
+(`work/previous-draft.md` is your last one), then check and finish as below.
+
 Search public sources (maps, directories, search) in the FACTS area - and
 if FACTS has a FOCUS line, only that kind of business; code refuses any
 other. A

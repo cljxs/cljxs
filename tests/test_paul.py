@@ -1287,3 +1287,143 @@ class TheVillageSeesWhatHeBuilt(PaulCase):
     def test_nothing_built_is_an_empty_list_not_an_error(self):
         rc, out = self.run_quiet(paul.cmd_deck, self.args())
         self.assertEqual((rc, json.loads(out)["builds"]), (0, []))
+
+
+HEADER_THAT_WRAPS = """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{margin:0;font:16px Georgia} header{display:flex;justify-content:space-between;align-items:center;
+padding:14px 18px} .name{font-size:22px} .btn{background:#8b2a2a;color:#fff;padding:10px 16px;
+font:700 13px sans-serif;letter-spacing:.12em;text-transform:uppercase} .ok{display:inline-block;padding:8px;
+background:#222;color:#fff}</style></head><body><header><div class="name">College Hill Barbers</div>
+<a class="btn" href="tel:3192779972">Call (319) 277-9972</a></header><a class="ok" href="#">Find our shop</a>
+</body></html>"""
+
+
+@unittest.skipUnless(_a_browser(), "needs a headless Chrome")
+class APhoneSeesWhatAPhoneSees(unittest.TestCase):
+    """College Hill Barbers (2026-10-06): on a phone the header's "CALL (319)
+    277-9972" broke onto two lines, in the screenshot Paul read, and passed.
+    Two bugs under it. No check measured a phone at all; and headless Chrome
+    will not lay out narrower than 500px, so a "390px" screenshot was a
+    500px page with its right edge cut off (measured 2026-10-13). Both are
+    now drawn inside an iframe of exactly the phone's width."""
+
+    def test_a_button_that_wraps_is_caught_and_its_fix_is_not(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "index.html").write_text(HEADER_THAT_WRAPS)
+            got = paul.phone_problems(d, _a_browser())
+            self.assertEqual(sorted(os.listdir(d)), ["index.html"], "the probe files were left behind")
+            self.assertEqual(got["wraps"], [("CALL (319) 277-9972", 2)])
+            self.assertFalse(got["wide"])
+            fixed = HEADER_THAT_WRAPS.replace("Call (319) 277-9972", "Call").replace(".btn{", ".btn{white-space:nowrap;")
+            (Path(d) / "index.html").write_text(fixed)
+            self.assertEqual(paul.phone_problems(d, _a_browser())["wraps"], [])
+
+    def test_a_page_wider_than_a_phone_is_caught(self):
+        # 450px fits Chrome's 500px floor: only a true 390px layout sees it.
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '</head><body style="margin:0"><div style="width:450px;height:9px"></div></body></html>')
+            self.assertTrue(paul.phone_problems(d, _a_browser())["wide"])
+
+    def test_the_phone_screenshot_is_a_390px_page_not_a_cropped_500px_one(self):
+        # A full-width bar with a red right edge: at a true 390px the red is
+        # in the picture; on a cropped 500px layout it is 110px off it.
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import knockout
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "index.html").write_text(
+                '<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                '<style>body{margin:0}div{height:40px;border-right:10px solid #f00;box-sizing:border-box}'
+                '</style></head><body><div></div></body></html>')
+            out = Path(d) / "m.png"
+            self.assertTrue(paul.screenshot(_a_browser(), (Path(d) / "index.html").as_uri(), out, 390, 844))
+            w, h, px = knockout.decode(out)
+            self.assertEqual(sorted(p.name for p in Path(d).iterdir()), ["index.html", "m.png"])
+        i = (20 * w + 385) * 4
+        self.assertEqual(w, 390)
+        self.assertGreater(px[i], 200, "the red right edge is in the picture")
+        self.assertLess(px[i + 1], 60)
+
+    def test_check_refuses_it(self):
+        t = target()
+        with tempfile.TemporaryDirectory() as d:
+            w = Path(d)
+            (w / "site").mkdir()
+            (w / "site" / "index.html").write_text(HEADER_THAT_WRAPS)
+            saved = paul.find_browser
+            paul.find_browser = _a_browser
+            try:
+                errs, _n, _i = paul.run_checks(t, offline, work=w)
+            finally:
+                paul.find_browser = saved
+        self.assertTrue(any('"CALL (319) 277-9972" breaks onto 2 lines' in e for e in errs), errs)
+
+
+class TheOwnerSendsASiteBack(PaulCase):
+    """Owner, 2026-10-13: "get Paul up and running again to fix this barbershop
+    website." A cycle picks a new business; `revise` puts a finished site
+    back in work/ - the folder a cycle resumes - with REVISE.md, so the next
+    cycle fixes that one instead."""
+
+    def built(self, name="College Hill Barbers", slug="college-hill-barbers-concept-abc123"):
+        site, box = paul.A("sites", slug), paul.A("outbox", slug)
+        site.mkdir(parents=True)
+        box.mkdir(parents=True)
+        (site / "index.html").write_text(INDEX)
+        paul.apply_safeguards(site, name, "Sam's Studio")
+        paul.write_json(box / "target.json", target(name=name))
+        (box / "draft.md").write_text("DRY RUN - not for sending.\n\nChannel: email\nTo: x@y.test\n\nHello.\n")
+        return slug
+
+    def test_it_goes_back_to_work_with_the_notes_and_without_the_safeguards(self):
+        slug = self.built()
+        rc, out = self.run_quiet(paul.cmd_revise, self.args(who="college hill", notes=["fix", "the", "header"]))
+        self.assertEqual(rc, 0, out)
+        w = paul.A("work")
+        self.assertIn("fix the header", (w / "REVISE.md").read_text())
+        self.assertEqual(paul.read_json(w / "target.json")["name"], "College Hill Barbers")
+        page = (w / "site" / "index.html").read_text()
+        self.assertNotIn(paul.CONCEPT_ID, page, "code adds the notice again at finish")
+        self.assertNotIn('name="robots"', page)
+        self.assertFalse((w / "site" / "robots.txt").exists())
+        self.assertIn("Hello.", (w / "previous-draft.md").read_text())
+        self.assertTrue((paul.A("sites", slug) / "index.html").is_file(), "the old build stays")
+        _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
+        self.assertIn('"College Hill Barbers", sent back by the owner', facts)
+        self.assertIn("read work/REVISE.md", facts)
+
+    def test_an_old_build_is_not_set_aside_as_abandoned(self):
+        # The copied site keeps its old file times; RESUME_DAYS must not
+        # read a 7-day-old build sent back today as an abandoned one.
+        self.built()
+        old = time.time() - 7 * 86400
+        for f in paul.A("sites").rglob("*"):
+            os.utime(f, (old, old))
+        self.run_quiet(paul.cmd_revise, self.args(who="College Hill", notes=["x"]))
+        _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
+        self.assertIn("sent back by the owner", facts)
+        self.assertTrue(paul.A("work", "REVISE.md").is_file())
+
+    def test_it_will_not_overwrite_a_build_in_progress(self):
+        self.built()
+        self.work()
+        rc, out = self.run_quiet(paul.cmd_revise, self.args(who="College Hill", notes=["x"]))
+        self.assertEqual(rc, 1)
+        self.assertIn("unfinished build", out)
+        self.assertFalse(paul.A("work", "REVISE.md").exists())
+
+    def test_an_unknown_or_ambiguous_name_is_refused(self):
+        self.built()
+        self.built(name="College Hill Bakery", slug="college-hill-bakery-concept-def456")
+        rc, out = self.run_quiet(paul.cmd_revise, self.args(who="Nobody", notes=["x"]))
+        self.assertEqual(rc, 1)
+        rc, out = self.run_quiet(paul.cmd_revise, self.args(who="College Hill", notes=["x"]))
+        self.assertEqual(rc, 1)
+        self.assertIn("more than one", out)
+        rc, _ = self.run_quiet(paul.cmd_revise, self.args(who="Bakery", notes=["x"]))
+        self.assertEqual(rc, 0)
+
+    def test_paul_is_told_what_to_do_with_it(self):
+        header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
+        self.assertIn("work/REVISE.md", header)

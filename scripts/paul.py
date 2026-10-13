@@ -14,7 +14,7 @@ writes four things - work/target.json, work/site/, work/draft.md and
 state/last-run.txt - and this file does the rest.
 
     the owner     init  sender  preflight  status  mark  exclude
-                  teardown  go-live  dry-next
+                  teardown  go-live  dry-next  revise
     the wrapper   should-run  brief  finish        (scripts/paul-cycle.sh)
     Paul itself   seen  check
 
@@ -22,6 +22,7 @@ state/last-run.txt - and this file does the rest.
     python3 scripts/paul.py status             pitches waiting on you, previews
     python3 scripts/paul.py mark <slug> sent   after you send one
     python3 scripts/paul.py dry-next           the next run is a dry cycle
+    python3 scripts/paul.py revise <name> "..."  send a site back with what to fix
 
 WHAT A PREVIEW IS. A site built under a real business's name before that
 business has agreed to anything. It must never pass for their official site,
@@ -619,6 +620,22 @@ def find_browser():
     return None
 
 
+# Headless Chrome will not lay a page out narrower than 500px, whatever
+# --window-size says: measured 2026-10-13, a 390px "phone" screenshot was a
+# 500px layout with its right 110px cut off, and a probe at 390 reported
+# innerWidth 500. So anything narrower is drawn inside an iframe of exactly
+# that width, which is the width the page then lays itself out to.
+CHROME_MIN_W = 500
+
+
+def phone_frame(url, w, h, script=""):
+    """A page holding `url` in a w x h iframe, for widths Chrome will not do."""
+    return (f'<!doctype html><html><head><meta charset="utf-8"><style>html,body{{margin:0;'
+            f'overflow:hidden;background:#fff}}iframe{{border:0;width:{w}px;height:{h}px;'
+            f'display:block}}</style></head><body><iframe src="{html.escape(url, quote=True)}">'
+            f'</iframe>{script}</body></html>')
+
+
 def screenshot(browser, url, out, w, h, run=subprocess.run):
     """True only if a real image landed on disk. A browser that exits 0 having
     written nothing is the case this exists to catch."""
@@ -626,13 +643,21 @@ def screenshot(browser, url, out, w, h, run=subprocess.run):
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.exists():
         out.unlink()
+    frame = None
+    if w < CHROME_MIN_W:
+        frame = out.with_name(f".{out.stem}-frame.html")
+        frame.write_text(phone_frame(url, w, h))
+        url = frame.as_uri()
     cmd = [browser, "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
-           "--no-first-run", "--disable-dev-shm-usage", f"--window-size={w},{h}",
-           "--virtual-time-budget=4000", f"--screenshot={out}", url]
+           "--no-first-run", "--disable-dev-shm-usage", "--allow-file-access-from-files",
+           f"--window-size={w},{h}", "--virtual-time-budget=4000", f"--screenshot={out}", url]
     try:
         run(cmd, capture_output=True, timeout=90)
     except Exception:
         return False
+    finally:
+        if frame:
+            frame.unlink(missing_ok=True)
     return out.is_file() and out.stat().st_size > 1000
 
 
@@ -1315,6 +1340,85 @@ var pre=document.createElement('pre');pre.id='paul-contrast';pre.textContent=JSO
 })();"""
 
 
+# THE PHONE PROBE. College Hill Barbers (2026-10-06): on a phone the header's
+# "CALL (319) 277-9972" button broke onto two lines and squeezed the name
+# beside it - in the phone screenshot Paul read, and passed. A button is a
+# short label in a box; when its text needs two lines at 390px it is too
+# long or too big for the header. Measured in a real browser like contrast,
+# on the first page only (the header is the same on every page) to keep
+# `check` quick. Also: a page that scrolls sideways on a phone.
+PHONE_W, PHONE_H = 390, 844
+PHONE_JS = r"""(function(){
+var out=[];var els=document.body.querySelectorAll('a,button,[class*="btn"],[class*="button"]');
+for(var n=0;n<els.length;n++){var el=els[n];var t=(el.innerText||'').replace(/\s+/g,' ').trim();
+ if(!t||t.length>40)continue;var s=getComputedStyle(el);
+ if(s.visibility!=='visible'||s.display==='none'||el.getClientRects().length===0)continue;
+ var rg=document.createRange();rg.selectNodeContents(el);var tops={};var rs=rg.getClientRects();
+ for(var i=0;i<rs.length;i++){if(rs[i].width>1)tops[Math.round(rs[i].top)]=1;}
+ var lines=Object.keys(tops).length;if(lines>1)out.push({text:t,lines:lines});}
+var wide=document.documentElement.scrollWidth>window.innerWidth+1;
+var pre=document.createElement('pre');pre.id='paul-phone';pre.textContent=JSON.stringify({wraps:out,wide:wide,width:window.innerWidth});document.body.appendChild(pre);
+})();"""
+
+
+def phone_problems(site, browser, run=subprocess.run):
+    """{'wraps': [(text, lines)], 'wide': bool} for the first page at phone
+    width, or None when the browser gave no answer."""
+    page = Path(site) / "index.html"
+    if not page.is_file():
+        return None
+    probe = page.with_name(f".{CONTRAST_ID}-phone-{page.name}")
+    frame = page.with_name(f".{CONTRAST_ID}-phoneframe-{page.name}")
+    markup = page.read_text(errors="replace")
+    tag = f"<script>{PHONE_JS}</script>"
+    probe.write_text(re.sub(r"(?i)</body>", lambda _m: tag + "</body>", markup, count=1)
+                     if re.search(r"(?i)</body>", markup) else markup + tag)
+    # The probe runs in a 390px iframe (CHROME_MIN_W); the frame copies its
+    # answer out, because --dump-dom prints only the outer page.
+    lift = ("<script>var f=document.querySelector('iframe');f.addEventListener('load',function(){"
+            "setTimeout(function(){var d=null;try{d=f.contentDocument}catch(e){}"
+            "var p=d&&d.getElementById('paul-phone');var o=document.createElement('pre');"
+            "o.id='paul-phone';o.textContent=p?p.textContent:'';document.body.appendChild(o);},100);"
+            "});</script>")
+    frame.write_text(phone_frame(probe.name, PHONE_W, PHONE_H, lift))
+    try:
+        r = run([browser, "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
+                 "--no-first-run", "--disable-dev-shm-usage", "--allow-file-access-from-files",
+                 f"--window-size={CHROME_MIN_W},{PHONE_H}",
+                 "--virtual-time-budget=4000", "--dump-dom", frame.as_uri()],
+                capture_output=True, text=True, timeout=90)
+        out = r.stdout or ""
+    except Exception:
+        out = ""
+    finally:
+        probe.unlink(missing_ok=True)
+        frame.unlink(missing_ok=True)
+    m = re.search(r'<pre id="paul-phone">(.+?)</pre>', out, re.S)
+    if not m:
+        return None
+    try:
+        d = json.loads(html.unescape(m.group(1)))
+    except ValueError:
+        return None
+    return {"wraps": [(w.get("text", ""), w.get("lines")) for w in d.get("wraps") or []],
+            "wide": bool(d.get("wide"))}
+
+
+def measured_phone(site, browser, memo, run=subprocess.run):
+    """phone_problems, remembered against the site's fingerprint, as contrast is."""
+    fp = site_fingerprint(site)
+    memo = Path(memo)
+    seen = read_json(memo, {}) or {}
+    if seen.get("phone_site") == fp and isinstance(seen.get("phone"), dict):
+        got = seen["phone"]
+        return {"wraps": [tuple(w) for w in got.get("wraps") or []], "wide": bool(got.get("wide"))}
+    got = phone_problems(site, browser, run=run)
+    if got is not None:
+        memo.parent.mkdir(parents=True, exist_ok=True)
+        write_json(memo, {**(read_json(memo, {}) or {}), "phone_site": fp, "phone": got})
+    return got
+
+
 def site_fingerprint(site):
     """What the site is, for "has it changed since it was last measured":
     every file's path, size and modified time. The contrast probe's hidden
@@ -1443,6 +1547,17 @@ def run_checks(t, get=http_get, work=None):
         for rel, text, ratio, need in (bad or [])[:6]:
             errs.append(f'"{text}" on {rel} is hard to read: contrast {ratio}:1, needs '
                         f"{need}:1 - change the text colour or what is behind it")
+        phone = measured_phone(work / "site", browser, work / "shots" / ".measured.json")
+        if phone is None:
+            notes.append("the phone layout was not measured - the browser gave no answer")
+        else:
+            for text, lines in phone["wraps"][:4]:
+                errs.append(f'on a phone ({PHONE_W}px) "{text}" breaks onto {lines} lines - '
+                            f"shorten the label (\"Call\" with the number on its own line, "
+                            f"or the number alone), shrink it, or move it out of the header")
+            if phone["wide"]:
+                errs.append(f"on a phone ({PHONE_W}px) the page scrolls sideways - something is "
+                            f"wider than the screen")
 
     dp = work / "draft.md"
     if not dp.is_file():
@@ -1916,6 +2031,69 @@ def cmd_go_live(a):
     return 0
 
 
+def strip_safeguards(site):
+    """apply_safeguards undone, for a site going back to Paul: he edits what
+    he built, and code adds the notice, noindex and robots again at finish."""
+    site = Path(site)
+    for page in site.rglob("*.html"):
+        markup = re.sub(rf'(?is)<p[^>]*id="{CONCEPT_ID}"[^>]*>.*?</p>', "", page.read_text(errors="replace"))
+        page.write_text(re.sub(r'(?i)<meta[^>]+name=["\']robots["\'][^>]*>', "", markup))
+    for name in ("robots.txt", "vercel.json"):
+        (site / name).unlink(missing_ok=True)
+
+
+def cmd_revise(a):
+    """Send a finished site back to Paul with the owner's notes (2026-10-13:
+    College Hill Barbers). It goes back into work/ - the folder a cycle
+    resumes - with REVISE.md saying what to fix, so the next cycle fixes
+    this business instead of finding a new one. The old build stays where
+    it is; the fixed one is filed beside it."""
+    work = A("work")
+    if work.is_dir() and any(work.iterdir()):
+        print("work/ already holds an unfinished build - the next cycle resumes it. Let it "
+              "finish first, then send this one back.")
+        return 1
+    key = " ".join(a.who.split())
+    hits = []
+    for tj in sorted(A("outbox").glob("*/target.json")):
+        slug = tj.parent.name
+        if slug.startswith("_"):
+            continue
+        t = read_json(tj, {}) or {}
+        if key == slug or (norm_name(key) and norm_name(key) in norm_name(t.get("name") or "")):
+            if (A("sites", slug) / "index.html").is_file():
+                hits.append((A("sites", slug).stat().st_mtime, slug, t))
+    names = sorted({t.get("name") for _m, _s, t in hits})
+    if not hits:
+        print(f'no finished site matches "{key}" - `paul.py status` lists them')
+        return 1
+    if len(names) > 1:
+        print(f'"{key}" matches more than one business - say which: ' + "; ".join(names))
+        return 1
+    _m, slug, t = max(hits)
+    notes = " ".join(a.notes).strip()
+    if not notes:
+        print("say what to fix - those words are what Paul reads")
+        return 2
+    shutil.copytree(A("sites", slug), work / "site")
+    strip_safeguards(work / "site")
+    write_json(work / "target.json", t)
+    old = A("outbox", slug, "draft.md")
+    if old.is_file():
+        (work / "previous-draft.md").write_text(old.read_text(errors="replace"))
+    (work / "REVISE.md").write_text(
+        f"# Sent back by the owner - {today()}\n\n"
+        f"This is your build of {t.get('name')} (sites/{slug}). Fix it - do not pick a new "
+        f"business. Keep what works; change what the owner asks, then run check.\n\n"
+        f"## What the owner wants fixed\n\n{notes}\n\n"
+        f"Write a new work/draft.md (your last one is work/previous-draft.md) and update "
+        f"work/target.json if the photos or claims change.\n")
+    record(f"sent back by the owner: {t.get('name')} - {notes}"[:300])
+    print(f"{t.get('name')} is back in work/ with your notes; the next cycle fixes it.")
+    print("  a dry cycle now:  python3 scripts/paul.py dry-next && systemctl start --no-block paul-cycle.service")
+    return 0
+
+
 def cmd_dry_next(a):
     m = A("state", "dry-next")
     if a.take:
@@ -1996,7 +2174,11 @@ def cmd_brief(a, get=http_get):
         newest = max(p.stat().st_mtime for p in work.rglob("*")) if any(work.rglob("*")) else 0
         old = (time.time() - newest) / 86400
         t = read_json(work / "target.json", {}) or {}
-        if old <= RESUME_DAYS:
+        if (work / "REVISE.md").is_file():
+            resume = (f'work/ holds "{t.get("name") or "a business"}", sent back by the owner '
+                      f"to fix - read work/REVISE.md first and fix every point in it. Same "
+                      f"business: do not look for a new one")
+        elif old <= RESUME_DAYS:
             resume = (f'work/ holds an unfinished build for "{t.get("name") or "a business"}" - '
                       f"finish it rather than starting over")
         else:
@@ -2352,6 +2534,9 @@ def main(argv=None):
     p = sub.add_parser("go-live", help="let scheduled cycles deploy (after a dry cycle)")
     p.add_argument("--off", action="store_true")
     p.add_argument("--anyway", action="store_true", help="skip the seen-a-dry-cycle check")
+    p = sub.add_parser("revise", help="send a finished site back to Paul with what to fix")
+    p.add_argument("who", help="the slug, or (part of) the business name")
+    p.add_argument("notes", nargs="+", help="what to fix, in your words")
     p = sub.add_parser("dry-next", help="make the next paul-cycle.service run a dry cycle")
     p.add_argument("--take", action="store_true", help=argparse.SUPPRESS)
     sub.add_parser("deck", help="(village) everything the Paul panel shows, as JSON")
@@ -2374,6 +2559,7 @@ def main(argv=None):
     return {"init": cmd_init, "sender": cmd_sender, "preflight": cmd_preflight,
             "status": cmd_status, "mark": cmd_mark, "exclude": cmd_exclude,
             "teardown": cmd_teardown, "go-live": cmd_go_live, "dry-next": cmd_dry_next,
+            "revise": cmd_revise,
             "focus": cmd_focus, "deck": cmd_deck,
             "should-run": cmd_should_run, "brief": cmd_brief, "finish": cmd_finish,
             "seen": cmd_seen, "check": cmd_check}[a.cmd](a)
