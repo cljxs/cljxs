@@ -36,6 +36,9 @@ DEFAULTS = {
     "max_clip_seconds": 60.0,
     "target_clip_seconds": 35.0,
     "max_clips_per_video": 5,
+    # On top of those: moments picked for the laugh they get - a pause in
+    # the talking as loud as the talking (score.laughs). 0 turns it off.
+    "funny_clips_per_video": 2,
     "min_score": 40.0,
     # A gap this long between two words ends a sentence even with no
     # punctuation - Whisper leaves plenty out.

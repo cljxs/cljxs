@@ -107,9 +107,17 @@ def loudness_per_second(frames):
     return [per.get(s, -120.7) for s in range(max(per) + 1)]
 
 
-def loudness(audio_path):
+def loudness_frames(audio_path):
+    """Every ebur128 reading, [[t, momentary_lufs]], ten a second. Laughter
+    is found in the pauses between words (score.laughs), and most of those
+    last a second or two: per-second maxima would measure the words either
+    side of the pause instead of the pause."""
     r = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-nostats", "-i", str(audio_path),
                         "-af", "ebur128", "-f", "null", "-"], capture_output=True, text=True)
     if r.returncode != 0:
         raise MediaError(f"ebur128 failed: {(r.stderr or '')[-400:]}")
-    return loudness_per_second(parse_ebur128(r.stderr))
+    return [[round(t, 2), v] for t, v in parse_ebur128(r.stderr)]
+
+
+def loudness(audio_path):
+    return loudness_per_second(loudness_frames(audio_path))

@@ -3013,3 +3013,130 @@ class TrimToTheMoment(unittest.TestCase):
 
     def test_no_words_is_kept_whole(self):
         self.assertEqual(trim.pick([], self.loudness(), 50.0, CFG)[:2], (0.0, 50.0))
+
+
+class FunnyMomentsToo(unittest.TestCase):
+    """Owner, 2026-10-13: "Is there a way we can get him to clip funny
+    moments along with his regular clips?" Whisper writes no words for a
+    laugh - its voice filter drops it - so a laugh is a pause in the talking
+    that is as loud as the talking. The fixture is real: five minutes of
+    "Our Miss Brooks" (1948, live studio audience; archive.org OurMissBrooks,
+    Public Domain Mark), transcribed by Clip's own faster-whisper provider
+    and measured by its own ebur128 pass."""
+
+    def setUp(self):
+        t = json.loads((FIXTURES / "clipper-laughs-ourmissbrooks.words.json").read_text())
+        self.words = t["words"]
+        self.frames = json.loads((FIXTURES / "clipper-laughs-ourmissbrooks.frames.json").read_text())
+        self.loud = media.loudness_per_second(self.frames)
+
+    def heard(self):
+        return {self.words[k]["word"].strip() for k in score.laughs(self.words, self.frames)}
+
+    def test_the_punchlines_get_their_laugh_and_plain_pauses_do_not(self):
+        got = self.heard()
+        for line in ("month.", "weapons?", "leg.", "bark."):
+            self.assertIn(line, got, f"the laugh after {line!r}: {sorted(got)}")
+        # "...to get along." (16.6 s) is a pause of 0.9 s: measured from its
+        # first reading it hears the word itself, and reads as a laugh.
+        for quiet in ("bite.", "fork.", "breakfast.", "subpoena.", "surprise.", "along."):
+            self.assertNotIn(quiet, got, "a pause where nobody laughed")
+
+    def test_the_theme_music_is_not_a_laugh(self):
+        # 9.4 s of music after "...to get along." (59.6 s): loud, and far too long.
+        k = next(i for i, x in enumerate(self.words) if x["word"].strip() == "along."
+                 and 59 < x["end"] < 60)
+        gap = self.words[k + 1]["start"] - self.words[k]["end"]
+        self.assertGreater(gap, score.LAUGH_MAX_GAP)
+        self.assertNotIn(k, score.laughs(self.words, self.frames))
+
+    def test_under_a_music_bed_no_pause_is_a_laugh(self):
+        # Every pause as loud as the talking: none of them means anything.
+        flat = [[t, -20.0] for t, _v in self.frames]
+        self.assertEqual(score.laughs(self.words, flat), {})
+
+    def chosen(self, funny):
+        sents = moments.sentences(self.words, CFG["sentence_pause_seconds"])
+        wins = moments.windows(sents, CFG["min_clip_seconds"], CFG["max_clip_seconds"])
+        scored = score.score_windows(sents, wins, self.words, self.loud, CFG, [], (), self.frames)
+        return moments.choose(scored, CFG["max_clips_per_video"], CFG["min_score"], [], funny)
+
+    def test_two_funny_clips_on_top_of_the_regular_five(self):
+        plain, both = self.chosen(0), self.chosen(2)
+        self.assertEqual(len(both), len(plain) + 2, "along with, not instead of")
+        funny = [c for c in both if c.get("picked_for") == "funny"]
+        self.assertEqual(len(funny), 2)
+        for c in funny:
+            self.assertGreater(c["laugh_tail"], 0, "ends on the line that got the laugh")
+            self.assertIn("gets a laugh at the end", c["reasons"])
+        self.assertFalse(any(c.get("picked_for") for c in plain))
+        for a in both:
+            for b in both:
+                self.assertTrue(a is b or not moments.overlaps(a, b), "never the same moment twice")
+
+    def test_no_laughs_means_no_extra_clips(self):
+        c = lambda s, sc: {"start": s, "end": s + 30, "score": sc, "topics": [], "laughs": 0}
+        scored = [c(0, 90), c(40, 80), c(80, 70)]
+        self.assertEqual(len(moments.choose(scored, 2, 40, None, 2)), 2)
+
+    def test_a_funny_pick_still_has_to_clear_the_bar(self):
+        c = {"start": 0, "end": 30, "score": 10, "topics": [], "laughs": 1, "laugh_tail": 1.5}
+        self.assertEqual(moments.choose([c], 2, 40, None, 2), [])
+
+    def test_the_laugh_is_cut_into_the_clip(self):
+        ws = [w(0, 1, " Setup"), w(1, 2, " punchline."), w(3.8, 4.5, " Next.")]
+        self.assertEqual(moments.cut_points(ws, 0, 1)[1], 2.35, "a beat after, normally")
+        self.assertEqual(moments.cut_points(ws, 0, 1, tail=moments.LAUGH_TAIL)[1], 3.75,
+                         "the laugh, up to the next word")
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class TheFunnyPickKeepsItsLaugh(EndToEnd):
+    """A funny pick that ends on its punchline is cut with the laugh after
+    it - the laugh is the payoff - and the Deck says why it was picked."""
+
+    def test_through_the_find_stage(self):
+        self.cli("source", "add", "pd", "--rights", "public-domain", "--evidence", "LibriVox")
+        self.cli("ingest", "pd", str(self.video))
+        self.give_words(1)
+        paths, cfg = config.paths(), dict(config.load(), funny_clips_per_video=1)
+        conn = db.connect(self.home / "clipper.db")
+        pipeline.stage_transcribe(conn, paths, cfg, conn.execute("SELECT * FROM videos").fetchone())
+        ws = self.words
+        # One pause after a full stop laughs: after "fisherman." (37.65 s),
+        # far enough in for a 20-30 s clip to end on it.
+        k = next(i for i in range(len(ws) - 1) if ws[i]["end"] > 30 and ws[i]["word"].strip().endswith(".")
+                 and 0.8 <= ws[i + 1]["start"] - ws[i]["end"] <= 6)
+        a, b = ws[k]["end"], ws[k + 1]["start"]
+
+        def level(t):
+            if a + score.MOMENTARY <= t <= b:
+                return -18.0
+            return -20.0 if any(x["start"] <= t <= x["end"] + 0.3 for x in ws) else -45.0
+        frames = [[round(n / 10, 1), level(n / 10)] for n in range(1, 600)]
+        (self.home / "media" / "1" / "loudness-frames.json").write_text(json.dumps(frames))
+
+        pipeline.stage_find(conn, paths, cfg, conn.execute("SELECT * FROM videos").fetchone())
+        rows = conn.execute("SELECT * FROM candidates WHERE selected = 1").fetchall()
+        funny = [r for r in rows if "one of the funny picks" in r["reasons"]]
+        self.assertEqual(len(funny), 1, [dict(r) for r in rows])
+        self.assertIn("gets a laugh at the end", funny[0]["reasons"])
+        self.assertAlmostEqual(funny[0]["end"], min(a + moments.LAUGH_TAIL, b - 0.05), places=3)
+        said = conn.execute("SELECT msg FROM events WHERE stage = 'find'").fetchall()[-1][0]
+        self.assertIn("funny: 1 of 1 (1 laughs heard)", said)
+
+    def test_a_video_measured_before_frames_were_kept_is_measured_again(self):
+        # Transcribed by an older Clip: loudness.json, no frames, no audio.
+        self.cli("source", "add", "pd", "--rights", "public-domain", "--evidence", "LibriVox")
+        self.cli("ingest", "pd", str(self.video))
+        self.give_words(1)
+        paths, conn = config.paths(), db.connect(self.home / "clipper.db")
+        video = conn.execute("SELECT * FROM videos").fetchone()
+        pipeline.stage_transcribe(conn, paths, config.load(), video)
+        f = self.home / "media" / "1"
+        self.assertTrue((f / "loudness-frames.json").exists(), "kept when first measured")
+        (f / "loudness-frames.json").unlink()
+        frames = pipeline.frames_of(paths, video)
+        self.assertGreater(len(frames), 500, "ten a second, for 60 s")
+        self.assertTrue((f / "loudness-frames.json").exists())
+        self.assertFalse((f / "audio.wav").exists(), "and the audio is not left behind")

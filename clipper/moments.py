@@ -93,7 +93,7 @@ def overlaps(a, b):
     return a["start"] < b["end"] and b["start"] < a["end"]
 
 
-def choose(scored, max_clips, min_score, hunt=None):
+def choose(scored, max_clips, min_score, hunt=None, funny=0):
     """Best first, never two that overlap. A clip overlapping a better one is
     the same moment twice, and posting both is a duplicate.
 
@@ -101,12 +101,19 @@ def choose(scored, max_clips, min_score, hunt=None):
     in the list's order - otherwise the one topic talked about longest
     takes every slot - and the rest go by score. A topic's pick may not be
     one that overlaps every remaining chance of a topic after it: a long
-    window mentioning two topics would otherwise cost the list a clip."""
+    window mentioning two topics would otherwise cost the list a clip.
+
+    `funny` more are chosen for the laugh they get (score.laughs), on top of
+    max_clips - the owner asked for funny moments "along with" the regular
+    clips, not instead of them. One that lands on its laugh beats one with
+    the laugh in the middle; then by score. Each is marked picked_for:
+    "funny". Fewer when fewer moments got a laugh."""
     ranked = sorted(scored, key=lambda c: c["score"], reverse=True)
     chosen = []
+    cap = [max_clips]
 
     def free(c):
-        return (c["score"] >= min_score and len(chosen) < max_clips
+        return (c["score"] >= min_score and len(chosen) < cap[0]
                 and not any(overlaps(c, k) for k in chosen))
 
     def take(c):
@@ -124,16 +131,31 @@ def choose(scored, max_clips, min_score, hunt=None):
         for c in fair or mine:
             if take(c):
                 break
+    laughing = sorted((c for c in ranked if c.get("laughs")),
+                      key=lambda c: (c.get("laugh_tail", 0) > 0, c["score"]), reverse=True)
+    for _ in range(funny):
+        cap[0] += 1
+        pick = next((c for c in laughing if c not in chosen and free(c)), None)
+        if pick is None:
+            cap[0] -= 1
+            break
+        pick["picked_for"] = "funny"
+        chosen.append(pick)
     for c in ranked:
         if c not in chosen:
             take(c)
     return sorted(chosen, key=lambda c: c["score"], reverse=True)
 
 
+# A clip that ends on a punchline keeps this much of the laugh after it.
+LAUGH_TAIL = 2.5
+
+
 def cut_points(words, first, last, lead=0.15, tail=0.35):
     """Where the file is actually cut: a breath before the first word and a
     beat after the last, but never into the next word - a clip that ends on
-    the first syllable of the next sentence sounds chopped."""
+    the first syllable of the next sentence sounds chopped. A funny pick
+    passes a longer tail: the laugh is the payoff."""
     start = max(0.0, words[first]["start"] - lead)
     end = words[last]["end"] + tail
     if last + 1 < len(words):

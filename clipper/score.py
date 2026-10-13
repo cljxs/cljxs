@@ -200,8 +200,68 @@ def topics(text, hunt):
     return hit
 
 
-def score_windows(sents, wins, words, loud, cfg, hunt=None, avoid=()):
+# ------------------------------------------------------------------ funny moments
+
+# A laugh is a pause in the talking that is as loud as the talking. Whisper
+# writes no words for laughter - the transcriber's voice filter drops it - so
+# a laugh shows up as a gap between two words; a pause where nobody laughs is
+# quiet. Measured on a real live-audience recording (tests/fixtures/
+# clipper-laughs-*, an episode of "Our Miss Brooks", 1948, public domain):
+# the pauses after "Six dollars a month.", "Carrying concealed weapons?",
+# "I broke my leg." and "He'll bark." sit at -0.4..+9 dB against the speech,
+# the plain pauses at -1.5 dB and well below. Longer than LAUGH_MAX_GAP is
+# not a laugh but music or a break - the theme in that sample ran 9.4 s.
+LAUGH_MIN_GAP = 0.8         # the sentence pause: shorter is a breath
+LAUGH_MAX_GAP = 6.0
+LAUGH_DB = 0.0              # the pause's median against the video's speech, dB
+MOMENTARY = 0.4             # an ebur128 reading at t covers t-0.4..t
+# ...but only where pauses are usually quiet. Under a music bed, or a hum,
+# every pause is as loud as the talking and none of them is a laugh. In the
+# sample 8 of 30 pauses were laughs; past half, nothing is called one.
+LAUGH_MAX_SHARE = 0.5
+
+
+def laughs(words, frames):
+    """{index of the word before the laugh: (seconds, dB over the speech)}.
+
+    Only readings wholly inside the pause count - one at t also hears the
+    0.4 s before it, which near the pause's start is the last word. Empty
+    when most pauses are loud (LAUGH_MAX_SHARE)."""
+    heard = [v for _t, v in frames or () if v > -70]
+    if not heard or not words:
+        return {}
+    speech = statistics.median(heard)
+    out, k, pauses = {}, 0, 0
+    for n in range(len(words) - 1):
+        a, b = words[n]["end"], words[n + 1]["start"]
+        gap = b - a
+        if not LAUGH_MIN_GAP <= gap <= LAUGH_MAX_GAP:
+            continue
+        while k < len(frames) and frames[k][0] < a + MOMENTARY:
+            k += 1
+        inside = []
+        j = k
+        while j < len(frames) and frames[j][0] <= b:
+            inside.append(frames[j][1])
+            j += 1
+        if inside:
+            pauses += 1
+            db = statistics.median(inside) - speech
+            if db >= LAUGH_DB:
+                out[n] = (round(gap, 2), round(db, 1))
+    if pauses and len(out) > LAUGH_MAX_SHARE * pauses:
+        return {}
+    return out
+
+
+def clock(t):
+    t = int(t)
+    return f"{t // 60}:{t % 60:02d}"
+
+
+def score_windows(sents, wins, words, loud, cfg, hunt=None, avoid=(), frames=None):
     median = statistics.median([v for v in loud if v > -70]) if any(v > -70 for v in loud) else -30.0
+    laughed = laughs(words, frames)
     out = []
     for i, j in wins:
         f = features(sents, i, j, words, loud, median, cfg)
@@ -221,7 +281,18 @@ def score_windows(sents, wins, words, loud, cfg, hunt=None, avoid=()):
         if bad:
             score, on_list = 0.0, []
             why = [f"skipped: says {bad!r}" + (" (a sponsor read)" if bad in AD_READ else " (on the avoid list)")]
+        # Funny: the window ends on the line that got the laugh (the laugh
+        # is then cut into the clip, moments.cut_points' tail), or has one
+        # inside it. Kept apart from the score: a laugh is what the funny
+        # picks are chosen by, not a reason to reorder the others.
+        after = [sents[k]["last"] for k in range(i, j + 1) if sents[k]["last"] in laughed]
+        lands = laughed.get(sents[j]["last"])
+        if after and not bad:
+            where = "at the end" if lands else f"at {clock(words[after[0]]['end'])}"
+            more = f" ({len(after)} in all)" if len(after) > 1 else ""
+            why = why + [f"gets a laugh {where}{more}"]
         out.append({"i": i, "j": j, "start": sents[i]["start"], "end": sents[j]["end"],
                     "text": text, "score": score, "features": f, "reasons": why,
-                    "topics": on_list})
+                    "topics": on_list, "laughs": 0 if bad else len(after),
+                    "laugh_tail": (lands[0] if lands and not bad else 0.0)})
     return out

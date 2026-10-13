@@ -36,9 +36,30 @@ def loudness_of(paths, video):
         return json.loads(loud_file.read_text())
     if not audio.exists():
         media.extract_audio(video["media_path"], audio)
-    loud = media.loudness(audio)
+    frames = media.loudness_frames(audio)
+    loud = media.loudness_per_second(frames)
     loud_file.write_text(json.dumps(loud))
+    (f / "loudness-frames.json").write_text(json.dumps(frames))
     return loud
+
+
+def frames_of(paths, video):
+    """The ten-a-second readings laughter is found in (score.laughs), kept as
+    loudness-frames.json beside loudness.json. A video measured before they
+    were kept has neither them nor its audio: the audio is extracted once
+    more, measured, and deleted again."""
+    f = folder(paths, video)
+    frames_file, audio = f / "loudness-frames.json", f / "audio.wav"
+    if frames_file.exists():
+        return json.loads(frames_file.read_text())
+    had_audio = audio.exists()
+    if not had_audio:
+        media.extract_audio(video["media_path"], audio)
+    frames = media.loudness_frames(audio)
+    frames_file.write_text(json.dumps(frames))
+    if not had_audio:
+        audio.unlink()
+    return frames
 
 
 def stage_transcribe(conn, paths, cfg, video):
@@ -101,23 +122,33 @@ def stage_find(conn, paths, cfg, video):
     avoid = json.loads(src["avoid"]) if src["avoid"] else []
     sents = moments.sentences(words, cfg["sentence_pause_seconds"])
     wins = moments.windows(sents, cfg["min_clip_seconds"], cfg["max_clip_seconds"])
-    scored = score.score_windows(sents, wins, words, loud, cfg, hunt, avoid)
+    funny = int(cfg["funny_clips_per_video"])
+    frames = frames_of(paths, video) if funny > 0 else None
+    scored = score.score_windows(sents, wins, words, loud, cfg, hunt, avoid, frames)
     # At least one clip per topic on the campaign's list: the list is the
     # moments it says to make, so a smaller cap would silently drop some.
-    chosen = moments.choose(scored, max(cfg["max_clips_per_video"], len(hunt)), cfg["min_score"], hunt)
+    chosen = moments.choose(scored, max(cfg["max_clips_per_video"], len(hunt)), cfg["min_score"],
+                            hunt, funny)
     # A campaign that names its own moments for this episode is followed
     # instead: Clip's picks are kept as unselected candidates (they are what
     # learning needs) and the campaign's first batch is queued below.
     listed = campaign.entries(conn, video)
     if listed:
         chosen = []
+    for c in chosen:
+        if c.get("picked_for") == "funny":
+            c["reasons"] = ["one of the funny picks"] + c["reasons"]
     picked = {(c["i"], c["j"]) for c in chosen}
     with conn:
         conn.execute("DELETE FROM clips WHERE video_id = ?", (video["id"],))
         conn.execute("DELETE FROM candidates WHERE video_id = ?", (video["id"],))
         for c in scored:
             first, last = sents[c["i"]]["first"], sents[c["j"]]["last"]
-            start, end = moments.cut_points(words, first, last)
+            # A funny pick that ends on its punchline keeps the laugh.
+            tail = (min(c["laugh_tail"], moments.LAUGH_TAIL)
+                    if (c["i"], c["j"]) in picked and c.get("picked_for") == "funny"
+                    and c.get("laugh_tail") else 0.35)
+            start, end = moments.cut_points(words, first, last, tail=tail)
             conn.execute(
                 "INSERT INTO candidates (video_id, start, end, text, score, scorer, features, "
                 "reasons, selected) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -132,10 +163,13 @@ def stage_find(conn, paths, cfg, video):
         return "found"
     covered = sorted({t for c in chosen for t in c["topics"]})
     missing = [t["name"] for t in hunt if t["name"] not in covered]
+    funnies = sum(1 for c in chosen if c.get("picked_for") == "funny")
     db.event(conn, "find", f"{len(sents)} sentences, {len(scored)} candidate windows, "
                            f"{len(chosen)} chosen (min score {cfg['min_score']})"
                            + (f"; campaign topics clipped: {', '.join(covered) or 'none'}" if hunt else "")
-                           + (f"; not found: {', '.join(missing)}" if missing else ""),
+                           + (f"; not found: {', '.join(missing)}" if missing else "")
+                           + (f"; funny: {funnies} of {funny} "
+                              f"({len(score.laughs(words, frames))} laughs heard)" if funny else ""),
              video_id=video["id"])
     return "found"
 
