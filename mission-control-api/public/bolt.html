@@ -402,7 +402,7 @@ async function side() {
           <td class="num">${price(t.price)}</td><td class="num">${money(t.notional)}</td>
           <td class="num ${cls(t.pnl)}">${t.side === 'sell' ? pct(t.pnl_pct, 1) : ''}</td></tr>
           <tr><td colspan="6" class="muted" style="font-size:11px;padding-top:0">${esc(t.reason)}</td></tr>`).join('')}</table></div>`
-        : '<div class="empty">No trades yet. He buys only what scores 7 or more, at most one coin every 4 hours.</div>'}`;
+        : `<div class="empty">No trades yet. He buys only what scores ${B.rules.min_score} or more, at most one coin every ${B.rules.cycle_hours} hours.</div>`}`;
     return;
   }
   const r = B.rules;

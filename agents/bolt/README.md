@@ -14,7 +14,7 @@ Every 10 minutes, every day:
   -4% (raised to the price paid after +8%), dead money (24h within 2%), and
   the BTC dump switch (BTC -5% on the day: every coin but BTC is sold)
 
-Every 4 hours (00/04/08/12/16/20 UTC): at most one new coin, the best
+Every hour and a half (00:00, 01:30, 03:00 ... UTC): at most one new coin, the best
 scoring 7+ on the 10-point rubric, sized at 15% of the account while keeping
 5% in cash. No limit on how many he holds - one of each coin, as far as the
 cash goes. Down 15%: no buys for 24 hours, then he

@@ -19676,6 +19676,24 @@ class BoltBuysOnTheFourHourCycle(BoltBase):
         nxt = self.b.run(book, self.market(ETH=good), self.T0 + timedelta(hours=4))
         self.assertIn("bought ETH", nxt["cycle"]["action"])
 
+    def test_a_buy_check_every_hour_and_a_half(self):
+        # Owner, 2026-10-13: every 1.5 hours instead of 4, since it costs
+        # nothing. Sixteen checks a day, at the same times every day.
+        day = datetime(2026, 10, 13, tzinfo=timezone.utc)
+        edges, prev = [], None
+        for m in range(0, 24 * 60, 10):
+            blk = self.b.cycle_block(day + timedelta(minutes=m))
+            if blk != prev:
+                edges.append((day + timedelta(minutes=m)).strftime("%H:%M"))
+                prev = blk
+        self.assertEqual(edges[:4], ["00:00", "01:30", "03:00", "04:30"])
+        self.assertEqual(len(edges), 16)
+        book = self.b.seed(day)
+        flat = self.market()
+        cycles = [self.b.run(book, flat, day + timedelta(minutes=m))["cycle"] is not None
+                  for m in range(0, 180, 10)]
+        self.assertEqual(sum(cycles), 2, "00:00 and 01:30 in three hours of ticks")
+
     def test_nothing_under_seven(self):
         book = self.b.seed(self.T0)
         ev = self.b.run(book, self.market(SOL=self.coin(ch24=0.5, ch7=-1, ch1=-0.1)), self.T0)

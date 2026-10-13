@@ -25,7 +25,7 @@ then the exits, at this tick's prices:
     dead money    open 24 hours and still within 2% either way
     BTC dump      BTC down more than 5% on the day: every coin but BTC goes
 
-EVERY FOURTH HOUR (00, 04, 08 ... UTC): at most one new position, the best
+EVERY HOUR AND A HALF (00:00, 01:30, 03:00 ... UTC): at most one new position, the best
 scorer of 7 or more on the 10-point rubric below, if nothing stops him -
 the dump switch, the drawdown halt, or the 5% of the account he always keeps
 in cash. There is no limit on how many coins he holds (owner, 2026-10-13);
@@ -93,7 +93,10 @@ BTC_DUMP_PCT = -5.0           # BTC's 24h change below this: close every altcoin
 MAX_DRAWDOWN_PCT = 15.0
 HALT_HOURS = 24.0
 
-CYCLE_HOURS = 4               # entries on the 00/04/08/12/16/20 UTC ticks
+# Owner, 2026-10-13: every 1.5 hours, not 4 - it costs nothing, being code.
+# 5,400 seconds divides a day exactly, so the checks fall at the same 16
+# times every day: 00:00, 01:30, 03:00 ... 22:30 UTC.
+CYCLE_HOURS = 1.5
 MA_FAST, MA_SLOW = 20, 50     # hours
 MIN_SCORE = 7
 CHASE_PCT = 20.0              # up this much on the day: no buying the top
@@ -286,7 +289,7 @@ def exit_reason(pos, price, now):
 
 
 def cycle_block(now):
-    return int(now.timestamp() // (CYCLE_HOURS * 3600))
+    return int(now.timestamp() // int(CYCLE_HOURS * 3600))
 
 
 def assess(sym, c, btc_change, held):
@@ -687,7 +690,7 @@ def board(now=None):
                 continue
     fetched = parse_iso((market or {}).get("fetched_utc"))
     age = (now - fetched).total_seconds() / 60 if fetched else None
-    nxt = datetime.fromtimestamp((cycle_block(now) + 1) * CYCLE_HOURS * 3600, timezone.utc)
+    nxt = datetime.fromtimestamp((cycle_block(now) + 1) * int(CYCLE_HOURS * 3600), timezone.utc)
     h = book["halt"]
     return {
         "mode": "PAPER", "starting_cash": start, "equity": eq, "cash": book["cash"],

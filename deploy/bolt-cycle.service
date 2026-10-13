@@ -10,10 +10,10 @@ Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=ECOSYSTEM_ROOT=/root/ecosystem
 WorkingDirectory=/root/ecosystem
 # No model wake. Every rule Bolt trades by is a formula, so the script is the
-# trader: one CoinGecko call, the exits at this tick's prices, and on the
-# 00/04/08/12/16/20 UTC ticks at most one new position. It checks its own
-# book before saving and exits 1 if it does not balance, which is what makes
-# a failure here mean something.
+# trader: one CoinGecko call, the exits at this tick's prices, and every
+# hour and a half (00:00, 01:30 ... UTC) at most one new position. It checks
+# its own book before saving and exits 1 if it does not balance, which is
+# what makes a failure here mean something.
 ExecStart=/usr/bin/python3 /root/ecosystem/scripts/bolt.py tick
 TimeoutStartSec=120
 StandardOutput=journal
