@@ -1018,6 +1018,35 @@ def round_reach(path, step=4):
     return math.sqrt(far) / (w / 2.0) if far else None
 
 
+# A MUG's print area is the whole wrap, handle seam to handle seam, and the
+# art was fitted to all of it: "Our morning perch" (2026-10-12) ran round the
+# mug from one side of the handle to the other - nobody sees more than a third
+# of that at once - and, fitted to the area's full height, past the dashed
+# safe lines at top and bottom, where the rim and base take it. Printify's mug
+# editor (owner's screenshot, 11oz) marks the two side faces at 19% and 81%
+# of the wrap, and its safe band at 7.4% in from top and bottom. The design
+# goes on each face, as large as fits inside its own half and that band.
+MUG_FACES = (0.19, 0.81)
+MUG_FACE_WIDTH = 0.36       # of the wrap: 2 x 0.19, less a hair either side
+MUG_SAFE_HEIGHT = 0.84      # of the wrap's height, inside the dashed lines
+
+
+def is_mug(entry):
+    """Does this product wrap round a mug? From Printify's blueprint title -
+    "Accent Coffee Mug (11, 15oz)" - like is_round. Tumblers and bottles are
+    different shapes and are left to the plain fit."""
+    return bool(re.search(r"\bmugs?\b", str((entry or {}).get("blueprint_title") or ""), re.I))
+
+
+def mug_images(image_id, image, area):
+    """One copy of the art on each side face of a mug, inside the safe band."""
+    iw, ih = image
+    aw, ah = area
+    sc = min(MUG_FACE_WIDTH, MUG_SAFE_HEIGHT * (ah / aw) * (iw / ih))
+    sc = math.floor(sc * 10000) / 10000         # rounded down: never past the line
+    return [{"id": image_id, "x": x, "y": 0.5, "scale": sc, "angle": 0} for x in MUG_FACES]
+
+
 def fit_images(image_id, image, area, top, round_cut=False, reach=None):
     """One image, as large as fits inside the print area, centred across.
 
@@ -1058,10 +1087,11 @@ def print_areas(image_id, image, variant_ids, entry, measured=None, reach=None):
         groups = {}
         for v in variant_ids:
             groups.setdefault(tuple(measured[v]), []).append(v)
-        top, rnd = is_garment(entry), is_round(entry)
+        top, rnd, mug = is_garment(entry), is_round(entry), is_mug(entry)
         return [{"variant_ids": vids, "placeholders": [{
                     "position": position_of(entry),
-                    "images": fit_images(image_id, image, area, top, rnd, reach)}]}
+                    "images": (mug_images(image_id, image, area) if mug else
+                               fit_images(image_id, image, area, top, rnd, reach))}]}
                 for area, vids in sorted(groups.items())]
     if not sizes:
         # Unmeasured: centred at full width - except on a round cut, where full
@@ -2104,7 +2134,7 @@ def cmd_draft(a):
             sys.exit(2)
         for area in areas:
             for img in area["placeholders"][0]["images"]:
-                print(f"  placing at y={img['y']} scale={img['scale']} "
+                print(f"  placing at x={img['x']} y={img['y']} scale={img['scale']} "
                       f"angle={img['angle']}  ({len(area['variant_ids'])} variant(s))")
         spec = {
             "title": str(listing.get("title") or d.name)[:140],

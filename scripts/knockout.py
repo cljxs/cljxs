@@ -354,6 +354,55 @@ def components(w, h, px):
     return out
 
 
+# A line of lettering beside the art is a row of small pieces, each letter
+# under the speck limit on its own. "Our morning perch" under a pair of
+# lovebirds (mug, 2026-10-12) lost 13 of its letters that way: only O, g and p
+# were big enough to stay, and the mug printed "O gp". A scratch stands alone;
+# a letter has neighbours. So pieces closer to each other than their own size
+# are grouped, and a group of at least this many pieces that together exceed
+# the speck limit is lettering, kept whole.
+WORD_MIN_PIECES = 3
+
+
+def words(w, pieces, total, max_pct=SPECK_MAX_PCT):
+    """Indexes into `pieces` that belong to a run of lettering.
+
+    Two pieces join when the gap between their boxes is no more than the
+    larger side of either - letter spacing, and a word space, are well under
+    a letter's height; a scratch beside the art has nothing that close.
+    """
+    boxes = []
+    for _size, members in pieces:
+        xs = [i % w for i in members]
+        ys = [i // w for i in members]
+        boxes.append((min(xs), min(ys), max(xs), max(ys)))
+    group = list(range(len(pieces)))
+
+    def root(i):
+        while group[i] != i:
+            group[i] = group[group[i]]
+            i = group[i]
+        return i
+
+    for a in range(len(boxes)):
+        ax0, ay0, ax1, ay1 = boxes[a]
+        for b in range(a + 1, len(boxes)):
+            bx0, by0, bx1, by1 = boxes[b]
+            reach = max(ax1 - ax0, ay1 - ay0, bx1 - bx0, by1 - by0) + 1
+            gap = max(bx0 - ax1, ax0 - bx1, by0 - ay1, ay0 - by1, 0)
+            if gap <= reach:
+                group[root(a)] = root(b)
+
+    sizes, counts = {}, {}
+    for n, (size, _members) in enumerate(pieces):
+        r = root(n)
+        sizes[r] = sizes.get(r, 0) + size
+        counts[r] = counts.get(r, 0) + 1
+    return {n for n in range(len(pieces))
+            if counts[root(n)] >= WORD_MIN_PIECES
+            and sizes[root(n)] * 100.0 / total > max_pct}
+
+
 def despeckle(w, h, px, max_pct=SPECK_MAX_PCT, dominant_pct=DOMINANT_MIN_PCT):
     """Erase stray marks left beside the artwork. Returns (pixels, count, why).
 
@@ -374,18 +423,23 @@ def despeckle(w, h, px, max_pct=SPECK_MAX_PCT, dominant_pct=DOMINANT_MIN_PCT):
                       f"like a multi-part design, so nothing was removed")
 
     wiped = wiped_parts = 0
-    for size, members in parts[1:]:
-        if size * 100.0 / total > max_pct:
+    lettering = words(w, parts[1:], total, max_pct)
+    for n, (size, members) in enumerate(parts[1:]):
+        if size * 100.0 / total > max_pct or n in lettering:
             continue
         for i in members:
             px[i * 4 + 3] = 0
         wiped += size
         wiped_parts += 1
+    kept = (f"; {len(lettering)} small piece(s) kept as lettering"
+            if lettering else "")
     if not wiped_parts:
-        return 0, 0, f"{len(parts)} pieces, none small enough to be a speck"
+        return 0, 0, (f"{len(parts)} pieces, none small enough to be a speck"
+                      if not lettering else
+                      f"{len(parts)} pieces, no stray marks{kept}")
     return wiped, wiped_parts, (f"removed {wiped_parts} stray mark(s), "
                                 f"{wiped:,} px ({wiped * 100.0 / total:.2f}% "
-                                f"of the artwork)")
+                                f"of the artwork){kept}")
 
 
 def verdict(w, h, px, tol=DEFAULT_TOLERANCE):

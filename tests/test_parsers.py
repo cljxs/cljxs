@@ -17201,6 +17201,120 @@ class LetteringInsideTheArtIsNotASpeck(unittest.TestCase):
         self.assertIn("removed 1 stray mark", said)
 
 
+class AWordBesideTheArtIsNotASpeck(unittest.TestCase):
+    """2026-10-12: "Our morning perch" under a pair of lovebirds, on a mug.
+    The birds and branch were the dominant piece; every letter of the words
+    below stood on the background as a piece of its own, and 13 of them were
+    under the speck limit - removed as stray marks, 11% of the artwork. The
+    mug printed "O gp". The fixture is the owner's design, cut from the
+    Command Deck screenshot. A letter has neighbours; a scratch does not."""
+
+    def setUp(self):
+        self.k = load("knockout_words", "knockout.py")
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        self.dir = Path(d.name)
+
+    def cut(self, src):
+        out = self.dir / "cut.png"
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knockout.py"), str(src), str(out),
+                            "--counters"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        w, h, px = self.k.decode(out)
+        return [size for size, _ in self.k.components(w, h, px)], r.stdout
+
+    def test_the_real_mug_keeps_its_words(self):
+        sizes, said = self.cut(FIXTURES / "emily-mug-morning-perch.png")
+        self.assertGreaterEqual(len(sizes), 15, f"the birds and the letters: {sizes}\n{said}")
+        line = next(l for l in said.splitlines() if l.startswith("despeckle:"))
+        self.assertNotIn("removed", line)
+        self.assertIn("kept as lettering", line)
+
+    def canvas(self, blocks, size=200):
+        px = bytearray(bytes((245, 245, 240, 255)) * (size * size))
+        for (x0, y0, x1, y1) in blocks:
+            for y in range(y0, y1):
+                for x in range(x0, x1):
+                    px[(y * size + x) * 4:(y * size + x) * 4 + 3] = bytes((40, 40, 45))
+        self.k.knockout(size, size, px)
+        return size, size, px
+
+    def test_a_row_of_letters_stays_and_a_lone_scratch_goes(self):
+        # An emblem, five 6x10 letters 4 px apart below it - each 60 px, under
+        # 1.5% of the art, together over it - and one scratch far off.
+        letters = [(40 + 10 * n, 150, 46 + 10 * n, 160) for n in range(5)]
+        w, h, px = self.canvas([(40, 20, 160, 130)] + letters + [(185, 5, 189, 9)])
+        wiped, parts, why = self.k.despeckle(w, h, px)
+        self.assertEqual((wiped, parts), (16, 1), why)
+        self.assertEqual(len(self.k.components(w, h, px)), 6, "the emblem and five letters")
+        self.assertIn("5 small piece(s) kept as lettering", why)
+
+    def test_a_pair_of_scratches_is_still_two_scratches(self):
+        # Two strokes side by side are a group, but not a word: the compass
+        # emblem's two pen scratches must still go. Each is 1.1% of the art,
+        # together 2.2% - over the limit, as a word would be.
+        w, h, px = self.canvas([(40, 40, 160, 160), (5, 5, 25, 13), (5, 17, 25, 25)])
+        wiped, parts, _why = self.k.despeckle(w, h, px)
+        self.assertEqual(parts, 2)
+
+    def test_a_cluster_of_dust_is_not_a_word(self):
+        # Three dots close together, but too little ink between them to be
+        # lettering: still specks.
+        w, h, px = self.canvas([(40, 40, 160, 160), (5, 5, 8, 8), (10, 5, 13, 8), (15, 5, 18, 8)])
+        wiped, parts, _why = self.k.despeckle(w, h, px)
+        self.assertEqual(parts, 3)
+
+    def test_scattered_specks_do_not_make_a_word(self):
+        # Three specks far apart from each other are three specks.
+        w, h, px = self.canvas([(40, 40, 160, 160), (5, 5, 9, 9), (190, 5, 194, 9), (5, 190, 9, 194)])
+        wiped, parts, _why = self.k.despeckle(w, h, px)
+        self.assertEqual(parts, 3)
+
+
+class MugsPrintOnTheirFaces(unittest.TestCase):
+    """2026-10-12: the lovebird mug's art was fitted to the whole wrap - round
+    the mug from one side of the handle to the other, and to the full height,
+    past Printify's dashed safe lines where rim and base take it. A mug is
+    seen one face at a time: the design goes on each side face, inside the
+    safe band."""
+
+    MUG = {"blueprint_title": "Accent Coffee Mug (11, 15oz)", "variant_titles": ["11oz", "15oz"]}
+
+    def setUp(self):
+        self.ep = load("emily_printify_mug", "emily-printify.py")
+
+    def images(self, image, entry=None, area=(2700, 1200)):
+        return self.ep.print_areas("I", image, [1], entry or self.MUG,
+                                   {1: area})[0]["placeholders"][0]["images"]
+
+    def test_a_wide_design_goes_on_both_faces_inside_the_safe_band(self):
+        imgs = self.images((549, 275))
+        self.assertEqual([i["x"] for i in imgs], [0.19, 0.81])
+        for i in imgs:
+            width = i["scale"]
+            height = i["scale"] * 2700 * 275 / 549 / 1200
+            self.assertLessEqual(i["x"] + width / 2, 1.0)
+            self.assertGreaterEqual(i["x"] - width / 2, 0.0)
+            self.assertLessEqual(height, self.ep.MUG_SAFE_HEIGHT + 1e-9, "inside the dashed lines")
+        self.assertLess(imgs[1]["x"] - imgs[0]["x"], 1.0)
+        self.assertGreaterEqual(imgs[1]["x"] - imgs[0]["x"], imgs[0]["scale"], "the two copies do not overlap")
+
+    def test_a_tall_design_is_held_by_the_safe_band(self):
+        img = self.images((400, 900))[0]
+        self.assertLessEqual(img["scale"] * 2700 * 900 / 400, self.ep.MUG_SAFE_HEIGHT * 1200 + 0.5)
+
+    def test_a_mug_is_known_by_printifys_title(self):
+        self.assertTrue(self.ep.is_mug({"blueprint_title": "White Glossy Mug"}))
+        self.assertTrue(self.ep.is_mug({"blueprint_title": "Mugs, 11oz"}))
+        self.assertFalse(self.ep.is_mug({"blueprint_title": "Stainless Steel Tumbler"}))
+        self.assertFalse(self.ep.is_mug({"blueprint_title": "Smuggler Tee"}))
+
+    def test_anything_else_keeps_its_one_centred_image(self):
+        imgs = self.images((549, 275), {"blueprint_title": "Tote Bag", "variant_titles": ["One size"]})
+        self.assertEqual(len(imgs), 1)
+        self.assertEqual(imgs[0]["x"], 0.5)
+
+
 class EmbroideryIsItsOwnProduct(unittest.TestCase):
     """2026-10-10: Scout kept proposing "embroidered sweatshirt" ideas, and the
     word "sweatshirt" in them found Emily's PRINTED sweatshirt. Approved, she
