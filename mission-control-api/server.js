@@ -14,6 +14,7 @@ const clipRoutes = require('./clip');
 const belfortRoutes = require('./belfort');
 const boltRoutes = require('./bolt');
 const paulRoutes = require('./paul');
+const shopRoutes = require('./shop');
 
 const PORT = Number(process.env.PORT || 3001);
 // Bind to loopback by default, matching the OpenClaw gateway's posture.
@@ -310,6 +311,12 @@ app.get('/bolt', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'bolt.html'));
 });
 
+// The Shop: today's TikTok kit and the listing board (owner, 2026-10-13).
+// Opened from Emily's house; the Deck links to it as its own tab.
+app.get('/shop', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'shop.html'));
+});
+
 app.get('/village', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'village.html'));
 });
@@ -324,6 +331,7 @@ clipRoutes.register(app);
 belfortRoutes.register(app);
 boltRoutes.register(app);
 paulRoutes.register(app);
+shopRoutes.register(app);
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'mission-control-api' }));
 

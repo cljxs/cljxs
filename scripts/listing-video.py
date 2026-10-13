@@ -87,8 +87,13 @@ def plan(n, seconds):
     return round(each, 3), fade, offsets
 
 
-def command(images, out, seconds=SECONDS):
-    """The ffmpeg command line - an argument list, never a shell string."""
+def command(images, out, seconds=SECONDS, size=(SIDE, SIDE), background=BACKGROUND, crf=20):
+    """The ffmpeg command line - an argument list, never a shell string.
+
+    `size` is (width, height): square for Etsy, 1080x1920 for tiktok-kit.py,
+    which makes its slideshow here rather than keep a second copy of the
+    zoom-and-crossfade that would drift from this one."""
+    W, H = size
     each, fade, offsets = plan(len(images), seconds)
     frames = int(round(each * FPS))
     step = (ZOOM - 1) / max(frames, 1)
@@ -97,21 +102,21 @@ def command(images, out, seconds=SECONDS):
         cmd += ["-i", str(img)]
     parts = []
     for i in range(len(images)):
-        # Fit inside a square twice the output size, pad to square, then zoom
-        # down to the output: zooming from a larger frame keeps the drift
+        # Fit inside a frame twice the output size, pad to its shape, then
+        # zoom down to the output: zooming from a larger frame keeps the drift
         # smooth instead of stepping a pixel at a time.
         parts.append(
-            f"[{i}:v]scale={2 * SIDE}:{2 * SIDE}:force_original_aspect_ratio=decrease,"
-            f"pad={2 * SIDE}:{2 * SIDE}:(ow-iw)/2:(oh-ih)/2:color={BACKGROUND},setsar=1,"
+            f"[{i}:v]scale={2 * W}:{2 * H}:force_original_aspect_ratio=decrease,"
+            f"pad={2 * W}:{2 * H}:(ow-iw)/2:(oh-ih)/2:color={background},setsar=1,"
             f"zoompan=z='min(zoom+{step:.6f},{ZOOM})':d={frames}"
-            f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={SIDE}x{SIDE}:fps={FPS},"
+            f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={W}x{H}:fps={FPS},"
             f"format=yuv420p[v{i}]")
     last = "v0"
     for k, off in enumerate(offsets, start=1):
         parts.append(f"[{last}][v{k}]xfade=transition=fade:duration={fade}:offset={off}[x{k}]")
         last = f"x{k}"
     cmd += ["-filter_complex", ";".join(parts), "-map", f"[{last}]",
-            "-t", str(seconds), "-an", "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+            "-t", str(seconds), "-an", "-c:v", "libx264", "-preset", "medium", "-crf", str(crf),
             "-pix_fmt", "yuv420p", "-r", str(FPS), "-movflags", "+faststart", str(out)]
     return cmd
 
@@ -187,9 +192,9 @@ def listing_photos(listing_id, key, ep):
             if r.get("url_fullxfull") or r.get("url_570xN")]
 
 
-def download(urls, folder):
+def download(urls, folder, limit=MAX_IMAGES):
     paths = []
-    for n, url in enumerate(urls[:MAX_IMAGES]):
+    for n, url in enumerate(urls[:limit]):
         if not str(url).startswith("https://"):
             continue
         ext = ".png" if str(url).lower().endswith(".png") else ".jpg"

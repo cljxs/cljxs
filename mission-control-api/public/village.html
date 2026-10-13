@@ -135,6 +135,8 @@
   #lb .cap{font-size:12.5px;color:var(--mute);text-align:center}
 
   /* report reader */
+  .shopbtn{display:block;width:100%;margin:14px 0 4px;padding:12px;border-radius:11px;cursor:pointer;
+    font-size:14px;font-weight:600;color:#fff;border:1px solid rgba(244,114,182,.6);background:rgba(244,114,182,.16)}
   .doclink{cursor:pointer;color:var(--c2);border-bottom:1px dotted rgba(255,255,255,.3)}
   #doc{position:fixed;inset:0;z-index:26;display:none;align-items:flex-start;justify-content:center;
     background:rgba(4,7,10,.94);padding:16px;overflow:auto}
@@ -2162,7 +2164,8 @@ function openPanel(name) {
       : `<div class="muted" style="margin-top:10px">📄 <span class="doclink" onclick="openDoc('${esc(a.name)}')">reports…</span></div>`}
     ${a.name === 'scout' ? `<h2 style="font-size:15px;margin:18px 0 8px">Ideas awaiting you</h2>
       <div id="scoutIdeas"><div class="muted">loading…</div></div>` : ''}
-    ${a.name === 'emily' ? `<div id="emilyShop"></div>
+    ${a.name === 'emily' ? `<button class="shopbtn" onclick="openFrame('shop')">🛍 Open the Shop - today's TikTok kit and the listing board</button>
+      <div id="emilyShop"></div>
       <h2 style="font-size:15px;margin:18px 0 8px">The gallery</h2>
       <div id="emilyBuilds"><div class="muted">loading…</div></div>` : ''}
     ${a.name === 'ace' ? `<div id="aceLedger"><div class="muted">loading the ledger…</div></div>` : ''}`;
@@ -3291,10 +3294,11 @@ async function actOnKnowledge(id, verb){
 function closePanel() { closeLb(); closeMarkets(); openAgent = null; $('panel').style.display = 'none'; }
 
 /* Belfort's house, Bolt's and Peter's hall: each agent's page in a frame over
- * the village (/markets, /bolt, /peter). Removed on close, not hidden, so it stops
+ * the village (/markets, /bolt, /peter). Emily's Shop (/shop) opens the same
+ * way, from the button at the top of her panel, over her gallery. Removed on close, not hidden, so it stops
  * polling. Escape inside it, or its close button, posts '<name>-close' here. */
 const FRAMES = { belfort: '/markets?embed=1', peter: '/peter?embed=1', bolt: '/bolt?embed=1',
-                 paul: '/paul?embed=1' };
+                 paul: '/paul?embed=1', shop: '/shop?embed=1' };
 function openFrame(agent) {
   closeMarkets();
   openAgent = agent;
@@ -3314,7 +3318,7 @@ function closeMarkets() {
 }
 window.addEventListener('message', e => {
   if (e.origin === location.origin && e.data
-      && ['markets-close', 'peter-close', 'bolt-close', 'paul-close'].includes(e.data.type)) closeMarkets();
+      && ['markets-close', 'peter-close', 'bolt-close', 'paul-close', 'shop-close'].includes(e.data.type)) closeMarkets();
 });
 $('panel').addEventListener('click', e => { if (e.target.id === 'panel') closePanel(); });
 
