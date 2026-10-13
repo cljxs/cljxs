@@ -18826,12 +18826,14 @@ class BelfortsListIsOneTableAndARefusedFetchIsLoud(unittest.TestCase):
                 "KO": "consumer and retail", "NBIS": "AI infrastructure and power",
                 "IREN": "AI infrastructure and power", "BE": "AI infrastructure and power",
                 "OKLO": "AI infrastructure and power", "IONQ": "quantum", "INFQ": "quantum",
-                "SOFI": "fintech", "PYPL": "fintech", "LMND": "fintech", "ONDS": "drones and defense"}
+                "SOFI": "fintech", "PYPL": "fintech", "LMND": "fintech", "ONDS": "drones and defense",
+                # ORCK was a typo for ORCL (owner, 2026-10-13); checked live the same day.
+                "ORCL": "AI infrastructure and power"}
         fetch = load("belfort_fetch_added", "belfort-fetch.py")
         for sym, group in want.items():
             self.assertIn(sym, fetch.UNIVERSE, sym)
             self.assertEqual(self.trade.cluster_of(sym), group, sym)
-        self.assertEqual(len(fetch.UNIVERSE), 70)
+        self.assertEqual(len(fetch.UNIVERSE), 71)
         self.assertNotIn("ORCK", fetch.UNIVERSE, "no such symbol")
 
     def test_a_name_or_two_failing_is_not_an_alarm(self):

@@ -129,7 +129,9 @@ CLUSTERS = {
     # Owner, 2026-10-12 - each checked with `belfort-fetch.py check` that day.
     # The AI build-out's other half: rented GPU clouds and the power for them,
     # which rise and fall on the same data-centre spending news.
-    "AI infrastructure and power": ["NBIS", "IREN", "BE", "OKLO"],
+    # ORCL (2026-10-13) too: Oracle trades on its GPU-cloud contracts now,
+    # not on database software, so it moves with these.
+    "AI infrastructure and power": ["NBIS", "IREN", "BE", "OKLO", "ORCL"],
     "quantum": ["IONQ", "INFQ"],            # INFQ: 165 trading days by then
     "fintech": ["SOFI", "PYPL", "LMND"],
     "drones and defense": ["ONDS"],
