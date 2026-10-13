@@ -356,7 +356,13 @@ const PLOTS = [
 // used by the house loop and the garden paths both, so a path never leads
 // to a house that is not there.
 const NO_HOUSE = new Set(['fury']);
-const housed = () => (DATA.agents || []).filter(a => !NO_HOUSE.has(a.name));
+// Houses go on PLOTS in this order, then anyone else by name. It is the order
+// they were built in: the agents came alphabetically, so Bolt (2026-10-13)
+// would otherwise have taken Emily's plot and moved every house after his.
+const PLOT_ORDER = ['ace', 'belfort', 'emily', 'paul', 'scout', 'bolt'];
+const plotRank = n => { const i = PLOT_ORDER.indexOf(n); return i < 0 ? PLOT_ORDER.length : i; };
+const housed = () => (DATA.agents || []).filter(a => !NO_HOUSE.has(a.name))
+  .slice().sort((a, b) => plotRank(a.name) - plotRank(b.name) || a.name.localeCompare(b.name));
 
 // Houses drawn for one agent's trade (makeTextures, "themed houses"): the
 // thing in each garden, the building's height (they share a 128px frontage
@@ -369,6 +375,7 @@ const THEMED = {
   emily:   { prop: 'easel', h: 144, lamp: [52, 9] },
   scout:   { prop: 'globe', h: 172, lamp: [64, 5] },
   paul:    { prop: 'drafting', h: 168, lamp: [101, 3] },
+  bolt:    { prop: 'rocket', h: 176, lamp: [64, 4] },
 };
 
 // What each resident wears, so the person outside a house fits it. A base
@@ -440,6 +447,22 @@ const OUTFITS = {
       } else {
         px(g, 15, 9, 3, 12, BLUE); px(g, 15, 9, 3, 1, END); px(g, 15, 20, 3, 1, END);   // slung on his back
       }
+    } },
+  bolt: { shirt: 0xf7931a, back: 0xe07f10, legs: 0x1f2430, hair: 0x15161a, shoes: 0xffffff,
+    more: (g, f) => {                                        // orange hoodie, a lightning bolt, shades
+      const Y = 0xffd23f, K = 0x111318;
+      if (f === 'down') {
+        px(g, 8, 7, 8, 2, K); px(g, 9, 7, 2, 1, 0x4cc9f0); px(g, 13, 7, 2, 1, 0x4cc9f0);   // shades
+        px(g, 13, 12, 2, 2, Y); px(g, 12, 14, 3, 1, Y); px(g, 11, 15, 3, 1, Y); px(g, 10, 16, 2, 2, Y);
+        px(g, 10, 11, 1, 3, 0xffffff); px(g, 13, 11, 1, 3, 0xffffff);                     // hood strings
+      } else if (f === 'side') {
+        px(g, 11, 7, 5, 2, K); px(g, 8, 7, 3, 1, K);
+        px(g, 13, 13, 2, 2, Y); px(g, 12, 15, 2, 2, Y);
+      } else {
+        px(g, 7, 9, 10, 3, 0xe07f10);                          // the hood, down
+      }
+      px(g, 6, 3, 12, 2, 0x15161a); px(g, 5, 5, 2, 4, 0x2b2f3a); px(g, 17, 5, 2, 4, 0x2b2f3a);   // headphones
+      px(g, 6, 2, 12, 1, 0x2b2f3a);
     } },
   clip: { shirt: 0x22252e, back: 0x22252e, legs: 0x4b5563, hair: 0x3a2a1d,
     more: (g, f) => {                                        // hoodie in the app colours, cap on backwards
@@ -1083,6 +1106,63 @@ function makeTextures(s) {
     px(g, 0, TH - 4, HW, 4, 0xc4c9d1);
   });
 
+  // Bolt, the crypto trader: a neon exchange that never closes. A Bitcoin
+  // coin for a sign, server racks blinking in the upper windows, a ticker of
+  // green and red candles, a lightning bolt on the wall and a glass front.
+  themed('bolt', (g, HW, TH, r) => {
+    const D = 0x141826, D2 = 0x1d2233, O = 0xf7931a, O2 = 0xffb04a, CY = 0x22d3ee, MG = 0xe040fb;
+    const Y = 0xffd23f, top = TH - 126;                     // the building is 126 tall, the sign above it
+    // the coin on its mast
+    px(g, 62, top - 14, 4, 16, 0x596079); px(g, 62, top - 14, 1, 16, 0x8d949f);
+    g.fillStyle(0x000000, .25); g.fillCircle(65, 23, 19);
+    g.fillStyle(O, 1); g.fillCircle(64, 22, 19);
+    g.fillStyle(O2, 1); g.fillCircle(64, 22, 15);
+    g.fillStyle(O, 1); g.fillCircle(64, 22, 13);
+    const W = 0xfff3d6;                                       // the B, with its two strokes
+    px(g, 58, 13, 3, 18, W); px(g, 58, 13, 9, 3, W); px(g, 58, 20, 10, 3, W); px(g, 58, 28, 11, 3, W);
+    px(g, 66, 15, 3, 5, W); px(g, 67, 23, 3, 5, W); px(g, 61, 10, 2, 3, W); px(g, 65, 10, 2, 3, W);
+    px(g, 61, 31, 2, 3, W); px(g, 65, 31, 2, 3, W);
+    // the building
+    g.translateCanvas(0, top);
+    px(g, 8, 4, HW - 16, 122, D); px(g, 8, 4, HW - 16, 2, CY);       // body, neon roofline
+    px(g, 6, 2, HW - 12, 3, D2);
+    px(g, 8, 4, 3, 122, MG, .85); px(g, HW - 11, 4, 3, 122, MG, .85); // neon edges
+    // upper floor: four server racks behind glass, LEDs lit at random
+    [14, 42, 70, 98].forEach(x => {
+      px(g, x, 12, 18, 32, 0x0b0e17); px(g, x, 12, 18, 1, 0x3a4250);
+      for (let y = 15; y < 42; y += 4) {
+        px(g, x + 2, y, 14, 3, 0x22283a);
+        px(g, x + 3, y + 1, 1, 1, r() < .7 ? 0x34d399 : 0xf05252);
+        px(g, x + 5, y + 1, 1, 1, r() < .5 ? CY : 0x22283a);
+      }
+      px(g, x, 12, 18, 32, 0xffffff, .05);
+    });
+    // the ticker: candles, mostly green
+    px(g, 8, 48, HW - 16, 12, 0x07090f); px(g, 8, 48, HW - 16, 1, 0x3a4250);
+    for (let x = 14; x < HW - 14; x += 6) {
+      const up = r() < .65, h = 2 + Math.floor(r() * 6), y0 = 50 + Math.floor(r() * (8 - h));
+      px(g, x + 1, y0 - 1, 1, h + 2, up ? 0x34d399 : 0xf05252, .6);
+      px(g, x, y0, 3, h, up ? 0x34d399 : 0xf05252);
+    }
+    // the ground floor: a lightning bolt on each side of a glass front
+    px(g, 8, 62, HW - 16, 2, O);
+    const bolt = x0 => {
+      [[6, 0, 4], [5, 2, 4], [4, 4, 4], [3, 6, 7], [5, 8, 4], [4, 10, 4], [3, 12, 4], [2, 14, 3]]
+        .forEach(([dx, dy, w]) => px(g, x0 + dx, 70 + dy * 2, w, 2, Y));
+      px(g, x0, 66, 16, 36, Y, .06);
+    };
+    bolt(14); bolt(98);
+    px(g, 34, 68, 60, 58, 0x1b2a3d); px(g, 34, 68, 60, 2, O2);        // the glass front
+    for (let x = 38; x < 92; x += 12) px(g, x, 72, 1, 26, 0xffffff, .12);
+    px(g, 34, 68, 60, 58, CY, .06);
+    px(g, 48, 92, 32, 34, 0x0e1622); px(g, 48, 92, 32, 2, O);         // the door, in the middle
+    px(g, 50, 95, 13, 31, 0x203550); px(g, 65, 95, 13, 31, 0x203550);
+    px(g, 61, 106, 2, 8, O2); px(g, 65, 106, 2, 8, O2);
+    g.translateCanvas(0, -top);
+    px(g, 0, TH - 8, HW, 4, 0x2b3142); px(g, 0, TH - 8, HW, 1, CY, .5);   // a lit step
+    px(g, 0, TH - 4, HW, 4, 0x20242f);
+  });
+
   // Ace, the sports bettor: an arena. A stadium dome with a jumbotron and
   // searchlights, basketball windows, championship banners and marquee
   // bulbs round the door - navy and orange, nothing like the props gym.
@@ -1355,6 +1435,17 @@ function makeTextures(s) {
     [9, 14, 25, 30].forEach(lx => px(d2, lx, 17, 3, 4, 0x6b4520));
     px(d2, 4, 8, 4, 2, 0x6b4520); px(d2, 2, 10, 2, 5, 0x6b4520);   // tail
     d2.generateTexture('bull', 44, 32); d2.destroy();
+
+    d2 = s.add.graphics();                               // Bolt's rocket: to the moon
+    d2.fillStyle(0x000000, .2); d2.fillEllipse(14, 54, 24, 5);
+    px(d2, 3, 46, 22, 5, 0x596079); px(d2, 3, 46, 22, 1, 0x8d949f);     // launch pad
+    px(d2, 11, 40, 6, 3, 0xffd23f); px(d2, 12, 43, 4, 3, 0xf7931a); px(d2, 13, 46, 2, 2, 0xf05252, .8);  // flame
+    px(d2, 9, 10, 10, 30, 0xe5e7eb); px(d2, 9, 10, 2, 30, 0xffffff); px(d2, 17, 10, 2, 30, 0xb8bec7);   // body
+    px(d2, 10, 6, 8, 4, 0xf05252); px(d2, 11, 3, 6, 3, 0xf05252); px(d2, 13, 1, 2, 2, 0xf05252);        // nose
+    px(d2, 11, 15, 6, 6, 0x2b2f3a); px(d2, 12, 16, 4, 4, 0x4cc9f0); px(d2, 12, 16, 2, 1, 0xffffff);    // window
+    px(d2, 9, 26, 10, 3, 0xf7931a);                                     // the stripe
+    px(d2, 5, 32, 4, 9, 0xf05252); px(d2, 19, 32, 4, 9, 0xf05252); px(d2, 13, 33, 2, 8, 0xc0392b);     // fins
+    d2.generateTexture('rocket', 28, 56); d2.destroy();
 
     d2 = s.add.graphics();                               // Ace's hoop
     d2.fillStyle(0x000000, .18); d2.fillEllipse(15, 54, 20, 5);
@@ -2034,6 +2125,8 @@ function openPanel(name) {
   // Belfort's house is his trading desk: the Markets page, the same one
   // the Deck opens as a tab (owner, 2026-10-06).
   if (name === 'belfort') return openMarkets();
+  // Bolt's house is his crypto desk, the page the Deck's Bolt tab opens.
+  if (name === 'bolt') return openFrame('bolt');
   // Paul's house is his workshop: what he built, as it looks, and the site
   // itself to open (owner, 2026-10-08).
   if (name === 'paul') return openPaulPanel();
@@ -3283,10 +3376,10 @@ async function actOnKnowledge(id, verb){
 
 function closePanel() { closeLb(); closeMarkets(); openAgent = null; $('panel').style.display = 'none'; }
 
-/* Belfort's house and Peter's hall: each agent's page in a frame over the
- * village (/markets, /peter). Removed on close, not hidden, so it stops
+/* Belfort's house, Bolt's and Peter's hall: each agent's page in a frame over
+ * the village (/markets, /bolt, /peter). Removed on close, not hidden, so it stops
  * polling. Escape inside it, or its close button, posts '<name>-close' here. */
-const FRAMES = { belfort: '/markets?embed=1', peter: '/peter?embed=1' };
+const FRAMES = { belfort: '/markets?embed=1', peter: '/peter?embed=1', bolt: '/bolt?embed=1' };
 function openFrame(agent) {
   closeMarkets();
   openAgent = agent;
@@ -3306,7 +3399,7 @@ function closeMarkets() {
 }
 window.addEventListener('message', e => {
   if (e.origin === location.origin && e.data
-      && (e.data.type === 'markets-close' || e.data.type === 'peter-close')) closeMarkets();
+      && ['markets-close', 'peter-close', 'bolt-close'].includes(e.data.type)) closeMarkets();
 });
 $('panel').addEventListener('click', e => { if (e.target.id === 'panel') closePanel(); });
 

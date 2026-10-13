@@ -5974,7 +5974,7 @@ class EachHouseLooksLikeItsTrade(unittest.TestCase):
 
     def test_every_themed_house_and_prop_is_drawn(self):
         themed = self.themed()
-        self.assertEqual(sorted(themed), ["ace", "belfort", "emily", "paul", "scout"])
+        self.assertEqual(sorted(themed), ["ace", "belfort", "bolt", "emily", "paul", "scout"])
         for name, (prop, h) in themed.items():
             self.assertIn(f"themed('{name}',", self.html, f"{name} has no house drawn")
             self.assertIn(f"generateTexture('{prop}',", self.html, f"{name}'s {prop} is never drawn")
@@ -19465,7 +19465,7 @@ class TheMarketsPageIsWiredInOnePlace(unittest.TestCase):
         self.assertIn('href="/peter"', (self.API / "public" / "dashboard.html").read_text())
         village = (self.API / "public" / "village.html").read_text()
         self.assertIn("peter: '/peter?embed=1'", village)
-        self.assertIn("e.data.type === 'peter-close'", village)
+        self.assertIn("'peter-close'", village.split("window.addEventListener('message'", 1)[1][:300])
         self.assertIn("type: 'peter-close'", (self.API / "public" / "peter.html").read_text())
         self.assertIn("const PROPS_DOOR = 'Peter';", village)
 
@@ -19504,3 +19504,361 @@ class ReportsHideOpenclawReplyTags(unittest.TestCase):
         self.assertIn("Market open notes.", out.stdout)
         self.assertIn("Keep [[this]] inline.", out.stdout)
 
+
+
+# --------------------------------------------------------------------------- Bolt
+
+class BoltBase(unittest.TestCase):
+    """Bolt (owner, 2026-10-13): a crypto paper trader that is plain code. Every
+    rule is a formula, so a script runs it - see bolt.py's docstring for why no
+    model. These load the script against a scratch agent folder."""
+
+    T0 = datetime(2026, 10, 13, 16, 0, 30, tzinfo=timezone.utc)   # on a 4h block edge
+
+    def setUp(self):
+        self.b = load("bolt_" + self.id().rsplit(".", 1)[-1], "bolt.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        a = Path(self.tmp.name) / "agents" / "bolt"
+        self.b.AGENT, self.b.MARKET = a, a / "data" / "market.json"
+        self.b.BOOK, self.b.EQUITY, self.b.REPORTS = a / "state" / "portfolio.json", \
+            a / "state" / "equity.jsonl", a / "reports"
+        self.rows = json.loads((FIXTURES / "coingecko-markets-bolt-10.json").read_text())
+
+    def coin(self, price=100.0, ma20=98.0, ma50=95.0, ch1=0.5, ch24=5.0, ch7=3.0,
+             cap=50e9, vol=2e9):
+        return {"price": price, "ma_20h": ma20, "ma_50h": ma50, "change_1h": ch1,
+                "change_24h": ch24, "change_7d": ch7, "market_cap": cap, "volume_24h": vol,
+                "rank": 5, "name": "x", "spark": [price] * 60}
+
+    def market(self, btc=1.0, **prices):
+        """Every coin flat and unscoring unless given a price; BTC's 24h is `btc`."""
+        coins = {s: self.coin(price=100.0, ma20=100.0, ma50=100.0, ch24=0.0, ch7=-1.0)
+                 for s in self.b.UNIVERSE}
+        for s, c in prices.items():
+            coins[s] = c if isinstance(c, dict) else dict(coins[s], price=c)
+        coins["BTC"]["change_24h"] = btc
+        return {"fetched_utc": self.b.iso(self.T0), "btc_change_24h": btc, "coins": coins}
+
+
+class BoltReadsCoinGecko(BoltBase):
+    """The averages come from the 7 days of hourly prices in ONE /coins/markets
+    call (fixture: the real reply for all ten, 2026-10-13, 168 hours each), not
+    ten /market_chart calls that would meet the free limit every tick."""
+
+    def test_the_real_reply_parses_and_the_averages_are_the_last_hours(self):
+        m = self.b.parse_markets(self.rows, self.T0)
+        self.assertEqual(list(m["coins"]), list(self.b.UNIVERSE))
+        btc = next(r for r in self.rows if r["id"] == "bitcoin")
+        spark = btc["sparkline_in_7d"]["price"]
+        self.assertEqual(len(spark), 168)
+        self.assertAlmostEqual(m["coins"]["BTC"]["ma_20h"], sum(spark[-20:]) / 20)
+        self.assertAlmostEqual(m["coins"]["BTC"]["ma_50h"], sum(spark[-50:]) / 50)
+        self.assertEqual(m["btc_change_24h"], btc["price_change_percentage_24h_in_currency"])
+        self.assertEqual(m["coins"]["AVAX"]["id"], "avalanche-2")
+
+    def test_half_a_market_is_refused_not_written(self):
+        with self.assertRaisesRegex(self.b.BadData, "DOT"):
+            self.b.parse_markets([r for r in self.rows if r["id"] != "polkadot"], self.T0)
+        short = json.loads(json.dumps(self.rows))
+        short[0]["sparkline_in_7d"]["price"] = short[0]["sparkline_in_7d"]["price"][-30:]
+        with self.assertRaisesRegex(self.b.BadData, "50 needed"):
+            self.b.parse_markets(short, self.T0)
+        with self.assertRaises(self.b.BadData):
+            self.b.parse_markets({"status": {"error_code": 429}}, self.T0)
+
+    def test_the_small_coins_were_refused_on_the_real_day(self):
+        # On 2026-10-13 LTC, AVAX and DOT were under $5B and LINK under $500M
+        # a day: watched, never bought, whatever they score.
+        m = self.b.parse_markets(self.rows, self.T0)
+        out = {s: self.b.assess(s, c, m["btc_change_24h"], set())["out"] or ""
+               for s, c in m["coins"].items()}
+        for s in ("LTC", "AVAX", "DOT"):
+            self.assertIn("market cap", out[s], s)
+        self.assertIn("volume", out["LINK"])
+        self.assertNotIn("market cap", out["BTC"])
+
+
+class BoltScoresByTheRubric(BoltBase):
+    def test_a_perfect_setup_scores_ten(self):
+        a = self.b.assess("SOL", self.coin(price=100, ma20=99, ma50=95, ch1=0.4, ch24=5, ch7=2), 1.0, set())
+        self.assertEqual((a["score"], a["out"]), (10, None))
+        self.assertEqual([r["ok"] for r in a["rubric"]], [True] * 5)
+
+    def test_each_point_is_its_own_rule(self):
+        base = dict(price=100, ma20=99, ma50=95, ch1=0.4, ch24=5, ch7=2)
+        cases = [({"ma20": 101}, 6),                # under its 20h average: no uptrend (-4)
+                 ({"ch1": -0.1}, 8), ({"ch24": 16}, 8), ({"ch24": 0.5}, 8),
+                 ({"ch7": -1}, 9), ({"price": 103}, 8)]
+        for change, want in cases:
+            with self.subTest(change):
+                a = self.b.assess("SOL", self.coin(**dict(base, **change)), 1.0, set())
+                self.assertEqual(a["score"], want, a["points"])
+        self.assertEqual(self.b.assess("SOL", self.coin(**base), -0.5, set())["score"], 9, "BTC down")
+
+    def test_what_can_never_be_bought(self):
+        ok = self.coin()
+        self.assertEqual(self.b.assess("SOL", ok, 1.0, {"SOL"})["out"], "already held")
+        self.assertIn("chasing", self.b.assess("SOL", self.coin(ch24=20.0), 1.0, set())["out"])
+        self.assertIn("50h", self.b.assess("SOL", self.coin(price=95, ma50=95), 1.0, set())["out"])
+        self.assertIn("market cap", self.b.assess("SOL", self.coin(cap=4.9e9), 1.0, set())["out"])
+        self.assertIn("volume", self.b.assess("SOL", self.coin(vol=4.9e8), 1.0, set())["out"])
+
+
+class BoltExitsAtTheTicksPrice(BoltBase):
+    """Every exit is code, every tick, at that tick's price - the -4% stop is
+    filled where the price really was, not where the stop sat."""
+
+    def hold(self, sym="SOL", price=100.0, at=None):
+        book = self.b.seed(self.T0)
+        self.b.buy(book, sym, price, 2500.0, at or self.T0, "test")
+        return book
+
+    def tick(self, book, minutes, btc=1.0, **prices):
+        now = self.T0 + timedelta(minutes=minutes)
+        book["last_cycle_block"] = self.b.cycle_block(now)       # exits only, no buying
+        return self.b.run(book, self.market(btc=btc, **prices), now)
+
+    def test_take_profit_sells_it_all(self):
+        book = self.hold()
+        ev = self.tick(book, 10, SOL=115.5)
+        self.assertEqual(len(ev["exits"]), 1)
+        self.assertIn("take profit", ev["exits"][0]["reason"])
+        self.assertEqual(book["positions"], [])
+
+    def test_a_stop_crossed_between_looks_fills_at_the_real_price(self):
+        book = self.hold()
+        ev = self.tick(book, 10, SOL=93.0)
+        t = ev["exits"][0]
+        self.assertIn("stop loss", t["reason"])
+        self.assertEqual(t["price"], 93.0, "the tick's price, not the stop's 96")
+        self.assertLess(t["pnl_pct"], -7.0, "and the loss includes both fees")
+
+    def test_breakeven_after_eight_percent(self):
+        book = self.hold()
+        self.assertEqual(self.tick(book, 10, SOL=108.5)["exits"], [])
+        self.assertEqual(book["positions"][0]["stop_price"], 100.0, "raised to the price paid")
+        ev = self.tick(book, 20, SOL=99.9)
+        self.assertIn("breakeven", ev["exits"][0]["reason"])
+
+    def test_dead_money_after_a_day_not_before(self):
+        book = self.hold()
+        self.assertEqual(self.tick(book, 23 * 60, SOL=101.0)["exits"], [])
+        ev = self.tick(book, 24 * 60 + 10, SOL=101.0)
+        self.assertIn("dead money", ev["exits"][0]["reason"])
+        moving = self.hold()
+        self.assertEqual(self.tick(moving, 24 * 60 + 10, SOL=103.0)["exits"], [], "+3% is not dead")
+
+    def test_the_btc_dump_sells_the_altcoins_and_keeps_btc(self):
+        book = self.hold("SOL")
+        self.b.buy(book, "BTC", 100.0, 2500.0, self.T0, "test")
+        ev = self.tick(book, 10, btc=-5.5)
+        self.assertTrue(ev["dumped"])
+        self.assertEqual([t["symbol"] for t in ev["exits"]], ["SOL"])
+        self.assertEqual([p["symbol"] for p in book["positions"]], ["BTC"])
+
+    def test_the_book_balances_after_every_kind_of_exit(self):
+        book = self.hold()
+        self.tick(book, 10, SOL=93.0)
+        self.assertEqual(self.b.problems(book), [])
+
+
+class BoltBuysOnTheFourHourCycle(BoltBase):
+    def test_one_buy_a_cycle_the_best_scorer_at_a_quarter_of_the_account(self):
+        book = self.b.seed(self.T0)
+        good = self.coin(price=100, ma20=99, ma50=95, ch1=0.4, ch24=5, ch7=2)
+        ev = self.b.run(book, self.market(SOL=good, ETH=dict(good, change_7d=-1.0)), self.T0)
+        self.assertIn("bought SOL", ev["cycle"]["action"])
+        self.assertEqual(len(book["positions"]), 1, "at most one a cycle")
+        self.assertAlmostEqual(book["trades"][0]["notional"], 2500.0)
+        later = self.b.run(book, self.market(ETH=good), self.T0 + timedelta(minutes=10))
+        self.assertIsNone(later["cycle"], "the next tick in the same 4 hours buys nothing")
+        nxt = self.b.run(book, self.market(ETH=good), self.T0 + timedelta(hours=4))
+        self.assertIn("bought ETH", nxt["cycle"]["action"])
+
+    def test_nothing_under_seven(self):
+        book = self.b.seed(self.T0)
+        ev = self.b.run(book, self.market(SOL=self.coin(ch24=0.5, ch7=-1, ch1=-0.1)), self.T0)
+        self.assertEqual(book["positions"], [])
+        self.assertIn("nothing scored 7+", ev["cycle"]["action"])
+
+    def test_the_cash_floor_holds_after_the_fee(self):
+        book = self.b.seed(self.T0)
+        good = self.coin(price=100, ma20=99, ma50=95, ch1=0.4, ch24=5, ch7=2)
+        for h, sym in enumerate(("SOL", "ETH", "BNB")):
+            self.b.run(book, self.market(**{sym: good}), self.T0 + timedelta(hours=4 * h))
+        eq = self.b.equity(book)
+        self.assertEqual(len(book["positions"]), 3)
+        self.assertGreaterEqual(book["cash"], eq * 0.25 - 0.01, "never under the floor")
+        ev = self.b.run(book, self.market(XRP=good), self.T0 + timedelta(hours=12))
+        self.assertIn("3 positions open", ev["cycle"]["action"])
+
+    def test_no_buying_into_a_btc_dump(self):
+        book = self.b.seed(self.T0)
+        good = self.coin(price=100, ma20=99, ma50=95, ch1=0.4, ch24=5, ch7=2)
+        ev = self.b.run(book, self.market(btc=-6.0, SOL=good), self.T0)
+        self.assertEqual(book["positions"], [])
+        self.assertIn("dump switch", ev["cycle"]["action"])
+
+
+class BoltHaltsAndResumesOnHisOwn(BoltBase):
+    """Owner, 2026-10-13: "make Bolt resume on its own since it's just paper
+    trading". Down 15% from where he last started counting: no buys for 24h,
+    then he starts again and counts from there."""
+
+    def test_halt_then_resume_counting_from_the_restart(self):
+        book = self.b.seed(self.T0)
+        book["cash"] = 8400.0                       # as if he had lost $1,600
+        book["trades"].append({"side": "sell", "symbol": "X", "qty": 0, "notional": 0,
+                               "fee": 1600.0, "utc": self.b.iso(self.T0)})
+        self.assertEqual(self.b.update_halt(book, 8400.0, self.T0), "halted")
+        good = self.coin(price=100, ma20=99, ma50=95, ch1=0.4, ch24=5, ch7=2)
+        ev = self.b.run(book, self.market(SOL=good), self.T0 + timedelta(hours=4))
+        self.assertIn("halted", ev["cycle"]["action"])
+        self.assertEqual(book["positions"], [])
+        later = self.T0 + timedelta(hours=24, minutes=10)
+        self.assertEqual(self.b.update_halt(book, 8400.0, later), "resumed")
+        self.assertEqual(book["halt"]["reference"], 8400.0)
+        self.assertIsNone(self.b.update_halt(book, 8300.0, later), "counts from $8,400 now")
+
+
+class BoltChecksHisOwnBook(BoltBase):
+    """Belfort's book once read -41% when the loss was under 4%: closes zeroed
+    the shares and never credited the cash. Bolt's cash is replayed from the
+    trades on every tick, and a book that does not balance is not saved."""
+
+    def test_a_sale_never_credited_is_caught(self):
+        book = self.b.seed(self.T0)
+        self.b.buy(book, "SOL", 100.0, 2500.0, self.T0, "t")
+        self.b.sell(book, book["positions"][0], 90.0, self.T0, "t")
+        self.assertEqual(self.b.problems(book), [])
+        book["cash"] -= 2000.0
+        self.assertIn("trades leave", self.b.problems(book)[0])
+
+    def test_a_position_its_trades_do_not_explain_is_caught(self):
+        book = self.b.seed(self.T0)
+        self.b.buy(book, "SOL", 100.0, 2500.0, self.T0, "t")
+        book["positions"][0]["qty"] *= 2
+        self.assertTrue(any("SOL" in p for p in self.b.problems(book)))
+
+    def test_an_unbalanced_tick_is_not_saved(self):
+        orig = self.b.sell
+
+        def forgetful(book, pos, price, now, reason):     # the Belfort bug, reintroduced
+            t = orig(book, pos, price, now, reason)
+            book["cash"] -= t["notional"] - t["fee"]
+            return t
+        book = self.b.seed(self.T0)
+        self.b.buy(book, "SOL", 100.0, 2500.0, self.T0, "t")
+        book["last_cycle_block"] = self.b.cycle_block(self.T0)
+        self.b.write_json(self.b.BOOK, book)
+        before = self.b.BOOK.read_text()
+        sol = next(r for r in self.rows if r["id"] == "solana")
+        sol["current_price"] = 80.0
+        self.b.sell = forgetful
+        out = io.StringIO()
+        with contextlib.redirect_stderr(out):
+            rc = self.b.cmd_tick(now=self.T0 + timedelta(minutes=10), fetch=lambda: self.rows)
+        self.assertEqual(rc, 1)
+        self.assertIn("DOES NOT BALANCE", out.getvalue())
+        self.assertEqual(self.b.BOOK.read_text(), before, "the wrong book was not written")
+
+
+class BoltWithoutPricesTradesNothing(BoltBase):
+    def test_a_failed_fetch_trades_nothing_and_says_so(self):
+        good = self.b.parse_markets(self.rows, self.T0)
+        self.b.write_json(self.b.MARKET, good)
+
+        def down():
+            raise urllib.error.URLError("timed out")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = self.b.cmd_tick(now=self.T0, fetch=down)
+        self.assertEqual(rc, 1)
+        self.assertEqual(json.loads(self.b.MARKET.read_text()), good, "the last good prices are kept")
+        book = json.loads(self.b.BOOK.read_text())
+        self.assertIn("timed out", book["last_error"]["error"])
+        self.assertEqual(book["trades"], [])
+        report = next(self.b.REPORTS.glob("*.md")).read_text()
+        self.assertIn("No prices", report)
+        self.assertIn("No prices", (self.b.AGENT / "MEMORY.md").read_text())
+
+    def test_a_real_tick_writes_the_book_the_report_and_one_memory_line(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.b.cmd_tick(now=self.T0, fetch=lambda: self.rows), 0)
+        self.assertTrue(self.b.BOOK.is_file() and self.b.MARKET.is_file())
+        mem = (self.b.AGENT / "MEMORY.md").read_text().strip().splitlines()
+        self.assertEqual(len(mem), 1)
+        self.assertIn("Equity $10,000.00", mem[0])
+        self.assertIn("## 12:00 ET - cycle", next(self.b.REPORTS.glob("*.md")).read_text())
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.b.cmd_tick(now=self.T0 + timedelta(minutes=10), fetch=lambda: self.rows)
+        self.assertEqual(len((self.b.AGENT / "MEMORY.md").read_text().strip().splitlines()), 1,
+                         "a tick between cycles records nothing")
+
+
+class BoltsScreenDrawsTheBoard(BoltBase):
+    """The page works nothing out: the averages it draws, the score and the
+    distances all come from `bolt.py board`."""
+
+    def test_the_board_carries_what_the_page_draws(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.b.cmd_tick(now=self.T0, fetch=lambda: self.rows)
+        board = self.b.board(self.T0 + timedelta(minutes=5))
+        btc = next(c for c in board["coins"] if c["symbol"] == "BTC")
+        self.assertAlmostEqual(btc["ma20_line"][-1], btc["ma_20h"], places=6)
+        self.assertAlmostEqual(btc["ma50_line"][-1], btc["ma_50h"], places=6)
+        self.assertIsNone(btc["ma50_line"][48])
+        self.assertEqual(len(btc["rubric"]), 5)
+        self.assertTrue(board["balances"])
+        self.assertAlmostEqual(board["btc_hold"]["equity"], 10000.0)
+        page = (ROOT / "mission-control-api" / "public" / "bolt.html").read_text()
+        for key in ("vs_ma20_pct", "ma20_line", "rubric", "btc_hold", "next_cycle_utc"):
+            self.assertIn(key, page)
+        self.assertIn("fetch('/api/bolt/board'", page)
+
+    def test_the_deck_and_the_village_open_it(self):
+        api = ROOT / "mission-control-api"
+        self.assertIn("app.get('/api/bolt/board'", (api / "bolt.js").read_text())
+        self.assertIn("app.get('/bolt'", (api / "server.js").read_text())
+        self.assertIn('href="/bolt"', (api / "public" / "dashboard.html").read_text())
+        village = (api / "public" / "village.html").read_text()
+        self.assertIn("bolt: '/bolt?embed=1'", village)
+        self.assertIn("if (name === 'bolt') return openFrame('bolt');", village)
+        self.assertIn("themed('bolt'", village)
+
+    def test_a_new_house_does_not_move_the_old_ones(self):
+        # Houses take PLOTS in order. Sorted by name, Bolt would have taken
+        # Emily's plot and shifted Paul and Scout along.
+        village = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        order = re.search(r"const PLOT_ORDER = \[([^\]]+)\]", village).group(1)
+        self.assertEqual([n.strip(" '") for n in order.split(",")],
+                         ["ace", "belfort", "emily", "paul", "scout", "bolt"])
+
+
+class BoltIsPlainCode(BoltBase):
+    """No model runs Bolt (agents/bolt/NO_MODEL): preflight must not demand an
+    AGENTS.md or a model for him, and deploy.sh must not try to merge one."""
+
+    def test_preflight_does_not_block_him(self):
+        root = Path(self.tmp.name) / "pf"
+        (root / "agents" / "bolt").mkdir(parents=True)
+        (root / "agents" / "bolt" / "NO_MODEL").write_text("plain code\n")
+        (root / "deploy").mkdir()
+        (root / "scripts").symlink_to(SCRIPTS)
+        r = subprocess.run([sys.executable, str(SCRIPTS / "preflight.py")], capture_output=True,
+                           text=True, timeout=120,
+                           env=dict(os.environ, ECOSYSTEM_ROOT=str(root), OPENROUTER_API_KEY="",
+                                    PATH="/usr/bin:/bin"))
+        self.assertIn("plain code - no model", r.stdout)
+        self.assertNotIn("bolt: AGENTS.md", r.stdout)
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_deploy_skips_the_merge_and_runs_a_tick(self):
+        sh = (SCRIPTS / "deploy.sh").read_text()
+        self.assertIn('[ -f "$ROOT/agents/$AGENT/NO_MODEL" ]', sh)
+        self.assertIn('python3 "$ROOT/scripts/bolt.py" check', sh)
+        self.assertTrue((ROOT / "agents" / "bolt" / "NO_MODEL").is_file())
+        unit = (ROOT / "deploy" / "bolt-cycle.service").read_text()
+        self.assertIn("scripts/bolt.py tick", unit)
+        self.assertIn("OnCalendar=*:0/10", (ROOT / "deploy" / "bolt-cycle.timer").read_text())

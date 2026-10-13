@@ -1,0 +1,4 @@
+Bolt is plain code: scripts/bolt.py on bolt-cycle.timer. No model is woken,
+so there is no AGENTS.md to build and no OpenClaw registration to check.
+preflight.py and deploy.sh read this file; delete it only if a model ever
+runs Bolt.

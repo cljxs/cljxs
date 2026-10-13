@@ -62,7 +62,7 @@ import et_time  # noqa: E402
 DEPARTMENTS = {
     "all":      [],
     "etsy":     ["emily", "scout"],
-    "trading":  ["belfort"],
+    "trading":  ["belfort", "bolt"],
     "betting":  ["ace"],
     "props":    [],
     "ops":      ["fury"],

@@ -154,9 +154,12 @@ function heartbeatAt(agentDir) {
 
 function markToMarket(agentDir, portfolio) {
   const quotes = readJson(path.join(agentDir, 'data', 'quotes.json'));
+  // Bolt keeps no quotes.json: his book carries the prices it was valued at
+  // this tick (`marks`, written by bolt.py), which is the same fact.
+  const marks = (portfolio && portfolio.marks) || {};
   const priceOf = sym => {
     const q = quotes && quotes.quotes && quotes.quotes[sym];
-    return q ? num(q.price) : null;
+    return q ? num(q.price) : (marks[sym] !== undefined ? num(marks[sym]) : null);
   };
 
   const raw = Array.isArray(portfolio && portfolio.positions) ? portfolio.positions
@@ -231,7 +234,8 @@ function buildAgent(name) {
   // Trust whichever is NEWER. An agent that writes its report but forgets to
   // update its state file would otherwise be reported as days idle when it
   // actually ran minutes ago - which is exactly what Belfort did on 2026-09-14.
-  const stateRun = portfolio && firstOf(portfolio, ['last_cycle_utc', 'last_run', 'updated_at'], null);
+  // last_tick_utc first: Bolt runs every 10 minutes and cycles every 4 hours.
+  const stateRun = portfolio && firstOf(portfolio, ['last_tick_utc', 'last_cycle_utc', 'last_run', 'updated_at'], null);
   const stateAge = minutesSince(stateRun);
   const reportAge = minutesSince(report.when);
   // Some agents write a report only when they have something to say. Scout is

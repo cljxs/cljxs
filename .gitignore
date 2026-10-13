@@ -165,3 +165,12 @@ agents/paul/reports/*
 !agents/paul/reports/.gitkeep
 agents/paul/MEMORY.md
 agents/paul/memory-archive.md
+
+# Bolt runtime state - plain code writes all of it, every 10 minutes.
+agents/bolt/data/*
+!agents/bolt/data/.gitkeep
+agents/bolt/reports/*
+!agents/bolt/reports/.gitkeep
+agents/bolt/state/*
+!agents/bolt/state/.gitkeep
+agents/bolt/MEMORY.md

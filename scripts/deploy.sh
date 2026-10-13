@@ -70,7 +70,9 @@ fi
 for AGENT in "${AGENTS[@]}"; do
   # Clip lives in clipper/, not agents/: it has units but no AGENTS.md,
   # because no model reads instructions to run it.
-  if [ ! -d "$ROOT/agents/$AGENT" ]; then
+  # Bolt lives in agents/ (his reports and book are agent files) but no model
+  # runs him, which agents/bolt/NO_MODEL says - so there is nothing to merge.
+  if [ ! -d "$ROOT/agents/$AGENT" ] || [ -f "$ROOT/agents/$AGENT/NO_MODEL" ]; then
     step "$AGENT: no AGENTS.md to rebuild (not a model agent)"
   else
   step "$AGENT: rebuilding AGENTS.md"
@@ -121,6 +123,14 @@ if printf '%s\n' "${AGENTS[@]}" | grep -qx belfort; then
       && ok "book balances now" || warn "still does not balance - stop and look"
   fi
   python3 "$ROOT/scripts/belfort-trade.py" show
+fi
+
+if printf '%s\n' "${AGENTS[@]}" | grep -qx bolt; then
+  step "bolt: one tick now, then the book"
+  # The first tick writes the book, the prices and his first report; later
+  # ones are the timer's. Either way the book is checked before it is saved.
+  python3 "$ROOT/scripts/bolt.py" tick || warn "the tick failed - journalctl -u bolt-cycle says why"
+  python3 "$ROOT/scripts/bolt.py" check || warn "Bolt's book does not balance"
 fi
 
 if printf '%s\n' "${AGENTS[@]}" | grep -qx ace; then

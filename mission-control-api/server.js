@@ -12,6 +12,7 @@ const propsRoutes = require('./props');
 const townhallRoutes = require('./townhall');
 const clipRoutes = require('./clip');
 const belfortRoutes = require('./belfort');
+const boltRoutes = require('./bolt');
 const paulRoutes = require('./paul');
 
 const PORT = Number(process.env.PORT || 3001);
@@ -298,6 +299,11 @@ app.get('/peter', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'peter.html'));
 });
 
+// Bolt: the crypto paper book, the same style again (owner, 2026-10-13).
+app.get('/bolt', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'bolt.html'));
+});
+
 app.get('/village', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'village.html'));
 });
@@ -310,6 +316,7 @@ propsRoutes.register(app);
 townhallRoutes.register(app);
 clipRoutes.register(app);
 belfortRoutes.register(app);
+boltRoutes.register(app);
 paulRoutes.register(app);
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'mission-control-api' }));

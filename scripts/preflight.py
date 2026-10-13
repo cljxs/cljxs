@@ -412,9 +412,13 @@ def main():
             print(f"{name:<10}{'retired':<34}{'-':<14}{'-':<12}")
             continue
 
+        # Plain code on a timer (agents/<name>/NO_MODEL): no instructions to
+        # be stale and no model to be missing - only the schedule can fail.
+        no_model = (adir / "NO_MODEL").is_file()
         before = len(BLOCK)
-        check_instructions(name, adir)
-        instr = "stale/broken" if len(BLOCK) > before else "current"
+        if not no_model:
+            check_instructions(name, adir)
+        instr = "n/a" if no_model else "stale/broken" if len(BLOCK) > before else "current"
 
         before = len(BLOCK)
         check_cycle_chain(name)
@@ -431,7 +435,7 @@ def main():
             sched = "armed"
 
         check_credentials(name, adir)
-        slug = check_model(name) or "-"
+        slug = "plain code - no model" if no_model else (check_model(name) or "-")
         print(f"{name:<10}{slug:<34}{instr:<14}{sched:<12}")
         art = image_model_for(name, adir)
         if art:
@@ -441,7 +445,8 @@ def main():
     check_credit()
     print()
 
-    live = [n for n in names if not (AGENTS / n / "RETIRED").is_file()]
+    live = [n for n in names if not (AGENTS / n / "RETIRED").is_file()
+            and not (AGENTS / n / "NO_MODEL").is_file()]
     if UNDEPLOYED and len(UNDEPLOYED) == len(live):
         BLOCK[:] = [b for b in BLOCK if "AGENTS.md does not exist" not in b[1]]
         BLOCK.insert(0, ("-", "no agent has an AGENTS.md, so this checkout has never "
