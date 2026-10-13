@@ -16,7 +16,8 @@ Every 10 minutes, every day:
 
 Every 4 hours (00/04/08/12/16/20 UTC): at most one new coin, the best
 scoring 7+ on the 10-point rubric, sized at 25% of the account while keeping
-25% in cash, with at most 3 open. Down 15%: no buys for 24 hours, then he
+5% in cash. No limit on how many he holds - one of each coin, as far as the
+cash goes. Down 15%: no buys for 24 hours, then he
 starts again on his own and counts from there.
 
 ## Files

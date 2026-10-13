@@ -211,7 +211,7 @@ function render() {
     <div><div class="l">Account value</div><div class="v big num">${money(B.equity)}</div></div>
     <div><div class="l">Since start</div><div class="v num ${cls(B.pnl)}">${signed(B.pnl)} <span style="font-size:13px">${pct(B.pnl_pct)}</span></div></div>
     <div><div class="l">Cash</div><div class="v num">${money(B.cash)} <span style="font-size:13px" class="muted">${has(B.cash_pct) ? Math.round(B.cash_pct) + '%' : ''}</span></div></div>
-    <div><div class="l">Open</div><div class="v num">${B.positions.length}/${B.rules.max_positions}</div></div>`;
+    <div><div class="l">Open</div><div class="v num">${B.positions.length}</div></div>`;
 
   const h = B.btc_hold || {};
   const rows = [{ name: 'Bolt', pct: B.pnl_pct }, { name: 'BTC held', pct: h.pnl_pct }];
@@ -418,7 +418,7 @@ async function side() {
     <div class="sect">Every ${r.cycle_hours} hours</div><ul class="rules">
       <li>At most one new coin, the best scoring <b>${r.min_score}/10</b> or more.</li>
       <li>Never: one already held, one up <b>${r.chase_pct}%+</b> on the day, one at or under its 50h average, or one under ${big(r.min_market_cap)} in size or ${big(r.min_volume_24h)} traded a day.</li>
-      <li>Up to <b>${r.max_positions}</b> open, each about <b>${r.target_pct}%</b> of the account, with <b>${r.cash_floor_pct}%</b> always kept in cash.</li></ul>
+      <li>As many coins as he likes, one of each, every new one about <b>${r.target_pct}%</b> of the account - but <b>${r.cash_floor_pct}%</b> always stays in cash, so the last one may be smaller.</li></ul>
     <div class="sect">The score</div><ul class="rules">
       <li>+4 uptrend: price above its 20h average, the 20h above the 50h</li>
       <li>+2 within 2% of the 20h average and rising this hour</li>

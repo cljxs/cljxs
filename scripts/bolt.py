@@ -27,8 +27,9 @@ then the exits, at this tick's prices:
 
 EVERY FOURTH HOUR (00, 04, 08 ... UTC): at most one new position, the best
 scorer of 7 or more on the 10-point rubric below, if nothing stops him -
-three open already, the dump switch, the drawdown halt, or the 25% of the
-account he always keeps in cash.
+the dump switch, the drawdown halt, or the 5% of the account he always keeps
+in cash. There is no limit on how many coins he holds (owner, 2026-10-13);
+one of each, and the cash floor, are the only bounds.
 
 A FILL IS THE PRICE AT THE TICK, NOT THE STOP. A stop at -4% checked every
 ten minutes can still be crossed by more than that between two looks; the
@@ -79,9 +80,8 @@ MIN_VOLUME_24H = 5e8
 
 STARTING_CASH = 10000.0
 FEE_PCT = 0.1                 # each way: a typical exchange's taker fee
-MAX_POSITIONS = 3
 TARGET_PCT = 25.0             # of the account, per new position
-CASH_FLOOR_PCT = 25.0         # always kept in cash, after the fee
+CASH_FLOOR_PCT = 5.0          # always kept in cash, after the fee (owner, 2026-10-13: was 25)
 MIN_TRADE = 100.0             # a position smaller than this is not worth the fees
 
 TAKE_PROFIT_PCT = 15.0
@@ -335,7 +335,7 @@ def rolling(xs, n):
 
 def size_for(book, eq):
     """What a new position may cost: a quarter of the account, never taking
-    cash under the 25% floor once the fee is paid."""
+    cash under the floor once the fee is paid."""
     room = (book["cash"] - eq * CASH_FLOOR_PCT / 100.0) / (1 + FEE_PCT / 100.0)
     return max(0.0, min(eq * TARGET_PCT / 100.0, room))
 
@@ -400,8 +400,6 @@ def run(book, market, now):
         action = "no entry: BTC's 24h change is missing, so the dump switch cannot be checked"
     elif btc < BTC_DUMP_PCT:
         action = f"no entry: BTC {btc:+.1f}% on the day, past the {BTC_DUMP_PCT:g}% dump switch"
-    elif len(book["positions"]) >= MAX_POSITIONS:
-        action = f"no entry: {MAX_POSITIONS} positions open already"
     elif not best:
         top = max(rows, key=lambda r: (0 if r["out"] else 1, r["score"]))
         action = (f"no entry: nothing scored {MIN_SCORE}+ (best eligible "
@@ -454,8 +452,6 @@ def problems(book):
         want, have = held.get(sym, 0.0), open_.get(sym, 0.0)
         if abs(want - have) > 1e-9 * max(1.0, abs(want)):
             out.append(f"{sym}: the trades leave {want:.8g}, the book holds {have:.8g}")
-    if len(book["positions"]) > MAX_POSITIONS:
-        out.append(f"{len(book['positions'])} positions open, the limit is {MAX_POSITIONS}")
     return out
 
 
@@ -721,7 +717,7 @@ def board(now=None):
                   "breakeven_at_pct": BREAKEVEN_AT_PCT, "dead_money_hours": DEAD_MONEY_HOURS,
                   "dead_money_band_pct": DEAD_MONEY_BAND_PCT, "btc_dump_pct": BTC_DUMP_PCT,
                   "max_drawdown_pct": MAX_DRAWDOWN_PCT, "halt_hours": HALT_HOURS,
-                  "max_positions": MAX_POSITIONS, "target_pct": TARGET_PCT,
+                  "target_pct": TARGET_PCT,
                   "cash_floor_pct": CASH_FLOOR_PCT, "fee_pct": FEE_PCT, "min_score": MIN_SCORE,
                   "cycle_hours": CYCLE_HOURS, "chase_pct": CHASE_PCT,
                   "min_market_cap": MIN_MARKET_CAP, "min_volume_24h": MIN_VOLUME_24H},
