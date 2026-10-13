@@ -273,6 +273,352 @@ class TheSlideshowIsListingVideosOwn(unittest.TestCase):
         self.assertNotIn("xfade", src)
 
 
+# ====================================================================== scenes
+
+def ff_available():
+    return shutil.which("ffmpeg") and shutil.which("ffprobe")
+
+
+def mockup(d, name="mock.png", bag="0xd9c9a6", backdrop="0xe8e8e6"):
+    """A stand-in Printify mockup: a tote with straps and a printed panel on a
+    plain studio backdrop."""
+    p = Path(d) / name
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", f"color=c={backdrop}:s=600x600",
+                    "-frames:v", "1", "-vf",
+                    f"drawbox=x=220:y=80:w=26:h=140:color={bag}:t=fill,drawbox=x=354:y=80:w=26:h=140:color={bag}:t=fill,"
+                    f"drawbox=x=220:y=80:w=160:h=20:color={bag}:t=fill,drawbox=x=130:y=190:w=340:h=360:color={bag}:t=fill,"
+                    "drawbox=x=200:y=280:w=200:h=160:color=0x2f5d3a:t=fill", str(p)], check=True)
+    return p
+
+
+def picture(d, name, spec, size="1080x1920"):
+    p = Path(d) / name
+    src = spec if "=" in spec else f"color=c={spec}:s={size}"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", src, "-frames:v", "1",
+                    "-vf", f"scale={size.replace('x', ':')}", str(p)], check=True)
+    return p
+
+
+class SceneBase(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.sc = load("scene_test", "scene.py")
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d, True)
+
+    def ff(self):
+        if not ff_available():
+            self.skipTest("ffmpeg is not installed here")
+
+
+class TheProductKeepsItsColour(SceneBase):
+    """Matched in full to a dim orange table, a cream tote came out khaki
+    grey (2026-10-13) - lit like the scene, and not the bag a buyer would
+    receive. The product is only ever nudged."""
+
+    def test_no_scene_moves_the_product_far(self):
+        product = {"p95": 230.0, "mean": 180.0, "tint_r": 0.0, "tint_b": 0.0, "neutral_share": 0.3}
+        for near, whole, tr, tb in ((60, 70, 0.4, -0.5), (250, 255, -0.4, 0.5), (140, 141, None, None)):
+            scene = {"near_p95": near, "p95": whole, "tint_r": tr, "tint_b": tb, "side": 0.0}
+            m = self.sc.match(scene, product)
+            self.assertGreaterEqual(m["gain"], self.sc.GAIN_MIN)
+            self.assertLessEqual(m["gain"], self.sc.GAIN_MAX)
+            for ch in "rgb":
+                self.assertLessEqual(abs(m[ch] / m["gain"] - 1), self.sc.TINT_MAX + 1e-9, (scene, m))
+
+    def test_the_shadow_falls_away_from_the_light(self):
+        product = {"p95": 200.0, "tint_r": None, "tint_b": None}
+        lit_right = {"near_p95": 200, "p95": 200, "tint_r": None, "tint_b": None, "side": 0.3}
+        self.assertLess(self.sc.match(lit_right, product)["shadow_dx"], 0)
+        lit_left = dict(lit_right, side=-0.3)
+        self.assertGreater(self.sc.match(lit_left, product)["shadow_dx"], 0)
+
+
+class WhereTheProductGoes(SceneBase):
+    """Laid flat in a top-down scene, it lies on the surface wherever it goes.
+    The first try stood a tote at eye level and it hung in front of the table."""
+
+    def test_flat_products_are_centred_a_mug_stands(self):
+        x, y, pw, ph = self.sc.placement(500, 600, "tote bag")
+        self.assertEqual(x, (self.sc.W - pw) // 2)
+        self.assertAlmostEqual(y + ph / 2, self.sc.H * self.sc.FLAT_CENTRE, delta=2)
+        x, y, pw, ph = self.sc.placement(500, 600, "mug")
+        self.assertEqual(y + ph, int(self.sc.H * self.sc.STAND_BASE))
+
+    def test_a_tall_product_is_capped(self):
+        _x, _y, pw, ph = self.sc.placement(200, 900, "tote bag")
+        self.assertLessEqual(ph, self.sc.H * self.sc.MAX_HEIGHT_SHARE + 2)
+
+    def test_the_prompts_ask_for_the_right_view(self):
+        self.assertIn("top-down", self.sc.prompt_for("tote bag", 0))
+        self.assertIn("very edges", self.sc.prompt_for("tote bag", 0))
+        self.assertIn("eye-level", self.sc.prompt_for("mug", 0))
+        self.assertNotEqual(self.sc.prompt_for("tote bag", 0), self.sc.prompt_for("tote bag", 1))
+        for t in ("tote bag", "mug", "sticker", "find"):
+            self.assertIn("no people", self.sc.prompt_for(t, 0))
+
+
+class TheFreeScene(SceneBase):
+    """The free service answers refusals as JSON - sometimes with a 200 - and
+    rate-limits by IP; one request in two was refused when asked quickly."""
+
+    class Answer:
+        def __init__(self, body, kind):
+            self.body, self.headers = body, {"Content-Type": kind}
+
+        def read(self):
+            return self.body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def opener(self, answers, seen):
+        def go(req, timeout=None):
+            seen.append(req)
+            a = answers.pop(0)
+            if isinstance(a, Exception):
+                raise a
+            return a
+        return go
+
+    def test_a_json_refusal_and_a_429_are_retried_then_the_picture_kept(self):
+        import urllib.error
+        seen, waits = [], []
+        answers = [self.Answer(b'{"error":"rate limited"}', "image/jpeg"),
+                   urllib.error.HTTPError("u", 429, "Too Many", {}, None),
+                   self.Answer(b"\xff\xd8\xff jpeg", "image/jpeg")]
+        out = self.d / "bg.img"
+        with unittest.mock.patch.object(self.sc, "credentials_key", return_value=None):
+            got = self.sc.fetch_background("a table", 7, out, self.opener(answers, seen), waits.append)
+        self.assertEqual(got, "free")
+        self.assertEqual(out.read_bytes(), b"\xff\xd8\xff jpeg")
+        self.assertEqual(waits, [self.sc.FETCH_WAIT] * 2)
+        self.assertTrue(seen[0].full_url.startswith("https://image.pollinations.ai/prompt/a%20table?"))
+        self.assertIn("seed=7", seen[0].full_url)
+
+    def test_every_try_refused_says_so(self):
+        answers = [self.Answer(b"{}", "application/json") for _ in range(self.sc.FETCH_TRIES)]
+        with unittest.mock.patch.object(self.sc, "credentials_key", return_value=None):
+            with self.assertRaises(self.sc.SceneError) as ctx:
+                self.sc.fetch_background("x", 1, self.d / "o", self.opener(answers, []), lambda s: None)
+        self.assertIn("refused 3 times", str(ctx.exception))
+        self.assertFalse((self.d / "o").exists())
+
+    def test_a_key_goes_in_a_header_never_the_url(self):
+        seen = []
+        with unittest.mock.patch.object(self.sc, "credentials_key", return_value="sk_test_value"):
+            self.sc.fetch_background("x", 1, self.d / "o",
+                                     self.opener([self.Answer(b"\xff\xd8", "image/jpeg")], seen), lambda s: None)
+        self.assertNotIn("sk_test_value", seen[0].full_url)
+        self.assertEqual(seen[0].get_header("Authorization"), "Bearer sk_test_value")
+
+    def test_the_mark_is_cropped_and_a_tiny_scene_refused(self):
+        self.ff()
+        # The free picture carries its mark in the bottom-right corner.
+        src = picture(self.d, "free.png", "color=c=0x806040:s=576x1024,drawbox=x=0:y=990:w=576:h=34:color=red:t=fill",
+                      "576x1024")
+        out = self.d / "bg.png"
+        self.sc.prepare_background(src, out, keyed=False)
+        self.assertEqual(self.sc.probe_size(out), (1080, 1920))
+        px = self.sc.raw(out, 54, 96)
+        last_row = px[-54 * 3:]
+        reds = sum(1 for j in range(0, len(last_row), 3) if last_row[j] > 180 and last_row[j + 1] < 80)
+        self.assertEqual(reds, 0, "the marked strip is gone")
+        with self.assertRaises(self.sc.SceneError):
+            self.sc.prepare_background(picture(self.d, "tiny.png", "0x806040", "300x500"), self.d / "t.png", False)
+
+
+class TheLightingChecker(SceneBase):
+    """Each way a pasted product gives itself away, measured on the finished
+    picture."""
+
+    def scene_from(self, bg, box):
+        return self.sc.scene_light(self.sc.raw(bg, self.sc.W // 2, self.sc.H // 2), box)
+
+    def composite(self, bg_spec, product="0xd9c9a6", rim=None):
+        """A finished picture: a product rectangle on a scene, optionally
+        with a light rim round it. Returns (path, scene, mask)."""
+        box = (290, 660, 500, 600)
+        x, y, w, h = box
+        draw = f"drawbox=x={x}:y={y}:w={w}:h={h}:color={product}:t=fill"
+        if rim:
+            draw = f"drawbox=x={x}:y={y}:w={w}:h={h}:color={rim}:t=fill,drawbox=x={x + 4}:y={y + 4}:w={w - 8}:h={h - 8}:color={product}:t=fill"
+        bg = picture(self.d, "bg.png", bg_spec)
+        out = self.d / "c.png"
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(bg), "-vf", draw, str(out)], check=True)
+        scene = self.scene_from(bg, box)
+        mask = {(cx, cy) for cx in range(x // 2, (x + w) // 2) for cy in range(y // 2, (y + h) // 2)}
+        return out, scene, mask
+
+    def test_a_calm_scene_and_a_matching_product_pass(self):
+        self.ff()
+        out, scene, mask = self.composite("0xb08a60")
+        checks = self.sc.check(out, scene, mask, 0.0)
+        self.assertTrue(all(c["ok"] for c in checks.values()), checks)
+
+    def test_a_studio_lit_product_in_a_dim_room_glows(self):
+        self.ff()
+        out, scene, mask = self.composite("0x5a5048", product="0xffffff")
+        checks = self.sc.check(out, scene, mask, 0.0)
+        self.assertFalse(checks["glow"]["ok"])
+        self.assertIn("pasted on", checks["glow"]["said"])
+
+    def test_a_light_rim_is_backdrop_left_on_the_outline(self):
+        self.ff()
+        out, scene, mask = self.composite("0x806040", product="0x4a3a30", rim="0xe8e8e6")
+        checks = self.sc.check(out, scene, mask, 0.0)
+        self.assertFalse(checks["edges"]["ok"], checks["edges"])
+
+    def test_backdrop_left_inside_fails(self):
+        self.ff()
+        out, scene, mask = self.composite("0xb08a60")
+        self.assertFalse(self.sc.check(out, scene, mask, 0.10)["backdrop"]["ok"])
+
+    def test_a_cluttered_or_dark_scene_fails(self):
+        self.ff()
+        out, scene, mask = self.composite("testsrc2=s=1080x1920")
+        self.assertIn("cluttered", self.sc.check(out, scene, mask, 0.0)["background"]["said"])
+        out, scene, mask = self.composite("0x151515")
+        self.assertIn("too dark", self.sc.check(out, scene, mask, 0.0)["background"]["said"])
+
+    def test_tint_is_judged_only_on_white_and_grey(self):
+        r, b, share = self.sc.tint([(200, 200, 200), (210, 200, 190), (250, 10, 10)])
+        self.assertAlmostEqual(share, 2 / 3)
+        self.assertGreater(r, 0)
+        self.assertLess(b, 0)
+        self.assertEqual(self.sc.tint([(250, 10, 10)])[2], 0.0)
+
+
+class AWholeScene(SceneBase):
+
+    def test_the_real_product_set_into_a_scene(self):
+        self.ff()
+        mock = mockup(self.d)
+        wood = picture(self.d, "wood.jpg", "color=c=0xb07a48:s=576x1024", "576x1024")
+        out = self.d / "scene.jpg"
+        fetch = lambda prompt, seed, o: (shutil.copy(wood, o), "free")[1]
+        rep = self.sc.make_scene(mock, "tote bag", out, 0, 1, self.d, fetch=fetch)
+        self.assertTrue(rep["ok"], rep)
+        self.assertEqual(self.sc.probe_size(out), (1080, 1920))
+        self.assertEqual(set(rep["checks"]), {"glow", "colour", "edges", "backdrop", "background"})
+        # The design itself is still there, untouched: the panel's green.
+        px = self.sc.raw(out, 108, 192)
+        greens = sum(1 for j in range(0, len(px), 3) if px[j + 1] > px[j] + 25 and px[j + 1] > px[j + 2] + 10)
+        self.assertGreater(greens, 50)
+
+    def test_a_product_too_small_to_enlarge_is_refused(self):
+        self.ff()
+        small = picture(self.d, "small.png",
+                        "color=c=0xe8e8e6:s=600x600,drawbox=x=240:y=240:w=110:h=110:color=0x2f5d3a:t=fill", "600x600")
+        with self.assertRaises(self.sc.CutoutError) as ctx:
+            self.sc.cutout(small, self.d)
+        self.assertIn("too little product", str(ctx.exception))
+
+    def test_a_photo_with_no_plain_backdrop_is_a_cutout_error(self):
+        self.ff()
+        busy = picture(self.d, "busy.png", "testsrc2=s=600x600", "600x600")
+        with self.assertRaises(self.sc.CutoutError):
+            self.sc.cutout(busy, self.d)
+
+
+class KitsWithScenes(unittest.TestCase):
+    """The kit holds AI scenes for the owner's eye before it can be posted."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tk = load("tiktok_kit_scenes", "tiktok-kit.py")
+        cls.sc = cls.tk._scene()
+
+    def setUp(self):
+        if not ff_available() or not self.tk.font():
+            self.skipTest("ffmpeg or a bold font is not installed here")
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d, True)
+        p = unittest.mock.patch.object(self.tk, "KITS", self.d / "tiktok")
+        p.start()
+        self.addCleanup(p.stop)
+        self.photos = [picture(self.d, "a.png", "0xd9c9a6", "800x800"), picture(self.d, "b.png", "0x2f5d3a", "800x800")]
+
+    def maker(self, fail=None):
+        calls = []
+
+        def make(photo, thing, out, n, seed, scratch):
+            calls.append(Path(photo).name)
+            if fail and fail(len(calls), Path(photo).name):
+                raise fail(len(calls), Path(photo).name)
+            picture(self.d, Path(out).name, "0xb07a48")
+            shutil.copy(self.d / Path(out).name, out)
+            return {"ok": True, "why": None, "checks": {"glow": {"ok": True, "said": "fine"}},
+                    "prompt": "a table", "source": "free"}
+        return make, calls
+
+    def test_scenes_go_first_and_hold_the_kit_for_review(self):
+        make, _ = self.maker()
+        waits = []
+        kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make, wait=waits.append)
+        self.assertEqual(kit["status"], "needs_review")
+        self.assertEqual(kit["ai_slides"], ["01.jpg", "02.jpg", "03.jpg"], "the hook is on a scene too")
+        self.assertEqual([s["slide"] for s in kit["scenes"]], ["02.jpg", "03.jpg"])
+        self.assertEqual(kit["slides"], 1 + 2 + 2 + 1)
+        self.assertEqual(waits, [self.tk.SCENE_SPACING], "the free service is not asked twice in a row")
+        self.assertIn("AI-generated content", (self.tk.KITS / kit["id"] / "audio.txt").read_text())
+        with self.assertRaises(ValueError):
+            self.tk.set_posted(kit["id"])
+        self.assertEqual(self.tk.approve(kit["id"])["status"], "ready")
+        self.assertEqual(self.tk.set_posted(kit["id"])["status"], "posted")
+
+    def test_a_photo_that_will_not_cut_out_is_skipped_for_the_next(self):
+        make, calls = self.maker(fail=lambda n, name: self.sc.CutoutError("no backdrop") if name == "a.png" else None)
+        kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make, wait=lambda s: None)
+        self.assertEqual(calls[:2], ["a.png", "b.png"])
+        self.assertEqual(len(kit["scenes"]), 2)
+        self.assertIn("a.png: no backdrop", kit["scenes_dropped"][0])
+
+    def test_a_failed_scene_costs_only_itself(self):
+        make, _ = self.maker(fail=lambda n, name: self.sc.SceneError("refused 3 times") if n == 1 else None)
+        kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make, wait=lambda s: None)
+        self.assertEqual(len(kit["scenes"]), 1)
+        self.assertEqual(kit["scenes_dropped"], ["refused 3 times"])
+
+    def test_no_scenes_is_the_plain_kit(self):
+        kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, scenes=0)
+        self.assertEqual((kit["status"], kit["ai_slides"]), ("ready", []))
+        self.assertNotIn("AI-generated", (self.tk.KITS / kit["id"] / "audio.txt").read_text())
+
+    def test_dropping_a_slide_rebuilds_the_video_and_zip(self):
+        make, _ = self.maker()
+        kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make, wait=lambda s: None)
+        k = self.tk.KITS / kit["id"]
+        after = self.tk.drop_slide(kit["id"], "02.jpg")
+        self.assertEqual(after["slides"], kit["slides"] - 1)
+        self.assertEqual(sorted(p.name for p in (k / "slides").iterdir()),
+                         [f"{n:02d}.jpg" for n in range(1, kit["slides"])])
+        self.assertEqual(after["ai_slides"], ["01.jpg", "02.jpg"], "the old 03 is now 02")
+        self.assertEqual([s["slide"] for s in after["scenes"]], ["02.jpg"])
+        names = zipfile.ZipFile(k / f"{kit['id']}.zip").namelist()
+        self.assertEqual(len([n for n in names if "/photos/" in n]), after["slides"])
+        secs, _w, _h, _a = self.tk._lv().probe(k / "video.mp4")
+        self.assertAlmostEqual(secs, after["video_seconds"], delta=0.25)
+        # Dropping every AI slide makes it a plain kit again.
+        self.tk.drop_slide(kit["id"], "01.jpg")
+        last = self.tk.drop_slide(kit["id"], "01.jpg")
+        self.assertEqual((last["ai_slides"], last["status"]), ([], "ready"))
+        self.assertNotIn("AI-generated", (k / "audio.txt").read_text())
+
+    def test_a_kit_keeps_two_slides_and_names_are_checked(self):
+        kit = self.tk.build_kit(ROW, self.photos[:1], "2026-10-13", "Shop on Etsy", 0, scenes=0)
+        self.tk.drop_slide(kit["id"], "01.jpg")
+        with self.assertRaises(ValueError):
+            self.tk.drop_slide(kit["id"], "01.jpg")
+        with self.assertRaises(ValueError):
+            self.tk.drop_slide(kit["id"], "../kit.json")
+
+
 # ====================================================================== board
 
 class BoardBase(unittest.TestCase):
@@ -579,7 +925,7 @@ class TheShopIsWiredIn(unittest.TestCase):
                          .replace("emily-build.py remove", ""))
 
     def test_nothing_posts_or_publishes(self):
-        for f in (SCRIPTS / "tiktok-kit.py", SCRIPTS / "store-board.py", API / "shop.js"):
+        for f in (SCRIPTS / "tiktok-kit.py", SCRIPTS / "store-board.py", SCRIPTS / "scene.py", API / "shop.js"):
             src = f.read_text().lower()
             self.assertNotIn("open-api.tiktok.com", src)
             self.assertNotIn("/publish.json", src)
@@ -624,6 +970,8 @@ class TheShopApi(unittest.TestCase):
                 "climb:await go('GET','/api/shop/tiktok/..%2F..%2Fx/file/video.mp4'),"
                 "badslide:await go('GET','/api/shop/tiktok/2026-10-13-42/slide/..%2Fkit.json'),"
                 "posted:await go('POST','/api/shop/tiktok/2026-10-13-42/posted',{}),"
+                "approve:await go('POST','/api/shop/tiktok/2026-10-13-42/approve',{}),"
+                "baddrop:await go('POST','/api/shop/tiktok/2026-10-13-42/drop',{slide:'../kit.json'}),"
                 "board:await go('GET','/api/shop/board'),"
                 "badslug:await go('POST','/api/shop/board/Bad%20Slug/approve',{})};"
                 "process.stdout.write(JSON.stringify(out));srv.close();});")
@@ -641,6 +989,8 @@ class TheShopApi(unittest.TestCase):
             self.assertEqual(out["badslide"][0], 400)
             self.assertEqual(out["posted"][0], 200)
             self.assertEqual(json.loads((k / "kit.json").read_text())["status"], "posted")
+            self.assertEqual(out["approve"][0], 200)
+            self.assertEqual(out["baddrop"][0], 400)
             self.assertTrue(json.loads(out["board"][3])["available"])
             self.assertEqual(out["badslug"][0], 400)
 

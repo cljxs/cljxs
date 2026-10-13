@@ -78,10 +78,14 @@
   /* the kit */
   .kit{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:16px}
   .strip{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;scroll-snap-type:x mandatory}
-  .strip a{flex:0 0 auto;scroll-snap-align:start}
+  .strip a{display:block}
   .strip img{height:300px;aspect-ratio:9/16;object-fit:cover;border-radius:8px;border:1px solid var(--line);display:block;background:#000}
   video{width:100%;max-height:440px;border-radius:10px;background:#000;border:1px solid var(--line)}
   .hook{font-weight:700;font-size:15px}
+  .sl{position:relative;flex:0 0 auto;scroll-snap-align:start}
+  .aitag{position:absolute;left:6px;top:6px;font-size:10px;font-weight:700;letter-spacing:.06em;padding:2px 7px;border-radius:999px;
+    background:rgba(11,16,32,.82);color:#fbbf24;border:1px solid rgba(245,158,11,.6)}
+  .btn.drop{position:absolute;right:6px;bottom:6px;padding:4px 9px;font-size:12px;background:rgba(11,16,32,.85)}
   .old{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
   .oldk{display:flex;gap:10px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px}
   .oldk img{width:54px;aspect-ratio:9/16;object-fit:cover;border-radius:6px;border:1px solid var(--line)}
@@ -219,7 +223,7 @@ function draw() {
     B && B.approved ? `<span class="pill g">${B.approved} approved to publish</span>` : '',
   ].join('');
   $('status').innerHTML = `<div class="k">Status</div>
-    <div class="line">${today ? `Today's kit: ${esc(today.title).slice(0, 80)}${today.status === 'posted' ? ' · posted ✓' : ' · ready to post'}`
+    <div class="line">${today ? `Today's kit: ${esc(today.title).slice(0, 80)}${today.status === 'posted' ? ' · posted ✓' : today.status === 'needs_review' ? ' · AI scenes to check' : ' · ready to post'}`
       : T && T.available ? 'No kit yet today - one is made at 9:48 Eastern, or press Make one now' : 'Kits could not be read'}</div>
     <div class="muted">${toPost} kit${toPost === 1 ? '' : 's'} to post · ${review} listing${review === 1 ? '' : 's'} to review</div>
     ${jobLine()}`;
@@ -229,12 +233,21 @@ function draw() {
 
 // ------------------------------------------------------------ TikTok
 
+// A slide the AI drew the background of (scene.py) is marked, with the
+// lighting checker's verdict and a Drop button while the kit awaits review.
 function slides(k) {
   const v = enc(k.made_utc || '');
+  const ai = new Set(k.ai_slides || []);
+  const review = k.status === 'needs_review';
   return Array.from({ length: k.slides || 0 }, (_, i) => {
-    const n = String(i + 1).padStart(2, '0');
-    const u = `/api/shop/tiktok/${enc(k.id)}/slide/${n}.jpg?v=${v}`;
-    return `<a href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="slide ${i + 1}" loading="lazy"></a>`;
+    const n = String(i + 1).padStart(2, '0') + '.jpg';
+    const u = `/api/shop/tiktok/${enc(k.id)}/slide/${n}?v=${v}`;
+    const sc = (k.scenes || []).find(x => x.slide === n);
+    const checks = sc && sc.checks ? Object.entries(sc.checks).map(([name, c]) =>
+      `${c.ok ? '✓' : '✕'} ${name}: ${c.said}`).join('\n') : '';
+    return `<div class="sl"><a href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="slide ${i + 1}" loading="lazy"></a>
+      ${ai.has(n) ? `<span class="aitag" ${checks ? `title="${esc(checks)}"` : ''}>AI SCENE${sc ? ' · light ✓' : ''}</span>` : ''}
+      ${review && ai.has(n) ? `<button class="btn drop" data-drop="${esc(k.id)}" data-slide="${n}" ${busy ? 'disabled' : ''}>Drop</button>` : ''}</div>`;
   }).join('');
 }
 
@@ -249,11 +262,14 @@ function tiktok(kits) {
     || String(b.made_utc).localeCompare(String(a.made_utc)));
   const v = enc(k.made_utc || '');
   const base = `/api/shop/tiktok/${enc(k.id)}`;
-  const posted = k.status === 'posted';
+  const posted = k.status === 'posted', review = k.status === 'needs_review';
+  const dropped = (k.scenes_dropped || []);
   const main = `<div class="card ${posted ? 'done' : ''}">
     <div class="ctop"><div><div class="cname">${esc(k.title)}</div>
       <div class="cmeta">${esc(k.day)} · ${k.slides} slides · ${k.video_seconds}s video</div></div>
-      <span class="tag ${posted ? 't-gray' : 't-pink'}">${posted ? 'POSTED' : 'READY TO POST'}</span></div>
+      <span class="tag ${posted ? 't-gray' : review ? 't-amber' : 't-pink'}">${posted ? 'POSTED' : review ? 'CHECK THE AI SCENES' : 'READY TO POST'}</span></div>
+    ${review ? `<div class="note">The slides marked AI SCENE have AI-drawn backgrounds around your real product photo. The lighting checker passed them; look at them yourself, Drop any you don't like, then Approve.</div>` : ''}
+    ${(k.ai_slides || []).length && !review ? `<div class="said">Has AI backgrounds: in TikTok, More options → turn on "AI-generated content" before posting.</div>` : ''}
     <div class="hook">“${esc(k.hook)}”</div>
     <div class="kit">
       <div><div class="k">Photo carousel</div><div class="strip">${slides(k)}</div>
@@ -270,15 +286,17 @@ function tiktok(kits) {
       <a class="btn" href="${base}/file/video.mp4?dl=1">⬇ Video</a>
       ${k.url ? `<button class="btn" data-copylink="${esc(k.url)}">Copy listing link (for your bio)</button>` : ''}
       ${posted ? `<button class="btn" data-unpost="${esc(k.id)}">Not posted after all</button>`
-               : `<button class="btn go" data-posted="${esc(k.id)}">✓ Posted</button>`}
+        : review ? `<button class="btn go" data-kitapprove="${esc(k.id)}" ${busy ? 'disabled' : ''}>✓ Approve the AI scenes</button>`
+        : `<button class="btn go" data-posted="${esc(k.id)}">✓ Posted</button>`}
     </div>
+    ${dropped.length ? `<details><summary class="said">${dropped.length} scene${dropped.length === 1 ? '' : 's'} left out by the checker</summary><pre>${esc(dropped.join('\n'))}</pre></details>` : ''}
   </div>`;
   const older = rest.length ? `<div class="sechead" style="margin-top:18px"><h2>Other kits</h2></div><div class="old">${rest.map(o => `
     <div class="oldk"><img src="/api/shop/tiktok/${enc(o.id)}/slide/01.jpg?v=${enc(o.made_utc || '')}" alt="" loading="lazy">
       <div style="min-width:0;flex:1"><div class="t">${esc(o.title)}</div>
         <div class="said">${esc(o.day)} · ${o.status === 'posted' ? 'posted' : 'not posted'}</div>
         <div class="acts" style="margin-top:4px"><a class="btn" style="padding:5px 9px" href="/api/shop/tiktok/${enc(o.id)}/file/kit.zip">⬇ zip</a>
-        ${o.status === 'posted' ? '' : `<button class="btn go" style="padding:5px 9px" data-posted="${esc(o.id)}">✓ Posted</button>`}</div></div></div>`).join('')}</div>` : '';
+        ${o.status === 'posted' || o.status === 'needs_review' ? '' : `<button class="btn go" style="padding:5px 9px" data-posted="${esc(o.id)}">✓ Posted</button>`}</div></div></div>`).join('')}</div>` : '';
   return head + main + older;
 }
 
@@ -392,6 +410,17 @@ $('body').onclick = e => {
     const r = await post(`/api/shop/tiktok/${enc(d.posted || d.unpost)}/posted`, { undo: !!d.unpost });
     toast(r.ok ? (d.posted ? 'Marked posted' : 'Back in the to-post pile') : (r.j.said || r.j.error || 'failed'));
   });
+  if (d.kitapprove) return act(async () => {
+    const r = await post(`/api/shop/tiktok/${enc(d.kitapprove)}/approve`);
+    toast(r.ok ? 'Approved - ready to post' : (r.j.said || r.j.error || 'failed'));
+  });
+  if (d.drop) {
+    if (!confirm(`Drop slide ${d.slide}? The video and the zip are rebuilt without it.`)) return;
+    return act(async () => {
+      const r = await post(`/api/shop/tiktok/${enc(d.drop)}/drop`, { slide: d.slide });
+      toast(r.ok ? 'Dropped - video and zip rebuilt' : (r.j.said || r.j.error || 'failed'));
+    });
+  }
   if (d.filter) { filter = d.filter; return draw(); }
   if (d.approve || d.unapprove) return act(async () => {
     const r = await post(`/api/shop/board/${enc(d.approve || d.unapprove)}/approve`, { undo: !!d.unapprove });

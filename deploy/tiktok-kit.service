@@ -10,9 +10,12 @@ Environment=HOME=/root
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WorkingDirectory=/root/ecosystem
 # Reads the store snapshot Fury's morning run fetches, downloads the chosen
-# listing's photos from Etsy, and makes the slides, the video and the words
-# with ffmpeg and code. A second run on the same day does nothing.
+# listing's photos from Etsy, sets the product into two free AI scenes, and
+# makes the slides, the video and the words with ffmpeg and code. A second
+# run on the same day does nothing.
 ExecStart=/usr/bin/python3 /root/ecosystem/scripts/tiktok-kit.py make
-TimeoutStartSec=900
+# Two free AI scenes (scene.py) can each take three tries of up to 150s
+# with waits between; with the slides and the video that is under half an hour.
+TimeoutStartSec=1800
 StandardOutput=journal
 StandardError=journal

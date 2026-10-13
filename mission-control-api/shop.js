@@ -115,6 +115,23 @@ function register(app) {
     res.status(r.ok ? 200 : 409).json({ ok: r.ok, said: (r.stdout + r.stderr).trim() });
   });
 
+  // The owner has looked at the kit's AI scenes (scene.py's), or takes one
+  // out - tiktok-kit.py rebuilds the video and the zip without it.
+  app.post('/api/shop/tiktok/:kit/approve', async (req, res) => {
+    if (!kitDir(req.params.kit)) return res.status(404).json({ error: 'no such kit' });
+    const r = await python('tiktok-kit.py', ['approve', req.params.kit]);
+    res.status(r.ok ? 200 : 409).json({ ok: r.ok, said: (r.stdout + r.stderr).trim() });
+  });
+
+  app.post('/api/shop/tiktok/:kit/drop', async (req, res) => {
+    if (!kitDir(req.params.kit)) return res.status(404).json({ error: 'no such kit' });
+    const slide = String((req.body || {}).slide || '');
+    if (!SLIDE_RE.test(slide)) return res.status(400).json({ error: 'bad slide' });
+    if (busy(res)) return;
+    const r = await python('tiktok-kit.py', ['drop', req.params.kit, slide], 300000);
+    res.status(r.ok ? 200 : 409).json({ ok: r.ok, said: (r.stdout + r.stderr).trim() });
+  });
+
   app.get('/api/shop/tiktok/:kit/slide/:name', (req, res) => {
     const dir = kitDir(req.params.kit);
     if (!dir || !SLIDE_RE.test(req.params.name)) return res.status(400).json({ error: 'bad name' });
