@@ -37,6 +37,8 @@ Provenance of each file, and how to refresh it:
 | `belfort-yahoo-chart-404.json` | Yahoo's chart endpoint for a symbol that does not exist: `result: null` and `No data found, symbol may be delisted` | fetched 2026-10-12 for ZZZZQQ; `belfort-fetch.py check` reads it as not found |
 | `schema-dump-401.log` | a tool-schema dump containing `401` as a VALUE | format captured from a real `last-run.py` dump; the `401` line is the one that caused the false positive |
 | `openrouter-models-agentroom.json` | OpenRouter's public model list, the five models the Agent Room's roles.json names or may switch to, with their real prices (strings of dollars per token) | fetched from `https://openrouter.ai/api/v1/models` on 2026-10-14 and trimmed to those five entries, unedited |
+| `hn-algolia-comments.json` | Hacker News search (hn.algolia.com `search_by_date`) for the exact phrase "I would pay for" in stories and comments: comments with HTML, entities and curly apostrophes, as Stan's fetcher meets them | fetched 2026-10-14, trimmed to the first four hits; one hit's `story_url` removed (a long hyphenated blog address that check-secrets rightly flags as token-shaped, and nothing reads) |
+| `hn-algolia-mixed.json` | the same search for "looking for a tool": one comment and two stories (title + `story_text`), the shape a story arrives in | fetched 2026-10-14, all three hits, unedited |
 
 `scripts/capture-fixtures.py` refreshes these from the live droplet and
 redacts anything secret-shaped. Run it there, commit what it writes, and the

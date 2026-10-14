@@ -6,5 +6,7 @@
   "tiktok_daily_ai": 0.3,
   "tiktok_leave_for_emily": 0.5,
   "agentroom_daily_ai": 3,
-  "agentroom_run_max": 1
+  "agentroom_run_max": 1,
+  "stan_daily_ai": 0.05,
+  "stan_leave_for_others": 0.5
 }

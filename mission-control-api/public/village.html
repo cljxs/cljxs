@@ -2265,6 +2265,8 @@ function openPanel(name) {
   // Paul's house is his workshop: what he built, as it looks, and the site
   // itself to open (owner, 2026-10-08).
   if (name === 'paul') return openFrame('paul');
+  // Stan's house is his page: the problems he found, to approve or reject.
+  if (name === 'stan') return openFrame('stan');
   const a = (DATA.agents || []).find(x => x.name === name);
   if (!a) return;
   openAgent = name;
@@ -3442,7 +3444,8 @@ function closePanel() { closeLb(); closeMarkets(); openAgent = null; $('panel').
  * way, from the button at the top of her panel, over her gallery. Removed on close, not hidden, so it stops
  * polling. Escape inside it, or its close button, posts '<name>-close' here. */
 const FRAMES = { belfort: '/markets?embed=1', ace: '/ace?embed=1', peter: '/peter?embed=1', bolt: '/bolt?embed=1',
-                 paul: '/paul?embed=1', shop: '/shop?embed=1', agentroom: '/agentroom?embed=1' };
+                 paul: '/paul?embed=1', shop: '/shop?embed=1', agentroom: '/agentroom?embed=1',
+                 stan: '/stan?embed=1' };
 function openFrame(agent) {
   closeMarkets();
   openAgent = agent;
@@ -3462,7 +3465,7 @@ function closeMarkets() {
 }
 window.addEventListener('message', e => {
   if (e.origin === location.origin && e.data
-      && ['markets-close', 'ace-close', 'peter-close', 'bolt-close', 'paul-close', 'shop-close', 'agentroom-close'].includes(e.data.type)) closeMarkets();
+      && ['markets-close', 'ace-close', 'peter-close', 'bolt-close', 'paul-close', 'shop-close', 'agentroom-close', 'stan-close'].includes(e.data.type)) closeMarkets();
 });
 $('panel').addEventListener('click', e => { if (e.target.id === 'panel') closePanel(); });
 

@@ -174,3 +174,10 @@ agents/bolt/MEMORY.md
 # Agent Room - its database, its key, the model price cache and captured
 # replies all stay on the droplet. roles.json (who plays which part) is tracked.
 agentroom/state/
+
+# Stan - the backlog of posts, every ledger and decision, his reports and
+# memory stay on the droplet. watchlist.json (what he searches for) is tracked.
+agents/stan/data/
+agents/stan/state/
+agents/stan/reports/
+agents/stan/MEMORY.md

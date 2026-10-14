@@ -16,6 +16,7 @@ const boltRoutes = require('./bolt');
 const paulRoutes = require('./paul');
 const shopRoutes = require('./shop');
 const agentroomRoutes = require('./agentroom');
+const stanRoutes = require('./stan');
 
 const PORT = Number(process.env.PORT || 3001);
 // Bind to loopback by default, matching the OpenClaw gateway's posture.
@@ -331,6 +332,12 @@ app.get('/agentroom', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'agentroom.html'));
 });
 
+// Stan: software pains from Hacker News, to approve into the Agent Room
+// (owner, 2026-10-14). Opened from his house in the village.
+app.get('/stan', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'stan.html'));
+});
+
 app.get('/village', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'village.html'));
 });
@@ -347,6 +354,7 @@ boltRoutes.register(app);
 paulRoutes.register(app);
 shopRoutes.register(app);
 agentroomRoutes.register(app);
+stanRoutes.register(app);
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'mission-control-api' }));
 
