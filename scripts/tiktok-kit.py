@@ -53,6 +53,8 @@ fonts-dejavu-core provides. Standard library otherwise.
 """
 
 import argparse
+import contextlib
+import fcntl
 import importlib.util
 import json
 import os
@@ -94,6 +96,15 @@ SLIDE_RE = re.compile(r"^\d{2}\.jpg$")
 # the owner found it looked terrible. A kit with any scene is held as
 # needs_review until the owner approves it.
 SCENES_PER_KIT = 2
+
+# ONE KIT AT A TIME. On 2026-10-14 the owner ran `make --again` minutes before
+# the 9:48 timer; the timer's run started while the first was still drawing
+# its scenes, chose the same listing, and cleared the same .part folder - the
+# first run then found a video of "0x0, 0.0s". Two builds at once are also
+# ~1.5 GB on a 2 GB server. So every build and every drop holds this lock,
+# and one that finds it taken waits for the other to finish - after which
+# the timer sees today's kit already exists and stops.
+LOCK_WAIT = 1500            # seconds; a kit with paid scenes takes a few minutes
 SCENE_SPACING = 25          # seconds between FREE requests; closer, they are refused
 
 FONTS = ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -156,6 +167,35 @@ def _store():
 
 
 _SCENE = []
+
+
+class Busy(Exception):
+    pass
+
+
+@contextlib.contextmanager
+def one_at_a_time(wait=LOCK_WAIT, sleep=time.sleep, say=None):
+    """Hold the kits' lock for the length of the block. Waits up to `wait`
+    seconds for another build to finish; raises Busy after that. The lock is
+    the kernel's (flock), so a build that crashes releases it."""
+    KITS.mkdir(parents=True, exist_ok=True)
+    with open(KITS / ".lock", "w") as f:
+        waited = 0
+        while True:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if waited >= wait:
+                    raise Busy(f"another kit was still being made after {wait // 60} minutes")
+                if not waited and say:
+                    say("another kit is being made right now - waiting for it to finish")
+                sleep(5)
+                waited += 5
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def _scene():
@@ -370,6 +410,9 @@ def video_problems(path, seconds):
     """What is wrong with the finished slideshow. [] is good. Read back from
     the file by ffprobe, not assumed from the command that made it."""
     secs, w, h, audio = _lv().probe(path)
+    if not (w or h):
+        size = Path(path).stat().st_size if Path(path).exists() else 0
+        return [f"the video file could not be read ({size:,} bytes)"]
     out = []
     if (w, h) != (W, H):
         out.append(f"{w}x{h}, not {W}x{H}")
@@ -510,7 +553,9 @@ def build_kit(row, photos, day, shop_line, turn, scenes=SCENES_PER_KIT, maker=No
 
     KITS.mkdir(parents=True, exist_ok=True)
     kid = kit_id(day, row["listing_id"])
-    part = KITS / f".part-{kid}"
+    # This process's own folder: even without the lock, two builds can no
+    # longer clear each other's work.
+    part = KITS / f".part-{kid}-{os.getpid()}"
     shutil.rmtree(part, ignore_errors=True)
     (part / "slides").mkdir(parents=True)
     try:
@@ -635,6 +680,15 @@ def drop_slide(kid, name):
 # ------------------------------------------------------------------ commands
 
 def cmd_make(a):
+    try:
+        with one_at_a_time(say=print):
+            return _make(a)
+    except Busy as exc:
+        print(f"{exc} - nothing made. Try again later.", file=sys.stderr)
+        return 1
+
+
+def _make(a):
     lv = _lv()
     if not all(lv.ffmpeg()):
         print("ffmpeg is not installed. On the droplet:  apt install -y ffmpeg", file=sys.stderr)
@@ -742,7 +796,11 @@ def cmd_approve(a):
 
 def cmd_drop(a):
     try:
-        kit = drop_slide(a.kit, a.slide)
+        with one_at_a_time(wait=60):
+            kit = drop_slide(a.kit, a.slide)
+    except Busy:
+        print("a kit is being made right now - drop the slide when it has finished", file=sys.stderr)
+        return 2
     except FileNotFoundError as exc:
         print(str(exc) if "slide" in str(exc) else f"no kit called {a.kit}", file=sys.stderr)
         return 1

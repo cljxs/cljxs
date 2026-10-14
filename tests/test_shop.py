@@ -253,6 +253,82 @@ class KitOnDisk(unittest.TestCase):
         build.assert_not_called()
 
 
+class OneKitAtATime(unittest.TestCase):
+    """2026-10-14: the owner's `make --again` was still drawing its scenes
+    when the 9:48 timer started a second build of the same listing; it
+    cleared the same .part folder and the first run found a "0x0, 0.0s"
+    video. Builds now take turns, and each has its own folder."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tk = load("tiktok_kit_lock", "tiktok-kit.py")
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d, True)
+        p = unittest.mock.patch.object(self.tk, "KITS", self.d / "tiktok")
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_a_second_build_waits_then_gives_up(self):
+        said, slept = [], []
+        with self.tk.one_at_a_time():
+            with self.assertRaises(self.tk.Busy):
+                with self.tk.one_at_a_time(wait=10, sleep=slept.append, say=said.append):
+                    self.fail("got the lock while another build held it")
+        self.assertEqual(slept, [5, 5], "it waited before giving up")
+        self.assertIn("waiting for it to finish", said[0])
+        with self.tk.one_at_a_time(wait=0):
+            pass                                    # free again once released
+
+    def test_the_timer_waits_for_a_manual_build_then_finds_todays_kit(self):
+        import threading
+        import time as _time
+        real_sleep = _time.sleep
+        held, release = threading.Event(), threading.Event()
+
+        def manual_build():
+            with self.tk.one_at_a_time():
+                held.set()
+                release.wait(10)
+                k = self.tk.KITS / "2026-10-14-1"
+                k.mkdir(parents=True)
+                (k / "kit.json").write_text(json.dumps({"day": "2026-10-14", "listing_id": 1,
+                                                        "status": "ready", "made_utc": "x"}))
+        t = threading.Thread(target=manual_build)
+        t.start()
+        held.wait(10)
+        threading.Timer(0.3, release.set).start()
+        args = type("A", (), {"again": False, "listing": None, "no_scenes": False})()
+        out = io_capture()
+        with unittest.mock.patch.object(self.tk.et_time, "day", return_value="2026-10-14"), \
+             unittest.mock.patch.object(self.tk.time, "sleep", lambda s: real_sleep(0.05)), \
+             unittest.mock.patch.object(self.tk, "_lv", return_value=type("L", (), {"ffmpeg": staticmethod(lambda: ("f", "p"))})()), \
+             unittest.mock.patch.object(self.tk, "build_kit") as build, \
+             unittest.mock.patch("sys.stdout", out):
+            code = self.tk.cmd_make(args)
+        t.join(10)
+        self.assertEqual(code, 0)
+        build.assert_not_called()
+        self.assertIn("today's kit is made", out.getvalue())
+
+    def test_each_build_has_its_own_folder(self):
+        src = (SCRIPTS / "tiktok-kit.py").read_text()
+        self.assertIn('part = KITS / f".part-{kid}-{os.getpid()}"', src)
+
+    def test_an_unreadable_video_says_so(self):
+        empty = self.d / "v.mp4"
+        empty.write_bytes(b"")
+        if not ff_available():
+            self.skipTest("ffmpeg is not installed here")
+        self.assertEqual(self.tk.video_problems(empty, 20), ["the video file could not be read (0 bytes)"])
+
+
+def io_capture():
+    import io
+    return io.StringIO()
+
+
 class TheSlideshowIsListingVideosOwn(unittest.TestCase):
     """listing-video.py's zoom-and-crossfade makes both videos; the size is a
     parameter, not a second copy that would drift."""
