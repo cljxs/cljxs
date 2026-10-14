@@ -29,12 +29,24 @@ Standard library only.
 import argparse
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
 AGENTS = ("ace", "belfort", "paul", "scout", "timmy")
+# The first line each <agent>-verify.py prints is its verdict. Most say
+# "PASS -" or "FAILED -" up front, but not all: "cannot read ... FAILED",
+# "data was stale ... PASS" (a correct skip, for Timmy). So the line is a
+# pass when it says PASS, and anything else is not. A run that exits before
+# its verifier (a provider error) has no line, and gets no verdict.
+VERDICT_RE = re.compile(r"^[a-z]+-verify: (.*)$", re.M)
+
+
+def verdict(line):
+    words = set(re.findall(r"[A-Z]+", line))
+    return "PASS" if "PASS" in words else "CRASHED" if "CRASHED" in words else "FAILED"
 
 
 def _last_run():
@@ -55,7 +67,19 @@ def journal(unit, days):
 
 
 def runs(raw):
-    """Every agent run in a journal, oldest first, as flat dicts."""
+    """Every agent run in a journal, oldest first, as flat dicts, each with
+    the verdict its verifier printed after it (or None)."""
+    out, start = [], 0
+    for m in VERDICT_RE.finditer(raw):
+        chunk = _runs(raw[start:m.end()])
+        if chunk:
+            chunk[-1]["verdict"] = verdict(m.group(1))
+        out += chunk
+        start = m.end()
+    return out + _runs(raw[start:])
+
+
+def _runs(raw):
     lr = _last_run()
     out = []
     for block in lr.json_blocks(raw):
@@ -72,7 +96,7 @@ def runs(raw):
                     "turns": d.get("assistantTurns"), "cost": cost,
                     "minutes": round(d["durationMs"] / 60000, 1) if isinstance(d.get("durationMs"), (int, float)) else None,
                     "calls": ts.get("calls"), "failures": ts.get("failures"),
-                    "session": d.get("sessionId")})
+                    "session": d.get("sessionId"), "verdict": None})
     return out
 
 
@@ -82,13 +106,16 @@ def _avg(values):
 
 
 def by_model(rows):
-    """{model: {runs, ok, failures, turns, minutes, cost, cost_total}} - averages
-    per run, over the runs that reported each number."""
+    """{model: {runs, ok, checked, passed, failures, turns, minutes, cost,
+    cost_total}} - averages per run, over the runs that reported each number."""
     out = {}
     for r in rows:
-        m = out.setdefault(r["model"], {"runs": 0, "ok": 0, "tool_failures": 0, "_t": [], "_m": [], "_c": []})
+        m = out.setdefault(r["model"], {"runs": 0, "ok": 0, "checked": 0, "passed": 0, "tool_failures": 0,
+                                        "_t": [], "_m": [], "_c": []})
         m["runs"] += 1
         m["ok"] += 1 if r["result"] == "ok" else 0
+        m["checked"] += 1 if r.get("verdict") else 0
+        m["passed"] += 1 if r.get("verdict") == "PASS" else 0
         m["tool_failures"] += r["failures"] or 0
         m["_t"].append(r["turns"])
         m["_m"].append(r["minutes"])
@@ -117,12 +144,13 @@ def cmd_report(a):
             print(f"  {agent:<9} no runs in the journal")
             continue
         for model, m in sorted(models.items(), key=lambda kv: -kv[1]["runs"]):
-            print(f"  {agent:<9} {model:<36} {m['runs']:>3} runs  {m['ok']:>3} ok  "
+            checks = f"{m['passed']}/{m['checked']}" if m["checked"] else "-"
+            print(f"  {agent:<9} {model:<36} {m['runs']:>3} runs  {m['ok']:>3} ok  {checks:>5} passed checks  "
                   f"{m['turns'] if m['turns'] is not None else '-':>5} turns  "
                   f"{m['minutes'] if m['minutes'] is not None else '-':>5} min  "
                   f"{money(m['cost']):>7}/run  {m['tool_failures']} tool failures")
-    print("\nA model is only better if it also passes its agent's checks:"
-          "  python3 scripts/health-check.py")
+    print("\nA model is only better if it also passes its agent's checks. Where that column"
+          " shows '-', look with:  python3 scripts/health-check.py")
     return 0
 
 

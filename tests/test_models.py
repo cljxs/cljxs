@@ -6,6 +6,10 @@ writes, so a model trial is judged on what the runs did and cost.
 
 import importlib.util
 import json
+import os
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -51,6 +55,60 @@ class RunsFromTheRealJournal(unittest.TestCase):
     def test_a_block_that_is_not_a_run_is_skipped(self):
         noise = json.dumps({"level": "info", "msg": "x" * 300, "detail": {"a": 1}})
         self.assertEqual(self.mt.runs(noise + "\n" + noise), [])
+
+
+def verifier_says(script, setup):
+    """What a real verifier prints, run against a scratch ecosystem - so the
+    lines below are the verifiers' own words, not a copy that can drift."""
+    with tempfile.TemporaryDirectory() as root:
+        setup(Path(root))
+        r = subprocess.run([sys.executable, str(ROOT / "scripts" / script), "0", "0", "0"],
+                           capture_output=True, text=True, env=dict(os.environ, ECOSYSTEM_ROOT=root))
+        return r.stdout
+
+
+def stale_timmy(root):
+    (root / "agents/timmy/data").mkdir(parents=True)
+    (root / "agents/timmy/data/_meta.json").write_text('{"asof_utc": "2026-01-01 00:00:00", "fetched_ok": ["AAPL"]}')
+    (root / "agents/timmy/MEMORY.md").write_text("a line\n")
+
+
+class EachRunCarriesItsVerdict(unittest.TestCase):
+    """"ok" is OpenClaw saying the model stopped talking; a model on trial is
+    judged on whether its work passed the verifier. Ace's missing-bankroll
+    failure does not say FAILED on its first line, and Timmy's correct skip
+    says PASS at the end of its line - reading only "verify: PASS|FAILED"
+    up front counted the first as unchecked and the second as nothing."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mt = load()
+        run = (FIXTURES / "openclaw-agent-json-2026.9.log").read_text()
+        haiku = run.replace("xiaomi/mimo-v2.6-pro", "anthropic/claude-haiku-5.5")
+        cls.failed = verifier_says("ace-verify.py", lambda root: None)
+        cls.passed = verifier_says("timmy-verify.py", stale_timmy)
+        # a failed run, one whose verifier never ran (a provider error exits
+        # first), then a passing one - the verdict belongs to the run just
+        # before it, not to the first run since the last verdict
+        cls.raw = run + cls.failed + haiku + haiku + cls.passed
+
+    def test_the_verifiers_really_print_these(self):
+        self.assertIn("does not exist", self.failed)
+        self.assertTrue(self.passed.startswith("timmy-verify: data was stale"), self.passed)
+
+    def test_each_run_gets_the_verdict_after_it(self):
+        self.assertEqual([r["verdict"] for r in self.mt.runs(self.raw)], ["FAILED", None, "PASS"])
+
+    def test_passes_are_counted_over_checked_runs(self):
+        got = self.mt.by_model(self.mt.runs(self.raw))
+        h, m = got["anthropic/claude-haiku-5.5"], got["xiaomi/mimo-v2.6-pro"]
+        self.assertEqual((h["runs"], h["checked"], h["passed"]), (2, 1, 1))
+        self.assertEqual((m["runs"], m["checked"], m["passed"]), (1, 1, 0))
+
+    def test_a_pass_said_up_front_is_a_pass(self):
+        line = "ace-verify: PASS - cycle 41, bankroll $10,212.50 (+2.12%), 2 open, memory +311B\n"
+        run = (FIXTURES / "openclaw-agent-json-2026.9.log").read_text()
+        self.assertEqual(self.mt.runs(run + line)[0]["verdict"], "PASS")
 
 
 if __name__ == "__main__":
