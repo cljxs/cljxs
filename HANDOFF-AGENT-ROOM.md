@@ -195,9 +195,17 @@ Existing endpoints a new tool could read (all on the server, port 3001):
 
 ### Money
 
-- All model calls go through **one OpenRouter key** (OpenRouter is a service
-  that sells access to many AI models - GPT, Gemini, DeepSeek, Kimi, Claude -
-  through one account and one API).
+- Model calls go through **OpenRouter** (a service that sells access to many
+  AI models - GPT, Gemini, DeepSeek, Kimi, Claude - through one account and
+  one API). Most agents share one key. **Paul has his own key with a $2 daily
+  limit** (owner, 2026-10-14), so his work never eats the shared day;
+  `python3 scripts/paul.py preflight` shows what is left on it.
+- **The owner has no separate DeepSeek or Kimi account that this repo knows
+  of** - none is referenced anywhere here. None is needed to start: the
+  OpenRouter account already reaches DeepSeek and Kimi (Moonshot) models, so
+  the new tool can use a NEW OpenRouter key of its own with its own daily
+  limit, the way Paul's was set up (agents/paul/README.md, step 3). Codex
+  CLI is different: it needs an OpenAI account or a ChatGPT plan.
 - `tasks/limits.json` holds `daily_ai_budget` (**$1.50 a day**, the owner's
   number), plus task caps and the Shop's `tiktok_daily_ai` ($0.30) and
   `tiktok_leave_for_emily` ($0.50).
@@ -325,9 +333,10 @@ shows enough to diagnose without revealing them.
 
 ## 7. Questions to ask the owner before writing code
 
-1. Which AI accounts do you actually have - OpenRouter only, or also a
-   DeepSeek key, a Kimi (Moonshot) key, ChatGPT Plus/Pro for Codex CLI?
-2. What may it spend a day, separate from the ecosystem's $1.50?
+1. Which AI accounts do you actually have? OpenRouter is known (it already
+   covers DeepSeek, Kimi and GPT models). A ChatGPT plan for Codex CLI?
+2. What may it spend a day, on its own new OpenRouter key - separate from the
+   shared $1.50 and Paul's $2?
 3. Should it run on the same $12 droplet (check memory with `free -h` -
    builds and Codex can starve the trading agents) or a separate machine?
 4. What will it build: new projects only (Option B), or also changes to this
