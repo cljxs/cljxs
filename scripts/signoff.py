@@ -77,10 +77,6 @@ AGENTS = {
         ("REPORT", "report", "reports", None),
         ("MEMORY", "memory", "MEMORY.md", None),
     ],
-    "timmy": [
-        ("REPORT", "report", "reports", None),
-        ("MEMORY", "memory", "MEMORY.md", None),
-    ],
 }
 
 

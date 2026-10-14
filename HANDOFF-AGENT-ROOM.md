@@ -112,7 +112,6 @@ the server at `/root/ecosystem`. Every script resolves that root from
 | **Fury** | writes the morning briefing | no - pure code |
 | **GM** | a "general manager" brief that proposes jobs for the owner to approve | yes |
 | **Clip** (`clipper/`) | cuts permitted videos into captioned short clips | partly |
-| Timmy | has systemd units in `deploy/` but no folder in the repo - check on the server before assuming anything | ? |
 
 New this week (the Shop): `scripts/tiktok-kit.py` makes one ready-to-post
 TikTok kit a day for an Etsy listing; `scripts/store-board.py` shows every

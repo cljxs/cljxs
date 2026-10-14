@@ -15,6 +15,12 @@ tried). So this reads every wake OpenClaw recorded in the journal and puts
 the models side by side on what they did: runs, how many ended "ok", tool
 failures, turns, minutes, and dollars - OpenRouter's own billed figure.
 
+"cached" is how much of what the model read came from the cache. Most of
+a run is re-reading what was already sent, and the cache prices that at a
+tenth of the input price or less - so a model with a cached price that
+shows ~0% here is being billed full price for every re-read, and costs
+several times what its price list suggests.
+
 Read-only and free: no model is woken. It reads what OpenClaw printed;
 whether the work was RIGHT is still each agent's verifier's call (preflight
 and health-check), so a model that finishes "ok" and writes nothing is
@@ -35,11 +41,11 @@ import sys
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
-AGENTS = ("ace", "belfort", "paul", "scout", "timmy")
+AGENTS = ("ace", "belfort", "paul", "scout")
 # The first line each <agent>-verify.py prints is its verdict. Most say
 # "PASS -" or "FAILED -" up front, but not all: "cannot read ... FAILED",
-# "data was stale ... PASS" (a correct skip, for Timmy). So the line is a
-# pass when it says PASS, and anything else is not. A run that exits before
+# or Ace's missing bankroll, which never says FAILED on that line. So the
+# line is a pass when it says PASS, and anything else is not. A run that exits before
 # its verifier (a provider error) has no line, and gets no verdict.
 VERDICT_RE = re.compile(r"^[a-z]+-verify: (.*)$", re.M)
 
@@ -89,15 +95,26 @@ def _runs(raw):
         if not ("assistantTurns" in d or "toolSummary" in d or "usage" in d):
             continue
         ts = d.get("toolSummary") or {}
+        usage = d.get("usage") or {}
         cost = d.get("costUsd")
         if cost is None:
-            cost = ((d.get("usage") or {}).get("cost") or {}).get("total")
+            cost = (usage.get("cost") or {}).get("total")
         out.append({"model": d.get("model"), "result": d.get("result") or d.get("status"),
                     "turns": d.get("assistantTurns"), "cost": cost,
                     "minutes": round(d["durationMs"] / 60000, 1) if isinstance(d.get("durationMs"), (int, float)) else None,
                     "calls": ts.get("calls"), "failures": ts.get("failures"),
+                    "cached": cached_share(usage),
                     "session": d.get("sessionId"), "verdict": None})
     return out
+
+
+def cached_share(usage):
+    """The fraction of what was read that came from the cache, or None when
+    the run reported no token counts."""
+    fresh, cached = usage.get("input"), usage.get("cacheRead") or 0
+    if not isinstance(fresh, (int, float)) or fresh + cached <= 0:
+        return None
+    return round(cached / (fresh + cached), 3)
 
 
 def _avg(values):
@@ -111,7 +128,7 @@ def by_model(rows):
     out = {}
     for r in rows:
         m = out.setdefault(r["model"], {"runs": 0, "ok": 0, "checked": 0, "passed": 0, "tool_failures": 0,
-                                        "_t": [], "_m": [], "_c": []})
+                                        "_t": [], "_m": [], "_c": [], "_k": []})
         m["runs"] += 1
         m["ok"] += 1 if r["result"] == "ok" else 0
         m["checked"] += 1 if r.get("verdict") else 0
@@ -120,14 +137,20 @@ def by_model(rows):
         m["_t"].append(r["turns"])
         m["_m"].append(r["minutes"])
         m["_c"].append(r["cost"])
+        m["_k"].append(r.get("cached"))
     for m in out.values():
         m["turns"], m["minutes"], m["cost"] = _avg(m.pop("_t")), _avg(m.pop("_m")), _avg(m["_c"])
+        m["cached"] = _avg(m.pop("_k"))
         m["cost_total"] = round(sum(c for c in m.pop("_c") if isinstance(c, (int, float))), 4)
     return out
 
 
 def money(v):
     return "-" if v is None else f"${v:.3f}"
+
+
+def pct(v):
+    return "-" if v is None else f"{v * 100:.0f}%"
 
 
 def cmd_report(a):
@@ -148,9 +171,11 @@ def cmd_report(a):
             print(f"  {agent:<9} {model:<36} {m['runs']:>3} runs  {m['ok']:>3} ok  {checks:>5} passed checks  "
                   f"{m['turns'] if m['turns'] is not None else '-':>5} turns  "
                   f"{m['minutes'] if m['minutes'] is not None else '-':>5} min  "
-                  f"{money(m['cost']):>7}/run  {m['tool_failures']} tool failures")
+                  f"{money(m['cost']):>7}/run  {pct(m['cached']):>4} cached  {m['tool_failures']} tool failures")
     print("\nA model is only better if it also passes its agent's checks. Where that column"
           " shows '-', look with:  python3 scripts/health-check.py")
+    print("'cached' near 0% means caching is not working for that model: every re-read is"
+          " billed at the full input price.")
     return 0
 
 

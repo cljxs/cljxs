@@ -2507,10 +2507,17 @@ class WhatACycleCosts(unittest.TestCase):
         self.assertEqual(self.m.cycles_per_week()["fury"], 0)
 
     def test_an_execstart_that_runs_to_several_lines_is_still_read(self):
-        # timmy's unit puts its openclaw call on a continuation line. Matching
-        # only lines starting with ExecStart read it as waking no model, which
-        # would have under-counted any inline unit written that way.
-        self.assertGreater(self.m.cycles_per_week()["timmy"], 0)
+        # A retired agent's unit put its openclaw call on a continuation line.
+        # Matching only lines starting with ExecStart read it as waking no
+        # model, which would under-count any inline unit written that way.
+        # That unit is gone; the fixture is a copy of its shape.
+        with tempfile.TemporaryDirectory() as root:
+            deploy = Path(root) / "deploy"
+            deploy.mkdir()
+            shutil.copy(FIXTURES / "systemd-inline-execstart.service", deploy / "example-cycle.service")
+            (deploy / "example-cycle.timer").write_text("[Timer]\nOnCalendar=Mon..Fri 10:15 America/New_York\n")
+            self.m.ROOT = Path(root)
+            self.assertEqual(self.m.cycles_per_week()["example"], 5)
 
     def test_every_cycle_timer_is_accounted_for(self):
         units = {u.name[:-len("-cycle.timer")]
@@ -13858,9 +13865,9 @@ class TheGMProposesOnlyWhatTheFactsSupport(GMHarness, unittest.TestCase):
 
     def test_departments_and_people_must_be_real(self):
         self.assertIsNone(self.gm.check_proposal(self.prop(dept="marketing"), self.FACTS)[0])
-        ok, why = self.gm.check_proposal(self.prop(who="timmy"), self.FACTS)
+        ok, why = self.gm.check_proposal(self.prop(who="nobody"), self.FACTS)
         self.assertIsNone(ok)
-        self.assertIn("unknown person", why, "a retired agent is not on the team at all")
+        self.assertIn("unknown person", why, "someone not on the team is refused")
         etsy = ["Needs you: 3 Scout ideas awaiting your review"]
         self.assertIsNotNone(self.gm.check_proposal(
             self.prop(who="Scout", dept="etsy", task="run_scout"), etsy)[0])

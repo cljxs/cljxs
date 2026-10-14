@@ -124,9 +124,9 @@ def cycles_per_week():
         wakes_model = False
         if service.is_file():
             # An ExecStart can run to several lines with trailing backslashes.
-            # Matching only lines that START with ExecStart read timmy's
-            # inline unit as waking no model, because the openclaw call was on
-            # a continuation line. Join them before looking.
+            # Matching only lines that START with ExecStart read an inline
+            # unit as waking no model when the openclaw call was on a
+            # continuation line. Join them before looking.
             joined = service.read_text().replace("\\\n", " ")
             exec_line = " ".join(l for l in joined.splitlines()
                                  if l.startswith("ExecStart"))

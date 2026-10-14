@@ -43,6 +43,15 @@ class RunsFromTheRealJournal(unittest.TestCase):
         self.assertEqual(r["minutes"], 6.1)
         self.assertEqual((r["calls"], r["failures"]), (47, 4))
 
+    def test_the_cached_share_is_read_from_the_runs_own_usage(self):
+        # 1,914,752 of 155,712 + 1,914,752 tokens read came from the cache.
+        # This is how a model trial tells whether caching works: Haiku's
+        # price assumes it does, and without it a run costs about 4x.
+        self.assertEqual(self.mt.runs(self.raw)[0]["cached"], 0.925)
+        nocache = self.raw.replace('"cacheRead": 1914752', '"cacheRead": 0')
+        self.assertEqual(self.mt.runs(nocache)[0]["cached"], 0.0)
+        self.assertEqual(self.mt.by_model(self.mt.runs(self.raw))["xiaomi/mimo-v2.6-pro"]["cached"], 0.925)
+
     def test_models_are_compared_per_run(self):
         a = dict(self.mt.runs(self.raw)[0])
         b = dict(a, model="anthropic/claude-haiku-5.5", result="error", turns=12, cost=0.02, minutes=2.0, failures=0)
@@ -67,18 +76,17 @@ def verifier_says(script, setup):
         return r.stdout
 
 
-def stale_timmy(root):
-    (root / "agents/timmy/data").mkdir(parents=True)
-    (root / "agents/timmy/data/_meta.json").write_text('{"asof_utc": "2026-01-01 00:00:00", "fetched_ok": ["AAPL"]}')
-    (root / "agents/timmy/MEMORY.md").write_text("a line\n")
+def belfort_unreadable(root):
+    (root / "agents/belfort/state").mkdir(parents=True)
+    (root / "agents/belfort/state/portfolio.json").write_text("{not json")
 
 
 class EachRunCarriesItsVerdict(unittest.TestCase):
     """"ok" is OpenClaw saying the model stopped talking; a model on trial is
     judged on whether its work passed the verifier. Ace's missing-bankroll
-    failure does not say FAILED on its first line, and Timmy's correct skip
-    says PASS at the end of its line - reading only "verify: PASS|FAILED"
-    up front counted the first as unchecked and the second as nothing."""
+    failure never says FAILED on its first line, and Belfort's unreadable
+    portfolio says it at the end - reading only "verify: PASS|FAILED" up
+    front counted both as unchecked, so a failing model looked clean."""
 
     @classmethod
     def setUpClass(cls):
@@ -86,7 +94,8 @@ class EachRunCarriesItsVerdict(unittest.TestCase):
         run = (FIXTURES / "openclaw-agent-json-2026.9.log").read_text()
         haiku = run.replace("xiaomi/mimo-v2.6-pro", "anthropic/claude-haiku-5.5")
         cls.failed = verifier_says("ace-verify.py", lambda root: None)
-        cls.passed = verifier_says("timmy-verify.py", stale_timmy)
+        cls.passed = "ace-verify: PASS - cycle 41, bankroll $10,212.50 (+2.12%), 2 open, memory +311B\n"
+        cls.belfort = verifier_says("belfort-verify.py", belfort_unreadable)
         # a failed run, one whose verifier never ran (a provider error exits
         # first), then a passing one - the verdict belongs to the run just
         # before it, not to the first run since the last verdict
@@ -94,7 +103,8 @@ class EachRunCarriesItsVerdict(unittest.TestCase):
 
     def test_the_verifiers_really_print_these(self):
         self.assertIn("does not exist", self.failed)
-        self.assertTrue(self.passed.startswith("timmy-verify: data was stale"), self.passed)
+        self.assertTrue(self.belfort.startswith("belfort-verify: cannot read"), self.belfort)
+        self.assertTrue(self.belfort.rstrip().endswith("FAILED"), self.belfort)
 
     def test_each_run_gets_the_verdict_after_it(self):
         self.assertEqual([r["verdict"] for r in self.mt.runs(self.raw)], ["FAILED", None, "PASS"])
@@ -105,10 +115,9 @@ class EachRunCarriesItsVerdict(unittest.TestCase):
         self.assertEqual((h["runs"], h["checked"], h["passed"]), (2, 1, 1))
         self.assertEqual((m["runs"], m["checked"], m["passed"]), (1, 1, 0))
 
-    def test_a_pass_said_up_front_is_a_pass(self):
-        line = "ace-verify: PASS - cycle 41, bankroll $10,212.50 (+2.12%), 2 open, memory +311B\n"
+    def test_a_failure_said_at_the_end_is_a_failure(self):
         run = (FIXTURES / "openclaw-agent-json-2026.9.log").read_text()
-        self.assertEqual(self.mt.runs(run + line)[0]["verdict"], "PASS")
+        self.assertEqual(self.mt.runs(run + self.belfort)[0]["verdict"], "FAILED")
 
 
 if __name__ == "__main__":
