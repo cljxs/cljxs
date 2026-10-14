@@ -86,13 +86,15 @@ HOOK_LINES = 4
 KIT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-\d{1,15}(-\d{1,2})?$")
 SLIDE_RE = re.compile(r"^\d{2}\.jpg$")
 
-# AI SCENES (owner, 2026-10-13: "Let's try the free option first"). The
-# product cut out of its mockup and set into a free AI-drawn scene by
-# scene.py, which owns how and checks the light. A kit with any is held as
-# needs_review until the owner approves it - the AI drew those backgrounds
-# and nobody has looked at them yet.
+# AI SCENES. scene.py owns how they are made and checked: since 2026-10-14
+# the paid kind - the product's own photo drawn into a scene by the image
+# model, then compared with the photo - within tasks/limits.json's
+# tiktok_daily_ai, never eating into what Emily's art needs. The free kind
+# (TIKTOK_SCENES=free) pastes the cut-out product onto a free background;
+# the owner found it looked terrible. A kit with any scene is held as
+# needs_review until the owner approves it.
 SCENES_PER_KIT = 2
-SCENE_SPACING = 25          # seconds between free requests; closer, they are refused
+SCENE_SPACING = 25          # seconds between FREE requests; closer, they are refused
 
 FONTS = ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
          "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
@@ -245,9 +247,9 @@ def caption_for(row, hook, shop_line):
     return text[:CAPTION_MAX]
 
 
-AI_NOTE = ["BEFORE YOU POST: some slides have AI-made backgrounds (the product itself",
-           "is your real photo). In TikTok, tap More options and turn on",
-           "'AI-generated content' - TikTok asks for it on realistic AI imagery.", ""]
+AI_NOTE = ["BEFORE YOU POST: some slides are AI-made pictures of your product. In",
+           "TikTok, tap More options and turn on 'AI-generated content' - TikTok",
+           "asks for it on realistic AI imagery.", ""]
 
 
 def audio_for(thing, ai=False):
@@ -407,24 +409,35 @@ def kit_id(day, listing_id):
     return name
 
 
-def make_scenes(row, photos, thing, turn, folder, n=SCENES_PER_KIT, maker=None, wait=time.sleep):
-    """Up to n AI scenes for the kit, in `folder`. Returns (used, dropped):
-    used is [(path, report)] that passed scene.py's checker, dropped the
-    reason for each that did not. A photo with no plain backdrop to cut the
-    product from is skipped for the next; a failed scene costs only itself."""
+def make_scenes(row, photos, thing, turn, folder, n=SCENES_PER_KIT, maker=None, wait=time.sleep,
+                spent_today=0.0, how=None):
+    """Up to n AI scenes for the kit, in `folder`. Returns (used, dropped,
+    cost): used is [(path, report)] that passed scene.py's checks, dropped
+    the reason for each that did not, cost what the paid ones cost.
+
+    A failed scene costs only itself. A photo with no plain backdrop to cut
+    the product from (free scenes) is skipped for the next. Today's
+    allowance running out (paid scenes) stops the rest - before spending."""
     sc = _scene()
+    how = how or sc.mode()
     maker = maker or sc.make_scene
-    used, dropped = [], []
+    used, dropped, cost = [], [], 0.0
     order = list(photos)
     for k in range(n):
-        if k:
+        if k and how == "free":
             wait(SCENE_SPACING)
         out = Path(folder) / f"scene-{k + 1}.jpg"
+        stop = False
         while order:
             scratch = Path(folder) / f"work-{k}"
             scratch.mkdir(exist_ok=True)
             try:
-                rep = maker(order[0], thing, out, turn + k, int(row["listing_id"]) % 100000 + 97 * turn + k, scratch)
+                rep = maker(order[0], thing, out, turn + k, int(row["listing_id"]) % 100000 + 97 * turn + k,
+                            scratch, spent_today=spent_today + cost, how=how)
+            except sc.SpendError as exc:
+                dropped.append(str(exc))
+                stop = True
+                break
             except sc.CutoutError as exc:
                 dropped.append(f"{Path(order[0]).name}: {exc}")
                 order.pop(0)
@@ -432,14 +445,23 @@ def make_scenes(row, photos, thing, turn, folder, n=SCENES_PER_KIT, maker=None, 
             except sc.SceneError as exc:
                 dropped.append(str(exc))
                 break
+            except Exception as exc:        # a refused or broken call costs this scene, not the kit
+                dropped.append(f"the scene failed: {str(exc)[:200]}")
+                break
+            cost += rep.get("cost") or 0.0
             if rep["ok"]:
                 used.append((out, rep))
             else:
                 dropped.append(rep["why"])
             break
-        if not order:
+        if stop or not order:
             break
-    return used, dropped
+    return used, dropped, round(cost, 4)
+
+
+def spent_today(kits, day):
+    """What today's kits have already spent on scenes, from their own records."""
+    return round(sum(float(k.get("scene_cost") or 0) for k in kits if k.get("day") == day), 4)
 
 
 def package(folder, kid):
@@ -468,7 +490,8 @@ def package(folder, kid):
     return slides, seconds
 
 
-def build_kit(row, photos, day, shop_line, turn, scenes=SCENES_PER_KIT, maker=None, wait=time.sleep):
+def build_kit(row, photos, day, shop_line, turn, scenes=SCENES_PER_KIT, maker=None, wait=time.sleep,
+              spent=0.0, how=None):
     """Make a whole kit from a listing row and its downloaded photos. Returns
     the kit dict. Raises on anything that would leave a kit half-made, and
     leaves nothing behind when it does. A scene that fails is not a failed
@@ -492,8 +515,9 @@ def build_kit(row, photos, day, shop_line, turn, scenes=SCENES_PER_KIT, maker=No
     (part / "slides").mkdir(parents=True)
     try:
         with tempfile.TemporaryDirectory() as scratch:
-            used, dropped = (make_scenes(row, photos, thing, turn, scratch, scenes, maker, wait)
-                             if scenes else ([], []))
+            used, dropped, cost = (make_scenes(row, photos, thing, turn, scratch, scenes, maker, wait,
+                                               spent, how)
+                                   if scenes else ([], [], 0.0))
             plan = ([("hook_scene", used[0][0], hook_lines)] if used else [("hook", photos[0], hook_lines)])
             plan += [("scene", path, ()) for path, _rep in used]
             plan += [("photo", p, ()) for p in photos] + [("end", photos[0], end_lines)]
@@ -506,7 +530,8 @@ def build_kit(row, photos, day, shop_line, turn, scenes=SCENES_PER_KIT, maker=No
                 if kind == "scene":
                     rep = used[len(scene_rows)][1]
                     scene_rows.append({"slide": out.name, "prompt": rep.get("prompt"),
-                                       "source": rep.get("source"), "checks": rep.get("checks")})
+                                       "source": rep.get("source"), "checks": rep.get("checks"),
+                                       "cost": rep.get("cost")})
         (part / "caption.txt").write_text(caption_for(row, hook, shop_line) + "\n")
         (part / "audio.txt").write_text(audio_for(thing, bool(ai_slides)))
         slides, seconds = package(part, kid)
@@ -515,6 +540,7 @@ def build_kit(row, photos, day, shop_line, turn, scenes=SCENES_PER_KIT, maker=No
                "hook": hook, "thing": thing, "slides": len(slides),
                "video_seconds": seconds, "hashtags": hashtags(row.get("tags")),
                "ai_slides": ai_slides, "scenes": scene_rows, "scenes_dropped": dropped,
+               "scene_cost": cost,
                "status": "needs_review" if ai_slides else "ready",
                "made_utc": _now(), "posted_utc": None}
         (part / "kit.json").write_text(json.dumps(kit, indent=1) + "\n")
@@ -644,8 +670,10 @@ def cmd_make(a):
     with tempfile.TemporaryDirectory() as d:
         try:
             photos = lv.download(lv.listing_photos(row["listing_id"], key, ep), d, MAX_PHOTOS)
+            how = _scene().mode()
             kit = build_kit(row, photos, day, store.SHOP_LINE, len(kits),
-                            scenes=0 if a.no_scenes else SCENES_PER_KIT)
+                            scenes=0 if a.no_scenes or how == "off" else SCENES_PER_KIT,
+                            spent=spent_today(kits, day), how=how)
         except Exception as exc:
             print(f"FAILED  {row['listing_id']}  {str(exc)[:300]}", file=sys.stderr)
             return 1
@@ -654,6 +682,8 @@ def cmd_make(a):
           f"{store.short(kit['title'], 50)}\n  hook: {kit['hook']}")
     if kit["scenes"]:
         print(f"  {len(kit['scenes'])} AI scene(s) - waiting for you to approve them in the Shop")
+    if kit["scene_cost"]:
+        print(f"  AI scenes cost ${kit['scene_cost']:.3f}")
     for why in kit["scenes_dropped"]:
         print(f"  scene left out: {why}")
     if gone:

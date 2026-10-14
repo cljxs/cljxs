@@ -483,7 +483,7 @@ def directed(prompt, product=""):
 
 
 def generate(path, prompt, key, model=None, product="", direction=None,
-             aspect=None):
+             aspect=None, images=()):
     """Draw one image. Returns (bytes written, usage).
 
     `usage.include` asks OpenRouter to price the call and hand the number back
@@ -496,9 +496,18 @@ def generate(path, prompt, key, model=None, product="", direction=None,
     `direction` and `aspect` are for art that is not a print file - the shop
     banner. Left out, a product's art gets its print direction and its face's
     shape exactly as before; the request is still built here, once.
+
+    `images` are pictures the model is shown with the prompt - scene.py
+    hands it the product's own photo to draw into a scene. Each is a
+    (mime type, bytes) pair, sent the way proof() sends one.
     """
     content = (f"{prompt.strip()}\n\n{direction}" if direction is not None
                else directed(prompt, product))
+    if images:
+        content = [{"type": "text", "text": content}] + [
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,"
+                                                       f"{base64.b64encode(data).decode()}"}}
+            for mime, data in images]
     request = {
         "model": model or image_model(),
         "messages": [{"role": "user", "content": content}],

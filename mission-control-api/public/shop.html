@@ -246,7 +246,7 @@ function slides(k) {
     const checks = sc && sc.checks ? Object.entries(sc.checks).map(([name, c]) =>
       `${c.ok ? '✓' : '✕'} ${name}: ${c.said}`).join('\n') : '';
     return `<div class="sl"><a href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="slide ${i + 1}" loading="lazy"></a>
-      ${ai.has(n) ? `<span class="aitag" ${checks ? `title="${esc(checks)}"` : ''}>AI SCENE${sc ? ' · light ✓' : ''}</span>` : ''}
+      ${ai.has(n) ? `<span class="aitag" ${checks ? `title="${esc(checks)}"` : ''}>AI SCENE${sc ? ' · checked ✓' : ''}</span>` : ''}
       ${review && ai.has(n) ? `<button class="btn drop" data-drop="${esc(k.id)}" data-slide="${n}" ${busy ? 'disabled' : ''}>Drop</button>` : ''}</div>`;
   }).join('');
 }
@@ -268,7 +268,7 @@ function tiktok(kits) {
     <div class="ctop"><div><div class="cname">${esc(k.title)}</div>
       <div class="cmeta">${esc(k.day)} · ${k.slides} slides · ${k.video_seconds}s video</div></div>
       <span class="tag ${posted ? 't-gray' : review ? 't-amber' : 't-pink'}">${posted ? 'POSTED' : review ? 'CHECK THE AI SCENES' : 'READY TO POST'}</span></div>
-    ${review ? `<div class="note">The slides marked AI SCENE have AI-drawn backgrounds around your real product photo. The lighting checker passed them; look at them yourself, Drop any you don't like, then Approve.</div>` : ''}
+    ${review ? `<div class="note">The slides marked AI SCENE are AI-made pictures of your product${k.scene_cost ? ` (cost $${Number(k.scene_cost).toFixed(2)})` : ''}. Each was compared with your real photo and passed; look closely at the design and lettering yourself, Drop any you don't like, then Approve.</div>` : ''}
     ${(k.ai_slides || []).length && !review ? `<div class="said">Has AI backgrounds: in TikTok, More options → turn on "AI-generated content" before posting.</div>` : ''}
     <div class="hook">“${esc(k.hook)}”</div>
     <div class="kit">

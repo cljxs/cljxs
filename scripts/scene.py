@@ -5,6 +5,13 @@ AI-drawn scene, and checked for whether the light matches.
 
     scene.py try photo.jpg --thing "tote bag"        two scenes, with the checker's report
     scene.py try photo.jpg --thing mug --n 1 --out /tmp/scenes
+    scene.py try photo.jpg --how free                 the free kind instead of the paid
+
+Two kinds. PAID (the default since 2026-10-14) shows the image model the
+product's photo and has it draw that product into a scene; a vision model
+then checks the design survived. FREE, below, pastes the cut-out product on
+a free AI background - the owner tried it and it "looks terrible", so it is
+kept only as `--how free` / TIKTOK_SCENES=free.
 
 WHY THIS SHAPE (owner, 2026-10-13: "Let's try the free option first"). An AI
 that redraws the product garbles its print - the lettering, the pattern - and
@@ -55,6 +62,7 @@ Needs ffmpeg. Standard library otherwise.
 """
 
 import argparse
+import base64
 import importlib.util
 import json
 import math
@@ -504,10 +512,11 @@ def check(composite, scene, mask, backdrop_left):
     return result
 
 
-def make_scene(photo, thing, out, n, seed, scratch, fetch=fetch_background):
-    """One scene picture at `out` (1080x1920 jpg). Returns its report:
-    {ok, why, checks, prompt, source, match}. A scene that fails a check is
-    still written, so the owner can see why; `ok` says whether to use it."""
+def free_scene(photo, thing, out, n, seed, scratch, fetch=fetch_background):
+    """One FREE scene picture at `out` (1080x1920 jpg): the cut-out product
+    on a free AI background. Returns its report: {ok, why, checks, prompt,
+    source, match}. A scene that fails a check is still written, so the
+    owner can see why; `ok` says whether to use it."""
     scratch = Path(scratch)
     cut, backdrop_left, share = cutout(photo, scratch)
     ko = _load("knockout_scene_size", "knockout.py")
@@ -527,15 +536,259 @@ def make_scene(photo, thing, out, n, seed, scratch, fetch=fetch_background):
             "product_share": round(share, 3)}
 
 
+# ------------------------------------------------------------------ paid scenes
+#
+# THE PAID KIND (owner, 2026-10-14, after seeing the free ones: "it looks
+# terrible"). The image model is shown the product's own photo and draws
+# that product into the scene - so it can be carried on a shoulder or held
+# at a market, which pasting never could. The price of that is that the
+# model REDRAWS the product, and a redrawn print can come back changed. So
+# every picture is compared with the real photo by a vision model, and code
+# - not that model - decides from its answers whether the design survived.
+#
+# Through the OpenRouter key and the request emily-assets.py already builds
+# (generate() with `images`), so there is no new account. The cost of each
+# call is OpenRouter's own figure (usage.include), recorded on the kit.
+#
+# BELIEVED, not verified: no key existed where this was written. The request
+# is the one emily-assets sends for art plus the image part proof() sends,
+# both of which run on the droplet daily, but image-in AND image-out in one
+# call had not been made from here before.
+
+PAID_MODEL = "google/gemini-2.5-flash-image"
+CHECK_MODEL = "google/gemini-2.5-flash"
+PAID_TRIES = 2              # per scene: a redraw that changed the design gets one more go
+IMAGE_GUESS = 0.05          # what an image is assumed to cost until OpenRouter says (believed ~$0.04)
+CHECK_GUESS = 0.003
+REF_SIDE = 1024             # the product photo is sent at most this size
+MIN_TALL = 1.3              # height / width - a landscape picture would crop the product away
+CHECK_MAX_TOKENS = 800
+LIMITS_KEYS = ("tiktok_daily_ai", "tiktok_leave_for_emily")
+LIMITS_DEFAULTS = {"tiktok_daily_ai": 0.30, "tiktok_leave_for_emily": 0.50}
+
+# Faces are cropped out on purpose: an AI face is the thing viewers spot
+# first and TikTok labels most strictly, and the product is the point.
+PAID_SCENES = {
+    "tote bag": ["carried on the shoulder of a woman walking down a sunny autumn street, cropped at the shoulders so no face shows",
+                 "held up by one hand at a farmers market stall, flowers softly blurred behind",
+                 "lying on a cafe table beside a latte and an open book, seen from slightly above",
+                 "hanging from the back of a wooden chair in a cozy reading nook with bookshelves",
+                 "on a picnic blanket in a park beside a basket of strawberries"],
+    "mug": ["held in two hands with cozy sweater sleeves beside a rainy window, no face shown",
+            "on a kitchen counter beside a coffee pot in soft morning light",
+            "on a desk next to an open notebook and a laptop, warm lamp light"],
+    "sticker": ["stuck on the lid of a laptop on a cafe table", "stuck on a water bottle beside a hiking trail"],
+    "t-shirt": ["worn by a person standing in a sunny park, cropped at the chin so no face shows",
+                "folded neatly on a wooden bench beside a pair of sneakers",
+                "worn by a person sitting in a cafe, cropped at the chin so no face shows"],
+}
+PAID_SCENES["bag"] = PAID_SCENES["tote bag"]
+for _k in ("shirt", "sweatshirt", "hoodie"):
+    PAID_SCENES[_k] = PAID_SCENES["t-shirt"]
+PAID_DEFAULT = ["on a cafe table beside a latte, seen from slightly above",
+                "on a wooden shelf in a bright living room with plants",
+                "held in one hand in soft daylight, no face shown"]
+
+PAID_ASK = (
+    "Here is a product photo of a {thing}. Make a new photo of THIS EXACT {thing} {scene}. "
+    "Keep the product identical to the photo: the same printed design, the same colours, the same "
+    "lettering spelled exactly the same, the same shape and proportions. Do not redraw, simplify, "
+    "restyle, add to or remove anything printed on it, and keep its design facing the camera and fully "
+    "visible. Photorealistic lifestyle photography, natural light, vertical 9:16 frame. No added text, "
+    "logos, captions or watermarks anywhere in the picture.")
+
+DESIGN_ASK = (
+    "Image A is a product photo. Image B is meant to show the SAME product in a new scene. "
+    "Look only at the product. Reply with JSON only, no prose:\n"
+    '{"product_visible": true or false (is the product clearly in B with its design facing the camera),\n'
+    ' "same_design": true or false (is the printed design in B the same as in A - same picture, colours and layout),\n'
+    ' "words_a": "every word printed on the product in A, exactly as spelled, or empty",\n'
+    ' "words_b": "every word printed on the product in B, exactly as spelled, or empty",\n'
+    ' "differences": ["each way the product in B differs from A - design, colours, lettering, shape"],\n'
+    ' "added_text": true or false (are there words in B that are not printed on the product)}')
+
+
+class SpendError(SceneError):
+    """Today's allowance for scenes is used up - stop asking, not just this one."""
+
+
+def _ea():
+    return _load("emily_assets_paid", "emily-assets.py")
+
+
+def limits(path=None):
+    """The kit's two money settings, from tasks/limits.json beside the other
+    caps: the most kits may spend on scenes a day, and what must be left of
+    the day's AI budget for Emily's art."""
+    path = Path(path) if path else Path(os.environ.get("ECOSYSTEM_ROOT", SCRIPTS.parent)) / "tasks" / "limits.json"
+    try:
+        d = json.loads(path.read_text())
+    except Exception:
+        d = {}
+    out = {}
+    for k in LIMITS_KEYS:
+        v = d.get(k, LIMITS_DEFAULTS[k])
+        out[k] = float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0 else LIMITS_DEFAULTS[k]
+    return out
+
+
+def allowance(spent_today, about_to, budget_read, caps):
+    """(ok, why) for spending `about_to` more on scenes today. Two rules,
+    both checked: the kits' own cap, and leaving Emily her share of the
+    day's AI budget as OpenRouter counts it (budget.py). An unreadable
+    budget is a no - this is spending, and unknown is not 'room left'."""
+    if spent_today + about_to > caps["tiktok_daily_ai"] + 1e-9:
+        return False, (f"today's scene allowance is spent (${spent_today:.2f} of "
+                       f"${caps['tiktok_daily_ai']:.2f})")
+    try:
+        state = budget_read()
+    except Exception as exc:
+        return False, f"the AI budget could not be read ({str(exc)[:80]}) - not spending blind"
+    left = state.get("ai_left_today")
+    if left is None:
+        return False, "OpenRouter did not say what is left today - not spending blind"
+    if left - about_to < caps["tiktok_leave_for_emily"]:
+        return False, (f"only ${left:.2f} of today's AI budget is left, and "
+                       f"${caps['tiktok_leave_for_emily']:.2f} is kept for Emily's art")
+    return True, None
+
+
+def paid_prompt(thing, n):
+    places = PAID_SCENES.get(thing) or PAID_DEFAULT
+    return PAID_ASK.format(thing=thing, scene=places[n % len(places)])
+
+
+def _letters(text):
+    return "".join(c for c in str(text or "").lower() if c.isalnum())
+
+
+def design_problems(reading):
+    """What is wrong with the redrawn product, from the vision model's
+    answers. Code decides, and an answer it cannot read is a failure - an
+    unread check is not a passed one."""
+    if not isinstance(reading, dict):
+        return ["the design check's answer could not be read"]
+    need = ("product_visible", "same_design", "words_a", "words_b", "differences", "added_text")
+    missing = [k for k in need if k not in reading]
+    if missing:
+        return [f"the design check did not answer {', '.join(missing)}"]
+    out = []
+    if reading["product_visible"] is not True:
+        out.append("the product is not clearly shown with its design facing the camera")
+    if reading["same_design"] is not True:
+        out.append("the printed design was changed")
+    a, b = _letters(reading["words_a"]), _letters(reading["words_b"])
+    if a != b:
+        out.append(f"the lettering changed: {str(reading['words_a'])[:60]!r} became {str(reading['words_b'])[:60]!r}")
+    diffs = [str(x)[:120] for x in reading["differences"] or [] if str(x).strip()] \
+        if isinstance(reading["differences"], list) else [str(reading["differences"])[:120]]
+    out += [f"changed: {x}" for x in diffs]
+    if reading["added_text"] is True:
+        out.append("words were added that are not on the product")
+    return out
+
+
+def design_check(reference, picture, key, post=None):
+    """(problems, cost) - the vision model's comparison of the real photo and
+    the new picture, judged by design_problems()."""
+    ea = _ea()
+    parts = [{"type": "text", "text": DESIGN_ASK}]
+    for label, path in (("A", reference), ("B", picture)):
+        data = base64.b64encode(Path(path).read_bytes()).decode()
+        parts += [{"type": "text", "text": f"Image {label}:"},
+                  {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{data}"}}]
+    body = json.dumps({"model": os.environ.get("SCENE_CHECK_MODEL") or CHECK_MODEL,
+                       "messages": [{"role": "user", "content": parts}],
+                       "max_tokens": CHECK_MAX_TOKENS, "usage": {"include": True}}).encode()
+    req = urllib.request.Request(ea.OR_URL, data=body, headers={
+        "Authorization": f"Bearer {key}", "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/cljxs/cljxs", "X-Title": "scene-check"})
+    data = (post or ea.post)(req)
+    msg = (data.get("choices") or [{}])[0].get("message") or {}
+    return design_problems(ea.read_proof(msg.get("content"))), ea.cost_of(data.get("usage"))
+
+
+def paid_scene(photo, thing, out, n, scratch, spent_today=0.0, key=None, generate=None,
+               check_design=None, budget_read=None, caps=None):
+    """One PAID scene at `out` (1080x1920 jpg): the product drawn into a
+    scene by the image model, then compared with its real photo. Returns
+    {ok, why, checks, prompt, source, cost}. Raises SpendError when today's
+    allowance would be crossed - before spending, never after."""
+    scratch = Path(scratch)
+    if key is None:
+        key = _load("preflight_scene", "preflight.py").openrouter_key()
+    if not key:
+        raise SpendError("no OpenRouter key - paid scenes need the key the agents use")
+    caps = caps or limits()
+    if budget_read is None:
+        budget_read = lambda: _load("budget_scene", "budget.py").read(key)
+    ea = _ea()
+    generate = generate or (lambda path, prompt, images: ea.generate(
+        path, prompt, key, model=os.environ.get("SCENE_IMAGE_MODEL") or PAID_MODEL,
+        direction="", aspect="9:16", images=images))
+    check_design = check_design or (lambda ref, pic: design_check(ref, pic, key))
+
+    ref = scratch / "reference.jpg"
+    ffmpeg("-i", photo, "-vf", f"scale='min({REF_SIDE},iw)':-2", "-frames:v", "1", "-q:v", "3", ref)
+    prompt = paid_prompt(thing, n)
+    spent, last = 0.0, None
+    for attempt in range(PAID_TRIES):
+        ok, why = allowance(spent_today + spent, IMAGE_GUESS + CHECK_GUESS, budget_read, caps)
+        if not ok:
+            if attempt == 0:
+                raise SpendError(why)
+            break
+        drawn = scratch / f"drawn-{n}-{attempt}.img"
+        _bytes, usage = generate(drawn, prompt, [("image/jpeg", ref.read_bytes())])
+        cost = ea.cost_of(usage)
+        spent += cost if cost is not None else IMAGE_GUESS
+        w, h = probe_size(drawn)
+        if h / max(w, 1) < MIN_TALL:
+            last = {"design": {"ok": False, "said": f"came back {w}x{h}, not a tall picture"}}
+            continue
+        ffmpeg("-i", drawn, "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}",
+               "-frames:v", "1", "-q:v", "3", out)
+        problems, ccost = check_design(ref, out)
+        spent += ccost if ccost is not None else CHECK_GUESS
+        last = {"design": {"ok": not problems,
+                           "said": "; ".join(problems) if problems else "the design matches the real photo"}}
+        if not problems:
+            break
+    failed = [v["said"] for v in (last or {}).values() if not v["ok"]]
+    return {"ok": bool(last) and not failed, "why": "; ".join(failed) or (None if last else "nothing was drawn"),
+            "checks": last or {}, "prompt": prompt, "source": "paid", "cost": round(spent, 4)}
+
+
+MODES = ("paid", "free", "off")
+
+
+def mode():
+    """Which scenes kits get: TIKTOK_SCENES in the environment, else paid."""
+    m = (os.environ.get("TIKTOK_SCENES") or "paid").strip().lower()
+    return m if m in MODES else "paid"
+
+
+def make_scene(photo, thing, out, n, seed, scratch, spent_today=0.0, how=None, **kw):
+    """One scene of whichever kind `how` (or mode()) says."""
+    how = how or mode()
+    if how == "free":
+        return free_scene(photo, thing, out, n, seed, scratch, **kw)
+    if how == "paid":
+        return paid_scene(photo, thing, out, n, scratch, spent_today, **kw)
+    raise SceneError("scenes are switched off (TIKTOK_SCENES=off)")
+
+
 def cmd_try(a):
     out = Path(a.out or tempfile.mkdtemp(prefix="scenes-"))
     out.mkdir(parents=True, exist_ok=True)
-    bad = 0
+    bad, spent = 0, 0.0
     for n in range(a.n):
         with tempfile.TemporaryDirectory() as scratch:
             target = out / f"scene-{n + 1}.jpg"
             try:
-                rep = make_scene(a.photo, a.thing, target, n, a.seed + n, scratch)
+                rep = make_scene(a.photo, a.thing, target, n, a.seed + n, scratch,
+                                 spent_today=spent, how=a.how)
+                spent += rep.get("cost") or 0.0
             except SceneError as exc:
                 print(f"scene {n + 1}: FAILED - {exc}")
                 bad += 1
@@ -544,6 +797,8 @@ def cmd_try(a):
         print(f"scene {n + 1}: {'PASS' if rep['ok'] else 'FAIL'}  {target}")
         for k, v in rep["checks"].items():
             print(f"    {'ok ' if v['ok'] else 'BAD'} {k:<11}{v['said']}")
+    if spent:
+        print(f"spent ${spent:.3f} (OpenRouter's own figures where it gave them)")
     return 1 if bad else 0
 
 
@@ -556,6 +811,7 @@ def main():
     t.add_argument("--n", type=int, default=2)
     t.add_argument("--seed", type=int, default=1)
     t.add_argument("--out")
+    t.add_argument("--how", choices=["paid", "free"], help="which kind (default: TIKTOK_SCENES, else paid)")
     t.set_defaults(fn=cmd_try)
     a = ap.parse_args()
     return a.fn(a)

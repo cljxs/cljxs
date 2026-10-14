@@ -502,7 +502,7 @@ class AWholeScene(SceneBase):
         wood = picture(self.d, "wood.jpg", "color=c=0xb07a48:s=576x1024", "576x1024")
         out = self.d / "scene.jpg"
         fetch = lambda prompt, seed, o: (shutil.copy(wood, o), "free")[1]
-        rep = self.sc.make_scene(mock, "tote bag", out, 0, 1, self.d, fetch=fetch)
+        rep = self.sc.free_scene(mock, "tote bag", out, 0, 1, self.d, fetch=fetch)
         self.assertTrue(rep["ok"], rep)
         self.assertEqual(self.sc.probe_size(out), (1080, 1920))
         self.assertEqual(set(rep["checks"]), {"glow", "colour", "edges", "backdrop", "background"})
@@ -526,6 +526,174 @@ class AWholeScene(SceneBase):
             self.sc.cutout(busy, self.d)
 
 
+class PaidScenesSpendOnlyWhatIsAllowed(SceneBase):
+    """Two rules before any paid call: the kits' own cap, and leaving Emily
+    her share of the day's AI budget as OpenRouter counts it."""
+
+    CAPS = {"tiktok_daily_ai": 0.30, "tiktok_leave_for_emily": 0.50}
+
+    def test_the_kits_own_cap(self):
+        ok, why = self.sc.allowance(0.28, 0.053, lambda: {"ai_left_today": 1.2}, self.CAPS)
+        self.assertFalse(ok)
+        self.assertIn("scene allowance is spent", why)
+        self.assertTrue(self.sc.allowance(0.20, 0.053, lambda: {"ai_left_today": 1.2}, self.CAPS)[0])
+
+    def test_emilys_share_is_left_alone(self):
+        ok, why = self.sc.allowance(0.0, 0.053, lambda: {"ai_left_today": 0.52}, self.CAPS)
+        self.assertFalse(ok)
+        self.assertIn("kept for Emily's art", why)
+
+    def test_an_unreadable_budget_is_a_no(self):
+        def boom():
+            raise RuntimeError("network down")
+        self.assertFalse(self.sc.allowance(0.0, 0.05, boom, self.CAPS)[0])
+        self.assertFalse(self.sc.allowance(0.0, 0.05, lambda: {"ai_left_today": None}, self.CAPS)[0])
+
+    def test_the_caps_live_in_limits_json(self):
+        got = self.sc.limits(ROOT / "tasks" / "limits.json")
+        self.assertEqual(got, {"tiktok_daily_ai": 0.30, "tiktok_leave_for_emily": 0.50})  # owner's file, 2026-10-14
+        bad = self.d / "limits.json"
+        bad.write_text(json.dumps({"tiktok_daily_ai": "lots", "tiktok_leave_for_emily": -1}))
+        self.assertEqual(self.sc.limits(bad), self.sc.LIMITS_DEFAULTS)
+        self.assertEqual(self.sc.limits(self.d / "none.json"), self.sc.LIMITS_DEFAULTS)
+
+    def test_mode(self):
+        for env, want in (({}, "paid"), ({"TIKTOK_SCENES": "free"}, "free"),
+                          ({"TIKTOK_SCENES": "OFF"}, "off"), ({"TIKTOK_SCENES": "nonsense"}, "paid")):
+            with unittest.mock.patch.dict(os.environ, env, clear=False):
+                if not env:
+                    os.environ.pop("TIKTOK_SCENES", None)
+                self.assertEqual(self.sc.mode(), want)
+
+
+class TheDesignCheck(SceneBase):
+    """A redrawn print can come back changed. The vision model answers
+    questions; code decides what counts as a problem."""
+
+    GOOD = {"product_visible": True, "same_design": True, "words_a": "FERN", "words_b": "Fern!",
+            "differences": [], "added_text": False}
+
+    def test_a_faithful_redraw_passes(self):
+        self.assertEqual(self.sc.design_problems(self.GOOD), [], "case and punctuation are not a change")
+
+    def test_each_kind_of_change_fails(self):
+        for change, said in ((dict(same_design=False), "design was changed"),
+                             (dict(words_b="FEM"), "lettering changed"),
+                             (dict(product_visible=False), "not clearly shown"),
+                             (dict(differences=["the leaves are blue"]), "the leaves are blue"),
+                             (dict(added_text=True), "words were added")):
+            got = " | ".join(self.sc.design_problems(dict(self.GOOD, **change)))
+            self.assertIn(said, got, change)
+
+    def test_an_unread_answer_is_a_failure(self):
+        self.assertTrue(self.sc.design_problems(None))
+        partial = {k: v for k, v in self.GOOD.items() if k != "same_design"}
+        self.assertIn("did not answer same_design", self.sc.design_problems(partial)[0])
+        self.assertTrue(self.sc.design_problems(dict(self.GOOD, same_design="yes")),
+                        "only a real true counts")
+
+    def test_the_request_shows_both_pictures_and_reads_a_fenced_reply(self):
+        a = self.d / "a.jpg"
+        b = self.d / "b.jpg"
+        a.write_bytes(b"\xff\xd8A")
+        b.write_bytes(b"\xff\xd8B")
+        sent = []
+
+        def post(req):
+            sent.append(json.loads(req.data))
+            return {"choices": [{"message": {"content": "```json\n" + json.dumps(self.GOOD) + "\n```"}}],
+                    "usage": {"cost": 0.0012}}
+        problems, cost = self.sc.design_check(a, b, "k", post=post)
+        self.assertEqual((problems, cost), ([], 0.0012))
+        parts = sent[0]["messages"][0]["content"]
+        urls = [p["image_url"]["url"] for p in parts if p["type"] == "image_url"]
+        self.assertEqual(len(urls), 2)
+        self.assertTrue(all(u.startswith("data:image/jpeg;base64,") for u in urls))
+
+
+class APaidScene(SceneBase):
+    """The product's photo drawn into a scene, compared with the photo, and
+    paid for only within the allowance."""
+
+    def setUp(self):
+        super().setUp()
+        if not ff_available():
+            self.skipTest("ffmpeg is not installed here")
+        self.photo = picture(self.d, "photo.png", "0xd9c9a6", "800x800")
+        self.room = lambda: {"ai_left_today": 1.20}
+        self.caps = {"tiktok_daily_ai": 0.30, "tiktok_leave_for_emily": 0.50}
+
+    def drawer(self, sizes):
+        calls = []
+
+        def generate(path, prompt, images):
+            calls.append((prompt, images))
+            picture(self.d, "drawn.png", "0xb07a48", sizes[min(len(calls), len(sizes)) - 1])
+            shutil.copy(self.d / "drawn.png", path)
+            return 1, {"cost": 0.039}
+        return generate, calls
+
+    def run_scene(self, generate, check, room=None):
+        return self.sc.paid_scene(self.photo, "tote bag", self.d / "scene.jpg", 0, self.d, 0.0, key="k",
+                                  generate=generate, check_design=check, budget_read=room or self.room,
+                                  caps=self.caps)
+
+    def test_a_good_scene(self):
+        gen, calls = self.drawer(["768x1344"])
+        rep = self.run_scene(gen, lambda ref, pic: ([], 0.001))
+        self.assertTrue(rep["ok"], rep)
+        self.assertEqual(rep["cost"], 0.04)
+        self.assertEqual(self.sc.probe_size(self.d / "scene.jpg"), (1080, 1920))
+        prompt, images = calls[0]
+        self.assertIn("THIS EXACT tote bag", prompt)
+        self.assertEqual(images[0][0], "image/jpeg", "the model is shown the real photo")
+
+    def test_a_changed_design_gets_one_more_try_then_fails(self):
+        gen, calls = self.drawer(["768x1344"])
+        rep = self.run_scene(gen, lambda ref, pic: (["the lettering changed"], 0.001))
+        self.assertEqual(len(calls), self.sc.PAID_TRIES)
+        self.assertFalse(rep["ok"])
+        self.assertIn("lettering changed", rep["why"])
+        self.assertAlmostEqual(rep["cost"], 0.08, places=3, msg="both tries are counted")
+
+    def test_a_wide_picture_is_tried_again(self):
+        gen, calls = self.drawer(["1344x768", "768x1344"])
+        rep = self.run_scene(gen, lambda ref, pic: ([], 0.001))
+        self.assertTrue(rep["ok"])
+        self.assertEqual(len(calls), 2)
+
+    def test_nothing_is_spent_without_room(self):
+        gen, calls = self.drawer(["768x1344"])
+        with self.assertRaises(self.sc.SpendError):
+            self.run_scene(gen, lambda ref, pic: ([], 0.001), room=lambda: {"ai_left_today": 0.40})
+        self.assertEqual(calls, [], "refused before the call, not after")
+
+    def test_emily_assets_sends_the_photo_with_the_prompt(self):
+        ea = load("emily_assets_scene_test", "emily-assets.py")
+        sent = []
+        png = (self.d / "photo.png").read_bytes()
+
+        def post(req):
+            sent.append(json.loads(req.data))
+            return {"choices": [{"message": {"images": [{"image_url": {
+                "url": "data:image/png;base64," + __import__("base64").b64encode(png).decode()}}]}}],
+                "usage": {"cost": 0.039}}
+        with unittest.mock.patch.object(ea, "post", post):
+            n, usage = ea.generate(self.d / "out.png", "draw it", "k", model="m", direction="",
+                                   aspect="9:16", images=[("image/jpeg", b"\xff\xd8x")])
+        req = sent[0]
+        content = req["messages"][0]["content"]
+        self.assertEqual(content[0]["type"], "text")
+        self.assertNotIn(ea.PRINT_DIRECTION[:40], content[0]["text"], "no print-file direction on a scene")
+        self.assertTrue(content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
+        self.assertEqual(req["image_config"], {"aspect_ratio": "9:16"})
+        self.assertEqual(usage["cost"], 0.039)
+        # Emily's own art request is unchanged: a plain string.
+        with unittest.mock.patch.object(ea, "post", post):
+            ea.generate(self.d / "out2.png", "draw it", "k", model="m", product="tote")
+        self.assertIsInstance(sent[1]["messages"][0]["content"], str)
+
+
 class KitsWithScenes(unittest.TestCase):
     """The kit holds AI scenes for the owner's eye before it can be posted."""
 
@@ -547,7 +715,7 @@ class KitsWithScenes(unittest.TestCase):
     def maker(self, fail=None):
         calls = []
 
-        def make(photo, thing, out, n, seed, scratch):
+        def make(photo, thing, out, n, seed, scratch, **kw):
             calls.append(Path(photo).name)
             if fail and fail(len(calls), Path(photo).name):
                 raise fail(len(calls), Path(photo).name)
@@ -560,21 +728,49 @@ class KitsWithScenes(unittest.TestCase):
     def test_scenes_go_first_and_hold_the_kit_for_review(self):
         make, _ = self.maker()
         waits = []
-        kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make, wait=waits.append)
+        kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make, wait=waits.append,
+                                how="free")
         self.assertEqual(kit["status"], "needs_review")
         self.assertEqual(kit["ai_slides"], ["01.jpg", "02.jpg", "03.jpg"], "the hook is on a scene too")
         self.assertEqual([s["slide"] for s in kit["scenes"]], ["02.jpg", "03.jpg"])
         self.assertEqual(kit["slides"], 1 + 2 + 2 + 1)
         self.assertEqual(waits, [self.tk.SCENE_SPACING], "the free service is not asked twice in a row")
+        paid_waits = []
+        self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make, wait=paid_waits.append,
+                          how="paid")
+        self.assertEqual(paid_waits, [], "the paid service is not made to wait")
         self.assertIn("AI-generated content", (self.tk.KITS / kit["id"] / "audio.txt").read_text())
         with self.assertRaises(ValueError):
             self.tk.set_posted(kit["id"])
         self.assertEqual(self.tk.approve(kit["id"])["status"], "ready")
         self.assertEqual(self.tk.set_posted(kit["id"])["status"], "posted")
 
+    def test_todays_allowance_running_out_stops_the_rest(self):
+        make, calls = self.maker(fail=lambda n, name: self.sc.SpendError("today's scene allowance is spent")
+                                 if n == 2 else None)
+        kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make,
+                                wait=lambda s: None, scenes=3, how="paid")
+        self.assertEqual(len(calls), 2, "no third scene is asked for once the money is gone")
+        self.assertEqual(len(kit["scenes"]), 1)
+        self.assertEqual(kit["scenes_dropped"], ["today's scene allowance is spent"])
+
+    def test_what_scenes_cost_is_kept_and_counted_for_the_day(self):
+        def make(photo, thing, out, n, seed, scratch, spent_today=0.0, how=None):
+            seen.append(spent_today)
+            picture(self.d, "s.png", "0xb07a48")
+            shutil.copy(self.d / "s.png", out)
+            return {"ok": True, "why": None, "checks": {}, "prompt": "p", "source": "paid", "cost": 0.04}
+        seen = []
+        kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make,
+                                wait=lambda s: None, spent=0.10, how="paid")
+        self.assertEqual(seen, [0.10, 0.14], "each scene knows what the day has spent so far")
+        self.assertEqual(kit["scene_cost"], 0.08)
+        self.assertEqual(self.tk.spent_today([kit, {"day": "2026-10-12", "scene_cost": 9}], "2026-10-13"), 0.08)
+
     def test_a_photo_that_will_not_cut_out_is_skipped_for_the_next(self):
         make, calls = self.maker(fail=lambda n, name: self.sc.CutoutError("no backdrop") if name == "a.png" else None)
-        kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make, wait=lambda s: None)
+        kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make, wait=lambda s: None,
+                                how="free")
         self.assertEqual(calls[:2], ["a.png", "b.png"])
         self.assertEqual(len(kit["scenes"]), 2)
         self.assertIn("a.png: no backdrop", kit["scenes_dropped"][0])
