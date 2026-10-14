@@ -14,6 +14,7 @@ things here without breaking them.
     deploy/              systemd units, installed by scripts/deploy.sh
     mission-control-api/ the Command Deck (Express, port 3001)
     clipper/             Clipper: permitted video -> captioned shorts (its own DESIGN.md)
+    agentroom/           the Agent Room: idea -> reviewed build plan (its own README.md)
 
 `ECOSYSTEM_ROOT` overrides the root; nothing hardcodes a path.
 

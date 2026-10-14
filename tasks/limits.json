@@ -4,5 +4,7 @@
   "daily_new_tasks_cap": 50,
   "daily_ai_budget": 1.5,
   "tiktok_daily_ai": 0.3,
-  "tiktok_leave_for_emily": 0.5
+  "tiktok_leave_for_emily": 0.5,
+  "agentroom_daily_ai": 3,
+  "agentroom_run_max": 1
 }

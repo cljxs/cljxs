@@ -74,6 +74,9 @@ SHAPES = {
 # openclaw agent by the dispatcher, preflight and the Deck.
 ELSEWHERE = {
     "clip": lambda: Path(os.environ.get("CLIPPER_HOME", ROOT / "clipper" / "var")) / "credentials.env",
+    # The Agent Room is not an agent either, and its key must not be found by
+    # preflight's search of agents/*/state for the agents' shared key.
+    "agentroom": lambda: Path(os.environ.get("AGENTROOM_HOME", ROOT / "agentroom")) / "state" / "credentials.env",
 }
 
 PARTS = {

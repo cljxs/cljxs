@@ -174,3 +174,7 @@ agents/bolt/reports/*
 agents/bolt/state/*
 !agents/bolt/state/.gitkeep
 agents/bolt/MEMORY.md
+
+# Agent Room - its database, its key, the model price cache and captured
+# replies all stay on the droplet. roles.json (who plays which part) is tracked.
+agentroom/state/

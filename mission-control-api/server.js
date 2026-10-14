@@ -15,6 +15,7 @@ const belfortRoutes = require('./belfort');
 const boltRoutes = require('./bolt');
 const paulRoutes = require('./paul');
 const shopRoutes = require('./shop');
+const agentroomRoutes = require('./agentroom');
 
 const PORT = Number(process.env.PORT || 3001);
 // Bind to loopback by default, matching the OpenClaw gateway's posture.
@@ -317,6 +318,13 @@ app.get('/shop', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'shop.html'));
 });
 
+// The Agent Room: an idea in, a reviewed build plan out, waiting for the
+// owner's Approve (owner, 2026-10-14). The runs are worked by
+// agentroom-runner.service, not by this server.
+app.get('/agentroom', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'agentroom.html'));
+});
+
 app.get('/village', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'village.html'));
 });
@@ -332,6 +340,7 @@ belfortRoutes.register(app);
 boltRoutes.register(app);
 paulRoutes.register(app);
 shopRoutes.register(app);
+agentroomRoutes.register(app);
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'mission-control-api' }));
 
