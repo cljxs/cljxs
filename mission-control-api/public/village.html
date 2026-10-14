@@ -463,6 +463,25 @@ const OUTFITS = {
       px(g, 6, 3, 12, 2, 0x15161a); px(g, 5, 5, 2, 4, 0x2b2f3a); px(g, 17, 5, 2, 4, 0x2b2f3a);   // headphones
       px(g, 6, 2, 12, 1, 0x2b2f3a);
     } },
+  sylvester: { shirt: 0x7c5cff, back: 0x6a4be8, legs: 0x2b3446, hair: 0x2a1a12, shoes: 0xf2f2f2, skin: 0xd8a47a,
+    more: (g, f) => {                                        // violet hoodie, glasses, a headset, a laptop
+      const K = 0x111318, MIC = 0x2b2f3a;
+      px(g, 6, 1, 12, 3, 0x2a1a12); px(g, 7, 0, 3, 1, 0x2a1a12); px(g, 13, 0, 4, 1, 0x2a1a12);   // curls
+      px(g, 6, 3, 12, 1, MIC);                                // the headband
+      if (f === 'down') {
+        px(g, 5, 5, 2, 4, MIC); px(g, 17, 5, 2, 4, MIC); px(g, 17, 9, 1, 2, MIC); px(g, 14, 10, 4, 1, MIC);
+        px(g, 8, 7, 3, 2, K); px(g, 13, 7, 3, 2, K); px(g, 11, 7, 2, 1, K);
+        px(g, 9, 7, 1, 1, 0x9fd8ff); px(g, 14, 7, 1, 1, 0x9fd8ff);
+        px(g, 10, 13, 4, 2, 0xffffff); px(g, 11, 13, 2, 1, 0x22d3ee);         // "</>" on the chest, small
+        px(g, 15, 15, 8, 6, 0xb8bec7); px(g, 15, 15, 8, 1, 0xdfe3e8);         // the laptop under his arm
+        px(g, 18, 17, 2, 2, 0xffffff);
+      } else if (f === 'side') {
+        px(g, 8, 5, 3, 4, MIC); px(g, 11, 7, 4, 2, K); px(g, 12, 7, 1, 1, 0x9fd8ff);
+        px(g, 6, 14, 10, 6, 0xb8bec7); px(g, 6, 14, 10, 1, 0xdfe3e8);
+      } else {
+        px(g, 7, 9, 10, 3, 0x6a4be8);                         // the hood, down
+      }
+    } },
   clip: { shirt: 0x22252e, back: 0x22252e, legs: 0x4b5563, hair: 0x3a2a1d,
     more: (g, f) => {                                        // hoodie in the app colours, cap on backwards
       px(g, 6, 15, 12, 1, 0xff3d7f); px(g, 6, 16, 12, 1, 0x23d5e6);
@@ -514,6 +533,16 @@ function nameTag(sc, x, y, who) {
 // the gardens of the houses either side of it.
 const CLIP_PLOT = { x: 18.7, y: 4.2 };
 const CLIP_DOOR = 'Clip';
+
+// Sylvester's app studio: the Agent Room, where an idea becomes a reviewed
+// build plan (owner, 2026-10-14: "build a house, call him Sylvester, make it
+// app creation themed"). Not an agent in agents/, so like Clip's studio it has
+// its own plot outside PLOTS - south of the high street between the town
+// square and Bolt's path, the last open ground that is not a house plot kept
+// for the next agent. It faces away from the lane, like Bolt and the hall,
+// and shares Bolt's path down column 25.
+const SYLV_PLOT = { x: 21.0, y: 15.6 };
+const SYLV_DOOR = 'Sylvester';
 
 // The pond, one x-span per row. A rectangle of water in a field looks like a
 // swimming pool; the point of listing rows is that the edge can wander.
@@ -1033,6 +1062,86 @@ function makeTextures(s) {
     rl.lineStyle(4, 0xfff6d6, 1); rl.strokeCircle(12, 12, 9);
     rl.lineStyle(1, 0xffffff, .8); rl.strokeCircle(12, 12, 7);
     rl.generateTexture('ringlight', 24, 50); rl.destroy();
+  }
+
+  {                                                      // Sylvester's app studio
+    const SW = 128, SH = 148;
+    const gg = s.add.graphics();
+    gg.fillStyle(0x000000, .2); gg.fillEllipse(SW / 2, SH - 4, SW - 4, 12);
+
+    // A phone the size of a tower on the roof, its screen a grid of apps -
+    // the thing this building makes, as its sign. The camera dot at the top
+    // is the status lamp (SYLV_LAMP).
+    const pw = 46, ph = 76, pxl = SW / 2 - pw / 2;
+    px(gg, pxl, 0, pw, ph, 0x111318); px(gg, pxl + 1, 1, pw - 2, 1, 0x3b4052);
+    px(gg, pxl - 1, 3, 1, ph - 6, 0x111318); px(gg, pxl + pw, 3, 1, ph - 6, 0x111318);
+    const sx0 = pxl + 4, sy0 = 8, sw = pw - 8, sh = ph - 16;
+    const sky = [0x2a1f5c, 0x2f2468, 0x352974, 0x3b2e80, 0x41338c, 0x473898];
+    sky.forEach((c, k) => px(gg, sx0, sy0 + k * 10, sw, 10, c));
+    px(gg, sx0 + 2, sy0 + 1, 8, 1, 0xffffff, .7); px(gg, sx0 + sw - 8, sy0 + 1, 6, 1, 0xffffff, .7);   // status bar
+    const APPS = [0xff5d8f, 0x22d3ee, 0xffd23f, 0x4ade80, 0xf97316, 0xa78bfa, 0x38bdf8, 0xf43f5e,
+                  0x34d399, 0xfbbf24, 0xe879f9, 0x60a5fa];
+    APPS.forEach((c, k) => {
+      const ax = sx0 + 3 + (k % 3) * 12, ay = sy0 + 6 + Math.floor(k / 3) * 12;
+      px(gg, ax, ay, 8, 8, c); px(gg, ax, ay, 8, 1, 0xffffff, .35); px(gg, ax + 2, ay + 3, 4, 2, 0xffffff, .5);
+    });
+    px(gg, sx0 + 2, sy0 + sh - 7, sw - 4, 6, 0xffffff, .14);              // the dock
+    [0xff5d8f, 0x22d3ee, 0xffd23f].forEach((c, k) => px(gg, sx0 + 5 + k * 11, sy0 + sh - 6, 5, 4, c));
+    px(gg, SW / 2 - 6, ph - 5, 12, 2, 0x8a90a0);                           // home bar
+    px(gg, SW / 2 - 2, 3, 4, 3, 0x22252e);                                 // camera
+    px(gg, pxl + 6, ph, 4, 4, 0x3b4052); px(gg, pxl + pw - 10, ph, 4, 4, 0x3b4052);   // its mounts
+
+    const R = 80;                                                          // the roof line
+    px(gg, 0, R, SW, 5, 0x3d2f7a); px(gg, 0, R, SW, 1, 0x6a5ac8);
+    // the fascia: a neon </> between two brackets of light
+    px(gg, 2, R + 5, SW - 4, 13, 0x15121f);
+    const N = 0x22d3ee, P = 0xff5d8f, y0 = R + 7;
+    px(gg, 50, y0 + 4, 2, 2, N); px(gg, 52, y0 + 2, 2, 2, N); px(gg, 54, y0, 2, 2, N);
+    px(gg, 52, y0 + 6, 2, 2, N); px(gg, 54, y0 + 8, 2, 2, N);              // <
+    for (let k = 0; k < 5; k++) px(gg, 66 - k * 2, y0 + k * 2, 2, 2, 0xffffff); // /
+    px(gg, 76, y0 + 4, 2, 2, P); px(gg, 74, y0 + 2, 2, 2, P); px(gg, 72, y0, 2, 2, P);
+    px(gg, 74, y0 + 6, 2, 2, P); px(gg, 72, y0 + 8, 2, 2, P);              // >
+    for (let fx = 8; fx < 42; fx += 6) px(gg, fx, R + 10, 3, 3, (fx / 6) % 2 ? N : P, .8);
+    for (let fx = 88; fx < SW - 8; fx += 6) px(gg, fx, R + 10, 3, 3, (fx / 6) % 2 ? P : N, .8);
+
+    // walls: deep violet, a light edge and a shaded one
+    const W0 = R + 18;
+    px(gg, 6, W0, SW - 12, SH - 10 - W0, 0x2c2450);
+    px(gg, 6, W0, 8, SH - 10 - W0, 0xffffff, .05); px(gg, SW - 14, W0, 8, SH - 10 - W0, 0x000000, .2);
+    // left window: code, coloured the way an editor colours it
+    const win = (wx) => { px(gg, wx - 2, W0 + 4, 34, 22, 0x1b1830); px(gg, wx, W0 + 6, 30, 18, 0x12101f); };
+    win(10);
+    [[2, 12, 0xff5d8f], [4, 16, 0x22d3ee], [4, 10, 0xffd23f], [6, 14, 0xa78bfa], [2, 6, 0xff5d8f]]
+      .forEach(([ix, w, c], k) => px(gg, 10 + ix + 2, W0 + 8 + k * 3, w, 2, c));
+    // right window: an app being laid out - a wireframe of a screen
+    win(SW - 40);
+    const fx0 = SW - 38;
+    px(gg, fx0 + 8, W0 + 7, 12, 16, 0xe8f1fb, .9); px(gg, fx0 + 9, W0 + 8, 10, 3, 0x7c5cff);
+    px(gg, fx0 + 9, W0 + 13, 10, 2, 0xb8bec7); px(gg, fx0 + 9, W0 + 16, 7, 2, 0xb8bec7);
+    px(gg, fx0 + 10, W0 + 19, 8, 3, 0x22d3ee);
+    px(gg, fx0 + 22, W0 + 9, 5, 5, 0xffd23f, .9); px(gg, fx0 + 22, W0 + 16, 5, 5, 0x4ade80, .9);
+    // glass doors, lit violet from inside
+    const dw = 32, dx0 = SW / 2 - dw / 2, dy0 = W0 + 6;
+    px(gg, dx0 - 3, dy0 - 3, dw + 6, SH - dy0 - 7, 0xb3a8e8);
+    px(gg, dx0, dy0, dw, SH - dy0 - 10, 0x1b1830);
+    px(gg, dx0 + 2, dy0 + 2, 13, SH - dy0 - 14, 0x5b4bb0);
+    px(gg, dx0 + 17, dy0 + 2, 13, SH - dy0 - 14, 0x5b4bb0);
+    px(gg, dx0 + 4, dy0 + 4, 2, 14, 0xffffff, .35); px(gg, dx0 + 19, dy0 + 4, 2, 14, 0xffffff, .35);
+    px(gg, SW / 2 - 4, dy0 + 13, 2, 6, 0xd1d5db); px(gg, SW / 2 + 2, dy0 + 13, 2, 6, 0xd1d5db);
+    // apron and step
+    px(gg, 4, SH - 12, SW - 8, 10, 0x9aa0aa); px(gg, 4, SH - 12, SW - 8, 2, 0xb8bdc6);
+    px(gg, dx0 - 6, SH - 6, dw + 12, 5, 0xc6ccd6);
+    gg.generateTexture('appstudio', SW, SH); gg.destroy();
+
+    const kb = s.add.graphics();                         // the plan on a board: to do, doing, done
+    kb.fillStyle(0x000000, .18); kb.fillEllipse(17, 44, 28, 4);
+    px(kb, 5, 26, 2, 18, 0x7a5230); px(kb, 27, 26, 2, 18, 0x7a5230);
+    px(kb, 1, 2, 32, 26, 0xf4f4f0); px(kb, 1, 2, 32, 2, 0xd6d6cf); px(kb, 0, 1, 34, 1, 0x8a90a0);
+    px(kb, 11, 5, 1, 21, 0xc8c8c0); px(kb, 22, 5, 1, 21, 0xc8c8c0);
+    [[3, 6, 0xffd23f], [3, 13, 0xff9ec4], [3, 20, 0xffd23f], [14, 6, 0x9fd8ff], [14, 13, 0xffd23f],
+     [25, 6, 0x86efac], [25, 13, 0x86efac], [25, 20, 0x86efac]]
+      .forEach(([x, y, c]) => { px(kb, x, y, 6, 5, c); px(kb, x + 1, y + 2, 4, 1, 0x000000, .25); });
+    kb.generateTexture('kanban', 34, 46); kb.destroy();
   }
 
   /* --- themed houses: one per agent that has a trade to show ---
@@ -1689,6 +1798,9 @@ function create() {
   layPath((PROPS_PLOT.x + 2.5) * T, Math.round(PROPS_PLOT.y + 3.9), PROPS_PLOT.x * T, PROPS_PLOT.x * T + 160, 'right');
   // ...and Clip's studio, whose door is at the middle of a 4.5-tile front.
   layPath((CLIP_PLOT.x + 2.25) * T, Math.round(CLIP_PLOT.y + 3.9), CLIP_PLOT.x * T, CLIP_PLOT.x * T + 144);
+  // ...and Sylvester's studio, south of the lane: down Bolt's column and
+  // along to his door.
+  layPath((SYLV_PLOT.x + 2) * T, Math.round(SYLV_PLOT.y + 148 / T), SYLV_PLOT.x * T, SYLV_PLOT.x * T + 128, 'right');
 
   window.__paved = PAVED;   // lets a check read the paths as drawn, not a copy of the rule
 
@@ -1777,17 +1889,20 @@ function create() {
   // and so was invisible to the first nudge. tests/test_parsers.py now checks
   // every coordinate below against every building's footprint, because
   // "nudged" is a thing someone remembers to do and a test is not.
+  // [22,20] and [24,21] stood on Sylvester's studio (2026-10-14), with the
+  // bush at [22,20], the rock at [21,19] and the sign at [24.6,17.4]; the
+  // barrel at [22.6,15.6] moved into the square, to [20.4,15.6].
   [[1,3],[4,1],[9,2],[20,2],[25,1],[34,1],[0,9],[36,4],
-   [2,16],[8,17],[15,18],[22,20],[24,21],[29,15.5],[9.6,22.6],[24,15.5],[18,2],
+   [2,16],[8,17],[15,18],[29,15.5],[9.6,22.6],[24,15.5],[18,2],
    [7,11],[13,16],[10,15.5]]
     .forEach(([tx,ty], i) => place(`tree${i % 3}`, tx, ty, 40, true, .78));
 
   // [32,21] stood exactly in front of the props hall's name plate, which then
   // read "P    PROPS". Found by screenshotting the village, not by reading it.
-  [[6,11],[14,11],[23,11],[29,11],[32.6,12],[3,12],[10,17],[14,20],[22,20],[28,18],[31,22],[17.5,19.6]]
+  [[6,11],[14,11],[23,11],[29,11],[32.6,12],[3,12],[10,17],[14,20],[28,18],[31,22],[17.5,19.6]]
     .forEach(([tx,ty]) => place('bush', tx, ty, 8, false, .42));
 
-  [[7,16],[21,19],[30,16],[13,12],[27.5,12],[37.5,22.2]]
+  [[7,16],[30,16],[13,12],[27.5,12],[37.5,22.2]]
     .forEach(([tx,ty]) => place('rock', tx, ty, 6, true, .34));
 
   // fence runs along the bottom edge of the north gardens
@@ -1811,10 +1926,10 @@ function create() {
   // [21.3, 12.6] stood across Clip's path into the square, and [16.7, 12.6]
   // overhung Emily's.
   [[17.0, 12.6], [22.0, 12.6]].forEach(([tx, ty]) => place('stall', tx, ty, 18, true, .7));
-  [[15.4, 15.6], [22.6, 15.6], [8.6, 12.4], [26.8, 12.4]]
+  [[15.4, 15.6], [20.4, 15.6], [8.6, 12.4], [26.8, 12.4]]
     .forEach(([tx,ty], i) => place(i % 2 ? 'barrel' : 'crate', tx, ty, 6, true, .32));
   // [11.4, 12.3] stood on the end of Belfort's name plate ("BELFOR-").
-  [[13.4, 16.4], [24.6, 17.4], [6.4, 16.2], [30.4, 15.4], [12.5, 12.9], [30.2, 12.3]]
+  [[13.4, 16.4], [6.4, 16.2], [30.4, 15.4], [12.5, 12.9], [30.2, 12.3]]
     .forEach(([tx,ty]) => place('sign', tx, ty, 6, false, .22));
 
   // --- town square: the statue, with the ledger on its plinth's plaque ---
@@ -1969,6 +2084,40 @@ function create() {
     });
   }
 
+  // ---- Sylvester's app studio ----
+  {
+    const SW = 128, SH = 148;
+    const bx = SYLV_PLOT.x * T, by = SYLV_PLOT.y * T;
+    this.add.image(bx, by, 'appstudio').setOrigin(0, 0).setDepth(by + SH);
+    blocker(bx + SW / 2, by + SH - 26, SW - 12, 52);
+    this.add.image(bx - 6, by + SH + 14, 'kanban').setOrigin(.5, 1).setDepth(by + SH + 16);
+
+    const plateW = Math.max(96, SYLV_DOOR.length * 10 + 22);
+    this.add.rectangle(bx + SW / 2, by + SH + 18, 6, 14, 0x7a5230).setDepth(by + SH + 24);
+    this.add.rectangle(bx + SW / 2, by + SH + 8, plateW, 20, 0xd9c9a3)
+      .setStrokeStyle(2, 0x8a7a5c).setDepth(by + SH + 25);
+    this.add.text(bx + SW / 2, by + SH + 8, SYLV_DOOR.toUpperCase(), {
+      fontFamily: 'ui-monospace,Menlo,monospace', fontSize: '12px', color: '#2b3a2e',
+    }).setOrigin(.5).setDepth(by + SH + 26);
+    doors.push({ name: SYLV_DOOR, x: bx + SW / 2, y: by + SH });
+
+    // the phone's camera dot: what the Agent Room is doing (roomLampColor)
+    sylvLamp = this.add.circle(bx + SW / 2, by + 4, 4, ROOM_LAMP.unknown)
+      .setStrokeStyle(1, 0x00000055).setDepth(by + SH + 27);
+    this.tweens.add({ targets: sylvLamp, alpha: .3, duration: 1000, yoyo: true, repeat: -1 });
+
+    // His front is the edge of the map, so like a south plot's resident he
+    // keeps to the path he shares with Bolt, beside the studio.
+    const hx = (Math.ceil((bx + SW) / T) + .5) * T, hy = by + SH - 48;
+    const lk = look('sylvester');
+    const npc = this.physics.add.sprite(hx, hy, `${lk}-down-0`);
+    npc.body.setSize(14, 12).setOffset(5, 16);
+    this.physics.add.collider(npc, solids);
+    npcs.push({ s: npc, homeX: hx, homeY: hy, tx: hx, ty: hy, look: lk, maxY: by + SH - 24,
+                wait: 400 + Math.floor(rnd() * 1400), moving: false, label: nameTag(this, hx, hy - 22, SYLV_DOOR) });
+    pollRoom();
+  }
+
   if (!agents.length) {
     this.add.text(W/2, 7*T, 'No agents yet —\nadd one and a house appears here.', {
       fontFamily: 'ui-sans-serif,system-ui', fontSize: '17px', color: '#ffffff',
@@ -2121,6 +2270,8 @@ function openPanel(name) {
   if (name === PROPS_DOOR) return openPeter();
   if (name === HALL_DOOR) return openHallPanel();
   if (name === CLIP_DOOR) return openClipPanel();
+  // Sylvester's studio is the Agent Room page (owner, 2026-10-14).
+  if (name === SYLV_DOOR) return openFrame('agentroom');
   // Belfort's house is his trading desk: the Markets page, the same one
   // the Deck opens as a tab (owner, 2026-10-06).
   if (name === 'belfort') return openMarkets();
@@ -3400,7 +3551,7 @@ function closePanel() { closeLb(); closeMarkets(); openAgent = null; $('panel').
  * way, from the button at the top of her panel, over her gallery. Removed on close, not hidden, so it stops
  * polling. Escape inside it, or its close button, posts '<name>-close' here. */
 const FRAMES = { belfort: '/markets?embed=1', peter: '/peter?embed=1', bolt: '/bolt?embed=1',
-                 paul: '/paul?embed=1', shop: '/shop?embed=1' };
+                 paul: '/paul?embed=1', shop: '/shop?embed=1', agentroom: '/agentroom?embed=1' };
 function openFrame(agent) {
   closeMarkets();
   openAgent = agent;
@@ -3420,7 +3571,7 @@ function closeMarkets() {
 }
 window.addEventListener('message', e => {
   if (e.origin === location.origin && e.data
-      && ['markets-close', 'peter-close', 'bolt-close', 'paul-close', 'shop-close'].includes(e.data.type)) closeMarkets();
+      && ['markets-close', 'peter-close', 'bolt-close', 'paul-close', 'shop-close', 'agentroom-close'].includes(e.data.type)) closeMarkets();
 });
 $('panel').addEventListener('click', e => { if (e.target.id === 'panel') closePanel(); });
 
@@ -3462,6 +3613,25 @@ function isTouch() { return window.matchMedia('(pointer: coarse)').matches; }
 $('act').addEventListener('click', () => { if (nearDoor) openPanel(nearDoor.name); });
 
 /* ---------------- data ---------------- */
+
+/* Sylvester's lamp: the Agent Room's state, read from /api/agentroom - the
+ * same answer the room's page shows, worked out by agentroom.py. Violet when
+ * a plan waits for the owner, amber while one is being written, green when
+ * the runner is up and idle, red when it is not running. */
+const ROOM_LAMP = { waiting: 0xa78bfa, working: 0xfbbf24, idle: 0x34d399, down: 0xf43f5e, unknown: 0x8791a8 };
+let sylvLamp = null;
+function roomLampColor(d) {
+  if (!d || d.ok === false || !d.runner) return ROOM_LAMP.unknown;
+  if (d.counts && d.counts.waiting) return ROOM_LAMP.waiting;
+  if (!d.runner.alive) return ROOM_LAMP.down;
+  return d.counts && d.counts.working ? ROOM_LAMP.working : ROOM_LAMP.idle;
+}
+async function pollRoom() {
+  let d = null;
+  try { d = await (await fetch('/api/agentroom', { cache: 'no-store' })).json(); } catch (e) {}
+  if (sylvLamp && sylvLamp.active) sylvLamp.setFillStyle(roomLampColor(d));
+}
+setInterval(pollRoom, 20000);
 
 async function pull(first) {
   try {

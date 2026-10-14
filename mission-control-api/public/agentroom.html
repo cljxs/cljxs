@@ -138,7 +138,11 @@
       <div class="pills" id="pills"></div>
     </div>
     <div class="sp"></div>
-    <button class="btn new" id="newbtn">+ New run</button>
+    <div class="acts" style="margin-top:0">
+      <button class="btn new" id="newbtn">+ New run</button>
+      <a class="btn" id="back" href="/dashboard">← Deck</a>
+      <button class="btn" id="close" style="display:none">✕ Close</button>
+    </div>
   </div>
   <div id="notices"></div>
   <div class="stats" id="stats"></div>
@@ -172,7 +176,16 @@
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-if (new URLSearchParams(location.search).get('embed') === '1') document.body.classList.add('embed');
+// Opened from Sylvester's studio in the village (?embed=1): a Close button
+// instead of the way back to the Deck, and Escape closes it too.
+if (new URLSearchParams(location.search).get('embed') === '1') {
+  document.body.classList.add('embed');
+  $('back').style.display = 'none';
+  $('close').style.display = '';
+  const close = () => parent.postMessage({ type: 'agentroom-close' }, '*');
+  $('close').onclick = close;
+  addEventListener('keydown', e => { if (e.key === 'Escape' && !$('dlg').open) close(); });
+}
 
 let deck = null, current = null, detail = null, tab = 'room', busy = false;
 try { current = Number(localStorage.getItem('agentroom.run')) || null; } catch {}

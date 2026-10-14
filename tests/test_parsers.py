@@ -5651,6 +5651,54 @@ class PaulHasAWorkshop(unittest.TestCase):
         self.assertIn("paulRoutes.register(app);", server)
 
 
+class SylvesterHasAStudio(unittest.TestCase):
+    """2026-10-14: the Agent Room got a building in the village - Sylvester's
+    app studio (owner: "build a house, call him Sylvester, make it app
+    creation themed"). Not an agent, so like Clip's studio it stands on its
+    own plot outside PLOTS, and is checked against every other building, or
+    the next agent would be built on top of it."""
+
+    def setUp(self):
+        self.html = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+
+    def test_it_stands_on_nobody_elses_ground(self):
+        sx, sy = (float(v) for v in re.search(r"SYLV_PLOT = \{ x: ([\d.]+), y: ([\d.]+) \}", self.html).groups())
+        sw, sh = 4.0, 148 / 32 + 0.9                     # the building and its name plate
+        others = [(float(a), float(b), 4.0, 116 / 32 + 0.9) for a, b in
+                  re.findall(r"\{ x:\s*([\d.]+),\s*y:\s*([\d.]+),\s*flip", self.html)]
+        self.assertEqual(len(others), 8, "all eight house plots, built on or not")
+        for name, w, h in (("PROPS_PLOT", 5.0, 124 / 32 + 0.9), ("CLIP_PLOT", 4.5, 124 / 32 + 0.9)):
+            m = re.search(name + r" = \{ x: ([\d.]+), y: ([\d.]+) \}", self.html)
+            others.append((float(m.group(1)), float(m.group(2)), w, h))
+        m = re.search(r"STATUE = \{ x: ([\d.]+), y: ([\d.]+) \}", self.html)
+        others.append((float(m.group(1)) - 62 / 32, float(m.group(2)) - 196 / 32, 124 / 32, 196 / 32))
+        for (ox, oy, ow, oh) in others:
+            apart = sx + sw <= ox or ox + ow <= sx or sy + sh <= oy or oy + oh <= sy
+            self.assertTrue(apart, f"Sylvester's studio overlaps the building at {ox:g},{oy:g}")
+        self.assertGreater(sy, 15.0, "south of the high street, clear of the road")
+
+    def test_his_door_opens_the_agent_room_and_it_can_close(self):
+        self.assertIn("doors.push({ name: SYLV_DOOR", self.html)
+        body = self.html.split("function openPanel(", 1)[1]
+        before = body.split("(DATA.agents || []).find", 1)[0]
+        self.assertIn("if (name === SYLV_DOOR) return openFrame('agentroom');", before)
+        self.assertIn("agentroom: '/agentroom?embed=1'", self.html)
+        self.assertIn("'agentroom-close'", self.html)
+        page = (ROOT / "mission-control-api" / "public" / "agentroom.html").read_text()
+        self.assertIn("parent.postMessage({ type: 'agentroom-close' }", page)
+
+    def test_the_lamp_reads_the_room_not_a_guess(self):
+        # Violet only when a plan waits for the owner, red when the runner is
+        # down - both from agentroom.py's own answer.
+        self.assertIn("fetch('/api/agentroom'", self.html)
+        self.assertIn("if (d.counts && d.counts.waiting) return ROOM_LAMP.waiting;", self.html)
+        self.assertIn("if (!d.runner.alive) return ROOM_LAMP.down;", self.html)
+
+    def test_he_is_dressed_and_named(self):
+        self.assertIn("  sylvester: { shirt:", self.html)
+        self.assertIn("const SYLV_DOOR = 'Sylvester';", self.html)
+
+
 class ClipHasAStudio(unittest.TestCase):
     """2026-09-28: Clip, the clipping agent, and Spotter, its research
     assistant, got a building. Like the props hall it is not in PLOTS, so
@@ -5826,6 +5874,10 @@ class NothingGrowsThroughAWall(unittest.TestCase):
         x, y = float(m.group(1)), float(m.group(2))
         yield ("Clip's studio", x, y, 144 / T, 124 / T, y * T + 124,
                max(96, len("Clip") * 10 + 22) / T)
+        m = re.search(r"SYLV_PLOT = \{ x: ([\d.]+), y: ([\d.]+) \}", self.html)
+        x, y = float(m.group(1)), float(m.group(2))
+        yield ("Sylvester's studio", x, y, 128 / T, 148 / T, y * T + 148,
+               max(96, len("Sylvester") * 10 + 22) / T)
         m = re.search(r"STATUE = \{ x: ([\d.]+), y: ([\d.]+) \}", self.html)
         x, y = float(m.group(1)), float(m.group(2))
         yield ("the statue", x - 2, y - 196 / T, 4.0, 196 / T, y * T, 0.0)
@@ -5925,6 +5977,8 @@ class NothingStandsOnAPath(NothingGrowsThroughAWall):
         lay((hx + 2.5) * T, jsround(hy + 3.9), hx * T, hx * T + 160, "right")
         cx, cy = (float(v) for v in re.search(r"CLIP_PLOT = \{ x: ([\d.]+), y: ([\d.]+) \}", self.html).groups())
         lay((cx + 2.25) * T, jsround(cy + 3.9), cx * T, cx * T + 144)
+        yx, yy = (float(v) for v in re.search(r"SYLV_PLOT = \{ x: ([\d.]+), y: ([\d.]+) \}", self.html).groups())
+        lay((yx + 2) * T, jsround(yy + 148 / T), yx * T, yx * T + 128, "right")
         tiles.update((x, y) for x in range(38) for y in (ROAD, ROAD + 1))      # the high street
         # The square is meant to be furnished; only the road across it and
         # Clip's way in are kept clear.
