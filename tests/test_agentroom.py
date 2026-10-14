@@ -155,11 +155,21 @@ class Money(Base):
     def test_the_agents_key_is_refused(self):
         # Guards: the Agent Room spending out of the agents' $1.50 a day,
         # which budget.py would then report as the agents' day being spent.
-        self.assertIn("same key the agents use", self.m.key_problem("sk-agents"))
+        self.assertIn("agents already use", self.m.key_problem("sk-agents"))
         self.assertIsNone(self.m.key_problem("sk-room"))
         with unittest.mock.patch.object(self.m, "room_key", return_value="sk-agents"):
             with self.assertRaises(ValueError):
                 self.m.new_run(self.conn, "Dinner", "An app that plans family dinners for a week.", dry=False)
+
+    def test_an_agents_own_key_is_refused_too(self):
+        # Guards: the Agent Room given Paul's key (his own $2 a day, owner
+        # 2026-10-14) - not the shared key, but still the agents' money.
+        root = Path(self.tmp.name) / "eco"
+        (root / "agents" / "paul" / "state").mkdir(parents=True)
+        (root / "agents" / "paul" / "state" / "credentials.env").write_text("PAUL_OPENROUTER_KEY=sk-paul\n")
+        self.m.ROOT = root
+        self.assertIn("agents already use", self.m.key_problem("sk-paul"))
+        self.assertIsNone(self.m.key_problem("sk-room"))
 
     def test_the_day_cap_stops_a_run_without_calling(self):
         rid = self.real_run()

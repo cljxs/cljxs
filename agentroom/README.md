@@ -36,7 +36,8 @@ phase by phase) is stage 2 and is not here yet.
 
 * Its **own OpenRouter key**, never the agents' key - OpenRouter counts
   spend per key, and on the shared key it would spend the agents' $1.50.
-  A real run with the agents' key is refused.
+  A real run with any key the agents already use (the shared one, or an
+  agent's own, like Paul's) is refused.
 * `agentroom_daily_ai` ($3) and `agentroom_run_max` ($1) in
   `tasks/limits.json`. Before every call, the call's worst case (its prompt
   plus `max_tokens`, at OpenRouter's published price) is checked against

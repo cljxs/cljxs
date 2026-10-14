@@ -216,14 +216,29 @@ def key_problem(key=None):
     if not key:
         return (f"no Agent Room key yet - make a second key on openrouter.ai with a daily "
                 f"limit, then: python3 scripts/set-credential.py agentroom {KEY_NAME}")
-    try:
-        agents = mod("preflight").openrouter_key()
-    except Exception:
-        agents = ""
-    if agents and key == agents:
-        return ("the Agent Room key is the same key the agents use - its spending would "
-                "come out of their $1.50 a day. Make a second key on openrouter.ai.")
+    if key in agents_keys():
+        return ("that is a key the agents already use - its spending would come out of "
+                "their day (the shared $1.50, or Paul's own $2). Make a NEW key on openrouter.ai.")
     return None
+
+
+def agents_keys():
+    """Every OpenRouter key the agents have: the shared one (preflight's,
+    which also honours OPENROUTER_API_KEY in the environment) and any agent's
+    own, such as Paul's PAUL_OPENROUTER_KEY - every credentials.env under
+    agents/, every variable with OPENROUTER in its name. Not one name per
+    agent, so a key added for the next agent is covered without an edit."""
+    keys = set()
+    try:
+        keys.add(mod("preflight").openrouter_key())
+    except Exception:
+        pass
+    for f in sorted((ROOT / "agents").glob("*/state/credentials.env")):
+        for name, value in mod("ea").read_env_file(f).items():
+            if "OPENROUTER" in name.upper():
+                keys.add((value or "").strip())
+    keys.discard("")
+    return keys
 
 
 # --------------------------------------------------------------------------
