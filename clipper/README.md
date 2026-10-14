@@ -334,6 +334,33 @@ minutes of one busy chat, so treat it as a starting point. If the clips miss,
 change `twitch_spike_ratio`, `twitch_spike_min_rate` or
 `twitch_clip_delay_seconds` in `clipper/var/config.json`.
 
+## One video from a Dropbox link (Clip's house)
+
+In the village, Clip's house -> **Add a video**: pick whose video it is, paste
+the Dropbox link to the video FILE (Share -> Copy link; a folder link is
+refused), the title, and optionally the hooks. **Write hooks from the title**
+drafts them with one cheap model call (about a tenth of a cent, inside Clip's
+own daily cap and the shared one) - check and edit them before queueing.
+
+**Add to Clip's queue** only saves the link. The 15-minute pickup timer takes
+one link a tick: downloads it (or, when the disk is too full, reads it from
+Dropbox in place), then transcribes and cuts it in the same run. The clips
+appear under Clips, waiting for approval. A link that fails shows why, with
+**Try again**.
+
+The hooks are the video's own: two videos from one source can each hunt for
+what their titles promise. A video without hooks uses its source's list.
+
+The same from the terminal:
+
+    python3 -m clipper hooks "LeBron's 76ers Look Like ELITE... ON PAPER" --source NAME
+    python3 -m clipper queue NAME "https://www.dropbox.com/scl/fi/..." --title "..." --hunt "Embiid: embiid, joel; LeBron: lebron"
+    python3 -m clipper inbox
+    python3 -m clipper hunt VIDEO_ID "Topic: term, term"     then: refind VIDEO_ID
+
+A single file's link needs no Dropbox app or key - the link itself is the
+permission to read it. (The folder pickup below does need one.)
+
 ## Dropbox folder pickup
 
 Instead of sending a link for every clip: one shared Dropbox folder per

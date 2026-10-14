@@ -7,7 +7,7 @@ rule for "can Clip act on this trending moment?" exists once.
 
 import json
 
-from clipper import db, postcopy, trends, twitch, youtube
+from clipper import db, inbox, postcopy, trends, twitch, youtube
 
 
 def trend_state(t, allowed):
@@ -73,6 +73,7 @@ def twitch_state(conn, cfg):
 def snapshot(conn, paths, cfg):
     allowed = trends.permitted_channels(conn)
     last = conn.execute("SELECT * FROM spot_runs ORDER BY id DESC LIMIT 1").fetchone()
+    inbox_rows = inbox.recent(conn)
     videos = [dict(v, clips=conn.execute("SELECT COUNT(*) FROM clips WHERE video_id = ?",
                                          (v["id"],)).fetchone()[0])
               for v in conn.execute("SELECT v.id, v.title, v.stage, v.error, v.duration, v.created_at, "
@@ -105,7 +106,7 @@ def snapshot(conn, paths, cfg):
                                                 "remade_clip_id")}
                             | {"state": code, "state_words": words})
     return {
-        "videos": videos, "clips": clips,
+        "videos": videos, "clips": clips, "inbox": inbox_rows,
         "sources": [{"name": s["name"], "rights": s["rights"], "channel_id": s["channel_id"],
                      "active": bool(s["active"])} for s in conn.execute("SELECT * FROM sources ORDER BY id")],
         "spend_today": db.spent_today(conn), "daily_budget": cfg["daily_budget_usd"],

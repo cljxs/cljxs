@@ -10,6 +10,10 @@
                                 a campaign's watermark, burned into every clip
     source list
     ingest SOURCE FILE_OR_HTTPS_URL [--title "..."] [--move] [--remote]
+    queue SOURCE DROPBOX_LINK [--title "..."] [--hunt "..."]   the next pickup downloads and clips it
+    hooks "VIDEO TITLE" [--source NAME]   a hunt list written from the title (about a tenth of a cent)
+    hunt VIDEO_ID "Topic: term; ..."      one video's own hunt list ("" = its source's)
+    inbox [--retry ID]                    the links queued, and what became of them
     run [--video ID]            transcribe, find moments, render - whatever is pending
     retry VIDEO_ID              put a failed video back where it failed
     refind VIDEO_ID             choose its moments again (a new --hunt); only before any clip exists
@@ -50,7 +54,7 @@ import json
 import re
 import sys
 
-from clipper import (campaign, config, db, dropbox, ingest, pipeline, postcopy, publish, report,
+from clipper import (campaign, config, db, dropbox, inbox, ingest, pipeline, postcopy, publish, report,
                      rights, score, transcribe, trends, twitch, youtube)
 
 
@@ -218,6 +222,12 @@ def cmd_moments(a):
 
 def cmd_pickup(a):
     cfg, paths, conn = open_all()
+    # A link pasted in Clip's house first - one a tick (inbox.py).
+    item = inbox.drain_one(conn, paths, cfg) if a.run else None
+    if item:
+        print(f"inbox #{item['id']}: {item['state']}"
+              + (f" - video {item['video_id']}" if item["video_id"] else "")
+              + (f" ({item['note']})" if item["note"] else ""))
     r = dropbox.pickup(conn, paths, cfg)
     print(f"Dropbox: {len(r['new'])} new video(s)"
           + (f" ({', '.join(map(str, r['new']))})" if r["new"] else "")
@@ -240,6 +250,53 @@ def cmd_pickup(a):
         for vid in waiting:
             v = conn.execute("SELECT stage, error FROM videos WHERE id = ?", (vid,)).fetchone()
             print(f"video {vid}: {v['stage']}" + (f" - {v['error']}" if v["error"] else ""))
+    return 0
+
+
+def cmd_queue(a):
+    cfg, paths, conn = open_all()
+    row = inbox.queue(conn, a.source, a.link, a.title, a.hunt)
+    hunt = json.loads(row["hunt"]) if row["hunt"] else []
+    print(f"inbox #{row['id']} queued for {row['source']}"
+          + (f" with {len(hunt)} hook topic(s)" if hunt else " - no hooks: it uses the source's list")
+          + ". The next pickup (every 15 minutes) downloads it and clips it.")
+    return 0
+
+
+def cmd_hooks(a):
+    cfg, paths, conn = open_all()
+    text, cost = inbox.hooks(conn, cfg, a.title, a.source or "")
+    print(text)
+    print(f"(cost ${float(cost or 0):.4f})", file=sys.stderr)
+    return 0
+
+
+def cmd_hunt(a):
+    """A video's own hunt list - then `refind` to choose its moments again."""
+    cfg, paths, conn = open_all()
+    topics = score.parse_hunt(a.hunt)
+    with conn:
+        n = conn.execute("UPDATE videos SET hunt = ? WHERE id = ?",
+                         (json.dumps(topics) if topics else None, a.video)).rowcount
+    if not n:
+        raise ValueError(f"no video {a.video}")
+    for t in topics:
+        print(f"hunting: {t['name']} ({', '.join(t['terms'])})")
+    print(f"video {a.video}: {'its own list' if topics else 'back to its source list'}. "
+          f"To use it on moments already chosen: python3 -m clipper refind {a.video}")
+    return 0
+
+
+def cmd_inbox(a):
+    cfg, paths, conn = open_all()
+    if a.retry:
+        inbox.retry(conn, a.retry)
+        print(f"inbox #{a.retry} queued again")
+        return 0
+    for r in inbox.recent(conn, 20):
+        print(f"  #{r['id']:<4}{r['state']:<9}{r['source']:<16}{(r['title'] or r['url'])[:50]}"
+              + (f"  video {r['video_id']}" if r["video_id"] else "")
+              + (f"\n        {r['note']}" if r["note"] else ""))
     return 0
 
 
@@ -578,6 +635,24 @@ def main(argv=None):
     i.add_argument("--remote", action="store_true",
                    help="leave an https video where it is; clips read only their own seconds")
     i.set_defaults(fn=cmd_ingest)
+
+    q = sub.add_parser("queue", help="a video link for the next pickup to download and clip")
+    q.add_argument("source")
+    q.add_argument("link")
+    q.add_argument("--title")
+    q.add_argument("--hunt", help="this video's hooks: \"Topic: term, term; Topic2: term\"")
+    q.set_defaults(fn=cmd_queue)
+    h = sub.add_parser("hooks", help="write a hunt list from a video title (one cheap model call)")
+    h.add_argument("title")
+    h.add_argument("--source")
+    h.set_defaults(fn=cmd_hooks)
+    h = sub.add_parser("hunt", help="set one video's own hunt list (\"\" goes back to its source's)")
+    h.add_argument("video", type=int)
+    h.add_argument("hunt")
+    h.set_defaults(fn=cmd_hunt)
+    h = sub.add_parser("inbox", help="the links pasted for clipping, and what became of them")
+    h.add_argument("--retry", type=int, help="queue a failed link again")
+    h.set_defaults(fn=cmd_inbox)
 
     r = sub.add_parser("run")
     r.add_argument("--video", type=int)

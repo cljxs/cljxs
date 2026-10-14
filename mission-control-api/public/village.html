@@ -122,6 +122,13 @@
     background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:10px;padding:12px 14px;
     resize:vertical}
   #edbox textarea#edCaption{min-height:170px}
+  #clipAdd label{display:block;margin:12px 0 5px;font-size:12px;letter-spacing:.04em;color:var(--mute);text-transform:uppercase}
+  #clipAdd input,#clipAdd textarea,#clipAdd select{width:100%;box-sizing:border-box;font-family:inherit;font-size:16px;
+    color:inherit;background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:10px;padding:11px 12px}
+  #clipAdd select option{color:#111}
+  #clipAdd .acts{margin-top:12px}
+  #caSaid{margin-top:8px}
+  #caInbox .w{margin-top:8px}
   #edbox input:focus,#edbox textarea:focus,#sedbox textarea:focus{outline:2px solid rgba(52,211,153,.6);outline-offset:1px}
   .edacts{display:flex;gap:12px;margin-top:18px}
   .edacts button{flex:1;padding:15px;border-radius:12px;font-size:17px;font-weight:600;
@@ -2659,6 +2666,23 @@ function openClipPanel(){
     <div class="sub">the clipping studio · Clip cuts permitted videos into captioned shorts ·
       Spotter, the research assistant, finds who and what is trending</div>
     <div id="clipStats"><div class="muted">loading…</div></div>
+    <div class="sect">Add a video</div>
+    <div id="clipAdd">
+      <label for="caSource">Whose video</label>
+      <select id="caSource"></select>
+      <label for="caLink">Dropbox link to the video file</label>
+      <input id="caLink" placeholder="https://www.dropbox.com/scl/fi/…" autocapitalize="none" autocorrect="off" spellcheck="false">
+      <label for="caTitle">Title</label>
+      <input id="caTitle" placeholder="LeBron's 76ers Look Like ELITE… ON PAPER" maxlength="200">
+      <label for="caHunt">Hooks to hunt for <span class="muted">(optional)</span></label>
+      <textarea id="caHunt" rows="3" placeholder="Embiid: embiid, joel; LeBron: lebron, bron" autocapitalize="none" autocorrect="off" spellcheck="false"></textarea>
+      <div class="acts">
+        <button class="no" id="caHooks">✨ Write hooks from the title</button>
+        <button class="yes" id="caQueue">Add to Clip's queue</button>
+      </div>
+      <div class="muted" id="caSaid">Clip picks it up within 15 minutes, downloads it and cuts the clips - they appear under Clips, waiting for you.</div>
+      <div id="caInbox"></div>
+    </div>
     <div class="sect">Clips</div>
     <div id="clipClips"></div>
     <div class="sect">Twitch — clips to download</div>
@@ -2682,7 +2706,84 @@ function openClipPanel(){
     e.preventDefault();
     clipCard(b.dataset.clip, b.dataset.id, b.dataset.platform);
   };
+  $('caHooks').onclick = clipHooks;
+  $('caQueue').onclick = clipQueue;
+  $('caInbox').onclick = e => {
+    const b = e.target.closest('[data-retry]');
+    if (b) clipPost(`/api/clip/inbox/${encodeURIComponent(b.dataset.retry)}/retry`, {}, 'Queued again.');
+  };
   loadClip();
+}
+
+// The form is drawn once, in openClipPanel, so a refresh never wipes what
+// is being typed; only the source list and the inbox below it are redrawn.
+const INBOX_STATE = { queued: 'waiting for the next pickup', working: 'downloading and clipping',
+                      done: 'in the studio', failed: 'failed' };
+function drawClipAdd(c){
+  const sel = $('caSource');
+  const keep = sel.value;
+  const names = (c.sources || []).filter(x => x.active).map(x => x.name);
+  if (document.activeElement !== sel) {
+    sel.innerHTML = names.length ? names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('')
+      : '<option value="">no source yet</option>';
+    if (names.includes(keep)) sel.value = keep;
+  }
+  if (!names.length) {
+    $('caSaid').innerHTML = 'A video has to belong to a source you have permission for. Add one on the droplet: '
+      + '<b>python3 -m clipper source add NAME --rights permission --evidence "the campaign brief"</b>';
+  }
+  const rows = c.inbox || [];
+  $('caInbox').innerHTML = rows.map(r => `
+      <div class="w">#${r.id} <b>${esc(r.title || r.url.slice(0, 60))}</b> · ${esc(r.source)} ·
+        <span style="color:${r.state === 'failed' ? '#f59e0b' : 'inherit'}">${esc(INBOX_STATE[r.state] || r.state)}</span>
+        ${r.video_id ? ` · video #${r.video_id}` : ''}${(r.hunt || []).length ? ` · ${r.hunt.length} hook topic(s)` : ''}
+        ${r.note ? `<div class="muted">${esc(String(r.note).slice(0, 240))}</div>` : ''}
+        ${r.state === 'failed' ? `<div class="acts"><button class="no" data-retry="${r.id}">Try again</button></div>` : ''}
+      </div>`).join('');
+}
+
+async function clipPost(url, body, ok){
+  if (clipBusy) return null;
+  clipBusy = true;
+  ['caHooks', 'caQueue'].forEach(id => { const b = $(id); if (b) b.disabled = true; });
+  let j = null;
+  try {
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                 body: JSON.stringify(body) });
+    j = await r.json();
+    j.ok = r.ok && j.ok !== false;
+    $('caSaid').textContent = j.ok ? (ok || j.message || 'Done.')
+      : String(j.message || j.error || 'That did not work.').replace(/^clipper: /, '').slice(0, 400);
+  } catch (e) {
+    $('caSaid').textContent = 'Could not reach the API: ' + e.message;
+  } finally {
+    clipBusy = false;
+    ['caHooks', 'caQueue'].forEach(id => { const b = $(id); if (b) b.disabled = false; });
+    loadClip();
+  }
+  return j;
+}
+
+async function clipHooks(){
+  const title = $('caTitle').value.trim();
+  if (!title) { $('caSaid').textContent = 'Paste the title first.'; return; }
+  $('caSaid').textContent = 'Writing hooks from the title…';
+  const j = await clipPost('/api/clip/hooks', { title, source: $('caSource').value });
+  if (j && j.ok) {
+    $('caHunt').value = String(j.message || '').trim().split('\n')[0];
+    $('caSaid').textContent = 'Hooks written - check them, change any words, then Add to Clip\'s queue.';
+  }
+}
+
+async function clipQueue(){
+  const body = { source: $('caSource').value, url: $('caLink').value.trim(),
+                 title: $('caTitle').value.trim(), hunt: $('caHunt').value.trim() };
+  if (!body.url) { $('caSaid').textContent = 'Paste the Dropbox link first.'; return; }
+  const j = await clipPost('/api/clip/queue', body);
+  if (j && j.ok) {
+    ['caLink', 'caTitle', 'caHunt'].forEach(id => { $(id).value = ''; });
+    $('caSaid').textContent = String(j.message || '').trim();
+  }
 }
 
 async function loadClip(){
@@ -2700,6 +2801,7 @@ function drawClip(){
     ['clipClips', 'clipTwitch', 'clipSpot', 'clipQueue'].forEach(id => $(id).innerHTML = '');
     return;
   }
+  drawClipAdd(c);
   const sp = c.spotter || {};
   const ready = (c.clips || []).filter(k => k.status === 'rendered').length;
   $('clipStats').innerHTML = `<div class="grid">
@@ -2730,8 +2832,8 @@ function drawClip(){
         <div class="d">${esc((k.reasons || []).join(' · '))}</div>
         ${drawPost(k)}
       </div>`).join('') + `</div>`
-    : `<div class="muted">No clips yet. Give Clip a video you have the rights to:
-       <b>python3 -m clipper ingest &lt;source&gt; &lt;file&gt;</b>, then <b>run</b>.</div>`;
+    : `<div class="muted">No clips yet. Paste a video's Dropbox link in <b>Add a video</b> above - Clip
+       cuts it within 15 minutes.</div>`;
 
   $('clipTwitch').innerHTML = drawTwitch(c.twitch || {});
 

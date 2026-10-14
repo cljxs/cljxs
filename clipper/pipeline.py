@@ -118,7 +118,9 @@ def stage_find(conn, paths, cfg, video):
         return "found"
     loud = loudness_of(paths, video)
     src = conn.execute("SELECT * FROM sources WHERE id = ?", (video["source_id"],)).fetchone()
-    hunt = json.loads(src["hunt"]) if src["hunt"] else []
+    # The video's own list (pasted with its link, inbox.py) before its source's.
+    own = video["hunt"] if "hunt" in video.keys() else None
+    hunt = json.loads(own) if own else (json.loads(src["hunt"]) if src["hunt"] else [])
     avoid = json.loads(src["avoid"]) if src["avoid"] else []
     sents = moments.sentences(words, cfg["sentence_pause_seconds"])
     wins = moments.windows(sents, cfg["min_clip_seconds"], cfg["max_clip_seconds"])

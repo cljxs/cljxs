@@ -275,6 +275,26 @@ MIGRATIONS = [
     """
     ALTER TABLE clips ADD COLUMN subtitles TEXT;
     """,
+    # 13 - the inbox (inbox.py): a link pasted in Clip's house, ingested by
+    # the next pickup. And a video's own hunt list - NULL uses its source's -
+    # so two videos from one source can each have the hooks their title
+    # promises (owner, 2026-10-14).
+    """
+    ALTER TABLE videos ADD COLUMN hunt TEXT;
+    CREATE TABLE inbox (
+        id INTEGER PRIMARY KEY,
+        source TEXT NOT NULL,
+        url TEXT NOT NULL,
+        link_key TEXT NOT NULL,
+        title TEXT,
+        hunt TEXT,
+        state TEXT NOT NULL DEFAULT 'queued',   -- queued, working, done, failed
+        video_id INTEGER,
+        note TEXT,
+        added_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    """,
 ]
 
 

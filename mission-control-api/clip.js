@@ -22,6 +22,9 @@ const CLIPS = path.join(HOME, 'clips');
 // one - `deck`, `spot` and `remake` need nothing beyond the standard library.
 const VENV_PY = path.join(ROOT, 'clipper', '.venv', 'bin', 'python');
 const ID_RE = /^\d{1,9}$/;
+// A source name as `clipper source add` takes it; anything else is refused
+// before it reaches a process.
+const SOURCE_RE = /^[A-Za-z0-9][A-Za-z0-9 _.@-]{0,59}$/;
 // A remake renders a clip: about a minute of CPU per 30 s on the droplet.
 const REMAKE_TIMEOUT_MS = 300000;
 const SPOT_TIMEOUT_MS = 180000;
@@ -74,6 +77,40 @@ function register(app) {
   });
 
   // Spotter's research, now. Costs YouTube quota units, not money.
+  // A video link for the next pickup (inbox.py): checked and saved now,
+  // downloaded and clipped by the 15-minute pickup timer - never while the
+  // page waits. The source and every word travel as separate arguments.
+  app.post('/api/clip/queue', async (req, res) => {
+    const b = req.body || {};
+    const source = String(b.source || '');
+    const url = String(b.url || '').trim();
+    const title = String(b.title || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    const hunt = String(b.hunt || '').replace(/\s+/g, ' ').trim().slice(0, 1000);
+    if (!SOURCE_RE.test(source)) return res.status(400).json({ ok: false, error: 'pick a source' });
+    if (!/^https:\/\/\S{8,1500}$/.test(url)) return res.status(400).json({ ok: false, error: 'paste an https:// link' });
+    const args = ['queue', source, url];
+    if (title) args.push('--title', title);
+    if (hunt) args.push('--hunt', hunt);
+    reply(res, await clipper(args));
+  });
+
+  // Hooks written from the title: one cheap model call, checked by code
+  // (inbox.hooks). The text comes back for the owner to edit before queueing.
+  app.post('/api/clip/hooks', async (req, res) => {
+    const b = req.body || {};
+    const title = String(b.title || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    const source = String(b.source || '');
+    if (!title) return res.status(400).json({ ok: false, error: 'paste the title first' });
+    const args = ['hooks', title];
+    if (SOURCE_RE.test(source)) args.push('--source', source);
+    reply(res, await clipper(args, 90000));
+  });
+
+  app.post('/api/clip/inbox/:id/retry', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    reply(res, await clipper(['inbox', '--retry', req.params.id]));
+  });
+
   app.post('/api/clip/spot', async (req, res) => {
     const r = await clipper(['spot'], SPOT_TIMEOUT_MS);
     res.status(r.code === 0 ? 200 : 500)

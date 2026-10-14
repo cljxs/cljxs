@@ -3140,3 +3140,195 @@ class TheFunnyPickKeepsItsLaugh(EndToEnd):
         self.assertGreater(len(frames), 500, "ten a second, for 60 s")
         self.assertTrue((f / "loudness-frames.json").exists())
         self.assertFalse((f / "audio.wav").exists(), "and the audio is not left behind")
+
+
+# ---------------------------------------------------------------- the inbox: a link pasted in Clip's house
+
+from clipper import inbox, ingest  # noqa: E402
+
+
+class InboxLinks(unittest.TestCase):
+    """2026-10-14: a box in Clip's house for a video's Dropbox link. What
+    cannot work is refused when it is pasted, not fifteen minutes later."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.conn = db.connect(Path(self.tmp.name) / "clipper.db")
+        ingest.add_source(self.conn, CFG, "mike", "permission", "campaign brief")
+
+    def test_what_is_refused_and_why(self):
+        for url, said in (("http://x.com/a.mp4", "https://"),
+                          ("https://www.youtube.com/watch?v=abc", "YouTube"),
+                          ("https://youtu.be/abc", "YouTube"),
+                          ("https://www.dropbox.com/scl/fo/abc/xyz?rlkey=1&dl=0", "folder link")):
+            with self.assertRaises(ValueError) as ctx:
+                inbox.queue(self.conn, "mike", url)
+            self.assertIn(said, str(ctx.exception), url)
+        with self.assertRaises(ValueError) as ctx:
+            inbox.queue(self.conn, "nobody", "https://www.dropbox.com/scl/fi/a/b.mp4?rlkey=k")
+        self.assertIn("permission", str(ctx.exception))
+
+    def test_a_link_is_saved_with_its_own_hooks(self):
+        r = inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/ep.mp4?rlkey=k&dl=0",
+                        "LeBron's 76ers", "Embiid: embiid, joel; LeBron: lebron")
+        self.assertEqual(r["state"], "queued")
+        self.assertEqual(json.loads(r["hunt"]), score.parse_hunt("Embiid: embiid, joel; LeBron: lebron"))
+
+    def test_the_same_link_copied_twice_is_one_video(self):
+        # Dropbox's st and dl change every time a link is copied.
+        inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/ep.mp4?rlkey=k&st=1&dl=0")
+        with self.assertRaises(ValueError) as ctx:
+            inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/ep.mp4?rlkey=k&st=2&dl=1")
+        self.assertIn("already in the inbox", str(ctx.exception))
+
+    def ingester(self, calls, fail=None):
+        def go(conn, paths, source, url, title, remote=False):
+            calls.append((url, remote))
+            if fail and fail(remote):
+                raise fail(remote)
+            src = conn.execute("SELECT id FROM sources WHERE name = ?", (source,)).fetchone()
+            with conn:
+                cur = conn.execute("INSERT INTO videos (source_id, title, origin, sha256, media_path, duration, "
+                                   "created_at, updated_at) VALUES (?, ?, ?, ?, '', 60, ?, ?)",
+                                   (src["id"], title, url, url, db.now(), db.now()))
+            return conn.execute("SELECT * FROM videos WHERE id = ?", (cur.lastrowid,)).fetchone(), True
+        return go
+
+    def test_one_link_a_pickup_oldest_first_and_its_hooks_reach_the_video(self):
+        a = inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/1.mp4?rlkey=k", "One", "Embiid: embiid")
+        inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/2.mp4?rlkey=k", "Two")
+        calls = []
+        got = inbox.drain_one(self.conn, {}, CFG, self.ingester(calls))
+        self.assertEqual((got["id"], got["state"]), (a["id"], "done"))
+        self.assertEqual(len(calls), 1, "one link a pickup")
+        v = self.conn.execute("SELECT hunt FROM videos WHERE id = ?", (got["video_id"],)).fetchone()
+        self.assertEqual(json.loads(v["hunt"])[0]["name"], "Embiid")
+        self.assertEqual(inbox.drain_one(self.conn, {}, CFG, self.ingester(calls))["title"], "Two")
+        self.assertIsNone(inbox.drain_one(self.conn, {}, CFG, self.ingester(calls)))
+
+    def test_a_failure_is_kept_with_its_reason_and_can_be_retried(self):
+        r = inbox.queue(self.conn, "mike", "https://example.com/a.mp4", "A")
+        got = inbox.drain_one(self.conn, {}, CFG, self.ingester([], fail=lambda remote: ValueError("needs both video and audio")))
+        self.assertEqual((got["state"], got["note"]), ("failed", "needs both video and audio"))
+        inbox.retry(self.conn, r["id"])
+        self.assertEqual(self.conn.execute("SELECT state FROM inbox").fetchone()[0], "queued")
+        with self.assertRaises(ValueError):
+            inbox.retry(self.conn, r["id"])
+
+    def test_too_big_for_the_disk_is_read_from_dropbox_instead(self):
+        inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/big.mp4?rlkey=k", "Big")
+        calls = []
+        full = lambda remote: None if remote else RuntimeError("not enough disk: 3.0 GB free")
+        got = inbox.drain_one(self.conn, {}, CFG, self.ingester(calls, fail=full))
+        self.assertEqual(got["state"], "done")
+        self.assertEqual([r for _u, r in calls], [False, True])
+        # Not for a link that cannot be read in place.
+        inbox.queue(self.conn, "mike", "https://example.com/big.mp4", "Big2")
+        got = inbox.drain_one(self.conn, {}, CFG, self.ingester([], fail=full))
+        self.assertEqual(got["state"], "failed")
+
+
+class HooksFromATitle(unittest.TestCase):
+    """The hunt list is matched against the transcript word for word, so
+    code keeps only words a speaker would say about that moment."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.conn = db.connect(Path(self.tmp.name) / "clipper.db")
+        self.cfg = dict(CFG, copy_model="m", daily_budget_usd=0.25)
+
+    DRAFT = {"topics": [{"name": "Embiid", "terms": ["Embiid", "joel", "the process", "game"]},
+                        {"name": "LeBron: the king", "terms": ["lebron", "bron;", "good"]},
+                        {"name": "Nothing useful", "terms": ["team", "season"]}]}
+
+    def test_generic_words_and_empty_topics_go(self):
+        got = inbox.check_hooks(self.DRAFT)
+        self.assertEqual(got, [{"name": "Embiid", "terms": ["embiid", "joel", "the process"]},
+                               {"name": "LeBron  the king", "terms": ["lebron", "bron"]}])
+        # What the owner sees is exactly what the hunt parser reads back.
+        self.assertEqual(score.parse_hunt(inbox.hooks_text(got)),
+                         [{"name": n["name"], "terms": n["terms"]} for n in got])
+
+    def test_too_few_topics_is_a_failure_not_a_guess(self):
+        with self.assertRaises(ValueError):
+            inbox.check_hooks({"topics": [{"name": "Embiid", "terms": ["embiid"]}]})
+        with self.assertRaises(ValueError):
+            inbox.check_hooks(None)
+
+    def test_a_draft_is_paid_for_only_within_both_caps(self):
+        calls = []
+        call = lambda prompt, key, slug: (calls.append(prompt) or (self.DRAFT, 0.0012))
+        with self.assertRaises(ValueError):
+            inbox.hooks(self.conn, self.cfg, "LeBron's 76ers", call=call, key="k", left=0.0)
+        self.assertEqual(calls, [], "no allowance, no call")
+        db.record_cost(self.conn, "openrouter", "copy", 0.249)
+        with self.assertRaises(db.OverBudget):
+            inbox.hooks(self.conn, self.cfg, "LeBron's 76ers", call=call, key="k", left=1.0)
+        self.assertEqual(calls, [])
+        with self.conn:
+            self.conn.execute("DELETE FROM costs")
+        text, cost = inbox.hooks(self.conn, self.cfg, "LeBron's 76ers Look Elite", "mike", call=call, key="k", left=1.0)
+        self.assertTrue(text.startswith("Embiid: embiid, joel"))
+        self.assertIn("LeBron's 76ers Look Elite", calls[0])
+        self.assertAlmostEqual(db.spent_today(self.conn), 0.0012, "the real cost is recorded")
+
+    def test_no_title_no_call(self):
+        with self.assertRaises(ValueError):
+            inbox.hooks(self.conn, self.cfg, "  ", call=lambda *a: self.fail("called"), key="k", left=1.0)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class AVideosOwnHooks(EndToEnd):
+    """A video's own list (pasted with its link) is hunted, not its source's -
+    two videos from one source each get the hooks their titles promise."""
+
+    test_permitted_video_in_captioned_short_out = None
+    test_a_failing_stage_is_retried_then_parked_then_retryable = None
+
+    def test_the_pasted_hooks_are_used_and_the_pickup_clips_it(self):
+        from unittest import mock
+        self.cli("source", "add", "tao", "--rights", "permission", "--evidence", "campaign page")
+        self.cli("source", "rules", "tao", "--hunt", "Blossom: blossom, blossoms")
+        code, said = self.cli("queue", "tao", "https://www.dropbox.com/scl/fi/a/talk.mp4?rlkey=k",
+                              "--title", "Talk", "--hunt", "Fisherman: fisherman")
+        self.assertEqual(code, 0, said)
+        self.assertIn("next pickup", said)
+        real = ingest.ingest
+        local = lambda conn, paths, source, url, title=None, remote=False: real(conn, paths, source, str(self.video), title)
+        nothing = {"new": [], "skipped": 0, "failed": 0}
+        with mock.patch.object(inbox.ingest, "ingest", side_effect=local), \
+             mock.patch.object(cli.dropbox, "pickup", return_value=nothing), \
+             mock.patch.object(cli.pipeline, "run", side_effect=lambda *a, **k: None):
+            code, said = self.cli("pickup", "--run")
+        self.assertEqual(code, 0, said)
+        self.assertIn("inbox #1: done - video 1", said)
+        self.assertIn("video 1: ingested", said, "the same tick sends it to be clipped")
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        ev = db.connect(self.home / "clipper.db").execute(
+            "SELECT msg FROM events WHERE stage = 'find'").fetchone()[0]
+        self.assertIn("campaign topics clipped: Fisherman", ev)
+        self.assertNotIn("Blossom", ev)
+
+    def test_hunt_sets_and_clears_a_videos_list(self):
+        self.cli("source", "add", "tao", "--rights", "permission", "--evidence", "campaign page")
+        self.cli("ingest", "tao", str(self.video))
+        code, said = self.cli("hunt", "1", "Fisherman: fisherman")
+        self.assertEqual(code, 0, said)
+        conn = db.connect(self.home / "clipper.db")
+        self.assertEqual(json.loads(conn.execute("SELECT hunt FROM videos").fetchone()[0])[0]["name"], "Fisherman")
+        self.cli("hunt", "1", "")
+        self.assertIsNone(conn.execute("SELECT hunt FROM videos").fetchone()[0])
+        self.assertEqual(self.cli("hunt", "9", "x")[0], 2)
+
+    def test_the_pickup_only_drains_the_inbox_when_it_runs(self):
+        from unittest import mock
+        self.cli("source", "add", "tao", "--rights", "permission", "--evidence", "campaign page")
+        self.cli("queue", "tao", "https://www.dropbox.com/scl/fi/a/talk.mp4?rlkey=k")
+        nothing = {"new": [], "skipped": 0, "failed": 0}
+        with mock.patch.object(inbox, "drain_one") as drain, \
+             mock.patch.object(cli.dropbox, "pickup", return_value=nothing):
+            self.cli("pickup")
+        drain.assert_not_called()
