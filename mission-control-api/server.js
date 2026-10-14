@@ -295,6 +295,12 @@ app.get('/markets', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'markets.html'));
 });
 
+// Ace: his sportsbook - every game as away @ home, his bet or pass on each
+// side and why. Opened inside Ace's house and as a Deck tab, like Markets.
+app.get('/ace', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'ace.html'));
+});
+
 // Peter: the player-prop forecasts, in the same style. The village opens it
 // inside the hall; the Deck links to it as its own tab.
 app.get('/peter', (req, res) => {

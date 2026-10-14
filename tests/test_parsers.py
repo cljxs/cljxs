@@ -5593,7 +5593,9 @@ class ThePropsHallIsItsOwnBuilding(unittest.TestCase):
         self.assertNotIn("aceForecasts", self.html)
         self.assertNotIn("loadAceForecasts", self.html)
         body = self.html.split("function openPanel(", 1)[1].split("\nlet ideaBusy", 1)[0]
-        self.assertIn("loadAceLedger()", body, "the ledger is still his")
+        # His house opens his sportsbook page, which carries the ledger now.
+        self.assertIn("if (name === 'ace') return openFrame('ace');", body)
+        self.assertIn("ace: '/ace?embed=1'", self.html)
 
     def test_the_hall_is_not_standing_on_a_house_plot(self):
         # PLOTS is indexed by agent, so an agent added later takes the next
@@ -15261,9 +15263,10 @@ class AceBetsByTheReviewedBar(unittest.TestCase):
             self.assertNotIn(gone, head)
 
     def test_the_deck_highlights_by_the_flag_code_wrote(self):
-        page = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        # The ledger moved from the village panel to Ace's own page (/ace).
+        page = (ROOT / "mission-control-api" / "public" / "ace.html").read_text()
         self.assertNotIn("edge_pts >= 8", page)
-        self.assertIn("c.clears_bar ? 'up'", page)
+        self.assertIn("s.clears_bar ? 'up'", page)
         self.assertIn("clears_bar: c.clears_bar === true",
                       (ROOT / "mission-control-api" / "ace.js").read_text())
 

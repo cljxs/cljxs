@@ -46,15 +46,24 @@ function normalise(c, i) {
     sport: c.sport ?? null,
     match: c.match ?? c.game ?? null,
     starts_utc: c.starts_utc ?? c.start ?? null,
+    // Which game and which side of it: the fetcher writes both, and the
+    // judge copies them, so the board can pair a team with its opponent.
+    event_id: c.event_id != null ? String(c.event_id) : null,
+    side: c.side === 'home' || c.side === 'away' ? c.side : null,
     price: num(c.price) ?? num(c.odds),
     novig_pct: num(c.novig_pct) ?? num(c.novig),
+    sharp_pct: num(c.sharp_pct),
     my_pct: num(c.my_pct) ?? num(c.estimate),
     edge_pts: num(c.edge_pts) ?? num(c.edge),
     // Expected value at Ace's estimate, and whether it clears the bar - both
     // written by ace-judge.py, which owns the bar, so this page never holds a
     // copy of the threshold.
     ev_pct: num(c.ev_pct),
+    // His estimate after the judge pulls it toward the market - the number
+    // the bar is actually measured on.
+    p_used: num(c.p_used),
     clears_bar: c.clears_bar === true,
+    fresh_injuries: Array.isArray(c.fresh_injuries) ? c.fresh_injuries : [],
     why_not: (Array.isArray(why) ? why : [why]).filter(Boolean).map(w => String(w).slice(0, 160)),
     status: c.status ?? (Array.isArray(why) && why.length ? 'passed' : 'unjudged'),
     stake: num(c.stake),
@@ -111,6 +120,9 @@ function build() {
     merged.set(keyOf(n), {
       ...prev,
       my_pct: n.my_pct ?? prev.my_pct,
+      p_used: n.p_used ?? prev.p_used,
+      event_id: prev.event_id ?? n.event_id,
+      side: prev.side ?? n.side,
       edge_pts: n.edge_pts ?? prev.edge_pts,
       ev_pct: n.ev_pct ?? prev.ev_pct,
       clears_bar: n.clears_bar || prev.clears_bar,
@@ -172,6 +184,116 @@ function build() {
   };
 }
 
+// ---------------------------------------------------------------- the board
+//
+// The same rows as build(), arranged the way a person reads a slate: one card
+// per game, away team above home team, each side carrying Ace's call on it -
+// a bet and why, or a pass and why. Team names, records and form come from
+// the context file ace-fetch.py wrote for that game; nothing is re-derived.
+
+const SPORT_RE = /^[a-z]{2,8}$/;
+const EVENT_RE = /^[0-9]{1,15}$/;
+
+function contextOf(sport, eventId) {
+  if (!SPORT_RE.test(String(sport || '')) || !EVENT_RE.test(String(eventId || ''))) return null;
+  return readJson(path.join(DIR, 'data', 'context', `${sport}-${eventId}.json`));
+}
+
+function teamOf(t, ctx) {
+  if (!t) return null;
+  const abbr = typeof t === 'string' ? t : t.abbr;
+  const form = ((ctx && ctx.last_five) || [])
+    .filter(g => g && g.team === abbr && g.result).map(g => String(g.result).slice(0, 1)).slice(0, 5);
+  return {
+    abbr: abbr || null,
+    name: (typeof t === 'object' && t.name) || null,
+    record: (typeof t === 'object' && t.record) || null,
+    form,
+  };
+}
+
+// Away and home for one game: from its context file when there is one, and
+// otherwise from the match string ESPN writes as "AWAY @ HOME" - settled bets
+// can outlive the context file of their game.
+function matchupOf(sport, eventId, match) {
+  const ctx = contextOf(sport, eventId);
+  if (ctx && ctx.home && ctx.away) {
+    const odds = ctx.odds || {};
+    return {
+      away: teamOf(ctx.away, ctx), home: teamOf(ctx.home, ctx),
+      name: ctx.name || null, venue: ctx.venue || null,
+      weather: ctx.weather && (ctx.weather.temp_f != null || ctx.weather.conditions) ? ctx.weather : null,
+      line: odds.details || null, total: num(odds.over_under), book: odds.book || null,
+    };
+  }
+  const m = /^\s*(\S.*?)\s+@\s+(\S.*?)\s*$/.exec(String(match || ''));
+  if (!m) return null;
+  return { away: teamOf(m[1], null), home: teamOf(m[2], null), name: null, venue: null,
+           weather: null, line: null, total: null, book: null };
+}
+
+function sideRow(c) {
+  return {
+    selection: c.selection, price: c.price, novig_pct: c.novig_pct, sharp_pct: c.sharp_pct,
+    my_pct: c.my_pct, p_used: c.p_used, edge_pts: c.edge_pts, ev_pct: c.ev_pct,
+    clears_bar: c.clears_bar, status: c.status, why: c.why_not, stake: c.stake, result: c.result,
+  };
+}
+
+function withMatchup(b) {
+  const side = b.side === 'home' || b.side === 'away' ? b.side : null;
+  return { ...b, side, matchup: matchupOf(b.sport, b.event_id, b.match) };
+}
+
+function board() {
+  const d = build();
+  const games = new Map();
+  for (const c of d.candidates) {
+    const k = c.event_id ? `${c.sport}|${c.event_id}` : `m|${c.match}`;
+    if (!games.has(k)) {
+      games.set(k, { key: k, sport: c.sport, event_id: c.event_id, match: c.match,
+                     starts_utc: c.starts_utc, sides: {}, injuries: [] });
+    }
+    const g = games.get(k);
+    if (c.side) g.sides[c.side] = sideRow(c);
+    for (const inj of c.fresh_injuries) {
+      if (inj && !g.injuries.some(x => x.id && x.id === inj.id)) g.injuries.push(inj);
+    }
+  }
+  const out = [...games.values()].map(g => {
+    const calls = Object.values(g.sides).map(s => s.status);
+    const verdict = calls.includes('bet') ? 'bet'
+      : calls.length && calls.every(x => x === 'passed') ? 'pass' : 'open';
+    return { ...g, matchup: matchupOf(g.sport, g.event_id, g.match), verdict };
+  }).sort((a, b) => String(a.starts_utc || '').localeCompare(String(b.starts_utc || ''))
+                 || String(a.match || '').localeCompare(String(b.match || '')));
+
+  const bank = readJson(path.join(DIR, 'state', 'bankroll.json'));
+  const allSettled = (bank && Array.isArray(bank.settled_bets)) ? bank.settled_bets : [];
+  const record = { won: 0, lost: 0, push: 0, void: 0 };
+  for (const s of allSettled) if (s && s.result in record) record[s.result] += 1;
+  const openBets = d.open_bets.map(withMatchup);
+
+  return {
+    available: d.available, day: d.day, slot: d.slot, asof_utc: d.asof_utc,
+    judged: d.judged, verdict: d.verdict,
+    bankroll: d.bankroll && {
+      ...d.bankroll, record,
+      // Straight from the book's own rows: what is staked right now, and
+      // what settled bets have returned. Sums, not a second ledger.
+      at_risk: openBets.reduce((t, b) => t + (num(b.stake) || 0), 0),
+      settled_profit: allSettled.reduce((t, s) => t + (num(s.profit) || 0), 0),
+    },
+    counts: { games: out.length, bets: out.filter(g => g.verdict === 'bet').length,
+              passes: out.filter(g => g.verdict === 'pass').length,
+              open: out.filter(g => g.verdict === 'open').length },
+    games: out,
+    open_bets: openBets,
+    settled_bets: d.settled_bets.map(withMatchup),
+    by_reason: d.by_reason.slice(0, 8),
+  };
+}
+
 function register(app) {
   // Player forecasts from props-forecast.py. Read-only, and deliberately
   // carries no odds: the script that writes this holds none, and a price
@@ -210,6 +332,14 @@ function register(app) {
     });
   });
 
+  app.get('/api/ace/board', (req, res) => {
+    const d = board();
+    if (!d.available) {
+      return res.json({ available: false, reason: 'Ace has not written a ledger yet - it writes one each cycle', games: [] });
+    }
+    res.json(d);
+  });
+
   app.get('/api/ace/ledger', (req, res) => {
     const d = build();
     if (!d.available) {
@@ -219,4 +349,4 @@ function register(app) {
   });
 }
 
-module.exports = { register, build };
+module.exports = { register, build, board };

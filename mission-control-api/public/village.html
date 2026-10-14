@@ -174,7 +174,7 @@
   #docbody .tw{overflow-x:auto;margin:10px 0}
   #docbody em{color:var(--mute)}
 
-  /* Ace's betting console */
+  /* A one-line verdict, boxed */
   .verdict{background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:11px;
     padding:12px 14px;font-size:13px;line-height:1.5;margin-bottom:12px}
   /* The drafter's own refusal, under the build it refused. Monospace and
@@ -196,24 +196,6 @@
   .verdict b{color:var(--ink)}
   .sect{font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute);
     margin:18px 0 8px;font-family:ui-monospace,Menlo,monospace}
-  .board{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px}
-  .board table{min-width:560px;font-size:12px}
-  .board th{white-space:nowrap;font-size:9.5px;padding:0 8px 6px 0;text-align:left}
-  .board td{padding:8px 8px 8px 0;vertical-align:top;text-align:left;border-bottom:1px solid var(--line)}
-  .board .sel{font-weight:600;white-space:nowrap}
-  .board .mt{color:var(--mute);font-size:11px}
-  .board .why{color:#c9a227;font-size:11px;line-height:1.4;min-width:150px}
-  .board .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-  .tagp{font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;border-radius:5px;
-    padding:2px 6px;border:1px solid var(--line);color:var(--mute);white-space:nowrap}
-  .tagp.bet{border-color:rgba(52,211,153,.5);color:var(--up)}
-  .tagp.won{border-color:rgba(52,211,153,.5);color:var(--up)}
-  .tagp.lost{border-color:rgba(251,113,133,.45);color:var(--down)}
-  .mini{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-  .mini .box{background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:10px;padding:10px}
-  .mini .box .l{font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--mute)}
-  .mini .box .rowline{display:flex;justify-content:space-between;gap:8px;font-size:11.5px;margin-top:5px}
-  .mini .box .rowline span:last-child{color:var(--mute);font-variant-numeric:tabular-nums}
 
   #boot{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:30;
     background:#121a14;color:var(--mute);font-size:13px;text-align:center;padding:24px}
@@ -2275,6 +2257,9 @@ function openPanel(name) {
   // Belfort's house is his trading desk: the Markets page, the same one
   // the Deck opens as a tab (owner, 2026-10-06).
   if (name === 'belfort') return openMarkets();
+  // Ace's house is his sportsbook: every game as away @ home, his bet or
+  // pass on each side and why (owner, 2026-10-14).
+  if (name === 'ace') return openFrame('ace');
   // Bolt's house is his crypto desk, the page the Deck's Bolt tab opens.
   if (name === 'bolt') return openFrame('bolt');
   // Paul's house is his workshop: what he built, as it looks, and the site
@@ -2284,11 +2269,7 @@ function openPanel(name) {
   if (!a) return;
   openAgent = name;
 
-  // Ace renders its own bankroll and open bets inside the ledger below, in a
-  // form built for betting. Showing the generic trader tiles as well just
-  // prints the same numbers twice.
-  const isAce = a.name === 'ace';
-  const isTrader = !isAce && a.has_portfolio && a.value !== null;
+  const isTrader = a.has_portfolio && a.value !== null;
   const stats = isTrader ? [
     { l: 'Value', v: money(a.value) },
     { l: 'P&L', v: `<span class="${cls(a.pnl)}">${money(a.pnl)}</span>`, s: pctTxt(a.pnl_pct) },
@@ -2310,13 +2291,13 @@ function openPanel(name) {
     </tr>`).join('');
 
   const main = `
-    ${isAce ? '' : `<div class="grid">${stats.map(s => `<div class="stat">
+    <div class="grid">${stats.map(s => `<div class="stat">
         <div class="l">${s.l}</div><div class="v num">${s.v}</div>
         ${s.s ? `<div class="l ${cls(a.pnl)}">${s.s}</div>` : ''}
-      </div>`).join('')}</div>`}
-    ${isAce ? '' : (rows ? `<table><thead><tr><th>Sym</th><th>Sh</th><th>Entry</th><th>Last</th><th>P&L</th></tr></thead>
+      </div>`).join('')}</div>
+    ${rows ? `<table><thead><tr><th>Sym</th><th>Sh</th><th>Entry</th><th>Last</th><th>P&L</th></tr></thead>
       <tbody>${rows}</tbody></table>`
-      : (isTrader ? `<div class="muted">No open positions.</div>` : ''))}
+      : (isTrader ? `<div class="muted">No open positions.</div>` : '')}
     ${a.headline ? `<div class="quote">${esc(a.headline)}</div>` : ''}
     ${a.latest_report ? `<div class="muted" style="margin-top:10px">📄 <span class="doclink" onclick="openDoc('${esc(a.name)}','${esc(a.latest_report)}')">${esc(a.latest_report)}</span></div>`
       : `<div class="muted" style="margin-top:10px">📄 <span class="doclink" onclick="openDoc('${esc(a.name)}')">reports…</span></div>`}
@@ -2325,8 +2306,7 @@ function openPanel(name) {
     ${a.name === 'emily' ? `<button class="shopbtn" onclick="openFrame('shop')">🛍 Open the Shop - today's TikTok kit and the listing board</button>
       <div id="emilyShop"></div>
       <h2 style="font-size:15px;margin:18px 0 8px">The gallery</h2>
-      <div id="emilyBuilds"><div class="muted">loading…</div></div>` : ''}
-    ${a.name === 'ace' ? `<div id="aceLedger"><div class="muted">loading the ledger…</div></div>` : ''}`;
+      <div id="emilyBuilds"><div class="muted">loading…</div></div>` : ''}`;
 
   $('card').innerHTML = `
     <h2>${esc(a.name)}</h2>
@@ -2335,12 +2315,11 @@ function openPanel(name) {
       a.data_age_min !== null ? ' · data ' + ago(a.data_age_min) : ''}</div>
     ${main}
     <button id="close">Close</button>`;
-  $('card').className = isAce ? 'wide' : '';
+  $('card').className = '';
   $('panel').style.display = 'flex';
   $('close').onclick = closePanel;
   if (a.name === 'scout') loadScoutIdeas();
   if (a.name === 'emily') { loadEmilyShop(); loadEmilyBuilds(); }
-  if (a.name === 'ace') loadAceLedger();
 }
 
 let ideaBusy = false;
@@ -2709,94 +2688,6 @@ async function showDoc(file){
     $('docbody').innerHTML = `<div class="muted">Could not load that report: ${esc(e.message)}</div>`;
   }
 }
-/* ---------------- Ace's betting console ---------------- */
-
-const pctTxt2 = v => v === null || v === undefined ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
-const priceTxt = v => v === null || v === undefined ? '—' : (v > 0 ? `+${v}` : `${v}`);
-
-function miniTable(title, rows, label){
-  if(!rows || !rows.length) return '';
-  return `<div class="box"><div class="l">${esc(title)}</div>` + rows.slice(0,6).map(r =>
-    `<div class="rowline"><span>${esc(r.key)}</span><span>${r.rows}${
-      r.settled ? ` · ${r.hit_pct}% of ${r.settled}` : ''}</span></div>`).join('') + '</div>';
-}
-
-async function loadAceLedger(){
-  const host = $('aceLedger');
-  if(!host) return;
-  let d;
-  try{
-    const r = await fetch('/api/ace/ledger', {cache:'no-store'});
-    d = await r.json();
-  }catch(e){ host.innerHTML = `<div class="muted">Could not load the ledger.</div>`; return; }
-
-  if(!d.available){
-    host.innerHTML = `<div class="muted">${esc(d.reason || 'No ledger yet.')}</div>`;
-    return;
-  }
-
-  const b = d.bankroll;
-  let out = '';
-
-  if(d.verdict){
-    out += `<div class="verdict"><b>${esc(d.verdict)}</b>${
-      d.slot ? `<div class="muted" style="margin-top:4px">${esc(d.day || '')} · ${esc(d.slot)}</div>` : ''}</div>`;
-  }
-
-  if(b){
-    out += `<div class="sect">Bankroll · paper</div>
-      <div class="grid">
-        <div class="stat"><div class="l">Bankroll</div><div class="v num">${money(b.cash)}</div>
-          ${b.pnl_pct !== null ? `<div class="l ${cls(b.pnl)}">${pctTxt(b.pnl_pct)}</div>` : ''}</div>
-        <div class="stat"><div class="l">Open bets</div><div class="v num">${b.open_count}</div>
-          <div class="l">${b.settled_count} settled</div></div>
-      </div>`;
-  }
-
-  out += `<div class="sect">Candidates tracked · ${d.counts.candidates}</div>`;
-  if(!d.candidates.length){
-    out += `<div class="muted">Nothing on the slate this cycle.</div>`;
-  } else {
-    out += `<div class="board"><table><thead><tr>
-        <th>Selection</th><th class="num">Price</th><th class="num">No-vig</th>
-        <th class="num">Mine</th><th class="num">Edge</th><th class="num">EV</th><th>Why not a pick</th><th>Status</th>
-      </tr></thead><tbody>` + d.candidates.map(c => `<tr>
-        <td><div class="sel">${esc(c.selection)}</div>${
-          c.match ? `<div class="mt">${esc(c.match)}</div>` : ''}${
-          c.sport ? `<div class="mt">${esc(c.sport)}</div>` : ''}</td>
-        <td class="num">${priceTxt(c.price)}</td>
-        <td class="num">${c.novig_pct === null ? '—' : c.novig_pct.toFixed(1) + '%'}</td>
-        <td class="num">${c.my_pct === null ? '—' : c.my_pct.toFixed(1) + '%'}</td>
-        <td class="num">${c.edge_pts === null ? '—' : pctTxt2(c.edge_pts).replace('%','')}</td>
-        <td class="num ${c.clears_bar ? 'up' : ''}">${c.ev_pct === null ? '—' : pctTxt2(c.ev_pct)}</td>
-        <td class="why">${c.why_not.length ? esc(c.why_not.join(', ')) : '—'}</td>
-        <td><span class="tagp ${esc(c.status)}">${esc(c.status)}</span></td>
-      </tr>`).join('') + `</tbody></table></div>`;
-  }
-
-  if(d.settled_bets.length){
-    out += `<div class="sect">Results</div><div class="board"><table><thead><tr>
-        <th>Bet</th><th class="num">Stake</th><th>Result</th></tr></thead><tbody>` +
-      d.settled_bets.slice(0,10).map(x => `<tr>
-        <td><div class="sel">${esc(x.selection || x.pick || x.match || 'bet')}</div>${
-          x.note ? `<div class="mt">${esc(x.note)}</div>` : ''}</td>
-        <td class="num">${x.stake === undefined ? '—' : money(x.stake)}</td>
-        <td><span class="tagp ${esc(x.result || '')}">${esc(x.result || 'open')}</span></td>
-      </tr>`).join('') + `</tbody></table></div>`;
-  } else {
-    out += `<div class="sect">Results</div><div class="muted">Nothing settled yet.</div>`;
-  }
-
-  const minis = [
-    miniTable('Criterion that failed', d.by_reason),
-    miniTable('By sport', d.by_sport),
-    miniTable('By status', d.by_status),
-  ].filter(Boolean).join('');
-  if(minis) out += `<div class="sect">How the discipline is holding</div><div class="mini">${minis}</div>`;
-
-  host.innerHTML = out;
-}
-
 function closeDoc(){ $('doc').classList.remove('on'); }
 
 /* ---------------- Clip's studio: clips, and Spotter's research ---------------- */
@@ -3550,7 +3441,7 @@ function closePanel() { closeLb(); closeMarkets(); openAgent = null; $('panel').
  * the village (/markets, /bolt, /peter). Emily's Shop (/shop) opens the same
  * way, from the button at the top of her panel, over her gallery. Removed on close, not hidden, so it stops
  * polling. Escape inside it, or its close button, posts '<name>-close' here. */
-const FRAMES = { belfort: '/markets?embed=1', peter: '/peter?embed=1', bolt: '/bolt?embed=1',
+const FRAMES = { belfort: '/markets?embed=1', ace: '/ace?embed=1', peter: '/peter?embed=1', bolt: '/bolt?embed=1',
                  paul: '/paul?embed=1', shop: '/shop?embed=1', agentroom: '/agentroom?embed=1' };
 function openFrame(agent) {
   closeMarkets();
@@ -3571,7 +3462,7 @@ function closeMarkets() {
 }
 window.addEventListener('message', e => {
   if (e.origin === location.origin && e.data
-      && ['markets-close', 'peter-close', 'bolt-close', 'paul-close', 'shop-close', 'agentroom-close'].includes(e.data.type)) closeMarkets();
+      && ['markets-close', 'ace-close', 'peter-close', 'bolt-close', 'paul-close', 'shop-close', 'agentroom-close'].includes(e.data.type)) closeMarkets();
 });
 $('panel').addEventListener('click', e => { if (e.target.id === 'panel') closePanel(); });
 

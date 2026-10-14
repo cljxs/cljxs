@@ -52,6 +52,11 @@ than the parser. Assert the round trip - parse the captured line, print it
 back, compare it to the line - and put fixed values only in tests that also
 hold their own input.
 
+`ace-board/` is one real slate: ace-fetch.py against ESPN on 2026-10-14, then
+ace-judge.py's blind estimates, passes and `rest`, cut to two games. The two
+settle events in its bankroll.json were written by hand so the Results tab
+has rows; every other value is what the scripts wrote.
+
 Still missing, because no raw sample has been captured yet:
 
 * `openclaw config get agents.entries.<name>.model.primary` - preflight parses
