@@ -3733,11 +3733,13 @@ $('act').addEventListener('click', () => { if (nearDoor) openPanel(nearDoor.name
 /* Sylvester's lamp: the Agent Room's state, read from /api/agentroom - the
  * same answer the room's page shows, worked out by agentroom.py. Violet when
  * a plan waits for the owner, amber while one is being written, green when
- * the runner is up and idle, red when it is not running. */
+ * the runner is up and idle, red when it is not running - or when a build
+ * is HELD for the owner to look at. */
 const ROOM_LAMP = { waiting: 0xa78bfa, working: 0xfbbf24, idle: 0x34d399, down: 0xf43f5e, unknown: 0x8791a8 };
 let sylvLamp = null;
 function roomLampColor(d) {
   if (!d || d.ok === false || !d.runner) return ROOM_LAMP.unknown;
+  if (d.counts && d.counts.held) return ROOM_LAMP.down;          // a held build is red, first
   if (d.counts && d.counts.waiting) return ROOM_LAMP.waiting;
   if (!d.runner.alive) return ROOM_LAMP.down;
   return d.counts && d.counts.working ? ROOM_LAMP.working : ROOM_LAMP.idle;

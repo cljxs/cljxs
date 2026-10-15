@@ -13,7 +13,16 @@
     "thinking is billed as output and counts against max_tokens: on",
     "2026-10-15 DeepSeek thought through all of 6000 and answered nothing.",
     "Hence room to spare. Every call also goes to the cheapest host at",
-    "most 1.5x the listed price (or_chat.py PRICE_HEADROOM)."
+    "most 1.5x the listed price (or_chat.py PRICE_HEADROOM).",
+    "",
+    "builder (owner, 2026-10-15): Claude Code on its OWN Claude login",
+    "(AGENTROOM_BUILDER_TOKEN), as the agentbuilder account in a sandbox, only",
+    "inside window, at most phases_per_night phases and sessions_per_night",
+    "sessions a night, and at most night_cap_usd of plan use a night as Claude",
+    "itself counts it at list prices. attempts: sessions a phase gets to pass.",
+    "bug_checker reads each phase's changes; watchdog (a different AI) reads",
+    "every session and HOLDS the build when anything looks wrong. Both are",
+    "paid, under agentroom_build_max in tasks/limits.json."
   ],
   "planner": {
     "name": "Kimi",
@@ -33,5 +42,29 @@
     }
   ],
   "review_rounds": 1,
-  "max_calls_per_run": 12
+  "max_calls_per_run": 12,
+  "bug_checker": {
+    "name": "DeepSeek",
+    "model": "deepseek/deepseek-v4-pro",
+    "max_tokens": 16000
+  },
+  "watchdog": {
+    "name": "GPT",
+    "model": "openai/gpt-5.4-mini",
+    "max_tokens": 8000
+  },
+  "builder": {
+    "model": "sonnet",
+    "max_turns": 80,
+    "timeout_min": 40,
+    "attempts": 3,
+    "window": {
+      "tz": "America/Chicago",
+      "start": "01:00",
+      "end": "03:00"
+    },
+    "phases_per_night": 3,
+    "sessions_per_night": 9,
+    "night_cap_usd": 5.0
+  }
 }

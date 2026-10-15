@@ -383,6 +383,15 @@ if (require.main === module) {
       if (++bound >= hosts.length) process.exitCode = 1;
     });
   }
+  // The Agent Room's built apps, on their own port and so their own origin:
+  // an app's code cannot call the Deck's buttons (agentroom.js sitesApp).
+  // Same addresses as the Deck - never 0.0.0.0.
+  const SITES_PORT = Number(process.env.SITES_PORT || PORT + 1);
+  const sites = agentroomRoutes.sitesApp();
+  for (const h of hosts) {
+    sites.listen(SITES_PORT, h, () => console.log(`[mission-control-api] Agent Room apps on http://${h}:${SITES_PORT}`))
+      .on('error', err => console.error(`[mission-control-api] could not bind apps ${h}:${SITES_PORT} - ${err.message}`));
+  }
 }
 
 module.exports = app;

@@ -8,5 +8,6 @@
   "agentroom_daily_ai": 3,
   "agentroom_run_max": 1,
   "stan_daily_ai": 0.05,
-  "stan_leave_for_others": 0.5
+  "stan_leave_for_others": 0.5,
+  "agentroom_build_max": 2.0
 }

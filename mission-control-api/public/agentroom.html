@@ -191,9 +191,13 @@ let deck = null, current = null, detail = null, tab = 'room', busy = false;
 try { current = Number(localStorage.getItem('agentroom.run')) || null; } catch {}
 
 const TAGS = { queued:'t-gray', planning:'t-amber', reviewing:'t-amber', revising:'t-amber',
-  awaiting_approval:'t-violet', approved:'t-green', stopped:'t-gray', failed:'t-red' };
+  awaiting_approval:'t-violet', approved:'t-green', stopped:'t-gray', failed:'t-red',
+  building:'t-amber', phase_ready:'t-violet', built:'t-green', held:'t-red' };
 const SHORT = { queued:'queued', planning:'planning', reviewing:'reviewing', revising:'revising',
-  awaiting_approval:'needs you', approved:'approved', stopped:'stopped', failed:'failed' };
+  awaiting_approval:'needs you', approved:'approved', stopped:'stopped', failed:'failed',
+  building:'building', phase_ready:'needs you', built:'built', held:'HELD' };
+const PHASE_TAG = { todo:['to do','t-gray'], building:['building','t-amber'], paused:['paused till tonight','t-gray'],
+  passed:['passed','t-green'], failed:['failed','t-red'] };
 
 function when(utc) {
   if (!utc) return '';
@@ -316,6 +320,29 @@ function renderPlan() {
     ${p.questions && p.questions.length ? `<h3>Questions for you</h3>${list(p.questions)}` : ''}`;
 }
 
+function appLink(r) {
+  if (!r.site || !deck) return '';
+  const url = `${location.protocol}//${location.hostname}:${deck.sites_port}/${encodeURIComponent(r.slug)}/`;
+  return `<a class="btn go" href="${esc(url)}" target="_blank" rel="noopener">Open the app ↗</a>`;
+}
+
+function renderBuild() {
+  const rows = detail.build || [];
+  if (!rows.length) return '<div class="empty">Nothing built yet. Approve the plan, then press Start building.</div>';
+  const list = (xs) => xs && xs.length ? `<ul>${xs.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
+  return rows.map(p => {
+    const [label, cls] = PHASE_TAG[p.status] || [p.status, 't-gray'];
+    const rv = p.review;
+    return `<div class="phase">
+      <div class="pt">Phase ${esc(p.phase_id)} - ${esc(p.title)} <span class="tag ${cls}" style="margin-left:6px">${esc(label)}</span></div>
+      <div class="muted">${p.attempts ? `${p.attempts} ${p.attempts === 1 ? 'try' : 'tries'}` : ''}${p.commit_id ? ` · saved as ${esc(p.commit_id)}` : ''}${p.finished_utc ? ` · ${esc(when(p.finished_utc))}` : ''}</div>
+      ${p.summary ? `<details><summary>What the builder says it did</summary><pre>${esc(p.summary)}</pre></details>` : ''}
+      ${p.check_output ? `<details><summary>The tests (run by code, offline)</summary><pre>${esc(p.check_output)}</pre></details>` : ''}
+      ${rv ? `<div style="margin-top:6px"><b>Bug checker:</b> ${esc(rv.summary)}</div>${rv.concerns.map(c => `<div class="concern ${esc(c.severity)}"><b>${esc(c.severity)}</b> - ${esc(c.text)}</div>`).join('')}` : ''}
+    </div>`;
+  }).join('');
+}
+
 function renderReviews() {
   const rs = detail.reviews;
   if (!rs.length) return '<div class="empty">No reviews yet.</div>';
@@ -340,7 +367,45 @@ function renderDetail() {
     return;
   }
   const r = detail.run;
-  const gate = r.state === 'awaiting_approval' ? `
+  const w = deck && deck.roles && deck.roles.builder ? deck.roles.builder : null;
+  const night = w ? `between ${esc(w.window.start)} and ${esc(w.window.end)} (${esc(w.window.tz.replace('_', ' '))}), at most ${w.phases_per_night} phases a night` : 'at night';
+  const buildGate = r.state === 'approved' ? `
+    <div class="gate">
+      <b>The plan is approved.</b> <span class="muted">${r.dry ? 'Practice build: no AI, nothing spent, straight away.' : `The builder works ${night}, in its own sandbox, on its own login. Every session is watched; anything odd holds the build for you.`}</span>
+      <div class="acts"><button class="btn go" data-act="build">Start building</button></div>
+    </div>` : r.state === 'building' ? `
+    <div class="gate" style="border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.06)">
+      <b>Building - ${r.phases_passed} of ${r.phases} phases done.</b> <span class="muted">${r.dry ? 'Practice build.' : `The builder works ${night}; outside those hours it waits.`} The Build tab shows each phase.</span>
+      ${appLink(r) ? `<div class="acts">${appLink(r)}</div>` : ''}
+    </div>` : r.state === 'phase_ready' ? `
+    <div class="gate">
+      <b>Tonight's work is done - ${r.phases_passed} of ${r.phases} phases built and passing.</b> <span class="muted">Look at it in the Build tab${r.site ? ' and in the app' : ''}. Continue, and building carries on ${r.dry ? 'now' : 'the next night'}.</span>
+      <div class="acts">
+        <button class="btn go" data-act="continue">Continue</button>
+        ${appLink(r)}
+        <button class="btn" id="fxtoggle">Send the last phase back…</button>
+        <button class="btn warn" data-act="stop">Stop</button>
+      </div>
+      <div id="fx" style="display:none">
+        <textarea id="fxnote" maxlength="2000" placeholder="What should the builder change in the last phase?" style="min-height:90px"></textarea>
+        <div class="acts"><button class="btn go" data-act="fixphase">Send it back</button></div>
+      </div>
+    </div>` : r.state === 'held' ? `
+    <div class="gate" style="border-color:rgba(244,63,94,.6);background:rgba(244,63,94,.08)">
+      <b style="color:#fb7185">The build is HELD for you to look at.</b>
+      <div style="margin-top:4px">${esc(r.error || '')}</div>
+      <div class="muted" style="margin-top:4px">Nothing runs until you decide. Read the Room and Build tabs. Resume if it is fine; Stop if it is not.</div>
+      <div class="acts"><button class="btn go" data-act="resume">Resume</button><button class="btn warn" data-act="stop">Stop</button></div>
+    </div>` : r.state === 'built' ? `
+    <div class="gate">
+      <b>Every phase is built and passing its tests.</b>
+      <div class="acts">${appLink(r)}<button class="btn" id="fxtoggle">Send the last phase back…</button></div>
+      <div id="fx" style="display:none">
+        <textarea id="fxnote" maxlength="2000" placeholder="What should the builder change?" style="min-height:90px"></textarea>
+        <div class="acts"><button class="btn go" data-act="fixphase">Send it back</button></div>
+      </div>
+    </div>` : '';
+  const gate = buildGate || (r.state === 'awaiting_approval' ? `
     <div class="gate">
       <b>The plan is waiting for you.</b> <span class="muted">Read it in the Plan tab. Approving saves it to its own project folder; nothing is built or sent anywhere.</span>
       <div class="acts">
@@ -352,7 +417,7 @@ function renderDetail() {
         <textarea id="sbnote" maxlength="2000" placeholder="What should the planner change?" style="min-height:90px"></textarea>
         <div class="acts"><button class="btn go" data-act="sendback">Send it back</button></div>
       </div>
-    </div>` : '';
+    </div>` : '');
   el.innerHTML = `
     <div class="runhead">
       <div style="min-width:0;flex:1">
@@ -369,25 +434,29 @@ function renderDetail() {
     </div>
     ${gate}
     <div class="tabs">
-      ${[['room', 'Room'], ['plan', 'Plan'], ['reviews', 'Reviews'], ['idea', 'Idea']].map(([k, n]) =>
+      ${[['room', 'Room'], ['plan', 'Plan'], ['reviews', 'Reviews'], ...((detail.build || []).length ? [['build', 'Build']] : []), ['idea', 'Idea']].map(([k, n]) =>
         `<button class="tab ${tab === k ? 'on' : ''}" data-tab="${k}">${n}</button>`).join('')}
     </div>
-    <div class="pane" id="pane">${tab === 'plan' ? renderPlan() : tab === 'reviews' ? renderReviews()
+    <div class="pane" id="pane">${tab === 'plan' ? renderPlan() : tab === 'reviews' ? renderReviews() : tab === 'build' ? renderBuild()
       : tab === 'idea' ? `<div class="body" style="white-space:pre-wrap">${esc(detail.idea)}</div>` : renderRoom()}</div>`;
   el.querySelectorAll('.tab').forEach(b => b.onclick = () => { tab = b.dataset.tab; renderDetail(); });
   el.querySelectorAll('[data-act]').forEach(b => b.onclick = () => act(b.dataset.act, b));
   const t = $('sbtoggle');
   if (t) t.onclick = () => { const s = $('sb'); s.style.display = s.style.display === 'none' ? 'block' : 'none'; };
+  const f = $('fxtoggle');
+  if (f) f.onclick = () => { const s = $('fx'); s.style.display = s.style.display === 'none' ? 'block' : 'none'; };
 }
 
 async function act(what, btn) {
   if (!detail) return;
   const id = detail.run.id;
   const body = {};
-  if (what === 'sendback') {
-    body.note = ($('sbnote').value || '').trim();
-    if (body.note.length < 3) { alert('Write a note for the planner first.'); return; }
+  if (what === 'sendback' || what === 'fixphase') {
+    body.note = ($(what === 'sendback' ? 'sbnote' : 'fxnote').value || '').trim();
+    if (body.note.length < 3) { alert('Write a note first.'); return; }
   }
+  if (what === 'build' && !detail.run.dry && !confirm('Start building? The builder will work in its night window, in its sandbox, on its own Claude login.')) return;
+  if (what === 'resume' && !confirm('Resume the build? Only if you have read why it was held and you are happy with it.')) return;
   if (what === 'stop' && !confirm('Stop this run? It stops before its next AI call.')) return;
   if (what === 'retry' && !confirm('Carry this run on from where it stopped? What is already done is kept and not paid for again; the step that failed is asked again.')) return;
   btn.disabled = true;
@@ -416,7 +485,7 @@ async function refresh() {
     detail = current ? await api(`/api/agentroom/runs/${current}`) : null;
     // Redraw only when something changed, so a half-typed note or an open
     // reply is not wiped every few seconds.
-    const sig = detail ? `${detail.run.state}|${detail.messages.length}|${detail.plan_version}|${detail.run.stopping}|${current}` : 'none';
+    const sig = detail ? `${detail.run.state}|${detail.messages.length}|${detail.plan_version}|${detail.run.stopping}|${current}|${(detail.build || []).map(p => p.status).join(',')}` : 'none';
     if (sig !== lastShown || !$('pane')) { lastShown = sig; renderDetail(); }
   } catch (e) {
     $('content').innerHTML = `<div class="empty err">${esc(e.message)}</div>`;
