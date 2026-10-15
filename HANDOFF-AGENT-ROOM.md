@@ -206,7 +206,7 @@ Existing endpoints a new tool could read (all on the server, port 3001):
   limit, the way Paul's was set up (agents/paul/README.md, step 3). Codex
   CLI is different: it needs an OpenAI account or a ChatGPT plan.
 - `tasks/limits.json` holds `daily_ai_budget` (**$1.50 a day**, the owner's
-  number), plus task caps and the Shop's `tiktok_daily_ai` ($0.30) and
+  number), plus task caps and the Shop's `tiktok_daily_ai` ($0.50) and
   `tiktok_leave_for_emily` ($0.50).
 - `scripts/budget.py` reads OpenRouter's **own** count of today's spend (the
   day is UTC - it turns over at 8pm Eastern) - nothing estimates it.

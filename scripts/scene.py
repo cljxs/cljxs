@@ -568,26 +568,47 @@ LIMITS_DEFAULTS = {"tiktok_daily_ai": 0.30, "tiktok_leave_for_emily": 0.50}
 
 # Faces are cropped out on purpose: an AI face is the thing viewers spot
 # first and TikTok labels most strictly, and the product is the point.
+# Seven each: a kit asks for five and tries two more when the design check
+# refuses one (tiktok-kit.py), and a place asked for twice is a duplicate.
 PAID_SCENES = {
     "tote bag": ["carried on the shoulder of a woman walking down a sunny autumn street, cropped at the shoulders so no face shows",
                  "held up by one hand at a farmers market stall, flowers softly blurred behind",
                  "lying on a cafe table beside a latte and an open book, seen from slightly above",
                  "hanging from the back of a wooden chair in a cozy reading nook with bookshelves",
-                 "on a picnic blanket in a park beside a basket of strawberries"],
+                 "on a picnic blanket in a park beside a basket of strawberries",
+                 "in the front basket of a bicycle parked on a cobblestone street",
+                 "resting on a made bed with a cozy knit throw in soft morning light"],
     "mug": ["held in two hands with cozy sweater sleeves beside a rainy window, no face shown",
             "on a kitchen counter beside a coffee pot in soft morning light",
-            "on a desk next to an open notebook and a laptop, warm lamp light"],
-    "sticker": ["stuck on the lid of a laptop on a cafe table", "stuck on a water bottle beside a hiking trail"],
+            "on a desk next to an open notebook and a laptop, warm lamp light",
+            "on a bedside table beside a stack of books and a small lamp",
+            "on a sunny balcony table among potted plants",
+            "on a wooden tray with cookies on a cozy knit blanket",
+            "on a cafe windowsill with a pastry on a plate beside it"],
+    "sticker": ["stuck on the lid of a laptop on a cafe table", "stuck on a water bottle beside a hiking trail",
+                "stuck on the cover of a travel journal on a wooden desk",
+                "stuck on a skateboard deck leaning against a brick wall",
+                "stuck on a phone case lying on a cafe table",
+                "stuck on a notebook beside a cup of coloured pencils",
+                "stuck on a guitar case in a sunny room"],
     "t-shirt": ["worn by a person standing in a sunny park, cropped at the chin so no face shows",
                 "folded neatly on a wooden bench beside a pair of sneakers",
-                "worn by a person sitting in a cafe, cropped at the chin so no face shows"],
+                "worn by a person sitting in a cafe, cropped at the chin so no face shows",
+                "laid flat on a bed beside a denim jacket and sunglasses",
+                "hanging on a wooden hanger against a white brick wall",
+                "worn by a person walking down a city street, cropped at the chin so no face shows",
+                "folded on a shelf in a bright little boutique"],
 }
 PAID_SCENES["bag"] = PAID_SCENES["tote bag"]
 for _k in ("shirt", "sweatshirt", "hoodie"):
     PAID_SCENES[_k] = PAID_SCENES["t-shirt"]
 PAID_DEFAULT = ["on a cafe table beside a latte, seen from slightly above",
                 "on a wooden shelf in a bright living room with plants",
-                "held in one hand in soft daylight, no face shown"]
+                "held in one hand in soft daylight, no face shown",
+                "on a bedside table beside a small lamp and a book",
+                "on a sunny windowsill among potted plants",
+                "on a wooden desk beside a notebook and a cup of coffee",
+                "on a picnic blanket in a park on a sunny day"]
 
 PAID_ASK = (
     "Here is a product photo of a {thing}. Make a new photo of THIS EXACT {thing} {scene}. "

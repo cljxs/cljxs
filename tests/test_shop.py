@@ -188,7 +188,7 @@ class KitOnDisk(unittest.TestCase):
         self.assertIn("isn't", kit["hook"])
         k = self.kits / kit["id"]
         slides = sorted((k / "slides").iterdir())
-        self.assertEqual(len(slides), 3 + 2, "hook + each photo + the shop slide")
+        self.assertEqual(len(slides), 1 + 2 + 1, "hook + each other photo + the shop slide - the hook's photo once")
         for s in slides:
             _secs, w, h, _a = self.lv.probe(s)
             self.assertEqual((w, h), (1080, 1920), s.name)
@@ -199,7 +199,7 @@ class KitOnDisk(unittest.TestCase):
         self.assertEqual(names, {f"{kit['id']}/photos/{s.name}" for s in slides}
                          | {f"{kit['id']}/{n}" for n in ("video.mp4", "caption.txt", "audio.txt")})
         saved = json.loads((k / "kit.json").read_text())
-        self.assertEqual((saved["status"], saved["listing_id"], saved["slides"]), ("ready", 4412345678, 5))
+        self.assertEqual((saved["status"], saved["listing_id"], saved["slides"]), ("ready", 4412345678, 4))
         self.assertEqual([x["id"] for x in self.tk.read_kits()], [kit["id"]])
         self.assertFalse(list(self.kits.glob(".part-*")))
 
@@ -629,7 +629,8 @@ class PaidScenesSpendOnlyWhatIsAllowed(SceneBase):
 
     def test_the_caps_live_in_limits_json(self):
         got = self.sc.limits(ROOT / "tasks" / "limits.json")
-        self.assertEqual(got, {"tiktok_daily_ai": 0.30, "tiktok_leave_for_emily": 0.50})  # owner's file, 2026-10-14
+        # 0.50 since 2026-10-15: five scenes a kit, not two (owner: "Create 4-5 AI generated pictures").
+        self.assertEqual(got, {"tiktok_daily_ai": 0.50, "tiktok_leave_for_emily": 0.50})
         bad = self.d / "limits.json"
         bad.write_text(json.dumps({"tiktok_daily_ai": "lots", "tiktok_leave_for_emily": -1}))
         self.assertEqual(self.sc.limits(bad), self.sc.LIMITS_DEFAULTS)
@@ -773,7 +774,14 @@ class APaidScene(SceneBase):
 
 
 class KitsWithScenes(unittest.TestCase):
-    """The kit holds AI scenes for the owner's eye before it can be posted."""
+    """The kit holds AI scenes for the owner's eye before it can be posted.
+
+    Owner, 2026-10-15, on a kit with the same scene twice and two identical
+    white-backdrop mockups: "Make sure there are no duplicate pictures in
+    these slideshows also don't use any of the pictures that don't have a
+    backround. Create 4-5 Ai generated pictures." """
+
+    COLOURS = ["0xb07a48", "0x6d8f5a", "0x3b5b8c", "0x9c3d54", "0xd8b04a", "0x5a3e8c", "0x2c7a7b", "0x8c8c3e"]
 
     @classmethod
     def setUpClass(cls):
@@ -788,40 +796,89 @@ class KitsWithScenes(unittest.TestCase):
         p = unittest.mock.patch.object(self.tk, "KITS", self.d / "tiktok")
         p.start()
         self.addCleanup(p.stop)
-        self.photos = [picture(self.d, "a.png", "0xd9c9a6", "800x800"), picture(self.d, "b.png", "0x2f5d3a", "800x800")]
+        # Two studio mockups: the product on one flat colour.
+        self.photos = [mockup(self.d, "a.png"), mockup(self.d, "b.png", bag="0x7a4a2a")]
+        # A photo with a background of its own.
+        self.room = picture(self.d, "room.png", "testsrc2=s=800x800", "800x800")
 
-    def maker(self, fail=None):
+    def maker(self, fail=None, same=False):
+        """A stand-in scene maker: each call a picture of its own colour, or
+        the same one every time (same=True)."""
         calls = []
 
         def make(photo, thing, out, n, seed, scratch, **kw):
             calls.append(Path(photo).name)
             if fail and fail(len(calls), Path(photo).name):
                 raise fail(len(calls), Path(photo).name)
-            picture(self.d, Path(out).name, "0xb07a48")
-            shutil.copy(self.d / Path(out).name, out)
+            colour = self.COLOURS[0 if same else (len(calls) - 1) % len(self.COLOURS)]
+            shutil.copy(picture(self.d, f"made-{len(calls)}.png", colour), out)
             return {"ok": True, "why": None, "checks": {"glow": {"ok": True, "said": "fine"}},
-                    "prompt": "a table", "source": "free"}
+                    "prompt": f"scene {n}", "source": "free"}
         return make, calls
+
+    def slides_of(self, kit):
+        return sorted(p.name for p in (self.tk.KITS / kit["id"] / "slides").iterdir())
 
     def test_scenes_go_first_and_hold_the_kit_for_review(self):
         make, _ = self.maker()
         waits = []
         kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make, wait=waits.append,
-                                how="free")
+                                scenes=2, how="free")
         self.assertEqual(kit["status"], "needs_review")
-        self.assertEqual(kit["ai_slides"], ["01.jpg", "02.jpg", "03.jpg"], "the hook is on a scene too")
-        self.assertEqual([s["slide"] for s in kit["scenes"]], ["02.jpg", "03.jpg"])
-        self.assertEqual(kit["slides"], 1 + 2 + 2 + 1)
+        self.assertEqual(kit["ai_slides"], ["01.jpg", "02.jpg"], "the hook is on a scene too")
+        self.assertEqual([s["slide"] for s in kit["scenes"]], ["01.jpg", "02.jpg"])
+        self.assertEqual(kit["slides"], 1 + 1 + 1, "hook on scene 1, scene 2, the shop slide")
         self.assertEqual(waits, [self.tk.SCENE_SPACING], "the free service is not asked twice in a row")
         paid_waits = []
         self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make, wait=paid_waits.append,
-                          how="paid")
+                          scenes=2, how="paid")
         self.assertEqual(paid_waits, [], "the paid service is not made to wait")
         self.assertIn("AI-generated content", (self.tk.KITS / kit["id"] / "audio.txt").read_text())
         with self.assertRaises(ValueError):
             self.tk.set_posted(kit["id"])
         self.assertEqual(self.tk.approve(kit["id"])["status"], "ready")
         self.assertEqual(self.tk.set_posted(kit["id"])["status"], "posted")
+
+    def test_five_scenes_and_the_hooks_is_not_shown_twice(self):
+        make, calls = self.maker()
+        kit = self.tk.build_kit(ROW, self.photos + [self.room], "2026-10-13", "Shop on Etsy", 0, maker=make,
+                                wait=lambda s: None, how="paid")
+        self.assertEqual(len(calls), 5)
+        self.assertEqual(kit["ai_slides"], [f"{n:02d}.jpg" for n in range(1, 6)])
+        self.assertEqual(len({s["prompt"] for s in kit["scenes"]}), 5, "five different scenes")
+        self.assertEqual(kit["slides"], 5 + 1 + 1, "five scenes, the room photo, the shop slide")
+        fps = [self.tk.fingerprint(self.tk.KITS / kit["id"] / "slides" / n) for n in kit["slide_names"][:-1]]
+        for i, a in enumerate(fps):
+            for b in fps[i + 1:]:
+                self.assertFalse(self.tk.alike(a, b), "no picture twice")
+
+    def test_a_plain_mockup_is_left_out_while_there_are_scenes(self):
+        self.assertTrue(self.tk.plain_backdrop(self.photos[0]))
+        self.assertFalse(self.tk.plain_backdrop(self.room))
+        make, _ = self.maker()
+        kit = self.tk.build_kit(ROW, self.photos + [self.room], "2026-10-13", "Shop on Etsy", 0, maker=make,
+                                wait=lambda s: None, scenes=2, how="paid")
+        self.assertEqual(kit["slides"], 2 + 1 + 1)
+        self.assertEqual(sum("plain backdrop" in x for x in kit["left_out"]), 2)
+
+    def test_with_no_scenes_the_mockups_are_all_there_is(self):
+        kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, scenes=0)
+        self.assertEqual(kit["slides"], 1 + 1 + 1, "hook on a, b, the shop slide")
+
+    def test_the_same_picture_twice_is_shown_once(self):
+        twin = self.d / "room-small.jpg"
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(self.room), "-vf", "scale=500:500",
+                        "-q:v", "6", str(twin)], check=True)
+        self.assertTrue(self.tk.alike(self.tk.fingerprint(self.room), self.tk.fingerprint(twin)))
+        self.assertFalse(self.tk.alike(self.tk.fingerprint(self.photos[0]), self.tk.fingerprint(self.photos[1])),
+                         "the same mockup in another colour is another picture")
+        kit = self.tk.build_kit(ROW, [self.room, twin], "2026-10-13", "Shop on Etsy", 0, scenes=0)
+        self.assertEqual(kit["slides"], 2)
+        self.assertIn("room-small.jpg: the same picture", kit["left_out"][0])
+        make, _ = self.maker(same=True)
+        kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make,
+                                wait=lambda s: None, scenes=3, how="paid")
+        self.assertEqual(kit["ai_slides"], ["01.jpg"], "three identical scenes are one")
 
     def test_todays_allowance_running_out_stops_the_rest(self):
         make, calls = self.maker(fail=lambda n, name: self.sc.SpendError("today's scene allowance is spent")
@@ -835,12 +892,11 @@ class KitsWithScenes(unittest.TestCase):
     def test_what_scenes_cost_is_kept_and_counted_for_the_day(self):
         def make(photo, thing, out, n, seed, scratch, spent_today=0.0, how=None):
             seen.append(spent_today)
-            picture(self.d, "s.png", "0xb07a48")
-            shutil.copy(self.d / "s.png", out)
+            shutil.copy(picture(self.d, f"s{len(seen)}.png", self.COLOURS[len(seen)]), out)
             return {"ok": True, "why": None, "checks": {}, "prompt": "p", "source": "paid", "cost": 0.04}
         seen = []
         kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make,
-                                wait=lambda s: None, spent=0.10, how="paid")
+                                wait=lambda s: None, spent=0.10, scenes=2, how="paid")
         self.assertEqual(seen, [0.10, 0.14], "each scene knows what the day has spent so far")
         self.assertEqual(kit["scene_cost"], 0.08)
         self.assertEqual(self.tk.spent_today([kit, {"day": "2026-10-12", "scene_cost": 9}], "2026-10-13"), 0.08)
@@ -848,49 +904,104 @@ class KitsWithScenes(unittest.TestCase):
     def test_a_photo_that_will_not_cut_out_is_skipped_for_the_next(self):
         make, calls = self.maker(fail=lambda n, name: self.sc.CutoutError("no backdrop") if name == "a.png" else None)
         kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make, wait=lambda s: None,
-                                how="free")
+                                scenes=2, how="free")
         self.assertEqual(calls[:2], ["a.png", "b.png"])
         self.assertEqual(len(kit["scenes"]), 2)
         self.assertIn("a.png: no backdrop", kit["scenes_dropped"][0])
 
-    def test_a_failed_scene_costs_only_itself(self):
-        make, _ = self.maker(fail=lambda n, name: self.sc.SceneError("refused 3 times") if n == 1 else None)
-        kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make, wait=lambda s: None)
-        self.assertEqual(len(kit["scenes"]), 1)
+    def test_a_failed_scene_costs_only_itself_and_a_spare_try_replaces_it(self):
+        make, calls = self.maker(fail=lambda n, name: self.sc.SceneError("refused 3 times") if n == 1 else None)
+        kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make, wait=lambda s: None,
+                                scenes=2)
+        self.assertEqual(len(kit["scenes"]), 2)
+        self.assertEqual(len(calls), 3)
         self.assertEqual(kit["scenes_dropped"], ["refused 3 times"])
+        make, calls = self.maker(fail=lambda n, name: self.sc.SceneError("refused") )
+        self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make, wait=lambda s: None,
+                          scenes=2)
+        self.assertEqual(len(calls), 2 + self.tk.SPARE_SCENES, "spare tries are a few, not endless")
 
     def test_no_scenes_is_the_plain_kit(self):
         kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, scenes=0)
         self.assertEqual((kit["status"], kit["ai_slides"]), ("ready", []))
         self.assertNotIn("AI-generated", (self.tk.KITS / kit["id"] / "audio.txt").read_text())
 
-    def test_dropping_a_slide_rebuilds_the_video_and_zip(self):
+    def test_a_drop_is_instant_and_pack_rebuilds_the_video_and_zip(self):
+        # Owner, 2026-10-15: "improve the drop function its really slow and
+        # doesn't always work". A drop answered only after the slideshow was
+        # rebuilt, and renumbered the slides, so a second tap on a page not
+        # yet redrawn named the wrong slide.
         make, _ = self.maker()
-        kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make, wait=lambda s: None)
+        kit = self.tk.build_kit(ROW, self.photos + [self.room], "2026-10-13", "Shop on Etsy", 0, maker=make,
+                                wait=lambda s: None, scenes=2, how="paid")
         k = self.tk.KITS / kit["id"]
-        after = self.tk.drop_slide(kit["id"], "02.jpg")
-        self.assertEqual(after["slides"], kit["slides"] - 1)
-        self.assertEqual(sorted(p.name for p in (k / "slides").iterdir()),
-                         [f"{n:02d}.jpg" for n in range(1, kit["slides"])])
-        self.assertEqual(after["ai_slides"], ["01.jpg", "02.jpg"], "the old 03 is now 02")
-        self.assertEqual([s["slide"] for s in after["scenes"]], ["02.jpg"])
+        self.assertEqual(kit["slide_names"], ["01.jpg", "02.jpg", "03.jpg", "04.jpg"])
+        video = (k / "video.mp4").stat().st_mtime_ns
+        with unittest.mock.patch.object(self.tk, "package", side_effect=AssertionError("no ffmpeg in a drop")):
+            after = self.tk.drop_slide(kit["id"], "02.jpg")
+            self.assertEqual(self.tk.drop_slide(kit["id"], "02.jpg")["slide_names"], after["slide_names"],
+                             "the same tap twice is the same answer")
+        self.assertEqual(self.slides_of(kit), ["01.jpg", "03.jpg", "04.jpg"], "names never change")
+        self.assertEqual((after["slides"], after["video_stale"], after["ai_slides"]), (3, True, ["01.jpg"]))
+        self.assertEqual([s["slide"] for s in after["scenes"]], ["01.jpg"])
+        self.assertEqual((k / "video.mp4").stat().st_mtime_ns, video, "the video waits for pack")
+        packed = self.tk.pack(kit["id"])
+        self.assertEqual((packed["video_stale"], packed["slides"]), (False, 3))
         names = zipfile.ZipFile(k / f"{kit['id']}.zip").namelist()
-        self.assertEqual(len([n for n in names if "/photos/" in n]), after["slides"])
+        self.assertEqual(sorted(n.split("/")[-1] for n in names if "/photos/" in n), ["01.jpg", "02.jpg", "03.jpg"],
+                         "the download is numbered without the gap")
         secs, _w, _h, _a = self.tk._lv().probe(k / "video.mp4")
-        self.assertAlmostEqual(secs, after["video_seconds"], delta=0.25)
+        self.assertAlmostEqual(secs, packed["video_seconds"], delta=0.25)
+        self.assertEqual(self.tk.pack(kit["id"])["packed_utc"], packed["packed_utc"], "nothing stale, nothing done")
         # Dropping every AI slide makes it a plain kit again.
-        self.tk.drop_slide(kit["id"], "01.jpg")
         last = self.tk.drop_slide(kit["id"], "01.jpg")
         self.assertEqual((last["ai_slides"], last["status"]), ([], "ready"))
         self.assertNotIn("AI-generated", (k / "audio.txt").read_text())
 
+    def test_a_drop_during_the_rebuild_is_rebuilt_for(self):
+        make, _ = self.maker()
+        kit = self.tk.build_kit(ROW, self.photos + [self.room], "2026-10-13", "Shop on Etsy", 0, maker=make,
+                                wait=lambda s: None, scenes=3, how="paid")
+        self.tk.drop_slide(kit["id"], "02.jpg")
+        real, runs = self.tk.package, []
+
+        def package(folder, kid):
+            runs.append(1)
+            got = real(folder, kid)
+            if len(runs) == 1:
+                self.tk.drop_slide(kid, "03.jpg")      # the owner taps again mid-rebuild
+            return got
+        with unittest.mock.patch.object(self.tk, "package", package):
+            packed = self.tk.pack(kit["id"])
+        self.assertEqual(len(runs), 2)
+        self.assertEqual((packed["slides"], packed["video_stale"]), (3, False))
+        names = zipfile.ZipFile(self.tk.KITS / kit["id"] / f"{kit['id']}.zip").namelist()
+        self.assertEqual(len([n for n in names if "/photos/" in n]), 3)
+
     def test_a_kit_keeps_two_slides_and_names_are_checked(self):
-        kit = self.tk.build_kit(ROW, self.photos[:1], "2026-10-13", "Shop on Etsy", 0, scenes=0)
+        kit = self.tk.build_kit(ROW, [self.room, self.photos[0]], "2026-10-13", "Shop on Etsy", 0, scenes=0)
+        self.assertEqual(kit["slides"], 3)
         self.tk.drop_slide(kit["id"], "01.jpg")
         with self.assertRaises(ValueError):
-            self.tk.drop_slide(kit["id"], "01.jpg")
+            self.tk.drop_slide(kit["id"], "02.jpg")
+        with self.assertRaises(FileNotFoundError):
+            self.tk.drop_slide(kit["id"], "07.jpg")
         with self.assertRaises(ValueError):
             self.tk.drop_slide(kit["id"], "../kit.json")
+
+
+class EveryKindOfProductHasSevenScenes(unittest.TestCase):
+    """A kit asks for five scenes and two spare tries, each a different
+    place - a place asked for twice draws the same picture twice."""
+
+    def test_seven_each(self):
+        tk = load("tiktok_kit_seven", "tiktok-kit.py")
+        sc = tk._scene()
+        need = tk.SCENES_PER_KIT + tk.SPARE_SCENES
+        for thing, places in list(sc.PAID_SCENES.items()) + [("default", sc.PAID_DEFAULT)]:
+            self.assertGreaterEqual(len(set(places)), need, thing)
+            prompts = {sc.paid_prompt(thing if thing != "default" else "lamp", 3 + k) for k in range(need)}
+            self.assertEqual(len(prompts), need, thing)
 
 
 # ====================================================================== board

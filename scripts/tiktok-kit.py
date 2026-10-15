@@ -9,16 +9,17 @@ tiktok-kit.py — one ready-to-post TikTok kit a day, for one live Etsy listing.
     tiktok-kit.py posted <kit>          you posted it - it leaves the to-do pile
     tiktok-kit.py posted <kit> --undo
     tiktok-kit.py approve <kit>         you have looked at its AI scenes
-    tiktok-kit.py drop <kit> 02.jpg     take a slide out; the video and zip are rebuilt
+    tiktok-kit.py drop <kit> 02.jpg     take a slide out, at once (--now: and rebuild)
+    tiktok-kit.py pack <kit>            rebuild its video and zip after drops
     tiktok-kit.py make --no-scenes      the listing's own photos only
 
 WHAT A KIT IS. Everything needed to post by hand from the iPad, so posting
 is a minute's work instead of an evening's:
 
-    slides/01.jpg ...    a photo carousel at 1080x1920: a hook slide, up to two
-                         AI scenes with the real product set into them
-                         (scene.py), the listing's own photos, and a last
-                         "shop it" slide
+    slides/01.jpg ...    a photo carousel at 1080x1920: a hook slide, up to five
+                         AI scenes with the real product in them (scene.py),
+                         the listing's own photos that are not plain studio
+                         mockups or repeats, and a last "shop it" slide
     video.mp4            the same slides as a silent slideshow, for a video post
     caption.txt          the caption, with its hashtags
     audio.txt            what kind of sound to add, and where to find it
@@ -95,7 +96,24 @@ SLIDE_RE = re.compile(r"^\d{2}\.jpg$")
 # (TIKTOK_SCENES=free) pastes the cut-out product onto a free background;
 # the owner found it looked terrible. A kit with any scene is held as
 # needs_review until the owner approves it.
-SCENES_PER_KIT = 2
+#
+# Five, and a couple of spare tries for ones the design check refuses (owner,
+# 2026-10-15: "Create 4-5 AI generated pictures"). The first carries the hook
+# and is not shown a second time.
+SCENES_PER_KIT = 5
+SPARE_SCENES = 2
+
+# WHAT IS NOT SHOWN (owner, 2026-10-15, on a kit whose carousel had the same
+# scene twice and two identical white-backdrop mockups: "Make sure there are
+# no duplicate pictures in these slideshows also don't use any of the
+# pictures that don't have a backround"). Two pictures whose 16x16 thumbnails
+# differ by less than LOOKALIKE per channel, on average, are one picture. A
+# photo whose border is one flat colour - knockout.py's own test for a
+# backdrop - is a studio mockup, left out whenever there are AI scenes to
+# show instead; with none, it is all the kit has.
+FINGERPRINT_SIDE = 16
+LOOKALIKE = 10
+PLAIN_SIDE = 96
 
 # ONE KIT AT A TIME. On 2026-10-14 the owner ran `make --again` minutes before
 # the 9:48 timer; the timer's run started while the first was still drawing
@@ -453,10 +471,11 @@ def kit_id(day, listing_id):
 
 
 def make_scenes(row, photos, thing, turn, folder, n=SCENES_PER_KIT, maker=None, wait=time.sleep,
-                spent_today=0.0, how=None):
-    """Up to n AI scenes for the kit, in `folder`. Returns (used, dropped,
-    cost): used is [(path, report)] that passed scene.py's checks, dropped
-    the reason for each that did not, cost what the paid ones cost.
+                spent_today=0.0, how=None, spare=SPARE_SCENES):
+    """Up to n AI scenes for the kit, in `folder`, from at most n + spare
+    tries - each a different scene. Returns (used, dropped, cost): used is
+    [(path, report)] that passed scene.py's checks, dropped the reason for
+    each that did not, cost what the paid ones cost.
 
     A failed scene costs only itself. A photo with no plain backdrop to cut
     the product from (free scenes) is skipped for the next. Today's
@@ -466,7 +485,9 @@ def make_scenes(row, photos, thing, turn, folder, n=SCENES_PER_KIT, maker=None, 
     maker = maker or sc.make_scene
     used, dropped, cost = [], [], 0.0
     order = list(photos)
-    for k in range(n):
+    for k in range(n + spare if n else 0):
+        if len(used) >= n:
+            break
         if k and how == "free":
             wait(SCENE_SPACING)
         out = Path(folder) / f"scene-{k + 1}.jpg"
@@ -502,6 +523,63 @@ def make_scenes(row, photos, thing, turn, folder, n=SCENES_PER_KIT, maker=None, 
     return used, dropped, round(cost, 4)
 
 
+def _pixels(path, side):
+    return _scene().raw(path, side, side)
+
+
+def fingerprint(path):
+    """The picture as a 16x16 thumbnail - enough to know it again."""
+    return _pixels(path, FINGERPRINT_SIDE)
+
+
+def alike(a, b):
+    """Two fingerprints of the same picture: the same mockup at another size
+    or quality, the same scene twice."""
+    if len(a) != len(b) or not a:
+        return False
+    return sum(abs(x - y) for x, y in zip(a, b)) / len(a) < LOOKALIKE
+
+
+def plain_backdrop(path):
+    """Is this the product on one flat colour - a studio mockup - rather than
+    a picture with a background? knockout.py's border test, the one that
+    decides whether there is a backdrop to cut."""
+    ko = _load("knockout_kit", "knockout.py")
+    px = _scene().raw(path, PLAIN_SIDE, PLAIN_SIDE, "rgba")
+    bg = ko.background_colour(PLAIN_SIDE, PLAIN_SIDE, px)
+    return ko.border_agreement(PLAIN_SIDE, PLAIN_SIDE, px, bg, ko.DEFAULT_TOLERANCE) >= ko.BORDER_MIN_PCT
+
+
+def choose(scenes, photos):
+    """(scenes, photos, left_out) to show: no picture twice, and no plain
+    mockup while there is a scene. scenes are [(path, report)], photos paths;
+    left_out says what was not shown, and why."""
+    seen, left_out = [], []
+
+    def new(path):
+        fp = fingerprint(path)
+        if any(alike(fp, x) for x in seen):
+            return False
+        seen.append(fp)
+        return True
+
+    keep = []
+    for path, rep in scenes:
+        if new(path):
+            keep.append((path, rep))
+        else:
+            left_out.append("an AI scene that looked like another one")
+    shown = []
+    for p in photos:
+        if keep and plain_backdrop(p):
+            left_out.append(f"{Path(p).name}: the product on a plain backdrop - the AI scenes show it instead")
+        elif new(p):
+            shown.append(p)
+        else:
+            left_out.append(f"{Path(p).name}: the same picture as one already in the kit")
+    return keep, shown, left_out
+
+
 def spent_today(kits, day):
     """What today's kits have already spent on scenes, from their own records."""
     return round(sum(float(k.get("scene_cost") or 0) for k in kits if k.get("day") == day), 4)
@@ -525,8 +603,10 @@ def package(folder, kid):
     tmp.replace(folder / "video.mp4")
     zpath = folder / f"{kid}.zip"
     with zipfile.ZipFile(folder / f"{kid}.zip.part", "w", zipfile.ZIP_STORED) as z:
-        for sl in slides:
-            z.write(sl, f"{kid}/photos/{sl.name}")
+        # Numbered in order: a dropped slide leaves a gap in the folder's
+        # names, never in the download.
+        for n, sl in enumerate(slides, start=1):
+            z.write(sl, f"{kid}/photos/{n:02d}.jpg")
         for name in ("video.mp4", "caption.txt", "audio.txt"):
             z.write(folder / name, f"{kid}/{name}")
     (folder / f"{kid}.zip.part").replace(zpath)
@@ -560,20 +640,24 @@ def build_kit(row, photos, day, shop_line, turn, scenes=SCENES_PER_KIT, maker=No
     (part / "slides").mkdir(parents=True)
     try:
         with tempfile.TemporaryDirectory() as scratch:
-            used, dropped, cost = (make_scenes(row, photos, thing, turn, scratch, scenes, maker, wait,
+            made, dropped, cost = (make_scenes(row, photos, thing, turn, scratch, scenes, maker, wait,
                                                spent, how)
                                    if scenes else ([], [], 0.0))
-            plan = ([("hook_scene", used[0][0], hook_lines)] if used else [("hook", photos[0], hook_lines)])
-            plan += [("scene", path, ()) for path, _rep in used]
-            plan += [("photo", p, ()) for p in photos] + [("end", photos[0], end_lines)]
+            used, shown, left_out = choose(made, photos)
+            if not used and not shown:
+                shown = photos[:1]
+            # The first scene carries the hook and is not shown again.
+            plan = ([("hook_scene", used[0][0], hook_lines, used[0][1])] if used
+                    else [("hook", shown[0], hook_lines, None)])
+            plan += [("scene", path, (), rep) for path, rep in used[1:]]
+            plan += [("photo", p, (), None) for p in (shown[1:] if not used else shown)]
+            plan += [("end", (used[-1][0] if used else shown[-1]), end_lines, None)]
             ai_slides, scene_rows = [], []
-            for n, (kind, photo, lines) in enumerate(plan, start=1):
+            for n, (kind, photo, lines, rep) in enumerate(plan, start=1):
                 out = part / "slides" / f"{n:02d}.jpg"
                 run(slide_command(photo, out, kind, lines, fontfile, scratch))
                 if kind in ("scene", "hook_scene"):
                     ai_slides.append(out.name)
-                if kind == "scene":
-                    rep = used[len(scene_rows)][1]
                     scene_rows.append({"slide": out.name, "prompt": rep.get("prompt"),
                                        "source": rep.get("source"), "checks": rep.get("checks"),
                                        "cost": rep.get("cost")})
@@ -583,6 +667,7 @@ def build_kit(row, photos, day, shop_line, turn, scenes=SCENES_PER_KIT, maker=No
         kit = {"day": day, "listing_id": int(row["listing_id"]),
                "title": row.get("title") or "", "url": row.get("url"),
                "hook": hook, "thing": thing, "slides": len(slides),
+               "slide_names": [p.name for p in slides], "left_out": left_out,
                "video_seconds": seconds, "hashtags": hashtags(row.get("tags")),
                "ai_slides": ai_slides, "scenes": scene_rows, "scenes_dropped": dropped,
                "scene_cost": cost,
@@ -621,60 +706,116 @@ def _save(path, kit):
     tmp.replace(path)
 
 
+@contextlib.contextmanager
+def _kit_lock(folder):
+    """One kit's kit.json, read and written by one process at a time. Held
+    for a moment, never across ffmpeg: a drop and the rebuild of the video
+    both edit the file, and the later write must not undo the earlier."""
+    with open(Path(folder) / ".kit.lock", "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def _slide_names(folder):
+    d = Path(folder) / "slides"
+    return sorted(p.name for p in d.iterdir() if SLIDE_RE.match(p.name)) if d.is_dir() else []
+
+
 def set_posted(kid, posted=True):
     path = _kit_path(kid)
-    kit = json.loads(path.read_text())
-    if posted and kit.get("status") == "needs_review":
-        raise ValueError("this kit has AI scenes nobody has looked at - approve it first")
-    kit["status"] = "posted" if posted else "ready"
-    kit["posted_utc"] = _now() if posted else None
-    _save(path, kit)
+    with _kit_lock(path.parent):
+        kit = json.loads(path.read_text())
+        if posted and kit.get("status") == "needs_review":
+            raise ValueError("this kit has AI scenes nobody has looked at - approve it first")
+        kit["status"] = "posted" if posted else "ready"
+        kit["posted_utc"] = _now() if posted else None
+        _save(path, kit)
     return kit
 
 
 def approve(kid):
     """The owner has looked at the AI scenes and the kit can be posted."""
     path = _kit_path(kid)
-    kit = json.loads(path.read_text())
-    if kit.get("status") == "needs_review":
-        kit["status"] = "ready"
-        kit["approved_utc"] = _now()
-        _save(path, kit)
+    with _kit_lock(path.parent):
+        kit = json.loads(path.read_text())
+        if kit.get("status") == "needs_review":
+            kit["status"] = "ready"
+            kit["approved_utc"] = _now()
+            _save(path, kit)
     return kit
 
 
+# DROP IS INSTANT; THE VIDEO FOLLOWS (owner, 2026-10-15: "improve the drop
+# function its really slow and doesn't always work"). A drop used to rebuild
+# the slideshow before it answered - most of a minute on this server - while
+# the page waited, and it waited behind any kit being made, and it renumbered
+# the slides, so a second tap on a page not yet redrawn named the wrong slide
+# or none. Now a drop takes the file out and says so in kit.json at once;
+# pack() rebuilds the video and the zip afterwards, as often as drops arrive.
+# Slide names never change, so a name always means the slide it was drawn
+# as, and dropping one already gone is the same answer twice.
 def drop_slide(kid, name):
-    """Take one slide out - an AI scene the owner does not like - and rebuild
-    the video and the zip from what is left, renumbered."""
+    """Take one slide out - an AI scene the owner does not like. The video
+    and the zip are marked stale for pack() to rebuild."""
     path = _kit_path(kid)
     if not SLIDE_RE.match(name or ""):
         raise ValueError(f"{name!r} is not a slide")
     folder = path.parent
-    kit = json.loads(path.read_text())
-    slides = sorted(p.name for p in (folder / "slides").iterdir() if SLIDE_RE.match(p.name))
-    if name not in slides:
-        raise FileNotFoundError(f"{kid} has no slide {name}")
-    if len(slides) <= 2:
-        raise ValueError("a kit needs at least two slides")
-    (folder / "slides" / name).unlink()
-    renamed = {}
-    for n, old in enumerate([x for x in slides if x != name], start=1):
-        new = f"{n:02d}.jpg"
-        if old != new:
-            (folder / "slides" / old).rename(folder / "slides" / new)
-        renamed[old] = new
-    kit["ai_slides"] = [renamed[x] for x in kit.get("ai_slides") or [] if x in renamed]
-    kit["scenes"] = [dict(r, slide=renamed[r["slide"]]) for r in kit.get("scenes") or []
-                     if r.get("slide") in renamed]
-    if not kit["ai_slides"]:
-        (folder / "audio.txt").write_text(audio_for(kit.get("thing") or "find"))
-        if kit.get("status") == "needs_review":
-            kit["status"] = "ready"
-    got, seconds = package(folder, kid)
-    kit["slides"], kit["video_seconds"] = len(got), seconds
-    kit["made_utc"] = _now()            # the page's image URLs are versioned by it
-    _save(path, kit)
+    with _kit_lock(folder):
+        kit = json.loads(path.read_text())
+        slides = _slide_names(folder)
+        if name not in slides:
+            if name in (kit.get("dropped") or []):
+                return kit
+            raise FileNotFoundError(f"{kid} has no slide {name}")
+        if len(slides) <= 2:
+            raise ValueError("a kit needs at least two slides")
+        (folder / "slides" / name).unlink()
+        left = [x for x in slides if x != name]
+        kit["slide_names"], kit["slides"] = left, len(left)
+        kit["dropped"] = (kit.get("dropped") or []) + [name]
+        kit["ai_slides"] = [x for x in kit.get("ai_slides") or [] if x != name]
+        kit["scenes"] = [r for r in kit.get("scenes") or [] if r.get("slide") != name]
+        if not kit["ai_slides"]:
+            (folder / "audio.txt").write_text(audio_for(kit.get("thing") or "find"))
+            if kit.get("status") == "needs_review":
+                kit["status"] = "ready"
+        kit["video_stale"] = True
+        _save(path, kit)
     return kit
+
+
+def pack(kid, wait=LOCK_WAIT):
+    """Rebuild a dropped-from kit's video and zip, until they hold exactly
+    the slides on disk - a drop that lands mid-rebuild is caught by the
+    comparison and rebuilt for. Holds the kits' lock: ffmpeg is the heavy
+    part, and it waits its turn behind a kit being made."""
+    path = _kit_path(kid)
+    folder = path.parent
+    with one_at_a_time(wait=wait):
+        while True:
+            with _kit_lock(folder):
+                kit = json.loads(path.read_text())
+                if not kit.get("video_stale"):
+                    return kit
+                before = _slide_names(folder)
+            try:
+                got, seconds = package(folder, kid)
+            except (RuntimeError, OSError):
+                if _slide_names(folder) != before:
+                    continue                # a slide went while ffmpeg read it
+                raise
+            with _kit_lock(folder):
+                if _slide_names(folder) != [p.name for p in got]:
+                    continue
+                kit = json.loads(path.read_text())
+                kit.update(video_stale=False, slides=len(got), video_seconds=seconds,
+                           slide_names=[p.name for p in got], packed_utc=_now())
+                _save(path, kit)
+                return kit
 
 
 # ------------------------------------------------------------------ commands
@@ -796,18 +937,36 @@ def cmd_approve(a):
 
 def cmd_drop(a):
     try:
-        with one_at_a_time(wait=60):
-            kit = drop_slide(a.kit, a.slide)
-    except Busy:
-        print("a kit is being made right now - drop the slide when it has finished", file=sys.stderr)
-        return 2
+        kit = drop_slide(a.kit, a.slide)
     except FileNotFoundError as exc:
         print(str(exc) if "slide" in str(exc) else f"no kit called {a.kit}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if a.json:
+        print(json.dumps(kit))
+        return 0
+    if a.now:
+        return cmd_pack(a)
+    print(f"{a.kit}: {kit['slides']} slides now ({kit['status']}) - the video and zip "
+          f"are rebuilt by:  tiktok-kit.py pack {a.kit}")
+    return 0
+
+
+def cmd_pack(a):
+    try:
+        kit = pack(a.kit)
+    except Busy:
+        print("a kit was still being made - the video is rebuilt next time", file=sys.stderr)
+        return 2
+    except FileNotFoundError:
+        print(f"no kit called {a.kit}", file=sys.stderr)
         return 1
     except (ValueError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    print(f"{a.kit}: {kit['slides']} slides now, a {kit['video_seconds']}s video ({kit['status']})")
+    print(f"{a.kit}: {kit['slides']} slides, a {kit['video_seconds']}s video ({kit['status']})")
     return 0
 
 
@@ -832,7 +991,12 @@ def main():
     d = sub.add_parser("drop", help="take a slide out and rebuild the video and zip")
     d.add_argument("kit")
     d.add_argument("slide", help="e.g. 02.jpg")
+    d.add_argument("--now", action="store_true", help="rebuild the video and zip before answering")
+    d.add_argument("--json", action="store_true", help="the kit after the drop, as JSON")
     d.set_defaults(fn=cmd_drop)
+    pk = sub.add_parser("pack", help="rebuild a kit's video and zip after drops")
+    pk.add_argument("kit")
+    pk.set_defaults(fn=cmd_pack)
     a = ap.parse_args()
     if a.cmd == "make" and a.listing and not a.listing.isdigit():
         print("a listing id is digits - it is in the listing's Etsy address", file=sys.stderr)

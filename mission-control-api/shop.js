@@ -94,11 +94,32 @@ function send(res, full, type, req, download) {
     'Cache-Control': req.query.v ? 'max-age=31536000, immutable' : 'no-cache' } });
 }
 
+// Background rebuilds of kits' videos after drops: kit -> { again }.
+const packing = new Map();
+const PACK_TIMEOUT_MS = 30 * 60 * 1000;
+
+function repack(kit) {
+  const p = packing.get(kit);
+  if (p) { p.again = true; return; }
+  const mine = { again: false };
+  packing.set(kit, mine);
+  python('tiktok-kit.py', ['pack', kit], PACK_TIMEOUT_MS).then(r => {
+    packing.delete(kit);
+    if (!r.ok) console.error(`tiktok-kit pack ${kit}: ${tail(r.stderr || r.stdout, 3)}`);
+    if (mine.again) repack(kit);
+  });
+}
+
 function register(app) {
   // ---- TikTok kits
 
   app.get('/api/shop/tiktok', async (req, res) => {
-    asJson(await python('tiktok-kit.py', ['list', '--json']), res, 'the kits');
+    const r = await python('tiktok-kit.py', ['list', '--json']);
+    // A rebuild the Deck's restart cut short is started again here.
+    try {
+      for (const k of JSON.parse(r.stdout).kits || []) if (k.video_stale && KIT_RE.test(k.id || '')) repack(k.id);
+    } catch { /* asJson says what was wrong */ }
+    asJson(r, res, 'the kits');
   });
 
   app.post('/api/shop/tiktok/make', (req, res) => {
@@ -123,13 +144,23 @@ function register(app) {
     res.status(r.ok ? 200 : 409).json({ ok: r.ok, said: (r.stdout + r.stderr).trim() });
   });
 
+  // A drop answers at once and the video follows (owner, 2026-10-15: "its
+  // really slow and doesn't always work"). It used to wait for the whole
+  // slideshow to be rebuilt, behind any other job, before it answered. Now
+  // `drop` takes the slide out and returns the kit; `pack` rebuilds the
+  // video and zip in the background - one at a time per kit, and once more
+  // if another drop came in while it ran.
   app.post('/api/shop/tiktok/:kit/drop', async (req, res) => {
-    if (!kitDir(req.params.kit)) return res.status(404).json({ error: 'no such kit' });
+    const kit = req.params.kit;
+    if (!kitDir(kit)) return res.status(404).json({ error: 'no such kit' });
     const slide = String((req.body || {}).slide || '');
     if (!SLIDE_RE.test(slide)) return res.status(400).json({ error: 'bad slide' });
-    if (busy(res)) return;
-    const r = await python('tiktok-kit.py', ['drop', req.params.kit, slide], 300000);
-    res.status(r.ok ? 200 : 409).json({ ok: r.ok, said: (r.stdout + r.stderr).trim() });
+    const r = await python('tiktok-kit.py', ['drop', kit, slide, '--json'], 30000);
+    if (!r.ok) return res.status(409).json({ ok: false, said: (r.stderr || r.stdout).trim() });
+    let after = null;
+    try { after = JSON.parse(r.stdout); } catch { /* the drop happened; the page reloads */ }
+    repack(kit);
+    res.json({ ok: true, kit: after });
   });
 
   app.get('/api/shop/tiktok/:kit/slide/:name', (req, res) => {

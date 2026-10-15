@@ -85,7 +85,8 @@
   .sl{position:relative;flex:0 0 auto;scroll-snap-align:start}
   .aitag{position:absolute;left:6px;top:6px;font-size:10px;font-weight:700;letter-spacing:.06em;padding:2px 7px;border-radius:999px;
     background:rgba(11,16,32,.82);color:#fbbf24;border:1px solid rgba(245,158,11,.6)}
-  .btn.drop{position:absolute;right:6px;bottom:6px;padding:4px 9px;font-size:12px;background:rgba(11,16,32,.85)}
+  .btn.drop{position:absolute;right:6px;bottom:6px;padding:8px 14px;font-size:13px;background:rgba(11,16,32,.85)}
+  .rebuild{font-size:12.5px;color:#fbbf24}
   .old{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
   .oldk{display:flex;gap:10px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px}
   .oldk img{width:54px;aspect-ratio:9/16;object-fit:cover;border-radius:6px;border:1px solid var(--line)}
@@ -155,6 +156,10 @@ if (EMBED) {
 
 let T = null, B = null, tab = new URLSearchParams(location.search).get('tab') === 'board' ? 'board' : 'tiktok';
 let filter = 'review', busy = false, open = null;
+// Slides dropped on this page, hidden at once while the server catches up:
+// "kit/02.jpg". A slide's name never changes, so this can only ever hide
+// the slide that was tapped.
+const gone = new Set();
 
 // store-board.py's verdicts and concern levels, as they read on a card.
 const VERDICT = { LOSS: ['LOSES MONEY', 't-red'], FIX: ['NEEDS FIXES', 't-amber'], CHECK: ['CHECK', 't-blue'],
@@ -167,14 +172,17 @@ async function getJson(u) {
 }
 
 async function load() {
+  const was = JSON.stringify([T, B]);
   [T, B] = await Promise.all([getJson('/api/shop/tiktok'), getJson('/api/shop/board')]);
-  // Not while a revision note is being typed - a redraw would wipe it.
-  if (!open) draw();
+  // Not while a revision note is being typed - a redraw would wipe it - and
+  // not when nothing changed, which would restart a video being watched.
+  if (!open && JSON.stringify([T, B]) !== was) draw();
   const job = (T && T.job) || (B && B.job);
+  const rebuilding = ((T && T.kits) || []).some(k => k.video_stale);
   clearTimeout(load.h);
-  // While a kit or a revision runs, look again soon; otherwise rarely - a
-  // board refresh re-reads nothing heavy, but there is no need to poll.
-  load.h = setTimeout(load, job && job.state === 'running' ? 5000 : 60000);
+  // While a kit, a revision or a video rebuild runs, look again soon;
+  // otherwise rarely - there is no need to poll.
+  load.h = setTimeout(load, (job && job.state === 'running') || rebuilding ? 5000 : 60000);
 }
 
 function toast(text) {
@@ -228,26 +236,35 @@ function draw() {
     <div class="muted">${toPost} kit${toPost === 1 ? '' : 's'} to post · ${review} listing${review === 1 ? '' : 's'} to review</div>
     ${jobLine()}`;
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.t === tab));
+  // The strip keeps its place across a redraw: dropping the fourth slide
+  // must not throw the owner back to the first.
+  const strip = document.querySelector('.strip'), sx = strip ? strip.scrollLeft : 0;
   $('body').innerHTML = tab === 'tiktok' ? tiktok(kits) : board(cards);
+  const again = document.querySelector('.strip');
+  if (again) again.scrollLeft = sx;
 }
 
 // ------------------------------------------------------------ TikTok
 
 // A slide the AI drew the background of (scene.py) is marked, with the
 // lighting checker's verdict and a Drop button while the kit awaits review.
+function slideNames(k) {
+  const names = k.slide_names || Array.from({ length: k.slides || 0 }, (_, i) => String(i + 1).padStart(2, '0') + '.jpg');
+  return names.filter(n => !gone.has(`${k.id}/${n}`));
+}
+
 function slides(k) {
   const v = enc(k.made_utc || '');
   const ai = new Set(k.ai_slides || []);
   const review = k.status === 'needs_review';
-  return Array.from({ length: k.slides || 0 }, (_, i) => {
-    const n = String(i + 1).padStart(2, '0') + '.jpg';
+  return slideNames(k).map((n, i) => {
     const u = `/api/shop/tiktok/${enc(k.id)}/slide/${n}?v=${v}`;
     const sc = (k.scenes || []).find(x => x.slide === n);
     const checks = sc && sc.checks ? Object.entries(sc.checks).map(([name, c]) =>
       `${c.ok ? '✓' : '✕'} ${name}: ${c.said}`).join('\n') : '';
     return `<div class="sl"><a href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="slide ${i + 1}" loading="lazy"></a>
       ${ai.has(n) ? `<span class="aitag" ${checks ? `title="${esc(checks)}"` : ''}>AI SCENE${sc ? ' · checked ✓' : ''}</span>` : ''}
-      ${review && ai.has(n) ? `<button class="btn drop" data-drop="${esc(k.id)}" data-slide="${n}" ${busy ? 'disabled' : ''}>Drop</button>` : ''}</div>`;
+      ${review && ai.has(n) ? `<button class="btn drop" data-drop="${esc(k.id)}" data-slide="${n}">Drop</button>` : ''}</div>`;
   }).join('');
 }
 
@@ -260,13 +277,15 @@ function tiktok(kits) {
   if (!kits.length) return head + `<div class="empty">No kits yet. The first is made at 9:48 Eastern - or press Make one now.</div>`;
   const [k, ...rest] = kits.slice().sort((a, b) => (a.status === 'posted') - (b.status === 'posted')
     || String(b.made_utc).localeCompare(String(a.made_utc)));
-  const v = enc(k.made_utc || '');
+  const v = enc(k.packed_utc || k.made_utc || '');
   const base = `/api/shop/tiktok/${enc(k.id)}`;
+  const stale = !!k.video_stale;
+  const shown = slideNames(k).length;
   const posted = k.status === 'posted', review = k.status === 'needs_review';
   const dropped = (k.scenes_dropped || []);
   const main = `<div class="card ${posted ? 'done' : ''}">
     <div class="ctop"><div><div class="cname">${esc(k.title)}</div>
-      <div class="cmeta">${esc(k.day)} · ${k.slides} slides · ${k.video_seconds}s video</div></div>
+      <div class="cmeta">${esc(k.day)} · ${shown} slides · ${stale ? 'video updating' : `${k.video_seconds}s video`}</div></div>
       <span class="tag ${posted ? 't-gray' : review ? 't-amber' : 't-pink'}">${posted ? 'POSTED' : review ? 'CHECK THE AI SCENES' : 'READY TO POST'}</span></div>
     ${review ? `<div class="note">The slides marked AI SCENE are AI-made pictures of your product${k.scene_cost ? ` (cost $${Number(k.scene_cost).toFixed(2)})` : ''}. Each was compared with your real photo and passed; look closely at the design and lettering yourself, Drop any you don't like, then Approve.</div>` : ''}
     ${(k.ai_slides || []).length && !review ? `<div class="said">Has AI backgrounds: in TikTok, More options → turn on "AI-generated content" before posting.</div>` : ''}
@@ -276,14 +295,16 @@ function tiktok(kits) {
         <div class="said">On the iPad: hold a slide → Save to Photos. Post them as a photo carousel in TikTok.</div></div>
       <div><div class="k">Slideshow video</div>
         <video src="${base}/file/video.mp4?v=${v}" controls playsinline preload="metadata" muted></video>
-        <div class="said">Silent on purpose - add the sound in TikTok.</div></div>
+        ${stale ? '<div class="rebuild">⏳ Rebuilding the video and the zip without the dropped slides - this updates by itself.</div>'
+          : '<div class="said">Silent on purpose - add the sound in TikTok.</div>'}</div>
     </div>
     <div><div class="k">Caption</div><pre id="cap">${esc(k.caption || '')}</pre></div>
     ${k.audio ? `<details><summary class="said">Sound to add</summary><pre>${esc(k.audio)}</pre></details>` : ''}
     <div class="acts">
       <button class="btn" data-copy="cap">Copy caption</button>
-      <a class="btn" href="${base}/file/kit.zip">⬇ Download set (.zip)</a>
-      <a class="btn" href="${base}/file/video.mp4?dl=1">⬇ Video</a>
+      ${stale ? '<span class="said">Downloads return when the video is rebuilt</span>'
+        : `<a class="btn" href="${base}/file/kit.zip">⬇ Download set (.zip)</a>
+      <a class="btn" href="${base}/file/video.mp4?dl=1">⬇ Video</a>`}
       ${k.url ? `<button class="btn" data-copylink="${esc(k.url)}">Copy listing link (for your bio)</button>` : ''}
       ${posted ? `<button class="btn" data-unpost="${esc(k.id)}">Not posted after all</button>`
         : review ? `<button class="btn go" data-kitapprove="${esc(k.id)}" ${busy ? 'disabled' : ''}>✓ Approve the AI scenes</button>`
@@ -292,7 +313,7 @@ function tiktok(kits) {
     ${dropped.length ? `<details><summary class="said">${dropped.length} scene${dropped.length === 1 ? '' : 's'} left out by the checker</summary><pre>${esc(dropped.join('\n'))}</pre></details>` : ''}
   </div>`;
   const older = rest.length ? `<div class="sechead" style="margin-top:18px"><h2>Other kits</h2></div><div class="old">${rest.map(o => `
-    <div class="oldk"><img src="/api/shop/tiktok/${enc(o.id)}/slide/01.jpg?v=${enc(o.made_utc || '')}" alt="" loading="lazy">
+    <div class="oldk"><img src="/api/shop/tiktok/${enc(o.id)}/slide/${slideNames(o)[0] || '01.jpg'}?v=${enc(o.made_utc || '')}" alt="" loading="lazy">
       <div style="min-width:0;flex:1"><div class="t">${esc(o.title)}</div>
         <div class="said">${esc(o.day)} · ${o.status === 'posted' ? 'posted' : 'not posted'}</div>
         <div class="acts" style="margin-top:4px"><a class="btn" style="padding:5px 9px" href="/api/shop/tiktok/${enc(o.id)}/file/kit.zip">⬇ zip</a>
@@ -395,6 +416,30 @@ async function act(fn) {
   await load();
 }
 
+// Gone from the page the moment it is tapped; the server takes it out in
+// well under a second and rebuilds the video afterwards. Not behind act():
+// a drop never waits for, or blocks, anything else on the page.
+async function dropSlide(kit, slide) {
+  const key = `${kit}/${slide}`;
+  if (gone.has(key)) return;
+  gone.add(key);
+  draw();
+  let r;
+  try { r = await post(`/api/shop/tiktok/${enc(kit)}/drop`, { slide }); }
+  catch { r = { ok: false, j: { said: 'The Deck could not be reached' } }; }
+  if (!r.ok) {
+    gone.delete(key);
+    toast(`Could not drop it: ${r.j.said || r.j.error || 'failed'}`);
+  } else {
+    const fresh = r.j.kit;
+    if (fresh && T && T.kits) T.kits = T.kits.map(k => k.id === kit ? Object.assign(k, fresh, { id: kit }) : k);
+    toast('Dropped - the video catches up in a moment');
+  }
+  draw();
+  clearTimeout(load.h);
+  load.h = setTimeout(load, 3000);
+}
+
 $('tabs').onclick = e => { const b = e.target.closest('[data-t]'); if (b) { tab = b.dataset.t; draw(); } };
 $('body').onclick = e => {
   const t = e.target.closest('button,[data-filter]');
@@ -414,13 +459,7 @@ $('body').onclick = e => {
     const r = await post(`/api/shop/tiktok/${enc(d.kitapprove)}/approve`);
     toast(r.ok ? 'Approved - ready to post' : (r.j.said || r.j.error || 'failed'));
   });
-  if (d.drop) {
-    if (!confirm(`Drop slide ${d.slide}? The video and the zip are rebuilt without it.`)) return;
-    return act(async () => {
-      const r = await post(`/api/shop/tiktok/${enc(d.drop)}/drop`, { slide: d.slide });
-      toast(r.ok ? 'Dropped - video and zip rebuilt' : (r.j.said || r.j.error || 'failed'));
-    });
-  }
+  if (d.drop) return dropSlide(d.drop, d.slide);
   if (d.filter) { filter = d.filter; return draw(); }
   if (d.approve || d.unapprove) return act(async () => {
     const r = await post(`/api/shop/board/${enc(d.approve || d.unapprove)}/approve`, { undo: !!d.unapprove });
