@@ -268,10 +268,13 @@ class TheSandbox(Base):
         # allowed - only Claude's own bubblewrap needs them (2026-10-15) - and
         # a session that does not find the builder's own bubblewrap first.
         tests = self.m.sandbox_cmd("u2", "/p", ["bash", "check.sh"], network=False)
-        for p in ("RestrictNamespaces=yes", "ProtectKernelTunables=yes", "ProtectKernelLogs=yes"):
-            self.assertIn(f"--property={p}", tests)
         claude = self.m.sandbox_cmd("u3", "/p", ["claude"], claude=True)
-        self.assertNotIn("--property=RestrictNamespaces=yes", claude)
+        for p in ("RestrictNamespaces=yes", "ProtectKernelTunables=yes", "ProtectKernelLogs=yes",
+                  "ProtectHostname=yes"):
+            self.assertIn(f"--property={p}", tests)
+            # Each covers part of /proc (systemd 255), and bubblewrap's fresh
+            # /proc is refused while any does: "Can't mount proc".
+            self.assertNotIn(f"--property={p}", claude)
         self.assertIn("--property=MemoryMax=700M", claude)
         path = [c for c in claude if c.startswith("--setenv=PATH=")][0]
         self.assertTrue(path.startswith(f"--setenv=PATH={self.m.BUILDER_BWRAP.parent}:"), path)

@@ -1122,15 +1122,17 @@ SANDBOX = [                   # systemd properties of every builder unit (sandbo
     "NoNewPrivileges=yes", "RestrictSUIDSGID=yes", "LockPersonality=yes",
     "ProtectSystem=strict", "PrivateTmp=yes", "InaccessiblePaths=/root",
     "ProtectKernelModules=yes", "ProtectControlGroups=yes", "ProtectClock=yes",
-    "ProtectHostname=yes", "KillMode=control-group",
+    "KillMode=control-group",
 ]
 # Added to every unit that is NOT a Claude session (tests, git). A Claude
 # session cannot have them: its bubblewrap, which hides the login from each
 # command, makes namespaces and mounts a fresh /proc, and the kernel refuses
-# a fresh /proc where systemd has covered parts of the old one. Without them
-# the builder is still an ordinary user: /proc/sys and the kernel log are
-# root's anyway.
-NOT_CLAUDE = ["ProtectKernelTunables=yes", "ProtectKernelLogs=yes", "RestrictNamespaces=yes"]
+# a fresh /proc where systemd has covered parts of the old one - and systemd
+# 255 covers /proc files for each of the first three ("Can't mount proc",
+# builder-check on the droplet, 2026-10-15). Without them the builder is still
+# an ordinary user: /proc/sys, the kernel log and the hostname are root's anyway.
+NOT_CLAUDE = ["ProtectKernelTunables=yes", "ProtectKernelLogs=yes", "ProtectHostname=yes",
+              "RestrictNamespaces=yes"]
 # The one bubblewrap the builder may make namespaces with (Ubuntu forbids it
 # by default): the setup script copies it here, runnable by root and the
 # builder only, and lets AppArmor allow this path alone.
