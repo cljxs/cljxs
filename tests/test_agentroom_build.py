@@ -311,6 +311,27 @@ class TheSandbox(Base):
                          "a session's bubblewrap needs namespaces, or Claude refuses to start")
         self.assertIn("--setenv=CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1", seen["cmd"], "commands never see the login")
 
+    def test_a_failed_selftest_says_why(self):
+        # Guards: builder-selftest on the droplet (2026-10-15) printing three
+        # bare FAILs and "no answer" - Claude's own reason hidden. The stream
+        # is a real one from a refused login (claude 2.1.300, 401).
+        events = self.m.stream_events((FIXTURES / "claude-stream-401.jsonl").read_text())
+        events.append({"type": "assistant", "message": {"content": [{"type": "text", "text": "fake-login-SECRET"}]}})
+        b = unittest.mock.MagicMock()
+        b.ready.return_value = None
+        b.session.return_value = events
+        with unittest.mock.patch.object(self.m, "Builder", return_value=b), \
+             unittest.mock.patch.object(self.m, "builder_home", return_value=self.d), \
+             unittest.mock.patch.object(self.m, "give_to_builder"), \
+             unittest.mock.patch.object(self.m, "builder_token", return_value="fake-login-SECRET"):
+            out, rc = self.m.builder_selftest()
+        text = "\n".join(out)
+        self.assertEqual(rc, 1)
+        self.assertIn("Invalid bearer token", text)
+        self.assertIn("API status: 401", text)
+        log = self.m.state_dir() / "selftest-last.jsonl"
+        self.assertNotIn("SECRET", log.read_text(), "the login never reaches the saved session")
+
     def test_the_agents_login_is_refused(self):
         with unittest.mock.patch.object(self.m, "builder_home", return_value=Path("/home/agentbuilder")), \
              unittest.mock.patch.object(self.m.os, "access", return_value=True), \

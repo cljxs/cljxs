@@ -1979,8 +1979,14 @@ def builder_selftest():
     give_to_builder(d)
     cfg = dict(roles()["builder"], max_turns=8, timeout_min=5)
     events = Builder().session(d, SELFTEST, cfg, lambda: None, 0.50)
-    _, commands, _, denials = session_facts(events)
+    result, commands, _, denials = session_facts(events)
     texts = json.dumps(events)
+    # The whole stream, for a closer look, without the login (were it ever
+    # in it) - root-only, beside credentials.env.
+    tok = builder_token()
+    log = state_dir() / "selftest-last.jsonl"
+    log.write_text("".join(json.dumps(e) + "\n" for e in events).replace(tok, "[login]") if tok else "")
+    os.chmod(log, 0o600)
     out = []
     ok1 = "selftest-hello" in texts
     ok2 = denials >= 1
@@ -1990,6 +1996,15 @@ def builder_selftest():
     out.append(f"{'PASS' if ok2 else 'FAIL'}  the guard refused printenv ({denials} refused)")
     out.append(f"{'PASS' if ok3 else 'FAIL'}  commands see no login ({'token-vars:' + m.group(1) if m else 'no answer'})")
     good = ok1 and ok2 and ok3
+    if not good:
+        # 2026-10-15: three bare FAILs and no way to tell why. Claude's own
+        # words say it: a refused login, a limit, or what it did instead.
+        r = result or {}
+        out += ["", f"Claude said: {str(r.get('result') or '(nothing)').strip()[:300]}",
+                f"  (error: {'yes' if r.get('is_error') else 'no'}, ended: {r.get('terminal_reason') or r.get('subtype')}, "
+                f"API status: {r.get('api_error_status') or '-'}, turns: {r.get('num_turns')}, "
+                f"commands tried: {len(commands)}, tools refused: {len(r.get('permission_denials') or [])})",
+                f"  The whole session: {log}"]
     out += ["", "The builder is safe to use." if good else "Do not build until every line says PASS."]
     return out, 0 if good else 1
 
