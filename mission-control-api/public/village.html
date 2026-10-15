@@ -2754,6 +2754,8 @@ function openClipPanel(){
   $('clipClips').onclick = e => {
     const play = e.target.closest('[data-play]');
     if (play) return playClip(play);
+    const dl = e.target.closest('[data-dl]');
+    if (dl) { e.preventDefault(); return downloadClip(dl); }
     const b = e.target.closest('[data-clip]');
     if (!b) return;
     e.preventDefault();
@@ -2783,6 +2785,44 @@ function playClip(btn){
   v._still = btn;
   btn.replaceWith(v);
   v.play().catch(() => {});
+}
+
+// A clip's file, fetched here with its progress on the link, then handed to
+// Safari's save prompt in one go. A plain link gave no sign anything was
+// happening for the whole transfer - "it struggles mightily to open" (owner,
+// 2026-10-15). If the browser cannot stream a download, the plain link runs.
+async function downloadClip(a){
+  if (a.dataset.busy) return;
+  const [vid, rank] = a.dataset.dl.split('/');
+  const label = a.textContent;
+  a.dataset.busy = '1';
+  try {
+    const r = await fetch(a.getAttribute('href'));
+    if (!r.ok || !r.body || !r.body.getReader) throw new Error('no stream');
+    const total = Number(r.headers.get('content-length')) || 0;
+    const mb = n => (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + ' MB';
+    const reader = r.body.getReader(), parts = [];
+    let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value); got += value.length;
+      a.textContent = total ? `Downloading ${Math.floor(got / total * 100)}% of ${mb(total)}`
+                            : `Downloading ${mb(got)}`;
+    }
+    const url = URL.createObjectURL(new Blob(parts, { type: 'video/mp4' }));
+    const save = document.createElement('a');
+    save.href = url; save.download = `clip-${vid}-${rank}.mp4`;
+    document.body.appendChild(save); save.click(); save.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    a.textContent = 'Downloaded - save it from the prompt';
+    setTimeout(() => { a.textContent = label; }, 8000);
+  } catch (e) {
+    a.textContent = label;
+    location.href = a.getAttribute('href');
+  } finally {
+    delete a.dataset.busy;
+  }
 }
 
 // The form is drawn once, in openClipPanel, so a refresh never wipes what
@@ -3035,7 +3075,8 @@ function drawPost(k){
     <div class="ktags">${(p.hashtags || []).map(t => `<span class="pill">#${esc(t)}</span>`).join('')}</div>
     <div class="muted" style="font-size:11px">${p.generator === 'owner' ? 'your words'
       : p.generator === 'template' ? 'plain draft (no model used)' : 'drafted by ' + esc(p.generator.slice(4))}</div>`;
-  const dl = `<a href="/api/clip/file/${k.video_id}/${k.rank}?dl=1">Download</a>`;
+  const dl = `<a href="/api/clip/file/${k.video_id}/${k.rank}?dl=1" data-dl="${k.video_id}/${k.rank}"
+    download="clip-${k.video_id}-${k.rank}.mp4">Download</a>`;
   if (k.status === 'rejected') return words + `<div class="ktags"><span class="pill">rejected</span></div>`;
   if (k.status === 'rendered') {
     return words + `<div class="acts clipacts">

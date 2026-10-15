@@ -449,6 +449,18 @@ class ClipsHouseLoadsStillsNotVideos(unittest.TestCase):
         self.assertIn("/api/clip/poster/", grid)
         self.assertIn("function playClip(", html)
 
+    def test_download_shows_its_progress(self):
+        # "It struggles mightily to open": a plain link said nothing for the
+        # whole transfer. The link is fetched with progress, then saved.
+        html = (self.API / "public" / "village.html").read_text()
+        dl = html.split("const dl = `", 1)[1].split("`;", 1)[0]
+        self.assertIn("data-dl=", dl)
+        handler = html.split("$('clipClips').onclick", 1)[1].split("};", 1)[0]
+        self.assertIn("downloadClip(", handler)
+        body = html.split("async function downloadClip(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("Downloading", body)
+        self.assertIn("location.href", body, "falls back to the plain link")
+
     @unittest.skipUnless(shutil.which("node") and shutil.which("ffmpeg")
                          and (ROOT / "mission-control-api" / "node_modules" / "express").is_dir(),
                          "needs node, the Deck's node_modules and ffmpeg")
