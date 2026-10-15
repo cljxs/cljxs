@@ -340,7 +340,8 @@ function register(app, db) {
     if (RETRIES.get(slug)?.running) return res.status(409).json({ error: 'already trying this one again' });
     const state = { running: true, started_at: new Date().toISOString(), said: '' };
     RETRIES.set(slug, state);
-    execFile('python3', [FINISH_SCRIPT, '--retry', slug], { cwd: ROOT, timeout: 10 * 60 * 1000 },
+    // Room for a drawing and a draft (emily-finish's DRAFT_TIMEOUT is 15 min).
+    execFile('python3', [FINISH_SCRIPT, '--retry', slug], { cwd: ROOT, timeout: 25 * 60 * 1000 },
       (err, stdout, stderr) => {
         const lines = `${stdout || ''}\n${stderr || ''}`.split('\n').map(s => s.trim()).filter(Boolean);
         Object.assign(state, { running: false, ok: !err, finished_at: new Date().toISOString(),

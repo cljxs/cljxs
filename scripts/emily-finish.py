@@ -239,12 +239,34 @@ def main():
     return draft(d)
 
 
+# 2026-10-15: the gallery's Try again on the Side-Eye Cat ran out its 300 s
+# here and put a Python traceback on the card. A draft is a handful of
+# Printify calls of up to 60 s each, on a one-CPU droplet often busy cutting
+# video; it gets longer, and running out is said in words, with the last step
+# it reached - which is what tells a slow Printify from a stuck step.
+DRAFT_TIMEOUT = 900
+
+
 def draft(d):
     """Run the drafter on one build and record the outcome on it."""
-    res = subprocess.run(
-        [sys.executable, str(ROOT / "scripts" / "emily-printify.py"), "draft", str(d)],
-        capture_output=True, text=True, timeout=300,
-    )
+    try:
+        res = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "emily-printify.py"), "draft", str(d)],
+            capture_output=True, text=True, timeout=DRAFT_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        said = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+        last = next((l.strip() for l in reversed(said.splitlines()) if l.strip()), "nothing printed yet")
+        print(said)
+        note_draft(d, {
+            "reason": f"drafting was still running after {DRAFT_TIMEOUT // 60} minutes and was "
+                      f"stopped - last step: {last}"[:REASON_CHARS],
+            "exit": "timeout",
+            "when_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        print(f"emily-finish: the Printify draft timed out after {DRAFT_TIMEOUT // 60} minutes "
+              f"(last step: {last}). The build stays 'ready_local'.")
+        return 0
     out = ((res.stdout or "") + (res.stderr or "")).strip()
     print(out)
 

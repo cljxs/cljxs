@@ -1264,6 +1264,26 @@ class TryAgainInTheGallery(unittest.TestCase):
         self.assertEqual(self.run_quiet(), 1)
         self.assertEqual(self.calls, [])
 
+    def test_a_draft_that_runs_out_of_time_says_so_in_words(self):
+        # The first real Try again ran out its 300 s and put a traceback on
+        # the card. Now: a sentence, with the last step it reached.
+        self.build()
+        self.art()
+
+        def slow(*a, **k):
+            raise subprocess.TimeoutExpired(a[0], k.get("timeout"),
+                                            output="checking art\nuploading design.png (2100 KB) ...\n")
+        with unittest.mock.patch.object(self.m.subprocess, "run", slow):
+            self.assertEqual(self.run_quiet_draft(), 0)
+        why = json.loads((self.d / "build.json").read_text())["draft_blocked"]["reason"]
+        self.assertIn("still running after 15 minutes", why)
+        self.assertIn("uploading design.png", why)
+        self.assertNotIn("Traceback", why)
+
+    def run_quiet_draft(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return self.m.draft(self.d)
+
     def test_the_gallery_offers_it_and_the_api_runs_it(self):
         html = (API / "public" / "village.html").read_text()
         self.assertIn("retryBox(b)", html.split("async function loadEmilyBuilds", 1)[1])
