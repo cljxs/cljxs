@@ -239,6 +239,26 @@ class KitOnDisk(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in self.kits.iterdir()),
                          ["2026-10-03-1", "2026-10-04-1", "2026-10-05-1"])
 
+    def test_a_kit_can_be_deleted_and_its_listing_gets_its_turn_back(self):
+        # Owner, 2026-10-15: "a delete option for the previous kits that I
+        # don't like".
+        self.fake("2026-10-13-1", "2026-10-13", "2026-10-13 14:00:00")
+        self.fake("2026-10-14-2", "2026-10-14", "2026-10-14 14:00:00")
+        two = self.kits / "2026-10-14-2" / "kit.json"
+        two.write_text(json.dumps(dict(json.loads(two.read_text()), listing_id=2)))
+        rows = [{"listing_id": 1, "url": "u1", "favs": 1}, {"listing_id": 2, "url": "u2", "favs": 9}]
+        self.assertEqual(self.tk.next_listing(rows, self.tk.read_kits())["listing_id"], 1, "featured longest ago")
+        self.assertEqual(self.tk.delete_kit("2026-10-14-2")["listing_id"], 2)
+        self.assertEqual([k["id"] for k in self.tk.read_kits()], ["2026-10-13-1"])
+        self.assertEqual([p.name for p in self.kits.iterdir() if p.name != ".lock"], ["2026-10-13-1"],
+                         "nothing half-deleted left behind")
+        self.assertEqual(self.tk.next_listing(rows, self.tk.read_kits())["listing_id"], 2,
+                         "a deleted kit is not a turn taken")
+        with self.assertRaises(FileNotFoundError):
+            self.tk.delete_kit("2026-10-14-2")
+        with self.assertRaises(ValueError):
+            self.tk.delete_kit("../../etc")
+
     def test_a_second_listing_on_one_day_gets_its_own_folder(self):
         self.fake("2026-10-13-1", "2026-10-13", "x")
         self.assertEqual(self.tk.kit_id("2026-10-13", 1), "2026-10-13-1-2")

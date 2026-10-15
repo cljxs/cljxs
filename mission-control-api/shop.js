@@ -163,6 +163,16 @@ function register(app) {
     res.json({ ok: true, kit: after });
   });
 
+  // Throw a kit away (owner, 2026-10-15: "a delete option for the previous
+  // kits that I don't like").
+  app.delete('/api/shop/tiktok/:kit', async (req, res) => {
+    const kit = req.params.kit;
+    if (!kitDir(kit)) return res.status(404).json({ error: 'no such kit' });
+    const r = await python('tiktok-kit.py', ['delete', kit], 30000);
+    packing.delete(kit);
+    res.status(r.ok ? 200 : 409).json({ ok: r.ok, said: (r.stdout + r.stderr).trim() });
+  });
+
   app.get('/api/shop/tiktok/:kit/slide/:name', (req, res) => {
     const dir = kitDir(req.params.kit);
     if (!dir || !SLIDE_RE.test(req.params.name)) return res.status(400).json({ error: 'bad name' });

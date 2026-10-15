@@ -11,6 +11,7 @@ tiktok-kit.py — one ready-to-post TikTok kit a day, for one live Etsy listing.
     tiktok-kit.py approve <kit>         you have looked at its AI scenes
     tiktok-kit.py drop <kit> 02.jpg     take a slide out, at once (--now: and rebuild)
     tiktok-kit.py pack <kit>            rebuild its video and zip after drops
+    tiktok-kit.py delete <kit>          throw a kit away - its listing's turn comes round again
     tiktok-kit.py make --no-scenes      the listing's own photos only
 
 WHAT A KIT IS. Everything needed to post by hand from the iPad, so posting
@@ -689,8 +690,9 @@ def prune(keep=KEEP_KITS):
     for k in read_kits()[keep:]:
         shutil.rmtree(KITS / k["id"], ignore_errors=True)
         gone.append(k["id"])
-    for d in KITS.glob(".part-*") if KITS.is_dir() else []:
-        shutil.rmtree(d, ignore_errors=True)
+    for pattern in (".part-*", ".gone-*"):
+        for d in KITS.glob(pattern) if KITS.is_dir() else []:
+            shutil.rmtree(d, ignore_errors=True)
     return gone
 
 
@@ -785,6 +787,24 @@ def drop_slide(kid, name):
                 kit["status"] = "ready"
         kit["video_stale"] = True
         _save(path, kit)
+    return kit
+
+
+# DELETE (owner, 2026-10-15: "a delete option for the previous kits that I
+# don't like"). The folder is renamed out of the kits in one step and then
+# removed, so a list, a pack or the page never sees half a kit. A kit is
+# also the record that its listing was featured, so the listing goes back
+# to the front of the queue - a kit nobody liked is not a turn taken.
+def delete_kit(kid):
+    path = _kit_path(kid)
+    if not path.is_file():
+        raise FileNotFoundError(kid)
+    folder = path.parent
+    with _kit_lock(folder):
+        kit = json.loads(path.read_text())
+        trash = KITS / f".gone-{kid}-{os.getpid()}"
+        folder.rename(trash)
+    shutil.rmtree(trash, ignore_errors=True)
     return kit
 
 
@@ -954,6 +974,19 @@ def cmd_drop(a):
     return 0
 
 
+def cmd_delete(a):
+    try:
+        kit = delete_kit(a.kit)
+    except FileNotFoundError:
+        print(f"no kit called {a.kit} - tiktok-kit.py list", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(f"deleted {a.kit} ({str(kit.get('title') or '')[:50]})")
+    return 0
+
+
 def cmd_pack(a):
     try:
         kit = pack(a.kit)
@@ -997,6 +1030,9 @@ def main():
     pk = sub.add_parser("pack", help="rebuild a kit's video and zip after drops")
     pk.add_argument("kit")
     pk.set_defaults(fn=cmd_pack)
+    dl = sub.add_parser("delete", help="throw a kit away")
+    dl.add_argument("kit")
+    dl.set_defaults(fn=cmd_delete)
     a = ap.parse_args()
     if a.cmd == "make" and a.listing and not a.listing.isdigit():
         print("a listing id is digits - it is in the listing's Etsy address", file=sys.stderr)

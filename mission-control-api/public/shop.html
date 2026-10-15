@@ -309,6 +309,7 @@ function tiktok(kits) {
       ${posted ? `<button class="btn" data-unpost="${esc(k.id)}">Not posted after all</button>`
         : review ? `<button class="btn go" data-kitapprove="${esc(k.id)}" ${busy ? 'disabled' : ''}>✓ Approve the AI scenes</button>`
         : `<button class="btn go" data-posted="${esc(k.id)}">✓ Posted</button>`}
+      <button class="btn warn" data-kitdel="${esc(k.id)}">🗑 Delete kit</button>
     </div>
     ${dropped.length ? `<details><summary class="said">${dropped.length} scene${dropped.length === 1 ? '' : 's'} left out by the checker</summary><pre>${esc(dropped.join('\n'))}</pre></details>` : ''}
   </div>`;
@@ -317,7 +318,8 @@ function tiktok(kits) {
       <div style="min-width:0;flex:1"><div class="t">${esc(o.title)}</div>
         <div class="said">${esc(o.day)} · ${o.status === 'posted' ? 'posted' : 'not posted'}</div>
         <div class="acts" style="margin-top:4px"><a class="btn" style="padding:5px 9px" href="/api/shop/tiktok/${enc(o.id)}/file/kit.zip">⬇ zip</a>
-        ${o.status === 'posted' || o.status === 'needs_review' ? '' : `<button class="btn go" style="padding:5px 9px" data-posted="${esc(o.id)}">✓ Posted</button>`}</div></div></div>`).join('')}</div>` : '';
+        ${o.status === 'posted' || o.status === 'needs_review' ? '' : `<button class="btn go" style="padding:5px 9px" data-posted="${esc(o.id)}">✓ Posted</button>`}
+        <button class="btn warn" style="padding:5px 9px" data-kitdel="${esc(o.id)}">🗑 Delete</button></div></div></div>`).join('')}</div>` : '';
   return head + main + older;
 }
 
@@ -440,6 +442,19 @@ async function dropSlide(kit, slide) {
   load.h = setTimeout(load, 3000);
 }
 
+// Gone from the page at once; put back if the server says no.
+async function deleteKit(kit) {
+  const k = ((T && T.kits) || []).find(x => x.id === kit);
+  if (!confirm(`Delete the kit for "${(k && k.title || kit).slice(0, 60)}"? Its slides, video and zip are thrown away.`)) return;
+  if (T && T.kits) T.kits = T.kits.filter(x => x.id !== kit);
+  draw();
+  let r;
+  try { r = await post(`/api/shop/tiktok/${enc(kit)}`, {}, 'DELETE'); }
+  catch { r = { ok: false, j: { said: 'The Deck could not be reached' } }; }
+  toast(r.ok ? 'Kit deleted' : `Could not delete it: ${r.j.said || r.j.error || 'failed'}`);
+  await load();
+}
+
 $('tabs').onclick = e => { const b = e.target.closest('[data-t]'); if (b) { tab = b.dataset.t; draw(); } };
 $('body').onclick = e => {
   const t = e.target.closest('button,[data-filter]');
@@ -460,6 +475,7 @@ $('body').onclick = e => {
     toast(r.ok ? 'Approved - ready to post' : (r.j.said || r.j.error || 'failed'));
   });
   if (d.drop) return dropSlide(d.drop, d.slide);
+  if (d.kitdel) return deleteKit(d.kitdel);
   if (d.filter) { filter = d.filter; return draw(); }
   if (d.approve || d.unapprove) return act(async () => {
     const r = await post(`/api/shop/board/${enc(d.approve || d.unapprove)}/approve`, { undo: !!d.unapprove });
