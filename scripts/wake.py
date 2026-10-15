@@ -5,6 +5,8 @@ wake.py — wake one agent for one cycle, on the engine it is set to run on.
     wake.py --agent ace --message "..." --session-id wake-ace-123 --timeout 300 --json
     wake.py engines                 which engine and model each agent wakes on
     wake.py check                   is the Claude plan ready? one tiny run on it
+    wake.py test [agent ...]        each plan agent, woken once with its real
+                                    instructions but no tools - not a cycle
 
 The flags are OpenClaw's own, so a cycle script swaps `openclaw agent` for
 `python3 scripts/wake.py` and changes nothing else.
@@ -329,12 +331,74 @@ def cmd_check(a):
     return 0
 
 
+TEST_MESSAGE = ("This is a connection test, not a cycle. Do not do your cycle and do not try to "
+                "use any tool. Reply with one line: your name, and the first thing your "
+                "instructions say every cycle must produce.")
+
+
+def cmd_test(a):
+    """Each agent on the plan, woken once on its own model with its own
+    system prompt - the part of every turn that costs the most - and no
+    tools, so nothing is written and no cycle runs. Proves the login, the
+    model name and the instructions load, and prints what one turn of that
+    agent costs at list price."""
+    binary, token = claude_bin(), plan_token()
+    if not (binary and token):
+        print("not ready - run: python3 scripts/wake.py check")
+        return 1
+    doc = engines()
+    names = a.agents or sorted(n for n in (doc.get("agents") or {}) if setting(n, doc)["engine"] == "claude")
+    if not names:
+        print("no agent is on the plan yet - see tasks/engines.json")
+        return 1
+    bad = 0
+    for n in names:
+        s = setting(n, doc)
+        if s["engine"] != "claude":
+            print(f"  {n:<9} not on the plan (tasks/engines.json)")
+            continue
+        workspace = AGENTS / n
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
+            f.write(system_prompt(n, workspace))
+            prompt_file = f.name
+        try:
+            r = subprocess.run([binary, "-p", TEST_MESSAGE, "--output-format", "json", "--model", str(s["model"]),
+                                "--max-turns", "1", "--tools", "", "--system-prompt-file", prompt_file,
+                                "--strict-mcp-config", "--no-session-persistence"],
+                               cwd=workspace, env=claude_env(token), capture_output=True, text=True, timeout=300)
+        except subprocess.TimeoutExpired:
+            print(f"  {n:<9} FAILED - no answer in 5 minutes")
+            bad += 1
+            continue
+        finally:
+            os.unlink(prompt_file)
+        res = last_json(r.stdout) or {}
+        mu = res.get("modelUsage") or {}
+        read = sum((m or {}).get(k) or 0 for m in mu.values()
+                   for k in ("inputTokens", "cacheCreationInputTokens", "cacheReadInputTokens"))
+        if res.get("is_error") or r.returncode:
+            print(f"  {n:<9} FAILED - {res.get('result') or (r.stderr or r.stdout).strip()[:200]}")
+            bad += 1
+            continue
+        said = " ".join(str(res.get("result") or "").split())[:110]
+        print(f"  {n:<9} ok  {', '.join(mu) or s['model']}  {read:,} tokens read  "
+              f"${res.get('total_cost_usd') or 0:.4f} list price\n            said: {said}")
+    print("\nList price is what this would cost on the API; on the plan it comes out of"
+          "\nyour usage allowance instead. A real cycle is this times its turns, mostly"
+          "\nre-read from the cache at a tenth of the price.")
+    return 1 if bad else 0
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["engines"]:
         ap = argparse.ArgumentParser(prog="wake.py engines")
         ap.add_argument("agents", nargs="*")
         return cmd_engines(ap.parse_args(argv[1:]))
+    if argv[:1] == ["test"]:
+        ap = argparse.ArgumentParser(prog="wake.py test")
+        ap.add_argument("agents", nargs="*")
+        return cmd_test(ap.parse_args(argv[1:]))
     if argv[:1] == ["check"]:
         ap = argparse.ArgumentParser(prog="wake.py check")
         ap.add_argument("--model", default="haiku")

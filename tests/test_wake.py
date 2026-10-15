@@ -152,6 +152,23 @@ class WakeOnEitherEngine(unittest.TestCase):
         self.assertIsNone(self.ran("claude"))
         self.assertIsNone(self.ran("openclaw"))
 
+    def test_the_test_wakes_each_plan_agent_once_with_no_tools(self):
+        # "Test them right now" must not run a cycle: no tool may be offered,
+        # and one turn only - an off-schedule cycle writes a report under the
+        # wrong slot and books paper bets nobody asked for.
+        self.engines({"ace": {"engine": "claude", "model": "haiku"}})
+        (self.rec / "claude-says").write_text(result("ok"))
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root), REC=str(self.rec), CLAUDE_BIN=str(self.bin / "claude"))
+        env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+        r = subprocess.run([sys.executable, str(SCRIPTS / "wake.py"), "test"], capture_output=True, text=True,
+                           env=env, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertRegex(r.stdout, r"ace\s+ok")
+        args = self.ran("claude")
+        self.assertEqual(args[args.index("--tools") + 1], "")
+        self.assertEqual(args[args.index("--max-turns") + 1], "1")
+        self.assertIsNone(self.ran("openclaw"))
+
 
 class EveryReaderReadsBothShapes(unittest.TestCase):
 

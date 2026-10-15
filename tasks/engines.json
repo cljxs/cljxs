@@ -20,6 +20,26 @@
       "engine": "claude",
       "model": "haiku",
       "max_turns": 40
+    },
+    "belfort": {
+      "engine": "claude",
+      "model": "haiku",
+      "max_turns": 40
+    },
+    "scout": {
+      "engine": "claude",
+      "model": "haiku",
+      "max_turns": 40
+    },
+    "emily": {
+      "engine": "claude",
+      "model": "haiku",
+      "max_turns": 60
+    },
+    "paul": {
+      "engine": "claude",
+      "model": "sonnet",
+      "max_turns": 80
     }
   }
 }
