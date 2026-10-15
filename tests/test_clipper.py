@@ -382,6 +382,15 @@ class APictureOfAFaceIsNotAPerson(unittest.TestCase):
         self.assertEqual([round(p[0]) for p in got], [1400])
 
     @unittest.skipUnless(HAVE_CV2, "needs numpy")
+    def test_every_face_and_why_it_was_dropped_is_reported(self):
+        # 2026-10-15: a clip framed on the mural again. `clipper framing CLIP`
+        # prints this, so the next fix starts from what was measured.
+        detail = []
+        framing.people(self.samples((300, 0.0), (1400, 8.0)), 1920, detail=detail)
+        self.assertEqual([(round(f["box"][0]), f["kept"]) for f in detail], [(300, False), (1400, True)])
+        self.assertIn("a picture", detail[0]["why"])
+
+    @unittest.skipUnless(HAVE_CV2, "needs numpy")
     def test_a_quiet_listener_is_still_a_person(self):
         # 3.4 beside 7.8 on the interview: 44% of the speaker - kept.
         got = framing.people(self.samples((300, 3.4), (1400, 7.8)), 1920)

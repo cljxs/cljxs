@@ -54,7 +54,7 @@ import json
 import re
 import sys
 
-from clipper import (campaign, config, db, dropbox, inbox, ingest, pipeline, postcopy, publish, report,
+from clipper import (campaign, config, db, dropbox, inbox, ingest, media, pipeline, postcopy, publish, report,
                      rights, score, transcribe, trends, twitch, youtube)
 
 
@@ -587,6 +587,31 @@ def cmd_subtitles(a):
     return 0
 
 
+def cmd_framing(a):
+    """Why a clip is framed the way it is: each shot, every face in it - where,
+    how big, how often seen, how much it changed - and what was kept."""
+    from clipper import framing
+    cfg, paths, conn = open_all()
+    clip, video, c = pipeline._clip_parts(conn, a.clip)
+    info = media.probe(video["media_path"])
+    sw, sh = info["width"], info["height"]
+    print(f"clip {a.clip}: video {video['id']}, {pipeline.clock(c['start'])}-{pipeline.clock(c['end'])}, "
+          f"{sw}x{sh}")
+    for s in framing.explain(video["media_path"], c["start"], c["end"], info):
+        print(f"\n{s['t0']:5.1f}-{s['t1']:5.1f}s  {s['layout'].upper()}  ({s['why']})")
+        for f in s["faces"]:
+            cx, cy, _w, h = f["box"]
+            m = "-" if f["motion"] is None else f"{f['motion']:.1f}"
+            print(f"   face {cx / sw:4.0%} across {cy / sh:4.0%} down, {h / sh:4.0%} tall, "
+                  f"seen {f['seen']:4.0%}, change {m:>4}  {'KEPT' if f['kept'] else 'dropped: ' + f['why']}")
+        if not s["faces"]:
+            print("   no face found")
+    print(f"\nA face is dropped as a picture when it changes under {framing.STILL_SHARE:.0%} of the "
+          f"liveliest face, and under {framing.STILL_MAX} - only in a shot whose liveliest face "
+          f"changes {framing.LIVE_MIN} or more.")
+    return 0
+
+
 def cmd_remake(a):
     cfg, paths, conn = open_all()
     clip = trends.remake(conn, paths, cfg, a.trend)
@@ -723,6 +748,9 @@ def main(argv=None):
     x.add_argument("--set-json", dest="set_json", default=None)
     x.add_argument("--reset", action="store_true")
     x.set_defaults(fn=cmd_subtitles)
+    x = sub.add_parser("framing", help="why a clip is framed the way it is: every face in every shot")
+    x.add_argument("clip", type=int)
+    x.set_defaults(fn=cmd_framing)
     m = sub.add_parser("remake")
     m.add_argument("trend", type=int)
     m.set_defaults(fn=cmd_remake)

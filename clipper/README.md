@@ -437,6 +437,17 @@ cd /root/ecosystem && clipper/.venv/bin/pip install -r clipper/requirements.txt
 ```
 
 Without it, clips are centre-cropped as before and the `frame:` line says so.
+
+A clip framed on the wrong thing - a poster, an empty chair - says why with
+`clipper framing CLIP`: every shot, every face in it (where, how big, how
+often seen, how much it changed), and which were kept. A printed face is
+dropped when it barely changes beside one that clearly does; on footage the
+camera is slowly zooming, a picture can change as much as a person, and this
+is where that shows:
+
+```
+cd /root/ecosystem && clipper/.venv/bin/python -m clipper framing 12
+```
 `"crop_mode": "center"` or `"blur"` in `clipper/var/config.json` goes back to
 one layout for every shot.
 

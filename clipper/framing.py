@@ -179,11 +179,12 @@ def motion(sightings):
     return statistics.median(diffs)
 
 
-def people(samples, sw, report=None):
+def people(samples, sw, report=None, detail=None):
     """The people in one shot's samples: [(cx, cy, w, h)] by x, each the median
     of its sightings, kept only if seen in MIN_SEEN of the samples - and, when
     the shot has a face that clearly moves, only if it moves too (a mural is
-    not a person). `report`, a list, gets each face's motion."""
+    not a person). `report`, a list, gets each face's motion; `detail`, a
+    list, gets every face found and what was decided about it (explain())."""
     if not samples:
         return []
     seen = sorted(((t, b) for t, boxes in samples for b in boxes), key=lambda tb: tb[1][0])
@@ -193,18 +194,29 @@ def people(samples, sw, report=None):
             groups[-1].append(tb)
         else:
             groups.append([tb])
-    kept, gap = [], CLUSTER_GAP * sw
+    kept, gap, found = [], CLUSTER_GAP * sw, []
     for g in groups:
         lo, hi = g[0][1][0] - gap, g[-1][1][0] + gap
         frames = sum(1 for _, boxes in samples if any(lo <= x[0] <= hi for x in boxes))
+        box = tuple(statistics.median(b[k] for _t, b in g) for k in range(4))
         if frames >= MIN_SEEN * len(samples):
-            kept.append((tuple(statistics.median(b[k] for _t, b in g) for k in range(4)), motion(g)))
+            kept.append((box, motion(g)))
+            found.append({"box": box, "seen": frames / len(samples), "motion": kept[-1][1], "kept": True})
+        else:
+            found.append({"box": box, "seen": frames / len(samples), "motion": None, "kept": False,
+                          "why": f"seen in under {MIN_SEEN:.0%} of the shot - a flicker"})
     moves = [m for _p, m in kept if m is not None]
     live = max(moves) if moves else None
     if report is not None:
         report.extend(m for _p, m in kept)
     if live is not None and LIVE_MIN is not None and live >= LIVE_MIN:
-        kept = [(p, m) for p, m in kept if m is None or m >= min(STILL_SHARE * live, STILL_MAX)]
+        bar = min(STILL_SHARE * live, STILL_MAX)
+        for f in found:
+            if f["kept"] and f["motion"] is not None and f["motion"] < bar:
+                f.update(kept=False, why=f"changes {f['motion']:.1f}, under {bar:.1f} - a picture")
+        kept = [(p, m) for p, m in kept if m is None or m >= bar]
+    if detail is not None:
+        detail.extend(found)
     return [p for p, _m in kept]
 
 
@@ -251,6 +263,20 @@ def plan(src, start, end, info):
             out[-1]["t1"] = t1
         else:
             out.append(seg)
+    return out
+
+
+def explain(src, start, end, info):
+    """plan(), shot by shot and unmerged, with every face found in each shot
+    and why it was kept or dropped - so a clip framed on the wrong thing can
+    be fixed from what was measured, not from a guess (`clipper framing`)."""
+    sw, sh = info["width"], info["height"]
+    cuts, faces = look(src, start, end, info)
+    out = []
+    for t0, t1 in shots(cuts, end - start):
+        detail = []
+        folk = people([f for f in faces if t0 <= f[0] < t1], sw, detail=detail)
+        out.append(dict(layout(folk, sw, sh), t0=t0, t1=t1, faces=detail))
     return out
 
 
