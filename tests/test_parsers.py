@@ -18459,6 +18459,47 @@ class ARoundStickerKeepsItsArtInsideTheCut(unittest.TestCase):
         self.assertEqual(square[0]["placeholders"][0]["images"][0]["scale"], 1, "a square cut is untouched")
 
 
+
+class AStickerIsKissCut(unittest.TestCase):
+    """2026-10-15, the owner: "Most stickers keep printing with the white
+    circle backround for no reason. Let's make it so anything that is an
+    actual sticker design is printed on kiss cut." The catalogue's "sticker"
+    was Round Vinyl Stickers, so every listing that said sticker went onto a
+    white disc whatever the art's shape. The resolver now sends a word that
+    lands on a round cut to the kiss-cut sticker, unless the word says round."""
+
+    CAT = {"sticker": {"blueprint_id": 1, "blueprint_title": "Round Vinyl Stickers"},
+           "kisscut": {"blueprint_id": 400, "blueprint_title": "Kiss-Cut Stickers"},
+           "decal": {"blueprint_id": 2, "blueprint_title": "Kiss-Cut Vinyl Decals"},
+           "tshirt": {"blueprint_id": 3, "blueprint_title": "Unisex Jersey Short Sleeve Tee"}}
+
+    def setUp(self):
+        self.ep = load("emily_printify_kisscut", "emily-printify.py")
+
+    def test_the_word_sticker_drafts_on_kiss_cut(self):
+        for word in ("sticker", "Sticker", "stickers", "vinyl sticker"):
+            self.assertEqual(self.ep.resolve(self.CAT, word)[0], "kisscut", word)
+
+    def test_asking_for_round_still_gets_round(self):
+        for word in ("round sticker", "round vinyl sticker", "Round Stickers"):
+            self.assertEqual(self.ep.resolve(self.CAT, word)[0], "sticker", word)
+
+    def test_other_products_and_the_decal_are_untouched(self):
+        self.assertEqual(self.ep.resolve(self.CAT, "tshirt")[0], "tshirt")
+        self.assertEqual(self.ep.resolve(self.CAT, "decal")[0], "decal")
+        self.assertEqual(self.ep.resolve(self.CAT, "kisscut")[0], "kisscut")
+
+    def test_with_no_kiss_cut_set_up_the_round_one_still_drafts(self):
+        cat = {k: v for k, v in self.CAT.items() if k != "kisscut"}
+        self.assertEqual(self.ep.resolve(cat, "sticker")[0], "sticker")
+
+    def test_two_kiss_cut_stickers_is_asked_not_guessed(self):
+        cat = dict(self.CAT, kisscut2={"blueprint_id": 564, "blueprint_title": "Kiss Cut Stickers"})
+        with self.assertRaises(self.ep.Ambiguous) as cm:
+            self.ep.resolve(cat, "sticker")
+        self.assertEqual(cm.exception.keys, ["kisscut", "kisscut2"])
+
+
 class LettersAndColoursOnAGarment(unittest.TestCase):
     """2026-10-05, "Trailside Girls Hiking Tee": (1) the holes inside the
     letters printed as background-coloured blobs - knockout floods from the

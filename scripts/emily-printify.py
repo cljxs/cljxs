@@ -360,7 +360,7 @@ def title_answers_to(blueprint_title, product_type):
     return asked[-1] in have[-2:] and all(w in have for w in asked)
 
 
-def resolve(cat, product_type):
+def resolve(cat, product_type, kisscut=True):
     """(key, entry) for a product type, or (None, None).
 
     The catalogue key is a word a model picked when it wrote listing.json, and
@@ -377,7 +377,9 @@ def resolve(cat, product_type):
       "Unisex Heavy Blend Hooded Sweatshirt" without anyone maintaining a list.
 
     Two entries answering to one word is not resolved by guessing: Ambiguous
-    says which, and the caller names them.
+    says which, and the caller names them. kisscut=False is the word's own
+    entry before sticker_cut() below moves it - what a draft made before
+    2026-10-15 went to.
     """
     want = " ".join(words(product_type))
     if not want:
@@ -385,7 +387,7 @@ def resolve(cat, product_type):
 
     for key, entry in products(cat):
         if str(key).lower() == str(product_type).lower():
-            return key, entry
+            return sticker_cut(cat, product_type, key, entry) if kisscut else (key, entry)
 
     # Past the exact key, a word finds only its own kind: "embroidered
     # sweatshirt" never the printed one, "crewneck sweatshirt" never the
@@ -404,7 +406,42 @@ def resolve(cat, product_type):
         raise Ambiguous(product_type, sorted(hits))
     if not hits:
         return None, None
-    return hits[0], cat[hits[0]]
+    if not kisscut:
+        return hits[0], cat[hits[0]]
+    return sticker_cut(cat, product_type, hits[0], cat[hits[0]])
+
+
+# A STICKER IS KISS-CUT. The catalogue's "sticker" was Printify's Round Vinyl
+# Stickers, so every sticker design printed on a white circle whatever its
+# shape (owner, 2026-10-15: "Most stickers keep printing with the white circle
+# backround for no reason. Let's make it so anything that is an actual
+# sticker design is printed on kiss cut"). A kiss-cut follows the art's own
+# outline. So a word that lands on a round-cut entry goes to the kiss-cut
+# sticker instead - unless the word itself asks for round, which is then a
+# choice somebody made and not a default. Here, in the resolver, because
+# draft, the listing check, Scout's product mix and the board all ask this.
+ROUND_WORD_RE = re.compile(r"\bround\b|\bcircle\b|\bcircular\b", re.I)
+
+
+def is_kisscut_sticker(entry):
+    """Printify's own title says kiss-cut and its head noun is sticker."""
+    title = str((entry or {}).get("blueprint_title") or "")
+    return bool(re.search(r"kiss\W?cut", title, re.I)) and title_answers_to(title, "sticker")
+
+
+def sticker_cut(cat, product_type, key, entry):
+    """(key, entry), moved from a round sticker to the kiss-cut one when the
+    word did not ask for round. Several kiss-cut stickers is Ambiguous, never
+    a guess; none leaves the round one, since it is all there is to draft."""
+    if not is_round(entry) or ROUND_WORD_RE.search(str(product_type)):
+        return key, entry
+    cut = [k for k, e in products(cat)
+           if is_kisscut_sticker(e) and is_embroidered(e) == is_embroidered(entry)]
+    if len(cut) > 1:
+        raise Ambiguous(product_type, sorted(cut))
+    if not cut:
+        return key, entry
+    return cut[0], cat[cut[0]]
 
 
 def no_entry(cat, product_type):
@@ -994,8 +1031,7 @@ ROUND_SAFE = 0.92
 def is_round(entry):
     """Is this product cut round? Read from Printify's own blueprint title -
     "Round Vinyl Stickers" - like is_all_over, not from a flag to remember."""
-    return bool(re.search(r"\bround\b|\bcircle\b|\bcircular\b",
-                          str((entry or {}).get("blueprint_title") or ""), re.I))
+    return bool(ROUND_WORD_RE.search(str((entry or {}).get("blueprint_title") or "")))
 
 
 def round_reach(path, step=4):

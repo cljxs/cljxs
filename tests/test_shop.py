@@ -1293,6 +1293,62 @@ class TryAgainInTheGallery(unittest.TestCase):
         self.assertIn("SLUG_RE.test", route)
 
 
+class RoundStickerDraftsMoveToKissCut(unittest.TestCase):
+    """Owner, 2026-10-15: "Most stickers keep printing with the white circle
+    backround ... anything that is an actual sticker design is printed on
+    kiss cut". New drafts resolve there; emily-finish.py --kisscut finds the
+    unpublished drafts already on the round cut, and never one on sale."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "scripts").symlink_to(SCRIPTS)
+        state = self.root / "agents/emily/state"
+        state.mkdir(parents=True)
+        (state / "printify-catalog.json").write_text(json.dumps({
+            "sticker": {"blueprint_id": 1, "blueprint_title": "Round Vinyl Stickers"},
+            "kisscut": {"blueprint_id": 400, "blueprint_title": "Kiss-Cut Stickers"},
+            "tshirt": {"blueprint_id": 3, "blueprint_title": "Unisex Jersey Short Sleeve Tee"}}))
+        self.builds = self.root / "agents/emily/builds"
+        env = {"ECOSYSTEM_ROOT": str(self.root)}
+        patch = unittest.mock.patch.dict(os.environ, env)
+        patch.start()
+        self.addCleanup(patch.stop)
+        spec = importlib.util.spec_from_file_location("emily_finish_kisscut", SCRIPTS / "emily-finish.py")
+        self.m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.m)
+
+    def build(self, name, word, **kw):
+        d = self.builds / name
+        d.mkdir(parents=True)
+        (d / "build.json").write_text(json.dumps(dict(
+            {"printify_product_id": "p-" + name, "published": False,
+             "printify_drafts": [{"product_type": word, "product_id": "p-" + name}]}, **kw)))
+        (d / "listing.json").write_text(json.dumps({"product_type": word}))
+
+    def test_only_unpublished_round_drafts_are_moved(self):
+        self.build("frog-sticker", "sticker")
+        self.build("live-sticker", "sticker", published=True)
+        self.build("chosen-round", "round sticker")
+        self.build("already-kisscut", "kisscut")
+        self.build("crow-tee", "tshirt")
+        self.build("not-drafted", "sticker", printify_product_id=None)
+        self.assertEqual([d.name for d in self.m.on_round(self.builds)], ["frog-sticker"])
+
+    def test_listing_alone_is_dry_run(self):
+        self.build("frog-sticker", "sticker")
+        calls = []
+        self.m.redo = lambda raw, product=None, keep_art=False: calls.append((raw, keep_art)) or 0
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.m.to_kisscut()
+        self.assertEqual(calls, [])
+        self.assertIn("frog-sticker", out.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.m.to_kisscut(apply=True)
+        self.assertEqual(calls, [("frog-sticker", True)], "redrafted from the art it has")
+
+
 class TheShopApi(unittest.TestCase):
     """shop.js against a real root: kits listed with their words, files served
     by name only, Posted written by the script."""

@@ -196,7 +196,54 @@ def retry(raw):
     return 0
 
 
+# ROUND TO KISS-CUT (owner, 2026-10-15: "anything that is an actual sticker
+# design is printed on kiss cut so there isn't an unnecessary backround").
+# New drafts already go there - emily-printify's resolver moves the word
+# sticker off a round cut. This finds the drafts made before that, which sit
+# in Printify on a white disc: unpublished builds whose draft word reached a
+# round entry then and reaches another now. Lists them; --apply redrafts each
+# from the art it already has (free - no drawing), through redo()'s guard
+# that never deletes a product live on Etsy.
+def on_round(builds_root):
+    ep = _module("emily_printify_kisscut", "emily-printify.py")
+    cat = ep.read_catalog()
+    out = []
+    for d in sorted(Path(builds_root).iterdir() if Path(builds_root).is_dir() else []):
+        build = _json(d / "build.json")
+        if not d.is_dir() or build.get("published") or not build.get("printify_product_id"):
+            continue
+        drafts = build.get("printify_drafts") or []
+        word = (drafts[-1].get("product_type") if drafts else None) \
+            or _json(d / "listing.json").get("product_type") or ""
+        try:
+            _k, then = ep.resolve(cat, word, kisscut=False)
+            _k, now = ep.resolve(cat, word)
+        except ep.Ambiguous:
+            continue
+        if then and now and ep.is_round(then) and not ep.is_round(now):
+            out.append(d)
+    return out
+
+
+def to_kisscut(apply=False):
+    todo = on_round(ROOT / "agents" / "emily" / "builds")
+    print(f"emily-finish: {len(todo)} unpublished sticker draft(s) on a round cut")
+    for d in todo:
+        print(f"  {d.name}")
+    if not apply:
+        if todo:
+            print("  add --apply to redraft them as kiss-cut from the art they have")
+        return 0
+    for d in todo:
+        if redo(d.name, keep_art=True):
+            print("emily-finish: stopping - the rest wait")
+            return 1
+    return 0
+
+
 def main():
+    if sys.argv[1:2] == ["--kisscut"]:
+        return to_kisscut("--apply" in sys.argv[2:])
     if sys.argv[1:2] == ["--retry"] and len(sys.argv) > 2:
         return retry(sys.argv[2])
     if sys.argv[1:2] == ["--redraw"]:
