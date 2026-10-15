@@ -15008,7 +15008,7 @@ class TheWakeMessageNamesTheReport(unittest.TestCase):
             message = src.split("--message", 1)[1].split("--session-id", 1)[0]
             self.assertIn("reports/$REPORT", message)
             self.assertIn("NEW file", message)
-            self.assertLess(src.index('REPORT="$('), src.index("openclaw agent"),
+            self.assertLess(src.index('REPORT="$('), src.index("scripts/wake.py"),
                             "the name is worked out before the agent is woken")
 
 
@@ -15602,8 +15602,8 @@ class BelfortsSellRulesAreCode(unittest.TestCase):
 
     def test_the_cycle_runs_the_exits_before_belfort_wakes(self):
         src = (SCRIPTS / "belfort-cycle.sh").read_text()
-        self.assertLess(src.index("belfort-trade.py\" exits --apply"), src.index("openclaw agent --agent belfort"))
-        self.assertIn("$EXITS", src.split("openclaw agent --agent belfort", 1)[1].split("--session-id")[0])
+        self.assertLess(src.index("belfort-trade.py\" exits --apply"), src.index('wake.py" --agent belfort'))
+        self.assertIn("$EXITS", src.split('wake.py" --agent belfort', 1)[1].split("--session-id")[0])
 
 
 class BelfortReadsNewsForAllThirty(unittest.TestCase):
@@ -15880,8 +15880,8 @@ class BelfortGuardrailsFromTheReview(unittest.TestCase):
 
     def test_the_cycle_runs_the_shadow_book_and_does_not_tell_belfort(self):
         src = (SCRIPTS / "belfort-cycle.sh").read_text()
-        self.assertLess(src.index("belfort-trade.py\" shadow"), src.index("openclaw agent --agent belfort"))
-        message = src.split("openclaw agent --agent belfort", 1)[1].split("--session-id")[0]
+        self.assertLess(src.index("belfort-trade.py\" shadow"), src.index('wake.py" --agent belfort'))
+        message = src.split('wake.py" --agent belfort', 1)[1].split("--session-id")[0]
         self.assertNotIn("SHADOW", message)
 
 
@@ -19216,7 +19216,7 @@ class BelfortWritesHisCallOnEachName(TheMarketsPageDrawsBelfortsOwnNumbers):
         sh = (SCRIPTS / "belfort-cycle.sh").read_text()
         self.assertIn('cp "$AGENT/data/candidates.json" "$AGENT/state/.candidates-at-wake.json"', sh)
         self.assertIn('belfort-trade.py" calls --owed', sh)
-        self.assertLess(sh.index(".candidates-at-wake.json"), sh.index("openclaw agent"))
+        self.assertLess(sh.index(".candidates-at-wake.json"), sh.index("scripts/wake.py"))
         self.assertIn("belfort-trade.py calls", (ROOT / "agents" / "belfort" / "_belfort-agents-header.md").read_text())
 
 
@@ -19500,7 +19500,7 @@ class BelfortLearnsFromNumbersNotMemory(unittest.TestCase):
     def test_it_is_wired_in(self):
         sh = (SCRIPTS / "belfort-cycle.sh").read_text()
         self.assertIn('RECORD="$(python3 "$ROOT/scripts/belfort-learn.py" record', sh)
-        self.assertLess(sh.index("RECORD="), sh.index("openclaw agent"))
+        self.assertLess(sh.index("RECORD="), sh.index("scripts/wake.py"))
         msg = sh[sh.index("--message"):sh.index("--session-id")]
         self.assertIn("\n$RECORD\n", msg, "in the wake message, on its own line")
         timer = (ROOT / "deploy" / "belfort-review.timer").read_text()

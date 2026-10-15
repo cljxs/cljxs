@@ -86,7 +86,13 @@ def run_view(d):
     further in, at meta.agentMeta. Read flat, Paul's first dry cycle
     (2026-10-05) printed "model None", "tool calls None" and the whole result
     on the model line, and no cost at all. A block already flat - the older
-    shape - comes back unchanged."""
+    shape - comes back unchanged.
+
+    The Claude plan's runs (scripts/wake.py, `claude -p --output-format json`)
+    are a third shape, mapped onto the same names so everything downstream
+    reads one view. Captured in tests/fixtures/claude-cli-result-*.json."""
+    if isinstance(d, dict) and d.get("type") == "result" and "num_turns" in d:
+        return claude_view(d)
     res = d.get("result")
     meta = res.get("meta") if isinstance(res, dict) else None
     if not isinstance(meta, dict):
@@ -95,6 +101,33 @@ def run_view(d):
     flat.pop("agentMeta", None)
     flat["result"] = d.get("status")
     return flat
+
+
+def claude_view(d):
+    """A Claude CLI result as last-run's flat view. Tokens are summed over
+    modelUsage, not read from `usage`: the CLI makes small calls of its own
+    that `usage` leaves out and the plan still counts (the captured 'OK' run:
+    usage says 2 input tokens, modelUsage 1,176). The model is the one that
+    did most of the work, by cost."""
+    mu = d.get("modelUsage") or {}
+    total = lambda k: sum((m or {}).get(k) or 0 for m in mu.values())
+    model = max(mu, key=lambda k: (mu[k] or {}).get("costUSD") or 0) if mu else None
+    failed = d.get("is_error") is True
+    return {
+        "engine": "claude",
+        "model": model,
+        "result": (d.get("terminal_reason") or d.get("subtype") or "error") if failed else "ok",
+        "assistantTurns": d.get("num_turns"),
+        "durationMs": d.get("duration_ms"),
+        # The list price of the run. On the plan nothing is billed per token;
+        # this is what it would have cost on the API, kept so runs compare.
+        "costUsd": d.get("total_cost_usd"),
+        "usage": {"input": total("inputTokens") + total("cacheCreationInputTokens"),
+                  "output": total("outputTokens"), "cacheRead": total("cacheReadInputTokens")} if mu else {},
+        "completion": {"stopReason": d.get("stop_reason"), "finishReason": d.get("terminal_reason")},
+        "finalAssistantVisibleText": d.get("result") if isinstance(d.get("result"), str) else None,
+        "sessionId": d.get("session_id"),
+    }
 
 
 def last_block(raw):

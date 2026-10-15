@@ -27,6 +27,23 @@ from pathlib import Path
 # rejected - which would have had someone re-entering a working credential.
 # Numbers that size are everywhere in this log; only "status 401" is evidence.
 SIGNS = [
+    # The Claude plan (scripts/wake.py). First, because its refusals also say
+    # 401, and the OpenRouter advice below would send someone to re-enter a
+    # key that was never the problem. Words from a real refusal:
+    # tests/fixtures/claude-cli-result-401.json.
+    (r"oauth (?:access )?token|no claude_code_oauth_token|claude cli is not installed",
+     "CLAUDE PLAN LOGIN REJECTED", "this is configuration, not the agent",
+     "The Claude plan did not accept this server's login, so no model ran.\n"
+     "  Make a new token:   ~/.local/bin/claude setup-token\n"
+     "  Store it:           python3 scripts/set-credential.py plan CLAUDE_CODE_OAUTH_TOKEN\n"
+     "  Check it works:     python3 scripts/wake.py check"),
+    # Not yet seen for real - the wording is the CLI's as last published.
+    # The first real one should become a fixture.
+    (r"usage limit reached|(?:5-hour|weekly|session) limit reached|limit reached\W{1,4}resets",
+     "CLAUDE PLAN LIMIT REACHED", "this is the plan's allowance, not the agent",
+     "The Claude plan's usage limit is spent until it resets. Your own Claude use\n"
+     "  draws on the same allowance. Agents set to fall back to OpenRouter do so\n"
+     "  by themselves; this one did not. See:  python3 scripts/wake.py engines"),
     # First, because it is the most specific. The owner capped the key at $1 a
     # day on OpenRouter (2026-09-25); once that is spent every call answers
     # "403 Key limit exceeded (daily limit)" until the cap resets at midnight
@@ -86,6 +103,11 @@ def main():
     except Exception:
         return 0
 
+    # A wake the plan refused and wake.py then sent through OpenClaw: the
+    # refusal is history, and only what OpenClaw did after it is this run.
+    marker = "sending this wake through OpenClaw instead"
+    if marker in text:
+        text = text.split(marker, 1)[1]
     low = text.lower()
     for pattern, title, subtitle, advice in SIGNS:
         m = re.search(pattern, low)

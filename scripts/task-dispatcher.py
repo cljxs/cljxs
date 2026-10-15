@@ -176,12 +176,13 @@ def clear_task_marker(agent):
 
 
 def spawn_agent(agent, task_id):
-    """Launch OpenClaw for one task with a fresh session id."""
+    """Wake an agent for one task with a fresh session id, through wake.py -
+    the one place that knows whether it runs on OpenClaw or the Claude plan."""
     # A fresh --session-id per task is REQUIRED: reusing sessions caused
     # runaway loops in the source system.
     session_id = f"task-{task_id}-{int(time.time())}"
     cmd = [
-        OPENCLAW_BIN, "agent",
+        sys.executable, str(ROOT / "scripts" / "wake.py"),
         "--agent", agent,
         # Self-contained on purpose. "see /tasks/3" is a path with no host,
         # no port and no verb - Emily woke to exactly that, was told by her
@@ -236,6 +237,10 @@ _LIVENESS = re.compile(r'"livenessState"\s*:\s*"([^"]*)"')
 _SUMMARY = re.compile(r'"toolSummary"\s*:\s*\{(.*?)\}', re.S)
 _TOOLS = re.compile(r'"tools"\s*:\s*\[(.*?)\]', re.S)
 _CALLS = re.compile(r'"calls"\s*:\s*(\d+)')
+# The Claude engine's result (tests/fixtures/claude-cli-result-*.json).
+_CLAUDE_REASON = re.compile(r'"terminal_reason"\s*:\s*"([^"]*)"')
+_CLAUDE_TURNS = re.compile(r'"num_turns"\s*:\s*(\d+)')
+_CLAUDE_SAID = re.compile(r'"result"\s*:\s*"((?:[^"\\]|\\.){0,300})')
 
 
 def why_it_stopped(stdout, seconds=None):
@@ -244,6 +249,17 @@ def why_it_stopped(stdout, seconds=None):
     off at its time limit exits 0 as well, so the code alone reads as
     "finished" about a run that was stopped mid-step."""
     text = stdout or ""
+    after = f" after {round(seconds / 60)} min" if seconds else ""
+    reasons = _CLAUDE_REASON.findall(text)
+    if reasons:
+        turns = _CLAUDE_TURNS.findall(text)
+        said = _CLAUDE_SAID.findall(text)
+        if reasons[-1] == "max_turns":
+            return (f"used all its turns ({turns[-1] if turns else '?'}) without finishing{after} - "
+                    f"raise max_turns in tasks/engines.json only if the work really needs more")
+        if reasons[-1] == "api_error":
+            return f"the Claude plan refused the run: {said[-1] if said else 'no reason given'}"
+        return None
     summaries = _SUMMARY.findall(text)
     if not summaries:
         return None
@@ -253,7 +269,6 @@ def why_it_stopped(stdout, seconds=None):
     calls_m = _CALLS.search(summary)
     stops, liveness = _STOP.findall(text), _LIVENESS.findall(text)
     stop = stops[-1] if stops else None
-    after = f" after {round(seconds / 60)} min" if seconds else ""
     counted = f", {calls_m.group(1)} tool call(s)" if calls_m else ""
     waited = [t for t in tools if t in WAITS_ON_A_PERSON]
     if waited and stop == "toolUse":

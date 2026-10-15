@@ -71,7 +71,9 @@ def known_secrets():
     guarantee, and it costs one read.
     """
     out = set()
-    for f in sorted((ROOT / "agents").glob("*/state/credentials.env")):
+    # The Claude plan's login token lives outside agents/ (scripts/wake.py).
+    files = sorted((ROOT / "agents").glob("*/state/credentials.env")) + [ROOT / "plan" / "credentials.env"]
+    for f in files:
         try:
             for line in f.read_text().splitlines():
                 s = line.strip()

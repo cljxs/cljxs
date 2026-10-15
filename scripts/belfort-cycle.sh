@@ -84,7 +84,7 @@ RECORD="$(python3 "$ROOT/scripts/belfort-learn.py" record 2>/dev/null)" || RECOR
 # this message named - and stopped: no memory line, no signoff, and the
 # verifier failed a cycle that had otherwise done its job. Ace's message has
 # always ended on signoff.py; Belfort's did not.
-openclaw agent --agent belfort \
+python3 "$ROOT/scripts/wake.py" --agent belfort \
   --message "Scheduled cycle. This wake's report is a NEW file: reports/$REPORT - write it there. Do not edit an earlier report, even one from today.
 
 The exit rules were already applied by code before you woke:

@@ -77,6 +77,9 @@ ELSEWHERE = {
     # The Agent Room is not an agent either, and its key must not be found by
     # preflight's search of agents/*/state for the agents' shared key.
     "agentroom": lambda: Path(os.environ.get("AGENTROOM_HOME", ROOT / "agentroom")) / "state" / "credentials.env",
+    # The Claude plan's login token (claude setup-token), read by wake.py for
+    # every agent on the claude engine. One token, so one place.
+    "plan": lambda: ROOT / "plan" / "credentials.env",
 }
 
 PARTS = {

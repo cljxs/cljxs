@@ -90,7 +90,13 @@ def _runs(raw):
     out = []
     for block in lr.json_blocks(raw):
         d = lr.run_view(block)
-        if not isinstance(d, dict) or not d.get("model"):
+        if not isinstance(d, dict):
+            continue
+        if not d.get("model") and d.get("engine") == "claude":
+            # The plan turned the run away before any model ran - still a
+            # run that failed, and the report must count it.
+            d = dict(d, model="claude plan (refused)")
+        if not d.get("model"):
             continue
         if not ("assistantTurns" in d or "toolSummary" in d or "usage" in d):
             continue
@@ -99,7 +105,8 @@ def _runs(raw):
         cost = d.get("costUsd")
         if cost is None:
             cost = (usage.get("cost") or {}).get("total")
-        out.append({"model": d.get("model"), "result": d.get("result") or d.get("status"),
+        out.append({"model": d.get("model"), "engine": d.get("engine") or "openclaw",
+                    "result": d.get("result") or d.get("status"),
                     "turns": d.get("assistantTurns"), "cost": cost,
                     "minutes": round(d["durationMs"] / 60000, 1) if isinstance(d.get("durationMs"), (int, float)) else None,
                     "calls": ts.get("calls"), "failures": ts.get("failures"),
@@ -128,6 +135,7 @@ def by_model(rows):
     out = {}
     for r in rows:
         m = out.setdefault(r["model"], {"runs": 0, "ok": 0, "checked": 0, "passed": 0, "tool_failures": 0,
+                                        "engine": r.get("engine") or "openclaw",
                                         "_t": [], "_m": [], "_c": [], "_k": []})
         m["runs"] += 1
         m["ok"] += 1 if r["result"] == "ok" else 0
@@ -171,7 +179,8 @@ def cmd_report(a):
             print(f"  {agent:<9} {model:<36} {m['runs']:>3} runs  {m['ok']:>3} ok  {checks:>5} passed checks  "
                   f"{m['turns'] if m['turns'] is not None else '-':>5} turns  "
                   f"{m['minutes'] if m['minutes'] is not None else '-':>5} min  "
-                  f"{money(m['cost']):>7}/run  {pct(m['cached']):>4} cached  {m['tool_failures']} tool failures")
+                  f"{money(m['cost']):>7}/run  {pct(m['cached']):>4} cached  {m['tool_failures']} tool failures"
+                  + ("  [Claude plan: list price, not billed]" if m.get("engine") == "claude" else ""))
     print("\nA model is only better if it also passes its agent's checks. Where that column"
           " shows '-', look with:  python3 scripts/health-check.py")
     print("'cached' near 0% means caching is not working for that model: every re-read is"

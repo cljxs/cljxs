@@ -130,12 +130,15 @@ def cycles_per_week():
             joined = service.read_text().replace("\\\n", " ")
             exec_line = " ".join(l for l in joined.splitlines()
                                  if l.startswith("ExecStart"))
+            # wake.py is how a cycle wakes its model now, on either engine;
+            # a bare `openclaw agent` is how it used to.
             script = re.search(r"(\S+\.sh)", exec_line)
             if script:
                 sh = ROOT / "scripts" / Path(script.group(1)).name
-                wakes_model = sh.is_file() and "openclaw" in sh.read_text()
+                text = sh.read_text() if sh.is_file() else ""
+                wakes_model = "wake.py" in text or "openclaw agent" in text
             else:
-                wakes_model = "openclaw" in exec_line
+                wakes_model = "wake.py" in exec_line or "openclaw" in exec_line
         if not wakes_model:
             out[agent] = 0
             continue

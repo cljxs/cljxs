@@ -348,7 +348,41 @@ def shutil_which(b):
     return which(b)
 
 
+def _wake():
+    spec = importlib.util.spec_from_file_location("wake_preflight", SCRIPTS / "wake.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def check_engine(name):
+    """'plan: <model>' for an agent on the Claude plan, after checking what
+    its wake needs - or None for an agent on OpenClaw. wake.py owns the
+    setting; this only asks it."""
+    w = _wake()
+    try:
+        s = w.setting(name)
+    except (SystemExit, ValueError) as exc:
+        block(name, f"tasks/engines.json cannot be used: {exc}", "fix the file, then: python3 scripts/wake.py engines")
+        return "engine?"
+    if s["engine"] != "claude":
+        return None
+    falls = s.get("fallback") == "openclaw"
+    stop = warn if falls else block
+    then = " - its wakes will go through OpenRouter instead" if falls else ""
+    if not w.claude_bin():
+        stop(name, f"is set to the Claude plan, but the claude CLI is not installed{then}",
+             "curl -fsSL https://claude.ai/install.sh | bash")
+    elif not w.plan_token():
+        stop(name, f"is set to the Claude plan, but no login token is stored{then}",
+             "~/.local/bin/claude setup-token, then python3 scripts/set-credential.py plan CLAUDE_CODE_OAUTH_TOKEN")
+    return f"plan: {s['model']}"
+
+
 def check_model(name):
+    plan = check_engine(name)
+    if plan:
+        return plan
     slug, note = agent_model(name)
     if not slug:
         return note

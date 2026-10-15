@@ -70,7 +70,7 @@ $($IDEAS brief)"
 T=$(stat -c %Y "$LAST" 2>/dev/null || echo 0)
 
 cd "$AGENT" || exit 1
-openclaw agent --agent scout --message "$MESSAGE" \
+python3 "$ROOT/scripts/wake.py" --agent scout --message "$MESSAGE" \
   --session-id "wake-scout-$(date +%s)" --timeout 600 --json
 
 U=$(stat -c %Y "$LAST" 2>/dev/null || echo 0)

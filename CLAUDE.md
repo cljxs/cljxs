@@ -77,6 +77,12 @@ in older install notes. Discover before you set:
 A wrong model slug fails silently: the agent just reports "model not found"
 at its next wake, hours later.
 
+Which engine wakes an agent is `tasks/engines.json`, read only by
+`scripts/wake.py`: OpenClaw on OpenRouter (the default), or the owner's Claude
+plan through `claude -p`. Every cycle script and the task dispatcher wake
+agents through wake.py, never `openclaw agent` directly. `wake.py engines`
+shows what runs where; `wake.py check` tests the plan's login.
+
 ## Things that have bitten
 
 * **Never `pkill -f` on a port or command pattern.** It has matched this

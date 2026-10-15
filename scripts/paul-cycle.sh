@@ -43,7 +43,7 @@ cd "$AGENT" || exit 1
 # 1800s: finding, checking and building one real site is the longest job any
 # agent here does. The unit's TimeoutStartSec leaves room for deploy and
 # verification after it.
-openclaw agent --agent paul --message "$MESSAGE" \
+python3 "$ROOT/scripts/wake.py" --agent paul --message "$MESSAGE" \
   --session-id "wake-paul-$(date +%s)" --timeout 1800 --json
 
 # Code files what the model left: checks it, deploys and verifies the preview

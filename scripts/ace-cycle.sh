@@ -69,7 +69,7 @@ trap 'rm -f "$LOG"' EXIT
 # Belfort's close run once edited the morning's report instead of writing its
 # own, and Ace has two slots a day as well.
 REPORT="$(python3 "$ROOT/scripts/et_time.py" report-name ace)"
-openclaw agent --agent ace \
+python3 "$ROOT/scripts/wake.py" --agent ace \
   --message "Scheduled cycle. Do the whole cycle yourself, now, in this session.
 This wake's report is a NEW file: reports/$REPORT - write it there, and do
 not edit an earlier report, even one from today.

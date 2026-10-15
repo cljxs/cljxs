@@ -59,6 +59,13 @@ ace-judge.py's blind estimates, passes and `rest`, cut to two games. The two
 settle events in its bankroll.json were written by hand so the Results tab
 has rows; every other value is what the scripts wrote.
 
+`claude-cli-result-*.json` are real results of `claude -p --output-format json`
+(Claude Code 2.1.300, 2026-10-15): a one-word answer, a run with tools, a run
+stopped at its turn limit, a login the API rejected, and a wake built by
+scripts/wake.py. Only the session ids were replaced. Not yet captured: a run
+refused because the plan's usage limit was reached - check-provider-error.py
+matches the CLI's published wording, and the first real one should land here.
+
 Still missing, because no raw sample has been captured yet:
 
 * `openclaw config get agents.entries.<name>.model.primary` - preflight parses
