@@ -831,6 +831,24 @@ class PreflightNamesTheSearchProvider(PaulCase):
         self.assertIn("brave", line)
         self.assertNotIn("tools.web.search", asked)
 
+    def test_on_the_plan_it_says_so_and_the_budget_is_not_his(self):
+        # Owner's droplet, 2026-10-15: on the Claude plan, preflight still
+        # said "a cycle needs $0.50 to start" and asked for a web search
+        # provider - both about an engine Paul no longer wakes on.
+        old = (paul._openclaw_get, paul.on_the_plan, paul.budget_left)
+        self.addCleanup(lambda: (setattr(paul, "_openclaw_get", old[0]), setattr(paul, "on_the_plan", old[1]),
+                                 setattr(paul, "budget_left", old[2])))
+        paul._openclaw_get = lambda key: "brave"
+        paul.vercel_token = lambda: None
+        paul.budget_left = lambda: 2.0
+        for plan in (True, False):
+            paul.on_the_plan = lambda plan=plan: plan
+            _, out = self.run_quiet(paul.cmd_preflight, None)
+            budget = next(l for l in out.splitlines() if "budget" in l and "$" in l)
+            self.assertEqual("Claude plan" in out, plan)
+            self.assertEqual("not used while he is on the plan" in budget, plan, budget)
+            self.assertEqual("needs $" in budget, not plan, budget)
+
 
 FIX = ROOT / "tests" / "fixtures"
 

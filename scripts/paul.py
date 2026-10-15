@@ -1829,12 +1829,20 @@ def cmd_preflight(a):
                 print("              !! Hobby is for personal, non-commercial use. Pitching sites")
                 print("                 for paid work is commercial - your call (README, 'Hosting').")
 
+    # On the Claude plan (2026-10-15) the OpenClaw lines below described an
+    # engine Paul no longer wakes on: his searches are Claude's WebSearch and
+    # his runs spend nothing from the OpenRouter budget. Said once, here.
+    plan = on_the_plan()
+    if plan:
+        print("  engine      your Claude plan (tasks/engines.json) - web search is Claude's own,")
+        print("              and the OpenRouter budget below applies only if the plan refuses a wake")
     # The provider, not tools.web.search itself: once anything under it is
     # set, that is an object, and its first line is "{" (owner's droplet,
     # 2026-10-05, after openclaw configure --section web). One scalar says it.
-    print(f"  web search  provider: {_openclaw_get('tools.web.search.provider')}")
-    print("              (Paul needs a web search tool to find businesses - this should name")
-    print("               one, e.g. brave; if it says unset, send Claude this line)")
+    print(f"  web search  {'fallback (OpenClaw) ' if plan else ''}provider: {_openclaw_get('tools.web.search.provider')}")
+    if not plan:
+        print("              (Paul needs a web search tool to find businesses - this should name")
+        print("               one, e.g. brave; if it says unset, send Claude this line)")
     # Paul must not heartbeat - it is woken by its timer and nothing else.
     # Not set from here: adding a heartbeat block to one agent can change which
     # agents heartbeat at all, which would be touching the others.
@@ -1848,7 +1856,7 @@ def cmd_preflight(a):
         print(f"  budget      unreadable - a cycle starts anyway (budget.py's rule)")
     else:
         print(f"  budget      ${max(left, 0):.2f} left on {budget_source()}; "
-              f"a cycle needs ${need:.2f} to start")
+              + ("not used while he is on the plan" if plan else f"a cycle needs ${need:.2f} to start"))
 
     live = read_json(A("state", "live.json"))
     print(f"  go-live     {'since ' + live.get('since', '?') if live else 'not yet - dry cycles only'}")
