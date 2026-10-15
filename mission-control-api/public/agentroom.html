@@ -360,6 +360,7 @@ function renderDetail() {
         ${r.project_dir ? `<div class="muted" style="margin-top:4px">Saved in <code>${esc(r.project_dir)}</code></div>` : ''}
       </div>
       ${r.working && !r.stopping ? '<button class="btn warn" data-act="stop">Stop</button>' : ''}
+      ${r.state === 'failed' ? '<button class="btn go" data-act="retry">Retry</button>' : ''}
     </div>
     ${gate}
     <div class="tabs">
@@ -383,6 +384,7 @@ async function act(what, btn) {
     if (body.note.length < 3) { alert('Write a note for the planner first.'); return; }
   }
   if (what === 'stop' && !confirm('Stop this run? It stops before its next AI call.')) return;
+  if (what === 'retry' && !confirm('Carry this run on from where it stopped? What is already done is kept and not paid for again; the step that failed is asked again.')) return;
   btn.disabled = true;
   try {
     await api(`/api/agentroom/runs/${id}/${what}`, { method: 'POST', body: JSON.stringify(body) });

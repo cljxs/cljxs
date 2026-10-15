@@ -64,7 +64,7 @@ function register(app) {
   app.post('/api/agentroom/runs/:id/:action', async (req, res) => {
     const { id, action } = req.params;
     if (!ID_RE.test(id)) return res.status(400).json({ error: 'bad id' });
-    if (action === 'approve' || action === 'stop') return asJson(await room([action, id]), res);
+    if (action === 'approve' || action === 'stop' || action === 'retry') return asJson(await room([action, id]), res);
     if (action === 'sendback') {
       return asJson(await room(['sendback', id, `--note=${text((req.body || {}).note, TEXT_MAX)}`]), res);
     }

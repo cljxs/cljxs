@@ -32,6 +32,16 @@ CHARS_PER_TOKEN = 3        # pessimistic: real text runs nearer 4, so worst case
 CALL_TIMEOUT = 300         # seconds for one model reply; a model thinking at length is slow
 RETRY_WAITS = (5, 20)      # between tries of a call that failed on the network or a 5xx
 
+# THE PRICE CEILING. OpenRouter's model list gives one price per model, but a
+# model is sold by many hosts at different prices, and OpenRouter picks one:
+# on 2026-10-15 deepseek-v4-pro was $0.88 to $3.83 per million output tokens
+# across 15 hosts, and a reply the worst case put at $0.007 cost $0.018.
+# So every call asks for the cheapest host first and REFUSES any host above
+# this many times the listed price (OpenRouter's provider.max_price: "will
+# prevent your request from running if the price is not available"), and the
+# worst case is worked out at that ceiling - the most the call can cost.
+PRICE_HEADROOM = 1.5
+
 _ea = None
 
 
@@ -91,18 +101,29 @@ def catalogue(cache, fetch=None, max_age=6 * 3600):
     return prices_from(data)
 
 
+def ceiling(prices, model):
+    """(dollars per prompt token, per output token) that a call to `model`
+    may be charged at most - the listed price times PRICE_HEADROOM - or None
+    when the model's prices are not known."""
+    p_in, p_out = prices.get(model, (None, None))
+    if p_in is None or p_out is None:
+        return None
+    return p_in * PRICE_HEADROOM, p_out * PRICE_HEADROOM
+
+
 def tokens_in(text):
     return math.ceil(len(text) / CHARS_PER_TOKEN)
 
 
 def worst_case(prices, model, prompt_text, max_tokens):
     """The most this call can cost, in dollars: every character of the prompt
-    as a third of a token, and the whole max_tokens written. None when the
-    model's prices are not known - unknown is not free."""
-    p_in, p_out = prices.get(model, (None, None))
-    if p_in is None or p_out is None:
+    as a third of a token, and the whole max_tokens written - thinking
+    included, which a reasoning model bills as output - at the ceiling price.
+    None when the model's prices are not known - unknown is not free."""
+    c = ceiling(prices, model)
+    if c is None:
         return None
-    return tokens_in(prompt_text) * p_in + max_tokens * p_out
+    return tokens_in(prompt_text) * c[0] + max_tokens * c[1]
 
 
 def extract_json(text):
@@ -145,13 +166,20 @@ def reply_text(data):
     return (content or "").strip(), choice.get("finish_reason"), (data or {}).get("usage") or {}
 
 
-def openrouter_call(key, model, system, user, max_tokens, post=None, wait=time.sleep, title="agentroom"):
+def openrouter_call(key, model, system, user, max_tokens, post=None, wait=time.sleep, title="agentroom",
+                    max_price=None):
     """One chat completion. Retries a network failure, a 429 or a 5xx twice;
     never retries a 4xx such as 402 (no credit) - asking again cannot help
-    and each try is priced."""
-    body = json.dumps({"model": model, "max_tokens": max_tokens, "usage": {"include": True},
-                       "messages": [{"role": "system", "content": system},
-                                    {"role": "user", "content": user}]}).encode()
+    and each try is priced. max_price is ceiling()'s (per prompt token, per
+    output token): the cheapest host is tried first, and none above it."""
+    req_body = {"model": model, "max_tokens": max_tokens, "usage": {"include": True},
+                "messages": [{"role": "system", "content": system},
+                             {"role": "user", "content": user}]}
+    if max_price:
+        # OpenRouter takes these in dollars per million tokens.
+        req_body["provider"] = {"sort": "price", "max_price": {"prompt": round(max_price[0] * 1e6, 6),
+                                                               "completion": round(max_price[1] * 1e6, 6)}}
+    body = json.dumps(req_body).encode()
     post = post or (lambda req: ea().post(req, timeout=CALL_TIMEOUT))
     last = None
     for attempt in range(len(RETRY_WAITS) + 1):

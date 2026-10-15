@@ -212,6 +212,68 @@ class Money(Base):
         self.assertEqual(len(tries), 3)
 
 
+class ThePriceCeiling(Base):
+    def test_every_call_refuses_a_host_above_the_ceiling(self):
+        # Guards 2026-10-15: OpenRouter sent DeepSeek to a host charging ~4x
+        # the listed price, and a reply budgeted at $0.007 cost $0.018.
+        sent = []
+
+        def post(req):
+            sent.append(json.loads(req.data))
+            return reply(GOOD_PLAN)
+        p_in, p_out = self.prices["deepseek/deepseek-v4-pro"]
+        self.m.openrouter_call("k", "deepseek/deepseek-v4-pro", "s", "u", 100, post=post,
+                               max_price=self.m.ceiling(self.prices, "deepseek/deepseek-v4-pro"))
+        prov = sent[0]["provider"]
+        self.assertEqual(prov["sort"], "price")
+        self.assertAlmostEqual(prov["max_price"]["completion"], p_out * 1e6 * self.m.orc.PRICE_HEADROOM, places=4)
+        self.assertAlmostEqual(prov["max_price"]["prompt"], p_in * 1e6 * self.m.orc.PRICE_HEADROOM, places=4)
+
+    def test_the_worst_case_is_worked_out_at_the_ceiling(self):
+        p_in, p_out = self.prices["moonshotai/kimi-k2.6"]
+        h = self.m.orc.PRICE_HEADROOM
+        w = self.m.worst_case(self.prices, "moonshotai/kimi-k2.6", "x" * 300, 1000)
+        self.assertAlmostEqual(w, 100 * p_in * h + 1000 * p_out * h)
+
+    def test_a_real_room_call_sends_the_ceiling(self):
+        sent = []
+        room = self.m.Room(key="sk-room", prices=self.prices, day_spent=lambda: 0.0)
+        with unittest.mock.patch.object(self.m, "openrouter_call",
+                                        side_effect=lambda *a, **k: sent.append(k) or reply(GOOD_PLAN)):
+            room.call("moonshotai/kimi-k2.6", "s", "u", 100)
+        self.assertEqual(sent[0]["max_price"], self.m.ceiling(self.prices, "moonshotai/kimi-k2.6"))
+
+
+class Retry(Base):
+    def test_retry_carries_on_without_paying_for_the_plan_again(self):
+        # Guards: a reviewer failing and the only way on being a new run,
+        # which pays the planner again.
+        rid = self.real_run()
+        empty = {"choices": [{"message": {"content": ""}, "finish_reason": "length"}], "usage": {"cost": 0.018}}
+        room, calls = self.room([reply(GOOD_PLAN), empty])
+        self.m.step(self.conn, rid, room)
+        self.assertEqual(self.m.step(self.conn, rid, room), "failed")
+        run = self.m.get_run(self.conn, rid)
+        self.assertIn("whole allowance thinking", run["error"])
+        self.assertEqual(run["failed_in"], "reviewing")
+        self.assertEqual(self.m.retry(self.conn, rid), "reviewing")
+        room, calls = self.room([reply(APPROVE), reply(APPROVE)])
+        self.assertEqual(self.m.step(self.conn, rid, room), "awaiting_approval")
+        self.assertEqual(calls, ["deepseek/deepseek-v4-pro", "openai/gpt-5.3-codex"], "no planner call")
+        with self.assertRaises(ValueError):
+            self.m.retry(self.conn, rid)
+
+    def test_a_room_made_before_retry_existed_still_works(self):
+        # The droplet's room.db was made without failed_in; connect() adds it.
+        conn = self.m.sqlite3.connect(str(Path(self.tmp.name) / "old.db"))
+        conn.executescript(self.m.SCHEMA.replace(",\n  failed_in TEXT", ""))
+        conn.close()
+        new = self.m.connect(Path(self.tmp.name) / "old.db")
+        self.addCleanup(new.close)
+        cols = {r["name"] for r in new.execute("PRAGMA table_info(runs)")}
+        self.assertIn("failed_in", cols)
+
+
 class TheStateMachine(Base):
     def test_a_real_run_goes_all_the_way_to_the_owner(self):
         rid = self.real_run()
@@ -322,6 +384,7 @@ class TheApi(unittest.TestCase):
                 "out.badact=await go('POST','/api/agentroom/runs/1/delete',{});"
                 "out.early=await go('POST','/api/agentroom/runs/1/approve',{});"
                 "out.stop=await go('POST','/api/agentroom/runs/1/stop',{});"
+                "out.retry=await go('POST','/api/agentroom/runs/1/retry',{});"
                 "process.stdout.write(JSON.stringify(out));srv.close();});")
             r = subprocess.run([self.NODE, "-e", js], capture_output=True, text=True, timeout=120,
                                env=dict(os.environ, AGENTROOM_HOME=str(home),
@@ -340,6 +403,7 @@ class TheApi(unittest.TestCase):
             self.assertEqual(out["badact"][0], 404)
             self.assertEqual(out["early"][0], 409, "approve before there is a plan is refused")
             self.assertEqual(out["stop"][0], 200)
+            self.assertEqual(out["retry"][0], 409, "a run that has not failed is not retried")
 
 
 if __name__ == "__main__":

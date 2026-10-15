@@ -440,7 +440,8 @@ def cycle(dry=False, call=None, prices=None, budget_read=None, key=None, now=Non
             return finish("stopped: " + summary["error"])
         try:
             data = call(model, SYSTEM, user, max_tokens) if call else \
-                orc.openrouter_call(key, model, SYSTEM, user, max_tokens, title="stan")
+                orc.openrouter_call(key, model, SYSTEM, user, max_tokens, title="stan",
+                                    max_price=orc.ceiling(prices, model))
         except Exception as e:
             summary["error"] = f"OpenRouter: {str(e)[:200]}"
             return finish("stopped: " + summary["error"])

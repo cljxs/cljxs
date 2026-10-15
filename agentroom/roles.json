@@ -8,12 +8,29 @@
     "check assumes a reply WILL write, so a bigger number reserves more of",
     "the day's allowance per call. The money caps are not here: they are",
     "agentroom_daily_ai and agentroom_run_max in tasks/limits.json, beside",
-    "the ecosystem's other caps."
+    "the ecosystem's other caps.",
+    "Reasoning models (all three here) think before they answer, and the",
+    "thinking is billed as output and counts against max_tokens: on",
+    "2026-10-15 DeepSeek thought through all of 6000 and answered nothing.",
+    "Hence room to spare. Every call also goes to the cheapest host at",
+    "most 1.5x the listed price (or_chat.py PRICE_HEADROOM)."
   ],
-  "planner": {"name": "Kimi", "model": "moonshotai/kimi-k2.6", "max_tokens": 12000},
+  "planner": {
+    "name": "Kimi",
+    "model": "moonshotai/kimi-k2.6",
+    "max_tokens": 16000
+  },
   "reviewers": [
-    {"name": "DeepSeek", "model": "deepseek/deepseek-v4-pro", "max_tokens": 6000},
-    {"name": "Codex", "model": "openai/gpt-5.3-codex", "max_tokens": 6000}
+    {
+      "name": "DeepSeek",
+      "model": "deepseek/deepseek-v4-pro",
+      "max_tokens": 16000
+    },
+    {
+      "name": "Codex",
+      "model": "openai/gpt-5.3-codex",
+      "max_tokens": 12000
+    }
   ],
   "review_rounds": 1,
   "max_calls_per_run": 12

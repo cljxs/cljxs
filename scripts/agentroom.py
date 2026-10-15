@@ -131,7 +131,7 @@ def _load(name, file):
 # reading a reply - Stan uses the same ones. Named here so the rest of this
 # file (and its tests) read as before.
 orc = _load("agentroom_or_chat", "or_chat.py")
-prices_from, tokens_in, worst_case = orc.prices_from, orc.tokens_in, orc.worst_case
+prices_from, tokens_in, worst_case, ceiling = orc.prices_from, orc.tokens_in, orc.worst_case, orc.ceiling
 extract_json, reply_text, openrouter_call = orc.extract_json, orc.reply_text, orc.openrouter_call
 
 _mods = {}
@@ -272,7 +272,8 @@ CREATE TABLE IF NOT EXISTS runs (
   project_dir TEXT,
   created_utc TEXT NOT NULL,
   updated_utc TEXT NOT NULL,
-  approved_utc TEXT
+  approved_utc TEXT,
+  failed_in TEXT
 );
 CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -314,6 +315,9 @@ def connect(path=None):
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")
     conn.executescript(SCHEMA)
+    # A room.db made before Retry existed (2026-10-15) has no failed_in.
+    if "failed_in" not in {r["name"] for r in conn.execute("PRAGMA table_info(runs)")}:
+        conn.execute("ALTER TABLE runs ADD COLUMN failed_in TEXT")
     return conn
 
 
@@ -590,7 +594,8 @@ class Room:
     def call(self, model, system, user, max_tokens):
         if self._call is not None:
             return self._call(model, system, user, max_tokens)
-        data = openrouter_call(self.key(), model, system, user, max_tokens)
+        data = openrouter_call(self.key(), model, system, user, max_tokens,
+                               max_price=ceiling(self.prices(), model))
         capture(model, data)
         return data
 
@@ -664,8 +669,10 @@ def ask(conn, room, rid, part, who, system, user):
         say(conn, rid, who, "error", f"(an empty reply - finish reason: {finish or 'not given'})",
             model=part["model"], cost=spent, cost_known=known)
         if finish == "length":
-            raise Blocked(f"{who} ran out of room before answering - raise its max_tokens "
-                          "in agentroom/roles.json")
+            # A reasoning model bills its thinking as output and counts it
+            # against max_tokens; thinking through all of it leaves no answer.
+            raise Blocked(f"{who} spent its whole allowance thinking and wrote no answer. Press Retry; "
+                          "if it happens again, its max_tokens in agentroom/roles.json needs raising")
         raise Blocked(f"{who} sent an empty reply")
     say(conn, rid, who, "agent", text, model=part["model"], cost=spent, cost_known=known)
     if get_run(conn, rid)["stop_requested"]:
@@ -835,7 +842,8 @@ def step(conn, rid, room=None):
         say(conn, rid, "Code", "system", "Stopped, as you asked.")
         return "stopped"
     except Blocked as e:
-        set_run(conn, rid, state="failed", error=str(e))
+        # Where it stopped, so Retry can carry on from there.
+        set_run(conn, rid, state="failed", error=str(e), failed_in=get_run(conn, rid)["state"])
         say(conn, rid, "Code", "error", f"Stopped: {e}")
         return "failed"
 
@@ -931,6 +939,26 @@ def send_back(conn, rid, note):
         raise ValueError(f"the note must be 3-{NOTE_MAX} characters")
     say(conn, rid, "You", "owner", note)
     set_run(conn, rid, state="revising", note=note, error=None)
+
+
+def retry(conn, rid):
+    """Carry a failed run on from where it stopped. What was already done -
+    the plan, any review - is kept and not paid for again; the step that
+    failed is asked again."""
+    run = get_run(conn, rid)
+    if not run:
+        raise ValueError(f"no run {rid}")
+    if run["state"] != "failed":
+        raise ValueError(f"run {rid} has not failed (it is {run['state']})")
+    target = run.get("failed_in")
+    if target not in WORKING:
+        # Failed before failed_in was kept, or by a bug in the runner: from
+        # what is on disk - the steps skip whatever is already there.
+        target = "reviewing" if latest_plan(conn, rid)[1] is not None else "planning"
+    set_run(conn, rid, state=target, error=None, failed_in=None, stop_requested=0)
+    say(conn, rid, "Code", "system",
+        "Retry pressed - carrying on from where it stopped. Nothing already done is paid for again.")
+    return target
 
 
 def stop(conn, rid):
@@ -1111,7 +1139,8 @@ def check_text():
             bad += 1
             continue
         out.append(f"{role:<11} {part['name']}: {part['model']}  ${p_in * 1e6:.2f} in / "
-                   f"${p_out * 1e6:.2f} out per million tokens; one reply at most ${w:.3f}")
+                   f"${p_out * 1e6:.2f} out per million tokens (hosts above "
+                   f"{orc.PRICE_HEADROOM:g}x refused); one reply at most ${w:.3f}")
         # the planner writes, then revises with the plan in its prompt
         total += w * times + (tokens_in("x" * plan_chars) * p_in if role == "planner" else 0)
     caps = limits()
@@ -1135,7 +1164,7 @@ def main(argv=None):
     n.add_argument("--idea", required=True)
     n.add_argument("--dry", action="store_true")
     sub.add_parser("runner").add_argument("--once", action="store_true")
-    for c in ("step", "approve", "stop", "show"):
+    for c in ("step", "approve", "stop", "show", "retry"):
         sub.add_parser(c).add_argument("id", type=int)
     sb = sub.add_parser("sendback")
     sb.add_argument("id", type=int)
@@ -1162,6 +1191,8 @@ def main(argv=None):
         elif a.cmd == "sendback":
             send_back(conn, a.id, a.note)
             print(json.dumps({"ok": True}))
+        elif a.cmd == "retry":
+            print(json.dumps({"ok": True, "state": retry(conn, a.id)}))
         elif a.cmd == "stop":
             print(json.dumps({"ok": True, "said": stop(conn, a.id)}))
         elif a.cmd == "deck":
