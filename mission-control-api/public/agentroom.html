@@ -203,8 +203,13 @@ function when(utc) {
 function dollars(v, digits = 2) { return v == null ? '?' : '$' + Number(v).toFixed(digits); }
 function spentText(r) { return r.dry ? 'practice - $0' : dollars(r.spent) + (r.spent_known ? '' : ' at most'); }
 
+// "Load failed" is all Safari says when the Deck cannot be reached at all -
+// usually because it is restarting. Said in words instead, with what to do.
+const UNREACHABLE = 'Could not reach the Deck - it may be restarting. Wait a few seconds and try again; nothing was lost.';
 async function api(url, opts) {
-  const r = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {}));
+  let r;
+  try { r = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' }, cache: 'no-store' }, opts || {})); }
+  catch (e) { throw new Error(UNREACHABLE); }
   let j = {};
   try { j = await r.json(); } catch {}
   if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
@@ -414,7 +419,7 @@ async function refresh() {
     const sig = detail ? `${detail.run.state}|${detail.messages.length}|${detail.plan_version}|${detail.run.stopping}|${current}` : 'none';
     if (sig !== lastShown || !$('pane')) { lastShown = sig; renderDetail(); }
   } catch (e) {
-    $('content').innerHTML = `<div class="empty err">Could not reach the Agent Room: ${esc(e.message)}</div>`;
+    $('content').innerHTML = `<div class="empty err">${esc(e.message)}</div>`;
     lastShown = '';
   } finally { busy = false; }
 }

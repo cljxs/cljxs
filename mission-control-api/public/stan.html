@@ -114,8 +114,13 @@ if (new URLSearchParams(location.search).get('embed') === '1') {
 
 let D = null, tab = 'pending', busy = false, sig = '';
 
+// "Load failed" is all Safari says when the Deck cannot be reached at all -
+// usually because it is restarting. Said in words instead, with what to do.
+const UNREACHABLE = 'Could not reach the Deck - it may be restarting. Wait a few seconds and try again; nothing was lost.';
 async function api(url, opts) {
-  const r = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' }, cache: 'no-store' }, opts || {}));
+  let r;
+  try { r = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' }, cache: 'no-store' }, opts || {})); }
+  catch (e) { throw new Error(UNREACHABLE); }
   let j = {}; try { j = await r.json(); } catch {}
   if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
   return j;
@@ -223,7 +228,7 @@ async function refresh() {
     // Redraw only on a change, so a half-typed reason is never wiped.
     const s = JSON.stringify([D.pending.map(p => p.id), D.decided.map(p => p.id + p.status), D.job && D.job.state, D.last_cycle && D.last_cycle.utc, D.fetch && D.fetch.utc]);
     if (s !== sig) { sig = s; render(); }
-  } catch (e) { $('status').innerHTML = `<span class="err">Could not reach Stan: ${esc(e.message)}</span>`; sig = ''; }
+  } catch (e) { $('status').innerHTML = `<span class="err">${esc(e.message)}</span>`; sig = ''; }
   finally { busy = false; }
 }
 refresh();
