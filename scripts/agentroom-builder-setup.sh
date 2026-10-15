@@ -8,7 +8,8 @@
 #   1. an ordinary Linux account, agentbuilder, with a home folder only it and
 #      root can see - it cannot read /root (the agents' keys, Belfort's book)
 #   2. bubblewrap, which Claude Code needs to strip its login out of every
-#      command it runs (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB)
+#      command it runs (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB): the builder's own
+#      copy, and an AppArmor rule letting that copy alone make namespaces
 #   3. a copy of the claude program the builder can run: the installer put it
 #      under /root, which the builder cannot reach
 #   4. then `agentroom.py builder-check`, which tries each guard for real
@@ -42,6 +43,33 @@ else
   apt-get install -y bubblewrap >/dev/null && echo "   installed bubblewrap" || { echo "   could not install bubblewrap"; exit 1; }
 fi
 
+# Ubuntu 24.04 stops ordinary accounts making the namespaces bubblewrap needs
+# ("bwrap: setting up uid map: Permission denied"). Rather than lift that for
+# the whole machine, the builder gets its own copy of bwrap, which only root
+# and the builder can run, and AppArmor allows namespaces for that path alone.
+# The guard refuses bwrap and unshare in the AI's own commands, and tests run
+# with namespaces switched off (RestrictNamespaces).
+mkdir -p "$LIB/bin"
+chmod 755 "$LIB" "$LIB/bin"
+install -o root -g "$USER_NAME" -m 750 "$(command -v bwrap)" "$LIB/bin/bwrap"
+echo "   the builder's copy: $LIB/bin/bwrap"
+LOCK=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+if [ -r "$LOCK" ] && [ "$(cat "$LOCK")" = 1 ]; then
+  PROFILE=/etc/apparmor.d/agentroom-bwrap
+  printf '%s\n' "# Written by agentroom-builder-setup.sh: lets the Agent Room builder's own" \
+    "# bubblewrap (and nothing else) make user namespaces, so Claude Code can hide" \
+    "# its login from the commands it runs." \
+    "abi <abi/4.0>," "include <tunables/global>" "" \
+    "profile agentroom-bwrap $LIB/bin/bwrap flags=(unconfined) {" "  userns," "}" > "$PROFILE"
+  if apparmor_parser -r "$PROFILE"; then
+    echo "   AppArmor allows namespaces for that copy only"
+  else
+    echo "   could not load the AppArmor rule $PROFILE"; exit 1
+  fi
+else
+  echo "   this system does not lock namespaces - no AppArmor rule needed"
+fi
+
 echo "== 3. the claude program, for the builder"
 SRC="$(command -v claude || true)"
 [ -n "$SRC" ] || SRC=/root/.local/bin/claude
@@ -49,9 +77,7 @@ SRC="$(readlink -f "$SRC")"
 if [ ! -x "$SRC" ]; then
   echo "   claude is not installed - see $ROOT/plan/README.md"; exit 1
 fi
-mkdir -p "$LIB"
 install -o root -g root -m 755 "$SRC" "$LIB/claude"
-chmod 755 "$LIB"
 echo "   $LIB/claude - $("$LIB/claude" --version 2>/dev/null)"
 
 echo "== 4. the builder's own login"

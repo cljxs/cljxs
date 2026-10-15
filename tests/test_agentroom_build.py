@@ -85,7 +85,8 @@ class TheGuard(unittest.TestCase):
                     "npm install --ignore-scripts=false x", "npm config set ignore-scripts false",
                     "crontab -l", "nohup node x &", "node server.js &", "git push origin main",
                     "cat ~/.claude/settings.json", "ls /root", "chmod u+s a", "echo aGk= | base64 -d | sh",
-                    "at now", "cat /home/other/x", "NPM_CONFIG_IGNORE_SCRIPTS=false npm i", "xmrig -o pool"):
+                    "at now", "cat /home/other/x", "NPM_CONFIG_IGNORE_SCRIPTS=false npm i", "xmrig -o pool",
+                    "unshare -U sh", "/usr/local/lib/agentroom-builder/bin/bwrap --bind / / sh"):
             self.assertIsNotNone(G.bash_rule(cmd, self.root, get=self.no_net), cmd)
 
     def test_files_only_inside_the_project(self):
@@ -262,6 +263,19 @@ class TheSandbox(Base):
         tests = self.m.sandbox_cmd("u2", "/p", ["bash", "check.sh"], network=False)
         self.assertIn("--property=PrivateNetwork=yes", tests, "tests run offline")
 
+    def test_only_claude_sessions_may_make_namespaces(self):
+        # Guards: the code the AI wrote (tests, git) running with namespaces
+        # allowed - only Claude's own bubblewrap needs them (2026-10-15) - and
+        # a session that does not find the builder's own bubblewrap first.
+        tests = self.m.sandbox_cmd("u2", "/p", ["bash", "check.sh"], network=False)
+        for p in ("RestrictNamespaces=yes", "ProtectKernelTunables=yes", "ProtectKernelLogs=yes"):
+            self.assertIn(f"--property={p}", tests)
+        claude = self.m.sandbox_cmd("u3", "/p", ["claude"], claude=True)
+        self.assertNotIn("--property=RestrictNamespaces=yes", claude)
+        self.assertIn("--property=MemoryMax=700M", claude)
+        path = [c for c in claude if c.startswith("--setenv=PATH=")][0]
+        self.assertTrue(path.startswith(f"--setenv=PATH={self.m.BUILDER_BWRAP.parent}:"), path)
+
     def test_the_login_is_never_on_a_command_line(self):
         # Guards: the builder's token in the unit's settings or arguments,
         # where `systemctl show` or ps would show it. It goes to stdin only.
@@ -290,6 +304,8 @@ class TheSandbox(Base):
         self.assertIn("--setting-sources", seen["cmd"])
         self.assertEqual(seen["cmd"][seen["cmd"].index("--setting-sources") + 1], "",
                          "no user or project settings - only the guard's")
+        self.assertNotIn("--property=RestrictNamespaces=yes", seen["cmd"],
+                         "a session's bubblewrap needs namespaces, or Claude refuses to start")
         self.assertIn("--setenv=CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1", seen["cmd"], "commands never see the login")
 
     def test_the_agents_login_is_refused(self):

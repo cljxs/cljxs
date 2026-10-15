@@ -81,7 +81,12 @@ to a wrapper - never a file, an argument or a unit setting), and
 **The sandbox** (systemd-run, enforced by the kernel): 700MB of memory, half
 the CPU, 256 processes; the system read-only except the builder's home;
 `/root` invisible; no way to become root; everything it started is killed
-when the session ends. Tests and git run in it with no network and no login.
+when the session ends. Tests and git run in it with no network, no login and
+no namespaces. Claude's bubblewrap (which hides the login from its commands)
+needs namespaces, which Ubuntu 24.04 locks: the setup script gives the builder
+its own copy of bwrap and an AppArmor rule for that copy only
+(`/etc/apparmor.d/agentroom-bwrap`), and the guard refuses bwrap and unshare
+in the AI's commands.
 
 **The guard** sees every tool call first (a PreToolUse hook Claude cannot
 switch off: `--setting-sources ""` and a root-owned `--settings`). It refuses

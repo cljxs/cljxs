@@ -61,6 +61,9 @@ DOWNLOADS = "https://api.npmjs.org/downloads/point/last-week/"
 # case matters. Word boundaries keep `subject` from matching `su`.
 BASH_RULES = [
     (r"(^|[;&|(\s`])(sudo|su|doas|pkexec|runuser|chroot|nsenter)\b", "running as another user is not allowed"),
+    # The builder's account may make namespaces (Claude's own bubblewrap
+    # needs them to hide the login); the AI may not make its own.
+    (r"(^|[;&|(\s`/])(bwrap|unshare|newuidmap|newgidmap)\b", "making sandboxes or namespaces of its own is not allowed"),
     (r"\bchmod\s+[^;&|]*[ugoa]*\+[rwx]*s|\bchmod\s+[0-7]*[4-7][0-7]{3}\b|\bsetcap\b", "setuid bits and capabilities are not allowed"),
     (r"\b(crontab|systemctl|launchctl)\b|(^|[;&|]\s*)(at|batch|service)\s", "scheduling or services are not allowed - nothing may outlive the session"),
     (r"\b(nohup|setsid|disown|screen|tmux)\b", "nothing may keep running after the session"),
