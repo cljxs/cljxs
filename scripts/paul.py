@@ -16,7 +16,7 @@ state/last-run.txt - and this file does the rest.
 
     the owner     init  sender  preflight  status  mark  exclude
                   teardown  go-live  dry-next  revise  prospects  approve  reject  find
-                  remove
+                  remove  places  photo
     the wrapper   should-run  brief  finish        (scripts/paul-cycle.sh)
     Paul itself   seen  check
 
@@ -38,7 +38,8 @@ said no.
 Standard library only. Network: the business's own current site (to check
 what Paul says is wrong with it), Vercel (deploy, verify, tear down), the
 reference sites (are they up today) and OpenRouter's key endpoint through
-budget.py. Nothing else.
+budget.py, and Google's Places API for one lookup per new prospect when
+GOOGLE_PLACES_KEY is set. Nothing else.
 """
 
 import argparse
@@ -1250,6 +1251,10 @@ def check_site(site, t, old_page=None):
             errs.append(f'{rel} has no entry in target.json "photos" - say where it came from')
             continue
         src = str(p.get("source") or "")
+        if rel.startswith(f"img/{SUPPLIED_PREFIX}"):
+            if p.get("kind") != "business":
+                errs.append(f'{rel} is their own photo, saved by the owner - kind "business"')
+            continue
         if not re.match(r"^https?://", src):
             errs.append(f"{rel}: its source must be the URL you downloaded it from")
         if p.get("kind") not in ("business", "stock"):
@@ -1258,6 +1263,12 @@ def check_site(site, t, old_page=None):
             host = urllib.parse.urlsplit(src).hostname or ""
             if not any(host == h or host.endswith("." + h) for h in STOCK_HOSTS):
                 errs.append(f"{rel}: stock photos come from Unsplash or Pexels only, not {host}")
+    theirs = sorted(f"img/{x.name}" for x in (site / "img").glob(f"{SUPPLIED_PREFIX}*")) \
+        if (site / "img").is_dir() else []
+    if theirs and not any(r in rasters for r in theirs):
+        errs.append(f"the owner saved {len(theirs)} of their own photos for this site "
+                    f"({', '.join(theirs[:3])}{'...' if len(theirs) > 3 else ''}) and it uses none - "
+                    f"use them, the hero first")
     had = old_site_photos(old_page)
     if had and not rasters:
         errs.append(f"their current site shows {had} photo(s) and yours shows none - "
@@ -1851,6 +1862,10 @@ def cmd_preflight(a):
     print("              (should be off - 0m, or unset with no default interval; if either")
     print("               shows an interval, send Claude these two lines)")
 
+    if places_key():
+        print(f"  google      key set - {places_used()} of {PLACES_DAILY} lookups used today")
+    else:
+        print("  google      no GOOGLE_PLACES_KEY (optional) - prospects are not checked on Google")
     left, need = budget_left(), min_left()
     if left is None:
         print(f"  budget      unreadable - a cycle starts anyway (budget.py's rule)")
@@ -1947,7 +1962,10 @@ def cmd_deck(a):
     except OSError:
         activity = []
     print(json.dumps({
-        "prospects": list(reversed(load_prospects())),
+        "prospects": [dict(p, supplied=supplied(p["id"]) if str(p.get("id") or "").isdigit() else [],
+                           maps=maps_link(p.get("name"), (p.get("google") or {}).get("place_id"))
+                           if (p.get("google") or {}).get("place_id") else None)
+                      for p in reversed(load_prospects())],
         "plan": plan, "activity": activity,
         "studio": {k: snd.get(k) for k in ("studio", "email", "area", "website") if snd.get(k)},
         "today": today(),
@@ -2265,6 +2283,256 @@ def cmd_dry_next(a):
 #
 # and when the pool is full and nothing is approved, no model is woken.
 
+# --------------------------------------------------------------------------
+# Google: a prospect's listing checked, its photos pointed at - never copied
+# --------------------------------------------------------------------------
+#
+# Owner, 2026-10-15: Paul could not see businesses' Facebook or Instagram
+# (a login wall), so their real photos never reached his sites. Google's
+# Places API answers instead - but its terms say "You must not pre-fetch,
+# cache, or store Places API content" beyond the place ID, and photos shown
+# must carry their author and Google's logo. So code asks Google once per
+# new prospect and keeps only what it decided: the place ID (allowed
+# indefinitely), how many photos the listing has and how many the business
+# posted itself, and what disagreed with what Paul found. The Studio links
+# to the listing; the owner saves the photos worth having and uploads them.
+#
+# Text Search with phone/website is the Enterprise SKU: 1,000 a month free,
+# then $35 per 1,000 (Google's price page, 2026-10-15). PLACES_DAILY keeps
+# a runaway loop inside the free month.
+PLACES_URL = "https://places.googleapis.com/v1/places:searchText"
+PLACES_FIELDS = ("places.id,places.displayName,places.nationalPhoneNumber,places.websiteUri,"
+                 "places.businessStatus,places.photos")
+PLACES_DAILY = 25
+
+
+class PlacesError(Exception):
+    pass
+
+
+def places_key():
+    return (credentials().get("GOOGLE_PLACES_KEY") or os.environ.get("GOOGLE_PLACES_KEY") or "").strip()
+
+
+def places_used(bump=False):
+    """Lookups made today; bump=True counts one more first."""
+    path = A("state", "places-usage.json")
+    d = read_json(path, {}) or {}
+    n = int(d.get("n") or 0) if d.get("day") == today() else 0
+    if bump:
+        n += 1
+        write_json(path, {"day": today(), "n": n})
+    return n
+
+
+def _places_post(body, key, timeout=20):
+    req = urllib.request.Request(PLACES_URL, data=json.dumps(body).encode(), method="POST", headers={
+        "Content-Type": "application/json", "X-Goog-Api-Key": key, "X-Goog-FieldMask": PLACES_FIELDS})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode() or "{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            msg = json.loads(exc.read().decode()).get("error", {}).get("message") or ""
+        except Exception:
+            msg = ""
+        raise PlacesError(f"Google said {exc.code}: {msg[:160] or exc.reason}") from None
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise PlacesError(f"Google could not be reached: {str(exc)[:120]}") from None
+
+
+def same_business(a, b):
+    """One name inside the other once both are normalised: "Milkbox" and
+    "Milkbox Coffee Bar" are one shop; "Rosa's" and "Rosati's" are not."""
+    x, y = norm_name(a), norm_name(b)
+    return bool(x and y) and (x == y or f" {x} " in f" {y} " or f" {y} " in f" {x} ")
+
+
+def google_check(p, key, post=_places_post):
+    """What Google's listing says about a prospect, as code's verdict - never
+    Google's content. {checked, found, place_id, photos, owner_photos, flags}."""
+    if places_used() >= PLACES_DAILY:
+        raise PlacesError(f"today's {PLACES_DAILY} Google lookups are used - checked tomorrow")
+    places_used(bump=True)
+    area = str(p.get("address") or "") or str(load_sender()[0].get("area") or "")
+    d = post({"textQuery": f"{p.get('name')} {area}".strip(), "pageSize": 3}, key)
+    place = next((x for x in d.get("places") or []
+                  if same_business(p.get("name"), (x.get("displayName") or {}).get("text"))), None)
+    if not place:
+        return {"checked": today(), "found": False}
+    shown = (place.get("displayName") or {}).get("text")
+    photos = [x for x in place.get("photos") or [] if isinstance(x, dict)]
+    own = [x for x in photos if any(same_business(shown, (w or {}).get("displayName"))
+                                    for w in x.get("authorAttributions") or [])]
+    flags = []
+    status = place.get("businessStatus")
+    if status == "CLOSED_PERMANENTLY":
+        flags.append(CLOSED_FOR_GOOD)
+    elif status == "CLOSED_TEMPORARILY":
+        flags.append("Google lists it as temporarily closed")
+    theirs, ours = norm_phone(place.get("nationalPhoneNumber")), norm_phone(p.get("phone"))
+    if theirs and ours and theirs != ours:
+        flags.append("the phone Paul found is not the one on their Google listing")
+    if place.get("websiteUri") and str(p.get("current_site") or "").strip().lower() in ("", "none"):
+        flags.append("Google lists a website for them - Paul said they have none")
+    return {"checked": today(), "found": True, "place_id": place.get("id"),
+            "photos": len(photos), "owner_photos": len(own), "flags": flags}
+
+
+CLOSED_FOR_GOOD = "Google lists it as permanently closed"
+
+
+def maps_link(name, place_id):
+    """Google's documented Maps URL for one place - built from the stored ID."""
+    return ("https://www.google.com/maps/search/?api=1&query=" + urllib.parse.quote(str(name or ""))
+            + "&query_place_id=" + urllib.parse.quote(str(place_id or "")))
+
+
+def check_on_google(p, key=None, post=_places_post):
+    """p["google"], set in place. No key: nothing, and nothing is held up."""
+    key = key if key is not None else places_key()
+    if not key:
+        return p
+    try:
+        p["google"] = google_check(p, key, post)
+    except PlacesError as exc:
+        p["google"] = {"checked": today(), "error": str(exc)[:200]}
+    return p
+
+
+def cmd_places(a, post=_places_post):
+    """Check one prospect against Google again, now."""
+    key = places_key()
+    if not key:
+        print("no GOOGLE_PLACES_KEY - python3 scripts/set-credential.py paul GOOGLE_PLACES_KEY")
+        return 1
+    rows = load_prospects()
+    p, err = find_prospect(rows, a.who)
+    if not p:
+        print(err)
+        return 1
+    check_on_google(p, key, post)
+    save_prospects(rows)
+    g = p.get("google") or {}
+    if g.get("error"):
+        print(f"{p['name']}: {g['error']}")
+        return 1
+    if not g.get("found"):
+        print(f"{p['name']}: no Google listing by that name")
+        return 0
+    print(f"{p['name']}: {g['photos']} photo(s) on Google, {g['owner_photos']} posted by the business")
+    for f in g["flags"]:
+        print(f"  !! {f}")
+    print(f"  {maps_link(p['name'], g['place_id'])}")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# photos the owner saved for a prospect (the Studio's Add photos)
+# --------------------------------------------------------------------------
+#
+# Their Facebook, Instagram and Google photos are behind a login or a
+# licence that rules Paul out - but the owner can open them on the iPad and
+# save the good ones. They live in state/photos/<prospect id>/, go into
+# work/site/img/ as yours-NN when the build starts, and the check holds the
+# site until it uses them.
+PHOTO_FROM = ("facebook", "instagram", "google", "website", "owner")
+MAX_SUPPLIED = 12
+SUPPLIED_MAX_BYTES = 6_000_000
+SUPPLIED_PREFIX = "yours-"
+
+
+def photo_dir(pid):
+    return A("state", "photos", str(int(pid)))
+
+
+def supplied(pid):
+    """[{file, from, added}] saved for this prospect, files that exist only."""
+    d = photo_dir(pid)
+    rows = read_json(d / "photos.json", []) or []
+    return [r for r in rows if isinstance(r, dict) and (d / str(r.get("file"))).is_file()]
+
+
+def image_kind(data):
+    if data[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    return None
+
+
+def add_photo(pid, data, origin):
+    """(file, error) - one photo saved for prospect pid."""
+    if origin not in PHOTO_FROM:
+        return None, f"say where it is from: {', '.join(PHOTO_FROM)}"
+    ext = image_kind(data)
+    if not ext:
+        return None, "not a JPEG or PNG"
+    if len(data) > SUPPLIED_MAX_BYTES:
+        return None, f"{len(data) // 1024} KB - under {SUPPLIED_MAX_BYTES // 1_000_000} MB please"
+    have = supplied(pid)
+    if len(have) >= MAX_SUPPLIED:
+        return None, f"{MAX_SUPPLIED} photos is plenty - remove one first"
+    d = photo_dir(pid)
+    d.mkdir(parents=True, exist_ok=True)
+    used = {int(m.group(1)) for r in have for m in [re.match(r"(\d+)", str(r["file"]))] if m}
+    n = next(i for i in range(1, 1000) if i not in used)
+    name = f"{n:02d}{ext}"
+    tmp = d / f".{name}.part"
+    tmp.write_bytes(data)
+    tmp.replace(d / name)
+    write_json(d / "photos.json", have + [{"file": name, "from": origin, "added": today()}])
+    return name, None
+
+
+def remove_photo(pid, name):
+    d = photo_dir(pid)
+    have = supplied(pid)
+    if not any(r["file"] == name for r in have):
+        return False
+    (d / name).unlink(missing_ok=True)
+    write_json(d / "photos.json", [r for r in have if r["file"] != name])
+    return True
+
+
+def place_supplied(pid, site):
+    """Copy the owner's photos into the build's img/ as yours-NN, once each.
+    [(rel path, from)]."""
+    out = []
+    img = Path(site) / "img"
+    for r in supplied(pid):
+        dest = img / f"{SUPPLIED_PREFIX}{r['file']}"
+        if not dest.exists():
+            img.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(photo_dir(pid) / r["file"], dest)
+        out.append((f"img/{dest.name}", r["from"]))
+    return out
+
+
+def cmd_photo(a):
+    rows = load_prospects()
+    p, err = find_prospect(rows, a.who)
+    if not p:
+        print(err)
+        return 1
+    if a.action == "add":
+        try:
+            data = Path(a.file).read_bytes()
+        except (OSError, TypeError) as exc:
+            print(f"cannot read {a.file}: {exc}")
+            return 1
+        name, err = add_photo(p["id"], data, a.origin)
+        print(f"refused: {err}" if err else f"saved {name} for {p['name']} (from their {a.origin})")
+        return 1 if err else 0
+    if a.action == "remove":
+        ok = remove_photo(p["id"], a.file or "")
+        print(f"removed {a.file}" if ok else f"{p['name']} has no photo {a.file}")
+        return 0 if ok else 1
+    for r in supplied(p["id"]):
+        print(f"  {r['file']}  from their {r['from']}  ({r['added']})")
+    return 0
+
+
 PROSPECT_POOL = 5
 PROSPECT_FIELDS = ("name", "category", "kind", "address", "phone", "hours", "current_site",
                    "problems", "channel", "contact", "sources", "why", "links")
@@ -2373,6 +2641,12 @@ def finish_scout(cyc, get=http_get):
         print(f"PAUL'S PROSPECTS: {err}")
         return 1
     rows = load_prospects()
+    key = places_key()
+    for p in list(good):
+        check_on_google(p, key)
+        if CLOSED_FOR_GOOD in (p.get("google") or {}).get("flags", []):
+            good.remove(p)
+            dropped.append((p["name"], [CLOSED_FOR_GOOD]))
     nxt = max([int(p.get("id") or 0) for p in rows] + [0]) + 1
     for i, p in enumerate(good):
         p.update(id=nxt + i, found=day, status="waiting")
@@ -2596,6 +2870,8 @@ def cmd_brief(a, get=http_get):
                 "day": today(), "passes": 0, "resume": resume != "none", "kind": kind,
                 "prospect": pid})
 
+    yours = place_supplied(pid, A("work", "site")) if str(pid or "").isdigit() else []
+
     rows = contacted()
     recent = [f"{r['business']} | {norm_phone(r['phone']) or '-'}" for r in rows[-15:]]
     if kind == "scout":
@@ -2635,6 +2911,12 @@ def cmd_brief(a, get=http_get):
           *([f"FOCUS        {KIND_WORDS[focus_kind()]} only (kind \"{focus_kind()}\"). Code refuses",
              "             any other kind; none good enough is a valid no-target day."]
             if focus_kind() else []),
+          *([f"photos       {len(yours)} of THEIR OWN photos, saved by the owner from their "
+             f"{', '.join(sorted({o for _r, o in yours}))}:",
+             *[f"             work/site/{r}" for r, _o in yours],
+             "             Use these before anything else - the hero first. Open each with",
+             "             view_image. List each in photos with kind \"business\" and source",
+             "             \"saved by the owner from their <where>\". Stock only for gaps."] if yours else []),
           f"passes       {MAX_PASSES} - each `paul.py check` that finds problems uses one",
           f"skip         {len(rows)} businesses already contacted or excluded. Check a candidate:",
           '             python3 ../../scripts/paul.py seen "<name>" "<phone>"']
@@ -3000,6 +3282,13 @@ def main(argv=None):
     p.add_argument("who", help="its number, or part of its name")
     p.add_argument("why", nargs="*")
     sub.add_parser("find", help="start a cycle now (whatever cycle_plan says it is for)")
+    p = sub.add_parser("places", help="check a prospect against its Google listing now")
+    p.add_argument("who", help="its number, or part of its name")
+    p = sub.add_parser("photo", help="photos you saved for a prospect: add, remove, list")
+    p.add_argument("who", help="its number, or part of its name")
+    p.add_argument("action", choices=("add", "remove", "list"))
+    p.add_argument("file", nargs="?", help="add: the image file; remove: its name (01.jpg)")
+    p.add_argument("--from", dest="origin", default="facebook", choices=PHOTO_FROM)
     p = sub.add_parser("remove", help="delete every build of one business, for good")
     p.add_argument("who", help="part of the business name, or a slug")
     p.add_argument("--yes", action="store_true", help="really delete (without it, only lists)")
@@ -3027,6 +3316,7 @@ def main(argv=None):
             "teardown": cmd_teardown, "go-live": cmd_go_live, "dry-next": cmd_dry_next,
             "revise": cmd_revise, "prospects": cmd_prospects, "approve": cmd_approve,
             "reject": cmd_reject, "find": cmd_find, "remove": cmd_remove,
+            "places": cmd_places, "photo": cmd_photo,
             "focus": cmd_focus, "deck": cmd_deck,
             "should-run": cmd_should_run, "brief": cmd_brief, "finish": cmd_finish,
             "seen": cmd_seen, "check": cmd_check}[a.cmd](a)

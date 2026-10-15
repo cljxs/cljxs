@@ -6,7 +6,8 @@
 // No rules here. Everything comes from `python3 scripts/paul.py deck`, the
 // same code `paul.py status` uses. Three buttons write, each by running the
 // paul.py command that does it (owner, 2026-10-13): Approve + build, Reject,
-// and Find prospects. Nothing here sends, deploys or marks a pitch.
+// and Find prospects; since 2026-10-15 also Add/remove photos and Check
+// Google. Nothing here sends, deploys or marks a pitch.
 
 const { execFile } = require('child_process');
 const express = require('express');
@@ -27,6 +28,10 @@ function deck() {
 }
 
 const ID_RE = /^\d{1,6}$/;
+// paul.py's own names for a saved photo (01.jpg) and where it came from.
+const PHOTO_RE = /^\d{2}\.(jpg|png)$/;
+const FROM = ['facebook', 'instagram', 'google', 'website', 'owner'];
+const UPLOAD_TYPES = { 'image/jpeg': '.jpg', 'image/png': '.png' };
 
 function paul(args, timeout = 60000) {
   return new Promise(resolve => {
@@ -45,6 +50,45 @@ function register(app) {
   app.post('/api/paul/prospects/:id/reject', async (req, res) => {
     if (!ID_RE.test(req.params.id)) return res.status(400).json({ error: 'bad id' });
     const r = await paul(['reject', req.params.id]);
+    res.status(r.ok ? 200 : 409).json(r);
+  });
+  // Photos the owner saved from the business's Facebook, Instagram or Google
+  // listing (owner, 2026-10-15). The page sends one image at a time, already
+  // resized - and re-encoded, which drops the phone's location data. The
+  // bytes go to a file and `paul.py photo add` decides whether to keep it.
+  app.post('/api/paul/prospects/:id/photos',
+    express.raw({ type: Object.keys(UPLOAD_TYPES), limit: '7mb' }), async (req, res) => {
+      const { id } = req.params, from = String(req.query.from || 'facebook');
+      const ext = UPLOAD_TYPES[String(req.headers['content-type'] || '').split(';')[0]];
+      if (!ID_RE.test(id) || !FROM.includes(from)) return res.status(400).json({ error: 'bad request' });
+      if (!ext || !Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'send a JPEG or PNG' });
+      const tmp = path.join(PAUL, 'state', `.upload-${process.pid}-${Date.now()}${ext}`);
+      try {
+        fs.mkdirSync(path.dirname(tmp), { recursive: true });
+        fs.writeFileSync(tmp, req.body);
+        const r = await paul(['photo', id, 'add', tmp, '--from', from]);
+        res.status(r.ok ? 200 : 409).json(r);
+      } finally {
+        fs.rm(tmp, { force: true }, () => {});
+      }
+    });
+  app.delete('/api/paul/prospects/:id/photos/:file', async (req, res) => {
+    const { id, file } = req.params;
+    if (!ID_RE.test(id) || !PHOTO_RE.test(file)) return res.status(400).json({ error: 'bad request' });
+    const r = await paul(['photo', id, 'remove', file]);
+    res.status(r.ok ? 200 : 404).json(r);
+  });
+  app.get('/api/paul/photo/:id/:file', (req, res) => {
+    const { id, file } = req.params;
+    if (!ID_RE.test(id) || !PHOTO_RE.test(file)) return res.status(400).json({ error: 'bad name' });
+    const full = path.join(PAUL, 'state', 'photos', id, file);
+    if (!fs.existsSync(full)) return res.status(404).json({ error: 'no such photo' });
+    res.sendFile(full, { headers: { 'Cache-Control': 'max-age=86400' } });
+  });
+  // Check one prospect against its Google listing again (paul.py places).
+  app.post('/api/paul/prospects/:id/google', async (req, res) => {
+    if (!ID_RE.test(req.params.id)) return res.status(400).json({ error: 'bad id' });
+    const r = await paul(['places', req.params.id]);
     res.status(r.ok ? 200 : 409).json(r);
   });
   app.post('/api/paul/find', async (req, res) => {

@@ -16,12 +16,14 @@ import importlib.util
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
 import types
 import unittest
 import urllib.parse
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -1667,6 +1669,222 @@ class TheOwnerPicksPaulBuilds(PaulCase):
         header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
         for word in ("SCOUT", "BUILD", "RESUME", "work/prospects.json", "work/prospect.json"):
             self.assertIn(word, header)
+
+
+PLACES = json.loads((ROOT / "tests" / "fixtures" / "google-places-searchtext.json").read_text())
+JPEG = b"\xff\xd8\xff\xe0" + b"0" * 4000
+PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 4000
+
+
+class GoogleIsCheckedNotCopied(PaulCase):
+    """Owner, 2026-10-15: Paul could not see businesses' Facebook or
+    Instagram, so their real photos never reached his sites. Google's Places
+    API can say what a listing holds - but its terms forbid storing its
+    content beyond the place ID, so code keeps only its own verdict: the ID,
+    how many photos and how many the business posted, and what disagrees."""
+
+    def post(self, places=None):
+        sent = []
+
+        def post(body, key):
+            sent.append((body, key))
+            return {"places": PLACES["places"] if places is None else places}
+        return post, sent
+
+    def test_the_listing_is_found_and_only_a_verdict_is_kept(self):
+        post, sent = self.post()
+        g = paul.google_check(prospect(), "k", post)
+        self.assertEqual(set(g), {"checked", "found", "place_id", "photos", "owner_photos", "flags"},
+                         "no name, phone, address, hours or photo of Google's is stored")
+        self.assertEqual((g["found"], g["place_id"]), (True, "ChIJ-test-not-a-real-place-1"))
+        self.assertEqual((g["photos"], g["owner_photos"], g["flags"]), (4, 2, []))
+        self.assertIn("Rosa's Tailoring", sent[0][0]["textQuery"])
+        self.assertIn("Austin", sent[0][0]["textQuery"])
+
+    def test_a_different_business_is_not_this_one(self):
+        # "Rosati's Pizza" is not "Rosa's Tailoring", whatever Google ranks first.
+        post, _ = self.post([PLACES["places"][1]])
+        self.assertEqual(paul.google_check(prospect(), "k", post), {"checked": paul.today(), "found": False})
+
+    def test_what_disagrees_is_flagged(self):
+        place = dict(PLACES["places"][0], nationalPhoneNumber="(512) 444-7777",
+                     websiteUri="https://rosas.example", businessStatus="CLOSED_TEMPORARILY")
+        post, _ = self.post([place])
+        flags = paul.google_check(prospect(), "k", post)["flags"]
+        self.assertEqual(len(flags), 3, flags)
+        self.assertTrue(any("phone" in f for f in flags))
+        self.assertTrue(any("website" in f for f in flags))
+        self.assertTrue(any("temporarily closed" in f for f in flags))
+
+    def test_a_scout_files_the_verdict_and_drops_one_closed_for_good(self):
+        closed = dict(PLACES["places"][0], id="ChIJ-closed", displayName={"text": "Closed Cafe"},
+                      businessStatus="CLOSED_PERMANENTLY", nationalPhoneNumber="(512) 444-0001")
+        paul.A("state", "credentials.env").write_text("GOOGLE_PLACES_KEY=test-not-a-key\n")
+        old = paul._places_post
+        self.addCleanup(setattr, paul, "_places_post", old)
+        calls = []
+        paul._places_post = lambda body, key, timeout=20: calls.append(body) or {
+            "places": [closed] if "Closed Cafe" in body["textQuery"] else PLACES["places"]}
+        # check_on_google's default is bound at definition; pass through the module
+        real = paul.check_on_google
+        self.addCleanup(setattr, paul, "check_on_google", real)
+        paul.check_on_google = lambda p, key=None, post=None: real(p, key, paul._places_post)
+        TheOwnerPicksPaulBuilds.scouted(self, [prospect(), prospect(name="Closed Cafe", phone="(512) 444-0001")])
+        rc, out = self.run_quiet(paul.cmd_finish, self.args(dry=True), get=offline)
+        self.assertEqual(rc, 0, out)
+        rows = paul.load_prospects()
+        self.assertEqual([p["name"] for p in rows], ["Rosa's Tailoring"])
+        self.assertEqual(rows[0]["google"]["owner_photos"], 2)
+        self.assertIn("dropped Closed Cafe: Google lists it as permanently closed", out)
+        self.assertEqual(paul.places_used(), 2)
+
+    def test_no_key_no_call_and_a_daily_cap(self):
+        post, sent = self.post()
+        p = paul.check_on_google(prospect(), "", post)
+        self.assertNotIn("google", p)
+        self.assertEqual(sent, [])
+        paul.write_json(paul.A("state", "places-usage.json"), {"day": paul.today(), "n": paul.PLACES_DAILY})
+        p = paul.check_on_google(prospect(), "k", post)
+        self.assertIn("lookups are used", p["google"]["error"])
+        self.assertEqual(sent, [], "nothing is asked past the cap")
+
+    def test_the_key_goes_in_a_header_never_the_url(self):
+        seen = []
+
+        class R:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b'{"places": []}'
+        old = urllib.request.urlopen
+        self.addCleanup(setattr, urllib.request, "urlopen", old)
+        urllib.request.urlopen = lambda req, timeout=20: seen.append(req) or R()
+        paul._places_post({"textQuery": "x"}, "test-not-a-key")
+        req = seen[0]
+        self.assertNotIn("test-not-a-key", req.full_url)
+        self.assertEqual(req.get_header("X-goog-api-key"), "test-not-a-key")
+        self.assertEqual(req.get_header("X-goog-fieldmask"), paul.PLACES_FIELDS)
+        self.assertNotIn("photos.", paul.PLACES_FIELDS.replace("places.photos", ""), "no photo media is fetched")
+
+    def test_the_studio_gets_a_maps_link_from_the_stored_id(self):
+        TheOwnerPicksPaulBuilds.seed(self, dict(prospect(), status="waiting",
+                                                google={"found": True, "place_id": "ChIJ-x", "photos": 3,
+                                                        "owner_photos": 1, "flags": []}))
+        d = json.loads(self.run_quiet(paul.cmd_deck, self.args())[1])
+        self.assertIn("query_place_id=ChIJ-x", d["prospects"][0]["maps"])
+        self.assertEqual(d["prospects"][0]["supplied"], [])
+
+
+class TheOwnersPhotosComeFirst(PaulCase):
+    """Owner, 2026-10-15: "Add photos" in the Studio - the owner saves a
+    business's photos from Facebook, Instagram or Google on the iPad and
+    adds them; Paul builds with them before any stock."""
+
+    def setUp(self):
+        super().setUp()
+        TheOwnerPicksPaulBuilds.seed(self, dict(prospect(), status="approved", decided="x"))
+
+    def test_adding_checks_what_it_is_given(self):
+        self.assertEqual(paul.add_photo(1, JPEG, "facebook"), ("01.jpg", None))
+        self.assertEqual(paul.add_photo(1, PNG, "instagram"), ("02.png", None))
+        self.assertIn("JPEG or PNG", paul.add_photo(1, b"<html>", "facebook")[1])
+        self.assertIn("where it is from", paul.add_photo(1, JPEG, "myspace")[1])
+        self.assertIn("MB", paul.add_photo(1, b"\xff\xd8\xff" + b"0" * paul.SUPPLIED_MAX_BYTES, "facebook")[1])
+        self.assertTrue(paul.remove_photo(1, "01.jpg"))
+        self.assertFalse(paul.remove_photo(1, "01.jpg"))
+        self.assertEqual(paul.add_photo(1, JPEG, "google"), ("01.jpg", None), "a gap is filled")
+        self.assertEqual([(r["file"], r["from"]) for r in paul.supplied(1)], [("02.png", "instagram"), ("01.jpg", "google")])
+        for _ in range(paul.MAX_SUPPLIED - 2):
+            paul.add_photo(1, JPEG, "facebook")
+        self.assertIn("plenty", paul.add_photo(1, JPEG, "facebook")[1])
+
+    def test_the_build_gets_them_and_is_told(self):
+        paul.add_photo(1, JPEG, "facebook")
+        paul.add_photo(1, JPEG, "instagram")
+        _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
+        self.assertIn("2 of THEIR OWN photos, saved by the owner from their facebook, instagram", facts)
+        self.assertIn("work/site/img/yours-01.jpg", facts)
+        self.assertEqual(paul.A("work", "site", "img", "yours-02.jpg").read_bytes(), JPEG)
+        _rc, again = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
+        self.assertIn("RESUME", again)
+        self.assertEqual(len(list(paul.A("work", "site", "img").glob("yours-*"))), 2, "copied once")
+
+    def site(self, ref, photos):
+        site = paul.A("work", "site")
+        (site / "img").mkdir(parents=True, exist_ok=True)
+        (site / "img" / "yours-01.jpg").write_bytes(JPEG)
+        (site / "img" / "hero.jpg").write_bytes(JPEG)
+        (site / "index.html").write_text(INDEX.replace("img/hero.jpg", ref))
+        (site / "style.css").write_text("body{margin:0}")
+        return site, target(photos=photos)
+
+    def test_the_check_wants_them_used_and_called_theirs(self):
+        site, t = self.site("img/yours-01.jpg", [{"file": "img/yours-01.jpg", "source": "saved by the owner from their Facebook",
+                                                  "kind": "business"}])
+        errs = paul.check_site(site, t)[0]
+        self.assertFalse([e for e in errs if "yours-" in e or "source must" in e], errs)
+        site, t = self.site("img/yours-01.jpg", [{"file": "img/yours-01.jpg", "source": "x", "kind": "stock"}])
+        self.assertTrue(any('kind "business"' in e for e in paul.check_site(site, t)[0]))
+        site, t = self.site("img/hero.jpg", target()["photos"])
+        self.assertTrue(any("uses none" in e for e in paul.check_site(site, t)[0]))
+
+    def test_paul_is_told(self):
+        header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
+        self.assertIn("work/site/img/yours-*", header)
+
+
+class ThePhotoRoutes(unittest.TestCase):
+    """paul.js against a real root: an upload is kept by `paul.py photo add`,
+    served back by its own name only, and removed the same way."""
+
+    NODE = shutil.which("node")
+    API = ROOT / "mission-control-api"
+
+    def test_routes(self):
+        if not (self.NODE and (self.API / "node_modules" / "express").is_dir()):
+            self.skipTest("node or the Deck's node_modules are not installed")
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "scripts").symlink_to(ROOT / "scripts")
+            (root / "agents" / "paul" / "state").mkdir(parents=True)
+            (root / "agents" / "paul" / "state" / "prospects.json").write_text(json.dumps(
+                {"prospects": [dict(prospect(), id=3, status="waiting")]}))
+            js = (
+                f"const express=require({json.dumps(str(self.API / 'node_modules' / 'express'))});"
+                f"const paul=require({json.dumps(str(self.API / 'paul.js'))});"
+                "const http=require('http');const app=express();app.use(express.json());paul.register(app);"
+                "const srv=app.listen(0,'127.0.0.1',async()=>{const port=srv.address().port;"
+                "const go=(m,p,b,t)=>new Promise(ok=>{const q=http.request({host:'127.0.0.1',port,path:p,method:m,"
+                "headers:{'Content-Type':t||'image/jpeg'}},r=>{let s='';r.on('data',c=>s+=c);r.on('end',()=>"
+                "ok([r.statusCode,s]));});q.end(b);});"
+                "const jpg=Buffer.concat([Buffer.from([0xff,0xd8,0xff,0xe0]),Buffer.alloc(3000)]);"
+                "const out={up:await go('POST','/api/paul/prospects/3/photos?from=instagram',jpg),"
+                "notimg:await go('POST','/api/paul/prospects/3/photos?from=facebook',Buffer.from('<html>')),"
+                "badtype:await go('POST','/api/paul/prospects/3/photos?from=facebook','x','text/plain'),"
+                "badfrom:await go('POST','/api/paul/prospects/3/photos?from=myspace',jpg),"
+                "badid:await go('POST','/api/paul/prospects/3x/photos',jpg),"
+                "get:await go('GET','/api/paul/photo/3/01.jpg'),"
+                "climb:await go('GET','/api/paul/photo/3/..%2Fprospects.json'),"
+                "del:await go('DELETE','/api/paul/prospects/3/photos/01.jpg'),"
+                "gone:await go('GET','/api/paul/photo/3/01.jpg')};"
+                "process.stdout.write(JSON.stringify(out));srv.close();});")
+            r = subprocess.run([self.NODE, "-e", js], capture_output=True, text=True, timeout=120,
+                               env=dict(os.environ, ECOSYSTEM_ROOT=d))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            out = json.loads(r.stdout)
+            self.assertEqual(out["up"][0], 200, out["up"])
+            self.assertIn("saved 01.jpg", out["up"][1])
+            self.assertEqual(out["notimg"][0], 409, "paul.py decides what is a picture")
+            self.assertEqual((out["badtype"][0], out["badfrom"][0], out["badid"][0]), (400, 400, 400))
+            self.assertEqual(out["get"][0], 200)
+            self.assertEqual(out["climb"][0], 400)
+            self.assertEqual((out["del"][0], out["gone"][0]), (200, 404))
+            self.assertEqual([p.name for p in (root / "agents" / "paul" / "state").glob(".upload-*")], [],
+                             "no upload is left behind")
 
 
 class ThePitchSaysWhatItCostsAndWhatCanChange(PaulCase):

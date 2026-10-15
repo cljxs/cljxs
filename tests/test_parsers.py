@@ -5653,7 +5653,12 @@ class PaulHasAWorkshop(unittest.TestCase):
         self.assertIn("paul(['approve', req.params.id, '--build'])", self.js)
         self.assertIn("paul(['reject', req.params.id])", self.js)
         self.assertIn("paul(['find'])", self.js)
-        self.assertEqual(self.js.count("app.post("), 3, "approve, reject, find - nothing that sends or marks")
+        # 2026-10-15: and Add photos and Check Google - still nothing that sends or marks.
+        posts = re.findall(r"app\.post\('([^']+)'", self.js)
+        self.assertEqual(sorted(posts), ["/api/paul/find", "/api/paul/prospects/:id/approve",
+                                         "/api/paul/prospects/:id/google", "/api/paul/prospects/:id/photos",
+                                         "/api/paul/prospects/:id/reject"])
+        self.assertEqual(re.findall(r"app\.delete\('([^']+)'", self.js), ["/api/paul/prospects/:id/photos/:file"])
         self.assertIn("const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,80}$/;", self.js)
         self.assertIn("dotfiles: 'deny'", self.js)
         server = (ROOT / "mission-control-api" / "server.js").read_text()

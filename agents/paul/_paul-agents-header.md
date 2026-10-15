@@ -185,9 +185,12 @@ think they paid for this.
   licence - only if verified). Food - warm editorial, food photos, a menu.
   Salons and wellness - calm, airy, a service menu, booking. Never a SaaS
   look; never the layout FACTS says you used last.
-- **Photos:** their own posted photos first - their site, Facebook,
-  Instagram, Google Business Profile owner uploads - then Unsplash or Pexels
-  for gaps. All-stock is a last resort, and `notes` must say where you
+- **Photos:** their own photos first. When FACTS lists `photos` the owner
+  saved for this business (work/site/img/yours-*), those come before
+  anything - the hero first; list each with kind "business" and source
+  "saved by the owner from their Facebook" (or wherever FACTS says). Then
+  their site, Facebook, Instagram, Google Business Profile owner uploads -
+  then Unsplash or Pexels for gaps. All-stock is a last resort, and `notes` must say where you
   looked for theirs. **Stock must pass for a shop like theirs, in their
   town:** close-ups of tools, chairs, hands, food, textures - never a scene
   with identifiable people, another business's signs, or writing in another
