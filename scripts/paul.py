@@ -2478,6 +2478,20 @@ def cmd_find(a, run=subprocess.run):
     return 0 if ok else 1
 
 
+def on_the_plan():
+    """True when Paul wakes on the owner's Claude plan (tasks/engines.json,
+    whose one reader is wake.py). His runs then spend nothing on OpenRouter,
+    so its allowance is not a reason to hold him - it held every cycle of his
+    with money he was not going to spend. Should the plan refuse a wake,
+    wake.py sends it through OpenRouter, where his own key's daily cap is
+    still the stop."""
+    w = _load("wake_paul", "wake.py")
+    try:
+        return w.setting("paul", w.engines(ROOT / "tasks" / "engines.json"))["engine"] == "claude"
+    except (SystemExit, ValueError):
+        return False
+
+
 def hold_reason(dry):
     """Why the model should not be woken now, or None. Decided by code
     because a woken model that has nothing to do still costs money to say so."""
@@ -2502,6 +2516,8 @@ def hold_reason(dry):
         if len(waiting) >= MAX_WAITING:
             return (f"{len(waiting)} pitches are waiting for you to send - mark the ones you "
                     f"have sent: python3 scripts/paul.py mark <slug> sent")
+    if on_the_plan():
+        return None
     left, need = budget_left(), min_left()
     if left is not None and left < need:
         return (f"today's AI allowance has ${max(left, 0):.2f} left; a Paul cycle needs "

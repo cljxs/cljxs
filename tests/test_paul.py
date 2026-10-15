@@ -543,6 +543,16 @@ class HoldWithoutWaking(PaulCase):
         paul.budget_left = lambda: 0.10
         self.assertIn("allowance", paul.hold_reason(dry=True))
 
+    def test_on_the_claude_plan_openrouter_money_does_not_hold_him(self):
+        # Owner, 2026-10-15: every agent on the Claude plan. Paul's run then
+        # spends nothing on OpenRouter; holding him for its allowance would
+        # stop every cycle for money he was not going to spend.
+        (self.root / "tasks").mkdir(exist_ok=True)
+        (self.root / "tasks" / "engines.json").write_text(
+            json.dumps({"agents": {"paul": {"engine": "claude", "model": "sonnet"}}}))
+        paul.budget_left = lambda: 0.10
+        self.assertIsNone(paul.hold_reason(dry=True))
+
     def test_a_hold_is_one_memory_line_not_one_a_day(self):
         self.approved()
         for _ in range(3):
