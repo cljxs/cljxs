@@ -8,7 +8,9 @@ The kit tests that render need ffmpeg and skip without it; the API tests need
 node and the Deck's node_modules and skip without them.
 """
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import re
@@ -1202,6 +1204,73 @@ class TheShopIsWiredIn(unittest.TestCase):
             self.assertNotIn("open-api.tiktok.com", src)
             self.assertNotIn("/publish.json", src)
             self.assertNotIn("publishing_succeeded", src)
+
+
+class TryAgainInTheGallery(unittest.TestCase):
+    """Owner, 2026-10-15: "a rerun button for designs when they don't work
+    because of not having enough money at that time". emily-finish.py --retry
+    does whichever step a build is missing - and never a listing on sale."""
+
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("emily_finish_retry", SCRIPTS / "emily-finish.py")
+        self.m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.m)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.d = Path(self.tmp.name) / "side-eye-cat"
+        self.d.mkdir()
+        self.m.find_build = lambda raw: self.d
+        self.calls = []
+        self.m.redo = lambda raw, product=None, keep_art=False: self.calls.append(keep_art) or 0
+
+    def build(self, **kw):
+        (self.d / "build.json").write_text(json.dumps(dict({"status": "ready_local"}, **kw)))
+
+    def art(self, placeholder=False):
+        mark = b"emily-assets placeholder - not artwork" if placeholder else b""
+        (self.d / "design.png").write_bytes(b"\x89PNG\r\n\x1a\n" + mark + b"\0" * 64)
+
+    def run_quiet(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return self.m.retry("side-eye-cat")
+
+    def test_no_art_is_drawn_again(self):
+        self.build()
+        self.assertEqual(self.run_quiet(), 0)
+        self.assertEqual(self.calls, [False], "a fresh drawing, then the draft")
+
+    def test_placeholder_art_is_drawn_again(self):
+        self.build()
+        self.art(placeholder=True)
+        self.run_quiet()
+        self.assertEqual(self.calls, [False])
+
+    def test_real_art_without_a_draft_is_only_drafted(self):
+        # The Side-Eye Cat: real art, LOCAL ONLY. Drawing it again would
+        # cost money and change art that was fine.
+        self.build()
+        self.art()
+        self.run_quiet()
+        self.assertEqual(self.calls, [True])
+
+    def test_a_finished_build_is_left_alone(self):
+        self.build(printify_product_id="abc123")
+        self.art()
+        self.run_quiet()
+        self.assertEqual(self.calls, [])
+
+    def test_a_listing_on_sale_is_never_touched(self):
+        self.build(published=True)
+        self.assertEqual(self.run_quiet(), 1)
+        self.assertEqual(self.calls, [])
+
+    def test_the_gallery_offers_it_and_the_api_runs_it(self):
+        html = (API / "public" / "village.html").read_text()
+        self.assertIn("retryBox(b)", html.split("async function loadEmilyBuilds", 1)[1])
+        js = (API / "emily.js").read_text()
+        route = js.split("'/api/emily/builds/:slug/retry'", 1)[1].split("app.post(", 1)[0]
+        self.assertIn("'--retry', slug", route)
+        self.assertIn("SLUG_RE.test", route)
 
 
 class TheShopApi(unittest.TestCase):

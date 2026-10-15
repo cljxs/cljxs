@@ -2578,6 +2578,35 @@ function blockedReason(b){
   return '';
 }
 
+// A build that did not come out - no real art (the day's money ran out
+// mid-drawing), or no Printify draft - gets a Try again button. Which step
+// it redoes is emily-finish.py --retry's decision. Owner, 2026-10-15.
+function needsRetry(b){
+  return !b.published && (b.art_mode === 'placeholder' || !b.images.length || !b.printify || !!b.draft_blocked);
+}
+function retryBox(b){
+  const r = b.retry;
+  if (r && r.running) return `<div class="muted" style="margin-top:6px">Trying again… a drawing takes a minute or two.</div>`;
+  const said = r && r.said ? `<div class="${r.ok ? 'muted' : 'bwhy'}" style="margin-top:6px">${esc(r.said)}</div>` : '';
+  if (!needsRetry(b)) return said;
+  return `${said}<button class="shopbtn" style="margin-top:8px" onclick="retryBuild('${esc(b.slug)}', this)">↻ Try again</button>`;
+}
+async function retryBuild(slug, btn){
+  const b = builds.find(x => x.slug === slug);
+  const art = b && (b.art_mode === 'placeholder' || !b.images.length);
+  if (!confirm(art ? 'Draw this design again and make its Printify draft? One drawing costs a few cents.'
+                   : 'Make the Printify draft from this art again? This costs nothing.')) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/emily/builds/${encodeURIComponent(slug)}/retry`, { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok) alert(j.error || 'That did not work.');
+  } catch (e) {
+    alert('Could not reach the API: ' + e.message);
+  }
+  loadEmilyBuilds();
+}
+
 // The shop banner from emily-banner.py, if one has been drawn. Asked for with
 // its timestamp so the six-second refresh reuses the cached image.
 async function loadEmilyShop() {
@@ -2650,8 +2679,12 @@ async function loadEmilyBuilds() {
           <div class="muted" style="font-size:11px;margin-top:6px">${b.images.length} image${
             b.images.length === 1 ? '' : 's'} · ${kb(b.bytes)}</div>
           ${blockedReason(b) ? `<div class="bwhy">${esc(blockedReason(b))}</div>` : ''}
+          ${retryBox(b)}
         </div></div>`;
       }).join('') + '</div>';
+    // While one is being tried again, look again shortly.
+    clearTimeout(loadEmilyBuilds.t);
+    if (builds.some(b => b.retry && b.retry.running)) loadEmilyBuilds.t = setTimeout(loadEmilyBuilds, 8000);
   } catch {
     host.innerHTML = '<div class="muted">Could not load the gallery.</div>';
   }

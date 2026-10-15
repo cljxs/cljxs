@@ -171,7 +171,34 @@ def redo(raw, product=None, keep_art=False):
     return draft(d)
 
 
+# THE TRY-AGAIN button in Emily's gallery (owner, 2026-10-15: "a rerun
+# button for designs when they don't work because of not having enough money
+# at that time"). One build, now, doing whichever step it is missing: no real
+# art - draw it, then draft (costs one drawing); real art and no Printify
+# draft - draft it from that art (free); both there - nothing.
+def retry(raw):
+    d = find_build(raw)
+    if d is None:
+        print(f"emily-finish: no build folder for {raw}")
+        return 1
+    if _json(d / "build.json").get("published"):
+        print(f"emily-finish: {d.name} is on sale - not touching a live listing")
+        return 1
+    ea = _module("emily_assets_retry", "emily-assets.py")
+    art = d / "design.png"
+    if not art.is_file() or ea.is_placeholder(art):
+        print(f"emily-finish: {d.name} has no real art - drawing it again, then drafting")
+        return redo(raw)
+    if not _json(d / "build.json").get("printify_product_id"):
+        print(f"emily-finish: {d.name} has its art and no Printify draft - drafting it")
+        return redo(raw, keep_art=True)
+    print(f"emily-finish: {d.name} has real art and a Printify draft - nothing to try again")
+    return 0
+
+
 def main():
+    if sys.argv[1:2] == ["--retry"] and len(sys.argv) > 2:
+        return retry(sys.argv[2])
     if sys.argv[1:2] == ["--redraw"]:
         return redraw()
     if sys.argv[1:2] in (["--redo"], ["--redraft"]):

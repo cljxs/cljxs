@@ -20,6 +20,9 @@ const { execFile } = require('child_process');
 const { ROOT, AGENTS_DIR } = require('./db');
 
 const BUILD_SCRIPT = path.join(ROOT, 'scripts', 'emily-build.py');
+const FINISH_SCRIPT = path.join(ROOT, 'scripts', 'emily-finish.py');
+// Try-again runs, by build: running, or what the last one said.
+const RETRIES = new Map();
 
 const BUILDS = path.join(AGENTS_DIR, 'emily', 'builds');
 // Shop-level art - the Etsy banner - kept out of builds/ so nothing that walks
@@ -233,6 +236,7 @@ function listBuilds() {
   return dirs
     .map(describe)
     .filter(Boolean)
+    .map(b => (RETRIES.has(b.slug) ? { ...b, retry: RETRIES.get(b.slug) } : b))
     .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
 }
 
@@ -323,6 +327,26 @@ function register(app, db) {
     const blocked = /printify product/i.test(why);
     const missing = /no build called/i.test(why);
     res.status(blocked ? 409 : missing ? 404 : 500).json({ error: why, blocked, slug });
+  });
+
+  // Try a failed build again, from the gallery: the art when a drawing failed
+  // (the day's money ran out), the Printify draft when that failed. Which
+  // step is emily-finish.py --retry's decision, not this route's. It runs in
+  // the background - a drawing can take a minute or two - and the gallery
+  // shows it running and then what it said.
+  app.post('/api/emily/builds/:slug/retry', (req, res) => {
+    const slug = req.params.slug;
+    if (!SLUG_RE.test(slug || '')) return res.status(400).json({ error: 'bad slug' });
+    if (RETRIES.get(slug)?.running) return res.status(409).json({ error: 'already trying this one again' });
+    const state = { running: true, started_at: new Date().toISOString(), said: '' };
+    RETRIES.set(slug, state);
+    execFile('python3', [FINISH_SCRIPT, '--retry', slug], { cwd: ROOT, timeout: 10 * 60 * 1000 },
+      (err, stdout, stderr) => {
+        const lines = `${stdout || ''}\n${stderr || ''}`.split('\n').map(s => s.trim()).filter(Boolean);
+        Object.assign(state, { running: false, ok: !err, finished_at: new Date().toISOString(),
+                               said: lines.slice(-3).join(' · ').slice(0, 400) });
+      });
+    res.status(202).json({ ok: true, slug, message: 'Trying again - this takes a minute or two.' });
   });
 
   app.post('/api/emily/builds/:slug/restore', async (req, res) => {
