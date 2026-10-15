@@ -69,7 +69,7 @@ class WakeOnEitherEngine(unittest.TestCase):
         (ws / "HEARTBEAT.md").write_text("heartbeat chores\n")
         (self.root / "tasks").mkdir()
         (self.root / "plan").mkdir()
-        (self.root / "plan" / "credentials.env").write_text("CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-test-token-value\n")
+        (self.root / "plan" / "credentials.env").write_text("CLAUDE_CODE_OAUTH_TOKEN=plan-login-placeholder\n")
 
     def engines(self, agents):
         (self.root / "tasks" / "engines.json").write_text(json.dumps({"agents": agents}))
@@ -78,7 +78,7 @@ class WakeOnEitherEngine(unittest.TestCase):
         (self.rec / "claude-says").write_text(result(says))
         env = dict(os.environ, ECOSYSTEM_ROOT=str(self.root), REC=str(self.rec), FAKE_EXIT=str(code),
                    CLAUDE_BIN=str(self.bin / "claude"), OPENCLAW_BIN=str(self.bin / "openclaw"),
-                   PATH=f"{self.bin}:{os.environ.get('PATH', '')}", ANTHROPIC_API_KEY="sk-ant-api-should-not-be-used")
+                   PATH=f"{self.bin}:{os.environ.get('PATH', '')}", ANTHROPIC_API_KEY="api-key-placeholder")
         env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
         return subprocess.run([sys.executable, str(SCRIPTS / "wake.py"), "--agent", "ace", "--message", "Scheduled cycle.",
                                "--session-id", "wake-ace-1760", "--timeout", "60", "--json"],
@@ -109,7 +109,7 @@ class WakeOnEitherEngine(unittest.TestCase):
         self.assertIn("Bash", args)
         self.assertEqual((self.rec / "claude-cwd").read_text().strip(), str(self.root / "agents" / "ace"))
         env = dict(l.split("=", 1) for l in (self.rec / "claude-env").read_text().splitlines() if "=" in l)
-        self.assertEqual(env.get("CLAUDE_CODE_OAUTH_TOKEN"), "sk-ant-oat01-test-token-value")
+        self.assertEqual(env.get("CLAUDE_CODE_OAUTH_TOKEN"), "plan-login-placeholder")
         # Set, the CLI bills the API instead of the plan.
         self.assertNotIn("ANTHROPIC_API_KEY", env)
         # The repo's CLAUDE.md is for whoever develops the ecosystem; read by
