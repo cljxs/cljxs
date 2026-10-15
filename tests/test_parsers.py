@@ -6047,7 +6047,9 @@ class EachHouseLooksLikeItsTrade(unittest.TestCase):
 
     def test_every_themed_house_and_prop_is_drawn(self):
         themed = self.themed()
-        self.assertEqual(sorted(themed), ["ace", "belfort", "bolt", "emily", "paul", "scout"])
+        # Stan (2026-10-15): Sylvester's idea man, who hunts for software to
+        # build - an idea lab with a lightbulb on the roof, and a telescope.
+        self.assertEqual(sorted(themed), ["ace", "belfort", "bolt", "emily", "paul", "scout", "stan"])
         for name, (prop, h) in themed.items():
             self.assertIn(f"themed('{name}',", self.html, f"{name} has no house drawn")
             self.assertIn(f"generateTexture('{prop}',", self.html, f"{name}'s {prop} is never drawn")

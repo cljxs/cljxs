@@ -364,6 +364,7 @@ const THEMED = {
   scout:   { prop: 'globe', h: 172, lamp: [64, 5] },
   paul:    { prop: 'drafting', h: 168, lamp: [101, 3] },
   bolt:    { prop: 'rocket', h: 176, lamp: [64, 4] },
+  stan:    { prop: 'telescope', h: 160, lamp: [64, 15] },
 };
 
 // What each resident wears, so the person outside a house fits it. A base
@@ -451,6 +452,29 @@ const OUTFITS = {
       }
       px(g, 6, 3, 12, 2, 0x15161a); px(g, 5, 5, 2, 4, 0x2b2f3a); px(g, 17, 5, 2, 4, 0x2b2f3a);   // headphones
       px(g, 6, 2, 12, 1, 0x2b2f3a);
+    } },
+  stan: { shirt: 0xe8742a, back: 0xd9661f, legs: 0x4a4038, hair: 0x7a5534, shoes: 0x3a2a1a,
+    more: (g, f) => {                                        // the idea hunter: deerstalker, orange vest
+      const TAN = 0xc9a26b, TAN2 = 0x9c7a4a, LENS = 0xbfe9ff, RIM = 0x8a6414;   // over a white shirt, a magnifier
+      px(g, 6, 1, 12, 3, TAN); px(g, 7, 0, 10, 1, TAN);       // the cap, checked
+      [[8, 1], [11, 2], [14, 1], [16, 2], [9, 3]].forEach(([x, y]) => px(g, x, y, 1, 1, TAN2));
+      if (f === 'down') {
+        px(g, 6, 4, 2, 3, TAN); px(g, 16, 4, 2, 3, TAN);      // ear flaps
+        px(g, 10, 11, 4, 10, 0xf4f1ea); px(g, 11, 13, 1, 1, 0xb8bec7); px(g, 11, 16, 1, 1, 0xb8bec7);
+        px(g, 15, 11, 1, 1, 0xffd23f); px(g, 15, 12, 1, 2, 0xfff3b0);   // a pencil in the vest
+        px(g, 19, 15, 1, 5, 0x5a3d1c);                        // the magnifier, held out
+        px(g, 17, 10, 5, 1, RIM); px(g, 17, 15, 5, 1, RIM); px(g, 16, 11, 1, 4, RIM); px(g, 22, 11, 1, 4, RIM);
+        px(g, 17, 11, 5, 4, LENS, .85); px(g, 18, 11, 1, 1, 0xffffff);
+      } else if (f === 'side') {
+        px(g, 3, 3, 4, 1, TAN);                               // the front peak
+        px(g, 9, 4, 2, 3, TAN);
+        px(g, 15, 13, 1, 5, 0x5a3d1c);                        // magnifier, out in front
+        px(g, 15, 8, 5, 1, RIM); px(g, 15, 13, 5, 1, RIM); px(g, 14, 9, 1, 4, RIM); px(g, 20, 9, 1, 4, RIM);
+        px(g, 15, 9, 5, 4, LENS, .85);
+      } else {
+        px(g, 14, 4, 4, 1, TAN);                              // the back peak
+        px(g, 6, 13, 12, 1, 0xd9661f); px(g, 11, 11, 2, 10, 0xc25a1a);   // vest seam
+      }
     } },
   sylvester: { shirt: 0x7c5cff, back: 0x6a4be8, legs: 0x2b3446, hair: 0x2a1a12, shoes: 0xf2f2f2, skin: 0xd8a47a,
     more: (g, f) => {                                        // violet hoodie, glasses, a headset, a laptop
@@ -1521,6 +1545,92 @@ function makeTextures(s) {
     px(g, dx0 - 6, TH - 5, 44, 5, 0xeef2f6);
   });
 
+  // Stan, Sylvester's idea man, who hunts for software worth building: the
+  // idea lab. A garage workshop with a giant lightbulb on the roof (his lamp
+  // is in the bulb), a dish listening for what people complain about, an
+  // idea board of sticky notes and app icons in the long window, a half-up
+  // garage door with a laptop on the bench, a whiteboard flowchart, and a
+  // pipe that carries the good ones off towards Sylvester's studio.
+  themed('stan', (g, HW, TH, r) => {
+    const OR = 0xff6600, OR2 = 0xff8a3d, WALL = 0x3a4150, WALL2 = 0x485062, WALL3 = 0x2c323e;
+    const BULB = 0xfff3b0, GLOW = 0xffe066, CORK = 0xc89a5e;
+    const NOTES = [0xffd23f, 0xff9ec4, 0x9fd8ff, 0x86efac, 0xffb86b];
+    const APPS = [0x7c5cff, 0x22d3ee, 0xf05252, 0x34d399, 0xf7931a, 0x3b82f6];
+    g.fillStyle(0x000000, .18); g.fillEllipse(HW / 2, TH - 3, HW - 6, 10);
+    // the bulb on the roof: a glow, the glass, a filament, the screw cap
+    g.fillStyle(GLOW, .22); g.fillCircle(64, 15, 15);
+    g.fillStyle(BULB, 1); g.fillCircle(64, 15, 11);
+    g.fillStyle(0xffffff, .7); g.fillCircle(60, 11, 3);
+    [[60, 16], [62, 13], [64, 16], [66, 13], [68, 16]].reduce((a, b) => {
+      g.lineStyle(1, 0xd9661f, 1); g.lineBetween(a[0], a[1], b[0], b[1]); return b; });
+    px(g, 59, 25, 10, 2, 0xe5e7eb); px(g, 58, 27, 12, 2, 0x9aa0aa); px(g, 59, 29, 10, 2, 0xc0c6cf);
+    px(g, 60, 31, 8, 2, 0x8d949f); px(g, 62, 33, 4, 5, 0x596079);
+    // the dish, listening, and an aerial with a red tip
+    px(g, 104, 26, 3, 12, 0x596079);
+    g.fillStyle(0xe5e7eb, 1); g.fillEllipse(108, 22, 18, 12);
+    g.fillStyle(0xb8bec7, 1); g.fillEllipse(109, 23, 12, 7);
+    px(g, 108, 15, 1, 8, 0x596079); px(g, 107, 14, 3, 2, OR);
+    px(g, 21, 18, 1, 20, 0x8d949f); px(g, 20, 16, 3, 3, 0xf05252);
+    [[-4, 0], [-8, 2], [4, 0], [8, 2]].forEach(([dx, dy]) => px(g, 21 + dx, 20 + dy, 1, 1, 0xfbbf24, .7));  // its signal
+    // the parapet, with the orange edge
+    px(g, 2, 38, HW - 4, 6, WALL3); px(g, 2, 38, HW - 4, 2, OR);
+    // the upper floor: ribbed metal, and the long window with the idea board
+    px(g, 4, 44, HW - 8, 54, WALL);
+    for (let x = 6; x < HW - 6; x += 4) px(g, x, 44, 1, 54, WALL2);
+    px(g, 12, 50, 104, 42, 0x1b2030); px(g, 12, 50, 104, 2, OR2);
+    px(g, 15, 53, 98, 36, CORK);
+    for (let k = 0; k < 40; k++) px(g, 15 + Math.floor(r() * 97), 53 + Math.floor(r() * 35), 1, 1, 0x9c7440, .6);
+    // sticky notes, each with a line or two of writing
+    [[18, 56], [30, 58], [18, 70], [42, 56], [92, 57], [102, 70], [90, 76], [30, 76]].forEach(([x, y], i) => {
+      px(g, x, y, 9, 9, NOTES[i % NOTES.length]); px(g, x, y, 9, 1, 0x000000, .12);
+      px(g, x + 2, y + 3, 5, 1, 0x000000, .35); if (i % 2) px(g, x + 2, y + 5, 3, 1, 0x000000, .35);
+      px(g, x + 4, y - 1, 1, 2, 0xf05252);                                  // the pin
+    });
+    // app icons, in a grid
+    for (let k = 0; k < 6; k++) {
+      const x = 41 + (k % 3) * 8, y = 71 + Math.floor(k / 3) * 8;   // clear of the mullions at 38 and 64
+      px(g, x, y, 6, 6, APPS[k]); px(g, x, y, 1, 1, CORK); px(g, x + 5, y, 1, 1, CORK);
+      px(g, x, y + 5, 1, 1, CORK); px(g, x + 5, y + 5, 1, 1, CORK); px(g, x + 2, y + 2, 2, 2, 0xffffff);
+    }
+    // a phone wireframe, the big idea, with red string out to two notes
+    px(g, 68, 55, 18, 31, 0xffffff); px(g, 70, 58, 14, 24, 0xeef2f6);
+    px(g, 71, 59, 12, 4, 0x9fd8ff); px(g, 71, 65, 5, 5, 0xd5dde6); px(g, 78, 65, 5, 5, 0xd5dde6);
+    px(g, 71, 72, 12, 2, 0xd5dde6); px(g, 71, 76, 8, 2, 0xd5dde6); px(g, 75, 83, 4, 1, 0xb8bec7);
+    g.lineStyle(1, 0xf05252, .9); g.lineBetween(86, 60, 92, 61); g.lineBetween(86, 78, 90, 80); g.lineBetween(68, 62, 39, 60);
+    for (let x = 12; x < 116; x += 26) px(g, x, 50, 2, 42, 0x1b2030);     // mullions
+    px(g, 12, 92, 104, 3, 0x596079);
+    // the orange band, with a string of bulbs
+    px(g, 4, 98, HW - 8, 4, OR);
+    for (let x = 8; x < HW - 8; x += 7) { px(g, x, 102, 1, 1, 0x2b2f3a); px(g, x, 103, 2, 2, r() < .8 ? GLOW : 0xfff8dc); }
+    // the ground floor
+    px(g, 4, 106, HW - 8, TH - 114, WALL2);
+    for (let y = 108; y < TH - 8; y += 5) px(g, 4, y, HW - 8, 1, WALL, .6);
+    // a garage door half up: slats, and a warm bench under it with a laptop
+    px(g, 7, 110, 36, 40, 0x14171f);
+    px(g, 7, 134, 36, 16, 0x2a2318); px(g, 8, 140, 34, 3, 0x8a5e2a); px(g, 10, 143, 2, 7, 0x6b4520); px(g, 38, 143, 2, 7, 0x6b4520);
+    px(g, 18, 133, 12, 7, 0x2b2f3a); px(g, 19, 134, 10, 5, 0x22d3ee); px(g, 17, 140, 14, 1, 0xb8bec7);
+    px(g, 33, 136, 4, 4, 0xffd23f, .9);                                  // a mug
+    px(g, 7, 134, 36, 1, 0xffe08a, .35);
+    for (let y = 110; y < 132; y += 4) { px(g, 7, y, 36, 3, 0xb8bec7); px(g, 7, y + 3, 36, 1, 0x8d949f); }
+    px(g, 7, 131, 36, 2, 0x596079); px(g, 22, 128, 6, 2, 0x2b2f3a);       // its handle
+    // the whiteboard window: a flowchart, idea -> check -> build
+    px(g, 86, 112, 34, 26, 0x596079); px(g, 88, 114, 30, 22, 0xf4f4f0);
+    px(g, 90, 117, 8, 5, 0xffd23f); px(g, 104, 117, 8, 5, 0x9fd8ff); px(g, 97, 128, 8, 5, 0x86efac);
+    g.lineStyle(1, 0x2b2f3a, .8); g.lineBetween(98, 119, 104, 119); g.lineBetween(108, 122, 103, 128);
+    px(g, 102, 118, 2, 3, 0x2b2f3a); px(g, 88, 136, 30, 2, 0x8a90a0);
+    // the pipe: out of the wall, along, and down into the ground towards Sylvester
+    px(g, 118, 64, 8, 4, 0xc77d3a); px(g, 118, 64, 8, 1, 0xe8a060);
+    px(g, 122, 64, 4, TH - 72, 0xc77d3a); px(g, 122, 64, 1, TH - 72, 0xe8a060);
+    [80, 110, 140].forEach(y => px(g, 121, y, 6, 2, 0x8a5a2b));
+    // the door: wood, a round window, an orange frame, a step
+    px(g, 46, 106, 36, TH - 114, OR);
+    px(g, 49, 109, 30, TH - 117, 0x6b4a2e); px(g, 49, 109, 30, 2, 0x8a5e2a);
+    g.fillStyle(0x2b2f3a, 1); g.fillCircle(64, 120, 6); g.fillStyle(GLOW, .9); g.fillCircle(64, 120, 4);
+    px(g, 74, 132, 2, 4, 0xffd23f);
+    px(g, 2, TH - 8, HW - 4, 8, 0x9aa0aa); px(g, 2, TH - 8, HW - 4, 1, 0xc6ccd6);
+    px(g, 42, TH - 4, 44, 4, 0xc6ccd6);
+  });
+
   /* --- what stands in each themed garden --- */
   {
     let d2 = s.add.graphics();                           // Belfort's bronze bull
@@ -1585,6 +1695,17 @@ function makeTextures(s) {
     px(d2, 27, 0, 2, 9, 0x6b7280); px(d2, 22, 0, 7, 2, 0x6b7280);        // the arm lamp
     px(d2, 19, 1, 5, 4, 0x2b2f3a); px(d2, 19, 5, 5, 1, 0xffe08a);
     d2.generateTexture('drafting', 32, 48); d2.destroy();
+
+    d2 = s.add.graphics();                               // Stan's telescope, on the hunt
+    d2.fillStyle(0x000000, .18); d2.fillEllipse(16, 46, 24, 5);
+    for (let k = 0; k < 22; k++) {                       // the tripod
+      px(d2, 15 - k * .4, 24 + k, 2, 1, 0x7a5230); px(d2, 17 + k * .4, 24 + k, 2, 1, 0x7a5230);
+      px(d2, 16, 24 + k, 1, 1, 0x5c3d22);
+    }
+    for (let k = 0; k < 20; k++) px(d2, 6 + k, 22 - k * .7, 5, 4, k < 3 ? 0x2b2f3a : 0xd9a02c);  // the tube, up and right
+    px(d2, 26, 4, 4, 5, 0x2b2f3a); px(d2, 27, 5, 2, 3, 0x9fd8ff);       // the lens end
+    px(d2, 14, 13, 3, 3, 0x8a6414); px(d2, 15, 21, 2, 4, 0x596079);     // the joint
+    d2.generateTexture('telescope', 32, 48); d2.destroy();
   }
 
   /* --- the town square: a statue of Iron Man on a granite plinth ---
