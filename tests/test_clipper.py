@@ -435,6 +435,51 @@ class APictureOfAFaceIsNotAPerson(unittest.TestCase):
         self.assertEqual([s["layout"] for s in plan], ["crop"], "no split with a picture")
 
 
+class ClipsHouseLoadsStillsNotVideos(unittest.TestCase):
+    """Owner, 2026-10-15: clips "hardly load in the pixel village". The studio
+    drew all 24 clips as <video>, and Safari fetched part of every one before
+    showing any. Now each is a small still, and a video loads when tapped."""
+
+    API = ROOT / "mission-control-api"
+
+    def test_the_grid_has_no_video_until_one_is_tapped(self):
+        html = (self.API / "public" / "village.html").read_text()
+        grid = html.split("$('clipClips').innerHTML = clips.length", 1)[1].split("$('clipTwitch')", 1)[0]
+        self.assertNotIn("<video", grid)
+        self.assertIn("/api/clip/poster/", grid)
+        self.assertIn("function playClip(", html)
+
+    @unittest.skipUnless(shutil.which("node") and shutil.which("ffmpeg")
+                         and (ROOT / "mission-control-api" / "node_modules" / "express").is_dir(),
+                         "needs node, the Deck's node_modules and ffmpeg")
+    def test_a_poster_is_made_once_and_served_small(self):
+        with tempfile.TemporaryDirectory() as d:
+            clips = Path(d) / "clips" / "3"
+            clips.mkdir(parents=True)
+            subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i",
+                            "testsrc2=size=1080x1920:rate=30", "-t", "2", "-c:v", "libx264",
+                            "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(clips / "01.mp4")], check=True)
+            js = (f"const express=require({json.dumps(str(self.API / 'node_modules' / 'express'))});"
+                  f"const clip=require({json.dumps(str(self.API / 'clip.js'))});"
+                  "const http=require('http');const app=express();clip.register(app);"
+                  "const srv=app.listen(0,'127.0.0.1',async()=>{const port=srv.address().port;"
+                  "const go=p=>new Promise(ok=>http.get({host:'127.0.0.1',port,path:p},r=>{let n=0;"
+                  "r.on('data',c=>n+=c.length);r.on('end',()=>ok([r.statusCode,r.headers['content-type']||'',n]));}));"
+                  "const out={a:await go('/api/clip/poster/3/1'),b:await go('/api/clip/poster/3/1'),"
+                  "none:await go('/api/clip/poster/3/9'),bad:await go('/api/clip/poster/3/..%2F1')};"
+                  "process.stdout.write(JSON.stringify(out));srv.close();});")
+            r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=120,
+                               env=dict(os.environ, CLIPPER_HOME=d))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            out = json.loads(r.stdout)
+            self.assertEqual(out["a"][:2], [200, "image/jpeg"])
+            self.assertTrue((clips / "01.poster.jpg").is_file(), "kept beside the clip, made once")
+            self.assertEqual(media.probe(clips / "01.poster.jpg")["width"], 360, "a grid tile, not the clip")
+            self.assertEqual(out["b"], out["a"])
+            self.assertEqual(out["none"][0], 404)
+            self.assertEqual(out["bad"][0], 400)
+
+
 class FramingFallsBackToTheCentre(unittest.TestCase):
     def test_no_opencv_is_a_centre_crop_said_out_loud(self):
         real = framing.plan

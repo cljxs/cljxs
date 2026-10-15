@@ -22,6 +22,8 @@ const CLIPS = path.join(HOME, 'clips');
 // one - `deck`, `spot` and `remake` need nothing beyond the standard library.
 const VENV_PY = path.join(ROOT, 'clipper', '.venv', 'bin', 'python');
 const ID_RE = /^\d{1,9}$/;
+const POSTER_WIDTH = 360;         // px: a grid tile, not the clip
+let posterQueue = Promise.resolve();
 // A source name as `clipper source add` takes it; anything else is refused
 // before it reaches a process.
 const SOURCE_RE = /^[A-Za-z0-9][A-Za-z0-9 _.@-]{0,59}$/;
@@ -61,6 +63,34 @@ function register(app) {
     }
     try { res.json(Object.assign({ installed: true }, JSON.parse(r.stdout))); }
     catch (e) { res.json({ installed: false, error: 'clipper deck printed something that is not JSON' }); }
+  });
+
+  // A still of one clip, for the grid. The studio drew every clip as a
+  // <video> (24 of them) and Safari fetched part of each before showing any,
+  // so Clip's house barely loaded on the iPad (owner, 2026-10-15). Now the
+  // grid is these small JPEGs and a video loads only when tapped. Made once
+  // by ffmpeg beside the clip, again when the clip is newer (a recut), and
+  // one at a time: 24 ffmpegs at once on one CPU would be the same stall.
+  app.get('/api/clip/poster/:video/:rank', (req, res) => {
+    const { video, rank } = req.params;
+    if (!ID_RE.test(video) || !ID_RE.test(rank)) return res.status(400).json({ error: 'bad id' });
+    const name = String(rank).padStart(2, '0');
+    const mp4 = path.join(CLIPS, video, `${name}.mp4`);
+    const jpg = path.join(CLIPS, video, `${name}.poster.jpg`);
+    let st;
+    try { st = fs.statSync(mp4); } catch { return res.status(404).json({ error: 'no such clip' }); }
+    const send = () => res.sendFile(jpg, { headers: { 'Cache-Control': 'no-cache' } }, err => {
+      if (err && !res.headersSent) res.status(500).json({ error: 'no poster' });
+    });
+    let fresh = false;
+    try { fresh = fs.statSync(jpg).mtimeMs >= st.mtimeMs; } catch { /* not made yet */ }
+    if (fresh) return send();
+    posterQueue = posterQueue.then(() => new Promise(done => {
+      execFile('ffmpeg', ['-nostdin', '-v', 'error', '-y', '-ss', '1', '-i', mp4, '-frames:v', '1',
+                          '-vf', `scale=${POSTER_WIDTH}:-2`, '-q:v', '5', jpg],
+               { timeout: 30000 }, () => done());
+    }));
+    posterQueue.then(send);
   });
 
   // One finished clip. sendFile answers range requests, which Safari needs
