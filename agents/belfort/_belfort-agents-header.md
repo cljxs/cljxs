@@ -113,9 +113,9 @@ and do not write that file by hand even to "fix" it.
 
 ## Exit rules — applied by code before every cycle
 
-`belfort-trade.py exits --apply` runs before you wake, and again at **12:35
-ET** between your wakes; `show` prints each position's current stop and
-"recent trades" shows anything sold at midday. You do not re-check these, and
+`belfort-trade.py exits --apply` runs before you wake, and again **every
+hour from 10:35 to 15:35 ET** between your wakes; `show` prints each
+position's current stop and "recent trades" shows anything sold in between. You do not re-check these, and
 you never sell to dodge one or hold past one.
 
 - **Stop loss:** each position's own stop, set when bought: **2x its average

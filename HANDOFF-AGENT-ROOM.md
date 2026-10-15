@@ -102,7 +102,7 @@ the server at `/root/ecosystem`. Every script resolves that root from
 
 | Agent | What it does | Model? |
 |---|---|---|
-| **Belfort** | paper-trades stocks (practice money): the model decides at 9:35 and 15:55 Eastern each trading day, and code checks exits at 12:35 | yes |
+| **Belfort** | paper-trades stocks (practice money): the model decides at 9:35 and 15:55 Eastern each trading day, and code checks exits every hour from 10:35 to 15:35 | yes |
 | **Bolt** | paper-trades crypto every 10 minutes | **no** - pure code |
 | **Ace** | places paper sports bets, and grades them against closing lines | yes |
 | **Peter** | NFL player-prop forecasts; a Grade button scores them after games | no (script) |

@@ -40,6 +40,7 @@ Standard library only.
 """
 
 import argparse
+import fcntl
 import json
 import re
 import os
@@ -717,7 +718,7 @@ def cmd_shadow(a):
         did = apply_exits(p) or ["nothing due"]
         save(p, SHADOW)
         log_equity(p, "shadow")
-        print("shadow book, midday exits: " + "; ".join(did))
+        print("shadow book, hourly exits: " + "; ".join(did))
         return 0
     did = shadow_turn(p)
     p["cycle_count"] = int(p.get("cycle_count") or 0) + 1
@@ -1356,7 +1357,7 @@ def main():
     b.set_defaults(fn=cmd_buy)
 
     sh = sub.add_parser("shadow")
-    sh.add_argument("--exits-only", action="store_true", help="the midday check: sell what is due, buy nothing")
+    sh.add_argument("--exits-only", action="store_true", help="the hourly check: sell what is due, buy nothing")
     sh.set_defaults(fn=cmd_shadow)
     z = sub.add_parser("size", help="the most of a name a buy may take now, and what limits it")
     z.add_argument("symbol")
@@ -1379,7 +1380,14 @@ def main():
     s.set_defaults(fn=cmd_sell)
 
     a = ap.parse_args()
-    return a.fn(a) or 0
+    # ONE AT A TIME. Every command reads portfolio.json and writes it back
+    # whole. The rule check runs hourly since 2026-10-15, closer to Belfort's
+    # own wakes, and a sell from his cycle landing between its read and its
+    # write would be undone. The kernel's lock: a crash releases it.
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    with open(STATE.parent / ".trade.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return a.fn(a) or 0
 
 
 if __name__ == "__main__":

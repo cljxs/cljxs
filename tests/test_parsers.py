@@ -16188,17 +16188,19 @@ class BelfortStopsSizesAndEarnings(unittest.TestCase):
                                   "entry_utc": "2026-09-01 14:00:00"}]}, "shadow.json")
         r = self.run_trade("shadow", "--exits-only")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("shadow book, midday exits: sold PANW: STOP LOSS", r.stdout)
+        self.assertIn("shadow book, hourly exits: sold PANW: STOP LOSS", r.stdout)
         after = self.saved("shadow.json")
         self.assertEqual((after["positions"], after["cash"], after["cycle_count"]), ([], 9880.0, 4),
                          "no AMD bought, and not counted as a cycle")
         self.assertEqual(json.loads((self.state / "equity.jsonl").read_text().splitlines()[-1])["book"], "shadow")
         self.assertIn("nothing due", self.run_trade("shadow", "--exits-only").stdout)
 
-    def test_the_midday_timer(self):
+    def test_the_hourly_timer(self):
         timer = (ROOT / "deploy" / "belfort-exits.timer").read_text()
         service = (ROOT / "deploy" / "belfort-exits.service").read_text()
-        self.assertIn("OnCalendar=Mon..Fri 12:35 America/New_York", timer)
+        # Owner, 2026-10-15: "Check more often" - every hour 10:35-15:35,
+        # between the 9:35 and 15:55 wakes, instead of 12:35 alone.
+        self.assertIn("OnCalendar=Mon..Fri 10..15:35 America/New_York", timer)
         runs = [l.split("=", 1)[1] for l in service.splitlines() if l.startswith("ExecStart=")]
         self.assertEqual([r.split("belfort-trade.py ")[1] for r in runs], ["exits --apply", "shadow --exits-only"])
         self.assertNotIn("openclaw", service, "code only: no model is woken")
@@ -16208,10 +16210,25 @@ class BelfortStopsSizesAndEarnings(unittest.TestCase):
         self.assertIn("OnCalendar=Mon..Fri 09..16:00/10 America/New_York",
                       (ROOT / "deploy" / "belfort-fetch.timer").read_text())
 
+    def test_two_trades_never_write_over_each_other(self):
+        # Hourly checks (2026-10-15) run closer to Belfort's own wakes. Every
+        # command reads portfolio.json and writes it back whole, so one that
+        # started while another was mid-write would undo it. They take turns.
+        import fcntl
+        with open(self.state / ".trade.lock", "w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            proc = subprocess.Popen([sys.executable, str(SCRIPTS / "belfort-trade.py"), "exits", "--apply"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                    env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)))
+            time.sleep(1.5)
+            self.assertIsNone(proc.poll(), "it waits while another command holds the book")
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, err)
+
     def test_belfort_is_told(self):
         head = (ROOT / "agents" / "belfort" / "_belfort-agents-header.md").read_text()
         for line in ("belfort-trade.py size MRVL", "1% of the\nportfolio", "earnings within 5 trading days",
-                     "again at **12:35\nET**", "**8+ trading days**, and behind QQQ"):
+                     "again **every\nhour from 10:35 to 15:35 ET**", "**8+ trading days**, and behind QQQ"):
             self.assertIn(line, head)
 
 

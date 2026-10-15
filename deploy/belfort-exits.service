@@ -1,11 +1,11 @@
 [Unit]
-Description=Belfort's midday check: the sell rules on both books, no AI, no buys
+Description=Belfort's hourly check: the sell rules on both books, no AI, no buys
 Documentation=https://github.com/cljxs/cljxs
 After=network-online.target
 
 [Service]
 # Added 2026-10-01 between the 9:35 and 3:55 wake-ups, so a stop crossed in
-# the morning is not left until the close. Code only - stop loss, take
+# the morning is not left until the close; hourly since 2026-10-15. Code only - stop loss, take
 # profit, protect a gain, dead money - on Belfort's book and the no-AI book.
 # Nothing is bought, and no model is woken.
 Type=oneshot
