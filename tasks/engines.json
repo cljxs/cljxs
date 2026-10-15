@@ -15,5 +15,11 @@
     "Check before moving an agent:  python3 scripts/wake.py check",
     "See what runs where:           python3 scripts/wake.py engines"
   ],
-  "agents": {}
+  "agents": {
+    "ace": {
+      "engine": "claude",
+      "model": "haiku",
+      "max_turns": 40
+    }
+  }
 }
