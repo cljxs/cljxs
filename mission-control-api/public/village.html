@@ -4072,7 +4072,7 @@ function renderFrame(offline) {
     : '<div class="wl"><span class="i" style="color:#3ee8a5">✓</span><div class="t"><b>All systems operational</b><span>no issues detected</span></div></div>';
 
   const feed = agents.filter(a => a.memory_line || a.headline)
-    .map(a => ({ a, t: a.last_run ? new Date(a.last_run) : null }))
+    .map(a => ({ a, t: a.last_run_utc ? new Date(a.last_run_utc) : null }))   // last_run has no zone; a browser would read it as local
     .sort((x, y) => (y.t || 0) - (x.t || 0));
   $('fFeedList').innerHTML = feed.map(({ a, t }) =>
     `<div class="row" data-go="${esc(a.name)}" title="${esc(a.memory_line || a.headline)}">${avatarBox(a.name)}<span class="tm">${t && !isNaN(t) ? t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—'}</span><span class="tx"><span class="who">${esc(a.name)}</span>${esc(a.memory_line || a.headline)}</span></div>`).join('')

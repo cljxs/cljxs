@@ -9,8 +9,14 @@ four edges. These check that contract, and that every number in the frame
 comes from what the Deck already serves.
 """
 
+import json
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -73,6 +79,38 @@ class TheFeedAndTheFaces(unittest.TestCase):
         # The textures exist only after create(); the faces are filled in then.
         create = PAGE.split("function create() {", 1)[1][:200]
         self.assertIn("makeTextures(this);\n  fillAvatars();", create)
+
+
+class TheFeedTellsTheRightTime(unittest.TestCase):
+    """Owner, 2026-10-16: "The times on the activity feed aren't correct."
+    Emily ran at 12:47 PM Central and the feed said 5:47 PM. The Deck's
+    last_run is "YYYY-MM-DD HH:MM:SS" in UTC with no zone, and a browser
+    reads that as local time - five hours off in Central daylight time."""
+
+    def test_the_deck_sends_a_time_with_its_zone(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        rep = tmp / "agents" / "emily" / "reports"
+        rep.mkdir(parents=True)
+        (rep / "r.md").write_text("Built Lint Roller Cat Mom Tee, a long enough line\n")
+        when = datetime(2026, 10, 16, 17, 47, tzinfo=timezone.utc).timestamp()
+        os.utime(rep / "r.md", (when, when))
+        js = (f"const m=require({json.dumps(str(ROOT / 'mission-control-api' / 'dashboard-data.js'))});"
+              "const a=m.build().agents.find(x=>x.name==='emily');"
+              "process.stdout.write(JSON.stringify([a.last_run,a.last_run_utc,"
+              "new Date(a.last_run_utc).toLocaleTimeString('en-US',{timeZone:'America/Chicago'})]))")
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(tmp), TZ="America/Chicago")
+        r = subprocess.run(["node", "-e", js], capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        raw, utc, central = json.loads(r.stdout)
+        self.assertEqual(raw, "2026-10-16 17:47:00", "the zoneless form that misled the browser")
+        self.assertEqual(utc, "2026-10-16T17:47:00.000Z")
+        self.assertEqual(central, "12:47:00 PM")
+
+    def test_the_feed_reads_the_zoned_time(self):
+        frame = PAGE.split("function renderFrame(offline) {", 1)[1].split("\nfunction tickClock", 1)[0]
+        self.assertIn("new Date(a.last_run_utc)", frame)
+        self.assertNotIn("new Date(a.last_run)", frame)
 
 
 if __name__ == "__main__":

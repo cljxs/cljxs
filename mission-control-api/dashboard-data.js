@@ -49,10 +49,20 @@ function num(v) {
   return Number.isFinite(n) ? n : null;
 }
 
-function minutesSince(iso) {
+// Every time on disk is UTC, written either as ISO with a Z or as
+// "YYYY-MM-DD HH:MM:SS" without one. A browser reads the second as LOCAL
+// time, which put the village's activity feed five hours ahead (owner,
+// 2026-10-16: "The times on the activity feed aren't correct"). So this is
+// the one reader, and the Deck is sent its answer, never the raw string.
+function parseUtc(iso) {
   if (!iso) return null;
   const t = Date.parse(String(iso).replace(' ', 'T') + (String(iso).endsWith('Z') ? '' : 'Z'));
-  if (!Number.isFinite(t)) return null;
+  return Number.isFinite(t) ? t : null;
+}
+
+function minutesSince(iso) {
+  const t = parseUtc(iso);
+  if (t === null) return null;
   return Math.max(0, Math.round((Date.now() - t) / 60000));
 }
 
@@ -261,6 +271,7 @@ function buildAgent(name) {
     status,
     mode: portfolio ? firstOf(portfolio, ['mode'], null) : null,
     last_run: lastRun,
+    last_run_utc: parseUtc(lastRun) !== null ? new Date(parseUtc(lastRun)).toISOString() : null,
     last_run_age_min: lastRunAge,
     data_age_min: dataAge,
     quotes_asof,
@@ -463,4 +474,4 @@ function build() {
   };
 }
 
-module.exports = { build, startingCapital, combineCapital };
+module.exports = { build, startingCapital, combineCapital, parseUtc };
