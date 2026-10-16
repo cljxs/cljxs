@@ -163,6 +163,15 @@ PROBLEMS = {
 # and only hands Paul the ones that load.
 REFERENCES = (
     ("trade, home services", "https://rourke-plumbing.vercel.app"),
+    # Real contractors' sites, from the owner's pick (2026-10-16): Contractor
+    # Gorilla's list of construction websites, the ones nearest Paul's size of
+    # business. REAL businesses - layout, trust and call-to-action ideas only,
+    # never a fact; and their quote forms are not ours (look_and_law).
+    ("trade: trust line, contact up top", "https://peepels.com/"),
+    ("trade: phone and quote call-to-action", "https://abcseamless.com/"),
+    ("trade: reviews, red calls-to-action", "https://www.rebath.com/"),
+    ("trade: service pages", "https://www.restoretacticsinc.com/"),
+    ("trade: clean layout, project gallery", "https://ebersonconstruction.com/"),
     ("auto shop", "https://repair-champion-auto.vercel.app"),
     ("craft, furniture, product", "https://austin-furniture-upholstery.vercel.app"),
     ("food, cafe", "https://ferngrove-coffee.vercel.app"),
@@ -1236,6 +1245,7 @@ def check_site(site, t, old_page=None):
         errs.append("a 555-01xx number is on the page - that is fiction, not this business")
 
     errs += look_and_law(sc)
+    errs += seo_problems(site, t)
     errs += claim_problems(sc["text"], t)
     errs += identity_problems(sc["text"], t)
     if any(TEMPLATE_MARK in c for c in sc["css"]):
@@ -1348,6 +1358,170 @@ def look_and_law(sc):
                     "policy; the call button is the contact")
     if any(CUSTOM_CURSOR.search(c) for c in sc["css"]):
         errs.append("a custom cursor - leave the visitor's cursor alone")
+    return errs
+
+
+# SEARCH: GOOGLE AND AI ANSWERS (owner, 2026-10-16: "Include SEO as well as
+# AI SEO"). A preview is kept out of search on purpose - noindex, robots.txt
+# - but the site it becomes is the one that must be found, so it is built
+# findable from the first draft and checked here, by code:
+#   * every page: a <title> (the home page's names the business), a meta
+#     description a search result can show whole, and one <h1>;
+#   * the home page: Open Graph tags, for link previews in texts and chats;
+#   * the home page: schema.org JSON-LD for the business - name, phone and
+#     street address that are the ones Paul found, and hours if he has them.
+#     Consistent name/address/phone is what local search and AI assistants
+#     both match a business on;
+#   * AI search: a short FAQ, visible on the page AND as FAQPage JSON-LD -
+#     plain questions with plain answers are what an AI answer quotes;
+#   * no aggregateRating or review in the markup: a rating Paul wrote is a
+#     claim nobody made, and Google treats self-served review markup as spam.
+TITLE_MAX = 65
+DESC_MIN, DESC_MAX = 50, 160
+FAQ_MIN = 3
+NOT_THE_BUSINESS = {"FAQPage", "WebSite", "WebPage", "BreadcrumbList", "Question", "Answer",
+                    "ImageObject", "Organization"}
+
+
+class _Seo(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.title, self.desc, self.h1, self.og, self.ld = None, None, 0, set(), []
+        self._in, self._buf = None, []
+
+    def handle_starttag(self, tag, attrs):
+        a = {k: (v or "") for k, v in attrs}
+        if tag == "title":
+            self._in, self._buf = "title", []
+        elif tag == "script" and a.get("type", "").lower() == "application/ld+json":
+            self._in, self._buf = "ld", []
+        elif tag == "h1":
+            self.h1 += 1
+        elif tag == "meta":
+            if a.get("name", "").lower() == "description":
+                self.desc = a.get("content", "").strip()
+            prop = a.get("property", "").lower()
+            if prop.startswith("og:") and a.get("content", "").strip():
+                self.og.add(prop)
+
+    def handle_endtag(self, tag):
+        if self._in == "title" and tag == "title":
+            self.title = " ".join("".join(self._buf).split())
+            self._in = None
+        elif self._in == "ld" and tag == "script":
+            self.ld.append("".join(self._buf))
+            self._in = None
+
+    def handle_data(self, data):
+        if self._in:
+            self._buf.append(data)
+
+
+def _ld_things(blocks):
+    """Every JSON-LD object on a page, @graph flattened. (things, errors)."""
+    things, errs = [], []
+    for raw in blocks:
+        try:
+            d = json.loads(raw)
+        except ValueError as exc:
+            errs.append(f"a JSON-LD block does not parse ({exc}) - it must be valid JSON")
+            continue
+        stack = d if isinstance(d, list) else [d]
+        while stack:
+            x = stack.pop(0)
+            if isinstance(x, dict):
+                things.append(x)
+                if isinstance(x.get("@graph"), list):
+                    stack += x["@graph"]
+    return things, errs
+
+
+def _types(x):
+    t = x.get("@type")
+    return set(t) if isinstance(t, list) else {t} if isinstance(t, str) else set()
+
+
+def seo_problems(site, t):
+    """What would keep the finished site from being found by Google and
+    quoted by AI search - checked on the files, the same way every time."""
+    site = Path(site)
+    errs = []
+    name, phone = str(t.get("name") or ""), norm_phone(t.get("phone"))
+    addr = str(t.get("address") or "")
+    street = addr.split(",")[0].strip()
+    number = street.split()[0] if street.split() and re.match(r"\d", street.split()[0]) else ""
+    town = addr.split(",")[1].strip() if addr.count(",") >= 1 else ""
+    index = None
+    for page in sorted(site.rglob("*.html")):
+        rel = page.relative_to(site).as_posix()
+        sp = _Seo()
+        try:
+            sp.feed(strip_note(page.read_text(errors="replace")))
+        except Exception:
+            continue                                  # scan_site already says it does not parse
+        if rel == "index.html":
+            index = sp
+        if not sp.title:
+            errs.append(f"{rel}: no <title> - it is the blue link in a search result")
+        elif len(sp.title) > TITLE_MAX:
+            errs.append(f"{rel}: the title is {len(sp.title)} characters - keep it under "
+                        f"{TITLE_MAX} or Google cuts it off")
+        if not sp.desc:
+            errs.append(f'{rel}: no <meta name="description"> - write the line a search result shows')
+        elif not DESC_MIN <= len(sp.desc) <= DESC_MAX:
+            errs.append(f"{rel}: the description is {len(sp.desc)} characters - {DESC_MIN} to "
+                        f"{DESC_MAX}, so a search result shows it whole")
+        if sp.h1 != 1:
+            errs.append(f"{rel}: {sp.h1} <h1> headings - exactly one, saying what the page is")
+    if index is None:
+        return errs
+    if index.title and name and not same_business(name, index.title):
+        errs.append(f'index.html: the title "{index.title}" does not name the business')
+    if town and town.lower() not in f"{index.title or ''} {index.desc or ''}".lower():
+        errs.append(f'index.html: say "{town}" in the title or the description - people search '
+                    f'"<what they need> {town}"')
+    missing = [p for p in ("og:title", "og:description", "og:image") if p not in index.og]
+    if missing:
+        errs.append(f"index.html: no {', '.join(missing)} - the preview a shared link shows")
+    things, bad = _ld_things(index.ld)
+    errs += [f"index.html: {e}" for e in bad]
+    biz = [x for x in things if _types(x) and not _types(x) & NOT_THE_BUSINESS and x.get("address")]
+    if not biz:
+        errs.append('index.html: no schema.org JSON-LD for the business - a <script '
+                    'type="application/ld+json"> with the most specific @type (e.g. '
+                    '"HomeAndConstructionBusiness", "Plumber", "HairSalon", "Restaurant"), name, '
+                    'telephone, address and openingHoursSpecification')
+    else:
+        b = biz[0]
+        if name and not same_business(name, b.get("name")):
+            errs.append(f'JSON-LD "name" is {b.get("name")!r}, not the business, {name!r}')
+        if phone and norm_phone(b.get("telephone")) != phone:
+            errs.append(f'JSON-LD "telephone" must be their number, {t.get("phone")}')
+        a = b.get("address") if isinstance(b.get("address"), dict) else {}
+        if number and number not in str(a.get("streetAddress") or ""):
+            errs.append(f'JSON-LD "address" needs a PostalAddress with streetAddress "{street}", '
+                        f'addressLocality, addressRegion and postalCode')
+        if str(t.get("hours") or "").strip() and not (b.get("openingHoursSpecification")
+                                                      or b.get("openingHours")):
+            errs.append('JSON-LD has no openingHoursSpecification - their hours are known, add them')
+    if any("aggregateRating" in x or "review" in x for x in things):
+        errs.append("JSON-LD has aggregateRating or review - no ratings or reviews in the markup: "
+                    "Paul did not collect them, and Google treats it as spam")
+    visible = norm_name(scan_site(site)["text"])
+    faq = [x for x in things if "FAQPage" in _types(x)]
+    qs = [q for f in faq for q in (f.get("mainEntity") or []) if isinstance(q, dict)]
+    good = [q for q in qs if str(q.get("name") or "").strip()
+            and str(((q.get("acceptedAnswer") or {}) if isinstance(q.get("acceptedAnswer"), dict) else {})
+                    .get("text") or "").strip()]
+    if len(good) < FAQ_MIN:
+        errs.append(f"index.html: AI search quotes plain answers - add a short FAQ ({FAQ_MIN}+ "
+                    f"questions a customer asks, answered from what you sourced) on the page, and "
+                    f"the same as FAQPage JSON-LD")
+    else:
+        hidden = [q["name"] for q in good if norm_name(q["name"]) not in visible]
+        if hidden:
+            errs.append(f'FAQ question "{hidden[0]}" is in the markup but not on the page - every '
+                        f"marked-up question must be visible")
     return errs
 
 

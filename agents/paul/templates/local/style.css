@@ -190,3 +190,10 @@ p { margin: 0 0 1em; }
   .row { grid-auto-columns: 78%; }
   .actions .btn { flex: 1 1 100%; }
 }
+
+/* Questions: plain, readable, no accordion - an answer hidden behind a tap
+   is one a visitor never reads. */
+.faq{margin:18px 0 0;max-width:46rem}
+.faq dt{font-weight:600;margin-top:20px}
+.faq dt:first-child{margin-top:0}
+.faq dd{margin:6px 0 0}

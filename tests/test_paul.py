@@ -15,6 +15,7 @@ reference sites are all fakes handed in where paul.py takes them.
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -45,15 +46,36 @@ SENDER = {"area": "Austin, TX", "name": "Sam Owner", "studio": "Sam Studio",
           "email": "sam@studio.test", "phone": "512 000 1111",
           "address": "PO Box 12, Austin, TX 78701", "price": "350"}
 
+# Findable as well as right (2026-10-16): a title naming the business and its
+# town, a description a result can show whole, Open Graph, the business as
+# schema.org JSON-LD and a visible FAQ marked up as FAQPage (seo_problems).
+SEO_HEAD = """<meta name="description" content="Rosa's Tailoring in Austin: hems, suits and wedding dress alterations, sewn by hand on E 7th St.">
+<meta property="og:title" content="Rosa's Tailoring"><meta property="og:description" content="Alterations in Austin.">
+<meta property="og:image" content="img/hero.jpg">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "ProfessionalService",
+ "name": "Rosa's Tailoring", "telephone": "+1-512-444-0199",
+ "address": {"@type": "PostalAddress", "streetAddress": "1801 E 7th St", "addressLocality": "Austin",
+             "addressRegion": "TX", "postalCode": "78702"},
+ "openingHoursSpecification": [{"@type": "OpeningHoursSpecification",
+   "dayOfWeek": ["Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"], "opens": "10:00", "closes": "18:00"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [
+ {"@type": "Question", "name": "Where is the shop?", "acceptedAnswer": {"@type": "Answer", "text": "1801 E 7th St, Austin."}},
+ {"@type": "Question", "name": "When are you open?", "acceptedAnswer": {"@type": "Answer", "text": "Tuesday to Saturday, 10am to 6pm."}},
+ {"@type": "Question", "name": "How do I book a fitting?", "acceptedAnswer": {"@type": "Answer", "text": "Call (512) 444-0199."}}]}</script>"""
+SEO_FAQ = """<section><h2>Questions</h2><h3>Where is the shop?</h3><p>1801 E 7th St, Austin.</p>
+<h3>When are you open?</h3><p>Tuesday to Saturday, 10am to 6pm.</p>
+<h3>How do I book a fitting?</h3><p>Call (512) 444-0199.</p></section>"""
+
 INDEX = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rosa's Tailoring</title><link rel="stylesheet" href="style.css">
+<title>Rosa's Tailoring | Alterations in Austin</title><link rel="stylesheet" href="style.css">
+""" + SEO_HEAD + """
 <link rel="icon" href="img/icon.svg"></head><body>
 <header class="hero" style="background-image:url('img/hero.jpg')">
 <h1>Rosa's Tailoring</h1><p>Hems, suits and wedding dresses, by hand since 1998.</p>
 <a class="cta" href="tel:+15124440199">Call (512) 444-0199</a></header>
 <main><p>1801 E 7th St, Austin, TX 78702</p><p>Tue-Sat 10am-6pm</p>
-<a href="https://maps.google.com/?q=1801+E+7th+St">Directions</a></main>
+<a href="https://maps.google.com/?q=1801+E+7th+St">Directions</a>""" + SEO_FAQ + """</main>
 </body></html>"""
 
 DRAFT = """Channel: email
@@ -1168,7 +1190,8 @@ def fill_template(site, t):
     shutil.copytree(TEMPLATE, site, dirs_exist_ok=True)
     street, rest = t["address"].split(", ", 1)
     values = {"NAME": t["name"], "PHONE": t["phone"], "PHONE_TEL": "+1" + paul.norm_phone(t["phone"]),
-              "ADDRESS_LINE1": street, "ADDRESS_LINE2": rest, "TOWN": "Austin, Texas"}
+              "ADDRESS_LINE1": street, "ADDRESS_LINE2": rest, "TOWN": "Austin, Texas",
+              "DESCRIPTION": "Hollow Oak Coffee in Austin: coffee and pastries on E 7th St, open six days a week."}
     def one(m):
         k = m.group(1)
         if k in values:
@@ -1885,6 +1908,76 @@ class ThePhotoRoutes(unittest.TestCase):
             self.assertEqual((out["del"][0], out["gone"][0]), (200, 404))
             self.assertEqual([p.name for p in (root / "agents" / "paul" / "state").glob(".upload-*")], [],
                              "no upload is left behind")
+
+
+class FoundOnGoogleAndInAIAnswers(unittest.TestCase):
+    """Owner, 2026-10-16: "Include SEO (search engine optimization) as well as
+    AI SEO". The preview stays out of search; the site it becomes is built
+    findable - and code checks it, the same way every time."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.site = Path(self.tmp.name) / "site"
+        (self.site / "img").mkdir(parents=True)
+
+    def errs(self, index=INDEX, t=None, more=None):
+        (self.site / "index.html").write_text(index)
+        for name, body in (more or {}).items():
+            (self.site / name).write_text(body)
+        return paul.seo_problems(self.site, t or target())
+
+    def has(self, errs, words):
+        self.assertTrue(any(words in e for e in errs), f"{words!r} not in {errs}")
+
+    def test_the_example_is_findable(self):
+        self.assertEqual(self.errs(), [])
+
+    def test_every_page_has_a_title_a_description_and_one_h1(self):
+        e = self.errs(more={"about.html": "<html><head></head><body><h1>A</h1><h1>B</h1></body></html>"})
+        self.has(e, "about.html: no <title>")
+        self.has(e, 'about.html: no <meta name="description">')
+        self.has(e, "about.html: 2 <h1> headings")
+        self.has(self.errs(INDEX.replace("Alterations in Austin", "x" * 80)), "Google cuts it off")
+        self.has(self.errs(INDEX.replace('content="Rosa\'s Tailoring in Austin:', 'content="Hi."><meta name="x" content="')),
+                 "the description is 3 characters")
+
+    def test_the_home_page_names_the_business_and_its_town(self):
+        self.has(self.errs(INDEX.replace("<title>Rosa's Tailoring | Alterations in Austin</title>",
+                                         "<title>Alterations in Austin</title>")), "does not name the business")
+        self.has(self.errs(t=target(address="1801 E 7th St, Round Rock, TX 78664")), 'say "Round Rock"')
+
+    def test_link_previews(self):
+        self.has(self.errs(INDEX.replace('<meta property="og:image" content="img/hero.jpg">', "")), "og:image")
+
+    def test_the_business_markup_matches_what_paul_found(self):
+        self.has(self.errs(INDEX.replace("ProfessionalService", "FAQPage", 1)), "no schema.org JSON-LD")
+        self.has(self.errs(INDEX.replace("+1-512-444-0199", "+1-512-444-0000")), '"telephone" must be their number')
+        self.has(self.errs(INDEX.replace('"streetAddress": "1801 E 7th St"', '"streetAddress": "E 7th St"')),
+                 "PostalAddress with streetAddress")
+        self.has(self.errs(INDEX.replace('"openingHoursSpecification"', '"hoursNote"')), "no openingHoursSpecification")
+        self.has(self.errs(INDEX.replace('"name": "Rosa\'s Tailoring", "telephone"', '"name": "Bob\'s", "telephone"')),
+                 '"name" is "Bob\'s"')
+        self.has(self.errs(INDEX.replace('{"@context": "https://schema.org", "@type": "ProfessionalService"',
+                                         '{"@context": "https://schema.org", "@type": "ProfessionalService", '
+                                         '"aggregateRating": {"ratingValue": 5}')), "no ratings or reviews")
+        self.has(self.errs(INDEX.replace('"@type": "ProfessionalService",', '"@type": "ProfessionalService",,')),
+                 "does not parse")
+
+    def test_ai_search_gets_a_visible_faq(self):
+        self.has(self.errs(INDEX.replace(SEO_FAQ, "")), "is in the markup but not on the page")
+        two = INDEX.replace(',\n {"@type": "Question", "name": "How do I book a fitting?", "acceptedAnswer": '
+                            '{"@type": "Answer", "text": "Call (512) 444-0199."}}', "")
+        self.has(self.errs(two), "add a short FAQ")
+
+    def test_check_site_runs_it(self):
+        body = (SCRIPTS / "paul.py").read_text().split("def check_site(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("errs += seo_problems(site, t)", body)
+
+    def test_paul_is_told(self):
+        header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
+        for word in ("FAQPage", "JSON-LD", "<meta name=\"description\">", "AI search", "contractorgorilla"):
+            self.assertIn(word, header)
 
 
 class ThePitchSaysWhatItCostsAndWhatCanChange(PaulCase):

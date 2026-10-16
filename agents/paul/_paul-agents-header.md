@@ -241,6 +241,38 @@ think they paid for this.
   one clear call to action: a `tel:` link to their number, plus booking or
   directions if it fits. Subtle motion only. Plain HTML, CSS and JS - no
   build step.
+- **Found on Google and in AI search** (the owner, 2026-10-16). The preview
+  is kept out of search on purpose; the site it becomes must be found, so
+  build it findable now. Code checks every point:
+  - Every page: a `<title>` under 65 characters - the home page's names the
+    business and their town ("Rosa's Tailoring | Alterations in Austin") -
+    a `<meta name="description">` of 50-160 characters that a search result
+    can show whole, and exactly one `<h1>` saying what the page is.
+  - The home page: `og:title`, `og:description` and `og:image`, the card a
+    shared link shows in a text or a chat.
+  - The home page: schema.org **JSON-LD** for the business, in a
+    `<script type="application/ld+json">`: the most specific `@type`
+    (Plumber, HomeAndConstructionBusiness, HairSalon, CafeOrCoffeeShop...),
+    their real name, telephone, a PostalAddress and
+    openingHoursSpecification - **the same name, address and phone as the
+    page**, which is what local search and AI assistants match a business
+    on - and `sameAs` with their Facebook, Instagram and Maps links. Never
+    `aggregateRating` or `review`: those are ratings nobody gave you.
+  - **AI search quotes plain answers**: a short FAQ on the home page, three
+    to five questions a customer really asks (parking, booking, cash or
+    card, how long a job takes, the area they cover), answered only from
+    what you sourced, and the same questions as **FAQPage** JSON-LD, word
+    for word. `templates/local/` shows all of it.
+  - Real words a customer would search, in the headline and the headings:
+    what they do and where ("Water heater repair in Cedar Falls"), not a
+    slogan. Photos compressed (under 2 MB each, smaller is better) - a page
+    that takes three seconds on a phone loses the visitor.
+- **Contractor references in FACTS** (from contractorgorilla.com's list of
+  construction websites) are REAL businesses' sites: take the ideas - a
+  trust line near the top, the phone number big and early, a project
+  gallery, a clear service list, one bold call-to-action colour against a
+  quiet palette - never a fact, a name or a claim. Their quote forms are not
+  allowed on ours (no forms): the call button is the contact.
 - Code adds the noindex tags, robots.txt and the "Design concept by" footer.
   Do not write them.
 

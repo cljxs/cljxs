@@ -5,6 +5,32 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{NAME}} | {{KIND}} in {{TOWN}}</title>
 <meta name="description" content="{{DESCRIPTION}}">
+<!-- FOUND ON GOOGLE AND IN AI ANSWERS (paul.py seo_problems). A preview is
+     hidden from search; the site it becomes is not. og: is the card a shared
+     link shows. The JSON-LD says who they are in the form search engines and
+     AI assistants read: the most specific @type (CafeOrCoffeeShop, Bakery,
+     Plumber, HairSalon, HomeAndConstructionBusiness...), their real name,
+     phone, address and hours - the same ones the page shows - and sameAs,
+     their Facebook, Instagram and Maps links. Never aggregateRating or
+     review: nobody gave those ratings to you. -->
+<meta property="og:title" content="{{NAME}}">
+<meta property="og:description" content="{{DESCRIPTION}}">
+<meta property="og:image" content="img/{{HERO_IMG}}">
+<script type="application/ld+json">
+{"@context": "https://schema.org", "@type": "{{SCHEMA_TYPE}}", "name": "{{NAME}}",
+ "telephone": "{{PHONE_TEL}}", "image": "img/{{HERO_IMG}}",
+ "address": {"@type": "PostalAddress", "streetAddress": "{{ADDRESS_LINE1}}", "addressLocality": "{{CITY}}",
+             "addressRegion": "{{STATE}}", "postalCode": "{{ZIP}}"},
+ "openingHoursSpecification": [{"@type": "OpeningHoursSpecification", "dayOfWeek": ["{{DAY}}"],
+                                "opens": "{{OPENS}}", "closes": "{{CLOSES}}"}],
+ "sameAs": ["{{FACEBOOK_URL}}"]}
+</script>
+<script type="application/ld+json">
+{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [
+ {"@type": "Question", "name": "{{FAQ_Q1}}", "acceptedAnswer": {"@type": "Answer", "text": "{{FAQ_A1}}"}},
+ {"@type": "Question", "name": "{{FAQ_Q2}}", "acceptedAnswer": {"@type": "Answer", "text": "{{FAQ_A2}}"}},
+ {"@type": "Question", "name": "{{FAQ_Q3}}", "acceptedAnswer": {"@type": "Answer", "text": "{{FAQ_A3}}"}}]}
+</script>
 <link rel="icon" href="img/icon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -211,6 +237,22 @@
           <tr data-day="0"><th scope="row">Sunday</th><td>{{SUN}}</td></tr>
         </tbody>
       </table>
+    </div>
+  </section>
+
+  <!-- QUESTIONS: three to five a customer really asks - parking, booking,
+       cash or card, how long a job takes - answered only from what you
+       sourced. AI search quotes plain answers like these. The same questions
+       and answers, word for word, are the FAQPage JSON-LD in <head>. -->
+  <section class="section" id="faq" aria-labelledby="faq-title">
+    <div class="wrap">
+      <p class="label">Questions</p>
+      <h2 id="faq-title">Good to know</h2>
+      <dl class="faq">
+        <dt>{{FAQ_Q1}}</dt><dd>{{FAQ_A1}}</dd>
+        <dt>{{FAQ_Q2}}</dt><dd>{{FAQ_A2}}</dd>
+        <dt>{{FAQ_Q3}}</dt><dd>{{FAQ_A3}}</dd>
+      </dl>
     </div>
   </section>
 
