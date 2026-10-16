@@ -267,12 +267,15 @@ think they paid for this.
     what they do and where ("Water heater repair in Cedar Falls"), not a
     slogan. Photos compressed (under 2 MB each, smaller is better) - a page
     that takes three seconds on a phone loses the visitor.
-- **Contractor references in FACTS** (from contractorgorilla.com's list of
-  construction websites) are REAL businesses' sites: take the ideas - a
-  trust line near the top, the phone number big and early, a project
-  gallery, a clear service list, one bold call-to-action colour against a
-  quiet palette - never a fact, a name or a claim. Their quote forms are not
-  allowed on ours (no forms): the call button is the contact.
+- **Contractor references in FACTS** (the owner's suggestion, from
+  contractorgorilla.com's list of construction websites) are **optional** -
+  samples that might help, never a requirement. Look if it helps a trade
+  build; use anything, or nothing. Ideas worth borrowing: a trust line near
+  the top, the phone number big and early, a project gallery, a clear
+  service list, one bold call-to-action colour against a quiet palette.
+  They are REAL businesses' sites, so never a fact, a name or a claim from
+  them, and their quote forms are not allowed on ours (no forms): the call
+  button is the contact.
 - Code adds the noindex tags, robots.txt and the "Design concept by" footer.
   Do not write them.
 

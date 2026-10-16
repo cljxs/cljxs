@@ -163,15 +163,15 @@ PROBLEMS = {
 # and only hands Paul the ones that load.
 REFERENCES = (
     ("trade, home services", "https://rourke-plumbing.vercel.app"),
-    # Real contractors' sites, from the owner's pick (2026-10-16): Contractor
-    # Gorilla's list of construction websites, the ones nearest Paul's size of
-    # business. REAL businesses - layout, trust and call-to-action ideas only,
-    # never a fact; and their quote forms are not ours (look_and_law).
-    ("trade: trust line, contact up top", "https://peepels.com/"),
-    ("trade: phone and quote call-to-action", "https://abcseamless.com/"),
-    ("trade: reviews, red calls-to-action", "https://www.rebath.com/"),
-    ("trade: service pages", "https://www.restoretacticsinc.com/"),
-    ("trade: clean layout, project gallery", "https://ebersonconstruction.com/"),
+    # Real contractors' sites, the owner's suggestion (2026-10-16), from
+    # Contractor Gorilla's list of construction websites: samples that might
+    # help, "he isn't required to use anything from that site". REAL
+    # businesses - ideas only, never a fact; their quote forms are not ours.
+    ("optional idea, trade: trust line", "https://peepels.com/"),
+    ("optional idea, trade: phone CTA", "https://abcseamless.com/"),
+    ("optional idea, trade: red CTAs", "https://www.rebath.com/"),
+    ("optional idea, trade: services", "https://www.restoretacticsinc.com/"),
+    ("optional idea, trade: gallery", "https://ebersonconstruction.com/"),
     ("auto shop", "https://repair-champion-auto.vercel.app"),
     ("craft, furniture, product", "https://austin-furniture-upholstery.vercel.app"),
     ("food, cafe", "https://ferngrove-coffee.vercel.app"),
@@ -3102,7 +3102,8 @@ def cmd_brief(a, get=http_get):
         L.append("             vary the layout - never the same one twice in a row")
     else:
         L.append("last builds  none yet")
-    L.append("references   open the closest one before you build (they are live today):")
+    L.append("references   open the closest one before you build (they are live today);")
+    L.append("             the ones marked optional are the owner's samples - use them or not:")
     for w, u in up:
         L.append(f"             {w:<26} {u}")
     if not up:

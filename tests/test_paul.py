@@ -1976,7 +1976,9 @@ class FoundOnGoogleAndInAIAnswers(unittest.TestCase):
 
     def test_paul_is_told(self):
         header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
-        for word in ("FAQPage", "JSON-LD", "<meta name=\"description\">", "AI search", "contractorgorilla"):
+        # The contractor sites are the owner's samples (2026-10-16): "he isn't required to use anything".
+        for word in ("FAQPage", "JSON-LD", "<meta name=\"description\">", "AI search", "contractorgorilla",
+                     "are **optional**", "use anything, or nothing"):
             self.assertIn(word, header)
 
 
