@@ -17,6 +17,7 @@ const paulRoutes = require('./paul');
 const shopRoutes = require('./shop');
 const agentroomRoutes = require('./agentroom');
 const stanRoutes = require('./stan');
+const attentionRoutes = require('./attention');
 
 const PORT = Number(process.env.PORT || 3001);
 // Bind to loopback by default, matching the OpenClaw gateway's posture.
@@ -355,6 +356,7 @@ paulRoutes.register(app);
 shopRoutes.register(app);
 agentroomRoutes.register(app);
 stanRoutes.register(app);
+attentionRoutes.register(app);
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'mission-control-api' }));
 
