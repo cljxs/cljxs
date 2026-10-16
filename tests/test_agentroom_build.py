@@ -372,6 +372,31 @@ class TheNight(Base):
         self.assertIsNone(self.m.next_run(self.conn, now=DAY))
         self.assertEqual(self.m.next_run(self.conn, now=NOW), rid)
 
+    def test_build_now_opens_a_daytime_window_with_its_own_limits(self):
+        # Guards: the owner's "run 3 phases right now" (2026-10-16) either
+        # still waiting for 1am, or building on past the hours given, or
+        # using up the night's phases so the night does nothing.
+        rid = self.approved_run()
+        b = FakeBuilder(self.m)
+        with unittest.mock.patch.object(self.m, "builder_for", return_value=b):
+            self.m.start_build(self.conn, rid)
+        self.assertIsNone(self.m.next_run(self.conn, now=DAY), "no window yet")
+        self.m.open_build_now(self.conn, 2, now=DAY)
+        self.assertEqual(self.m.next_run(self.conn, now=DAY), rid)
+        self.assertEqual(self.m.next_run(self.conn, now=DAY + timedelta(minutes=110)), rid)
+        self.assertIsNone(self.m.next_run(self.conn, now=DAY + timedelta(minutes=121)), "the hours given are up")
+        cfg = self.m.roles()["builder"]
+        day_key = self.m.build_window(self.conn, cfg, DAY)[2]
+        self.assertNotEqual(day_key, self.m.build_window(self.conn, cfg, NOW)[2], "its own count, not tonight's")
+        run = self.build(rid, b, [reply(OK), reply(APPROVE)] * 3, now=DAY, steps=3)
+        self.assertEqual(run["state"], "phase_ready", "3 phases, then the owner - as at night")
+        self.assertEqual(self.m.night_get(self.conn, day_key)["phases"], 3)
+        self.assertEqual(self.m.night_get(self.conn, self.m.window(cfg, NOW)[2])["phases"], 0)
+        self.m.open_build_now(self.conn, 0)
+        self.assertFalse(self.m.build_window(self.conn, cfg, DAY)[0], "--off closes it")
+        with self.assertRaises(ValueError):
+            self.m.open_build_now(self.conn, 9)
+
     def test_at_most_n_phases_a_night_then_the_owner(self):
         self.set_roles(phases_per_night=1)
         rid = self.approved_run()

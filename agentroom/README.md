@@ -109,6 +109,16 @@ checker reads the phase, it is committed, and the next one starts.
 The apps open on their own port (the Deck's + 1, so 3002), a different
 origin from the Deck: an app's code cannot press the Deck's buttons.
 
+**Building in the daytime** (owner, 2026-10-16), to watch it work:
+
+    python3 /root/ecosystem/scripts/agentroom.py build-now --hours 2
+    python3 /root/ecosystem/scripts/agentroom.py build-now --off
+
+opens (or closes) a window of up to 4 hours now. It has a night's limits -
+3 phases, 9 sessions, $5 of plan use - counted on their own, so tonight's
+are untouched, and every guard is the same. It spends your Claude plan's
+limits while you are using it too, which is why the night is the default.
+
 ### Setting it up, on the droplet
 
     bash /root/ecosystem/scripts/agentroom-builder-setup.sh

@@ -65,7 +65,7 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
@@ -1258,6 +1258,50 @@ def window(cfg, now=None):
     return is_open, left, local.strftime("%Y-%m-%d")
 
 
+BUILD_NOW_MAX_HOURS = 4
+
+
+def build_window(conn, cfg, now=None):
+    """(open now?, minutes left, key) for building: the night window, or a
+    daytime one the owner opened with `build-now` (owner, 2026-10-16: "run 3
+    phases right now just to see if it works"). A daytime window has its own
+    key, so it has its own phases, sessions and plan cap - the same limits as
+    a night - and leaves tonight's untouched. Everything else is the same."""
+    is_open, left, key = window(cfg, now)
+    if is_open:
+        return is_open, left, key
+    try:
+        d = json.loads(meta_get(conn, "build_now") or "{}")
+        until = datetime.fromisoformat(d["until"])
+    except (ValueError, KeyError, TypeError):
+        return is_open, left, key
+    now = now or datetime.now(timezone.utc)
+    if now < until:
+        return True, (until - now).total_seconds() / 60, d["key"]
+    return is_open, left, key
+
+
+def open_build_now(conn, hours, now=None):
+    """The owner opens (hours > 0) or closes (0) a daytime build window."""
+    if hours <= 0:
+        meta_set(conn, "build_now", "")
+        return "The daytime window is closed: the builder works only in the night window again."
+    if hours > BUILD_NOW_MAX_HOURS:
+        raise ValueError(f"at most {BUILD_NOW_MAX_HOURS} hours")
+    from zoneinfo import ZoneInfo
+    b = roles()["builder"]
+    now = now or datetime.now(timezone.utc)
+    until = now + timedelta(hours=hours)
+    local = now.astimezone(ZoneInfo(b["window"]["tz"]))
+    meta_set(conn, "build_now", json.dumps({"until": until.isoformat(),
+                                            "key": "daytime-" + local.strftime("%Y-%m-%d-%H%M")}))
+    ends = until.astimezone(ZoneInfo(b["window"]["tz"])).strftime("%H:%M")
+    return (f"The builder may work now, until {ends} ({b['window']['tz']}): at most {b['phases_per_night']} "
+            f"phases, {b['sessions_per_night']} sessions and ${b['night_cap_usd']:.2f} of plan use at list "
+            "prices, with every guard as at night. It uses your Claude plan's limits while you are using it "
+            "too. A run that is building starts within a minute; one that is approved needs Start building.")
+
+
 def night_get(conn, key):
     v = meta_get(conn, f"night:{key}")
     return json.loads(v) if v else {"phases": 0, "plan_usd": 0.0, "sessions": 0}
@@ -1743,7 +1787,7 @@ def build_phase_once(conn, rid, room, builder=None, now=None):
         raise Blocked(problem)
     cfg = roles()
     bcfg = cfg["builder"]
-    is_open, left, night_key = window(bcfg, now)
+    is_open, left, night_key = build_window(conn, bcfg, now)
     if builder.practice:
         night_key = "practice-" + night_key         # practice never uses up a real night
     elif not is_open:
@@ -1762,9 +1806,8 @@ def build_phase_once(conn, rid, room, builder=None, now=None):
         if get_run(conn, rid)["stop_requested"]:
             return "stop"
         if not builder.practice:
-            o, lft, _ = window(bcfg)
-            if not o:
-                return f"the night's window ended at {bcfg['window']['end']}"
+            if not build_window(conn, bcfg)[0]:
+                return "the build window closed"
         return None
 
     note, reviewed = run["build_note"], 0
@@ -1772,7 +1815,7 @@ def build_phase_once(conn, rid, room, builder=None, now=None):
     for attempt in range(1, bcfg["attempts"] + 1):
         night = night_get(conn, night_key)
         why_not = None if builder.practice else night_room(cfg, night)
-        if not why_not and not builder.practice and window(bcfg, now)[1] < WINDOW_MARGIN_MIN:
+        if not why_not and not builder.practice and build_window(conn, bcfg, now)[1] < WINDOW_MARGIN_MIN:
             why_not = "too little of the night is left to start a session"
         if why_not:
             set_phase(conn, rid, idx, status="paused")
@@ -1880,7 +1923,7 @@ def build_phase_once(conn, rid, room, builder=None, now=None):
         night = night_add(conn, night_key, phases=1)
         concerns = (review or {}).get("concerns") or []
         more_tonight = (not last and night["phases"] < bcfg["phases_per_night"]
-                        and (builder.practice or window(bcfg, now)[0]))
+                        and (builder.practice or build_window(conn, bcfg, now)[0]))
         say(conn, rid, "Code", "system",
             f"{label_ph} passed its tests" + (f" and is saved (commit {commit})" if commit else "")
             + (f". The bug checker left {len(concerns)} note(s) - see the Build tab." if concerns else ".")
@@ -2066,7 +2109,7 @@ def next_run(conn, now=None):
         if r["state"] != "building" or r["dry"]:
             return r["id"]
         try:
-            is_open, _, key = window(roles()["builder"], now)
+            is_open, _, key = build_window(conn, roles()["builder"], now)
         except Exception:
             continue
         if is_open and meta_get(conn, f"night_done:{r['id']}") != key:
@@ -2272,6 +2315,9 @@ def main(argv=None):
     sub.add_parser("builder-check")
     sub.add_parser("builder-selftest")
     sub.add_parser("builder-login")
+    bn = sub.add_parser("build-now")
+    bn.add_argument("--hours", type=float, default=2.0)
+    bn.add_argument("--off", action="store_true")
     sb = sub.add_parser("sendback")
     sb.add_argument("id", type=int)
     sb.add_argument("--note", required=True)
@@ -2304,6 +2350,8 @@ def main(argv=None):
             print(json.dumps({"ok": True}))
         elif a.cmd == "build":
             print(json.dumps({"ok": True, "state": start_build(conn, a.id)}))
+        elif a.cmd == "build-now":
+            print(open_build_now(conn, 0 if a.off else a.hours))
         elif a.cmd == "continue":
             print(json.dumps({"ok": True, "state": continue_build(conn, a.id)}))
         elif a.cmd == "resume":
