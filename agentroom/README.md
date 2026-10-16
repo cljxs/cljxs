@@ -112,8 +112,7 @@ origin from the Deck: an app's code cannot press the Deck's buttons.
 ### Setting it up, on the droplet
 
     bash /root/ecosystem/scripts/agentroom-builder-setup.sh
-    /root/.local/bin/claude setup-token
-    python3 /root/ecosystem/scripts/set-credential.py agentroom AGENTROOM_BUILDER_TOKEN
+    python3 /root/ecosystem/scripts/new-claude-login.py agentroom AGENTROOM_BUILDER_TOKEN
     python3 /root/ecosystem/scripts/agentroom.py builder-login
     python3 /root/ecosystem/scripts/agentroom.py builder-check
     python3 /root/ecosystem/scripts/agentroom.py builder-selftest

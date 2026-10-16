@@ -84,10 +84,9 @@ echo "== 4. the builder's own login"
 if grep -q '^AGENTROOM_BUILDER_TOKEN=' "$ROOT/agentroom/state/credentials.env" 2>/dev/null; then
   echo "   set"
 else
-  echo "   not set yet. Make a SEPARATE login for the builder (not your agents' one):"
-  echo "     $SRC setup-token"
-  echo "   then save it (it will not show as you paste):"
-  echo "     python3 $ROOT/scripts/set-credential.py agentroom AGENTROOM_BUILDER_TOKEN"
+  echo "   not set yet. Make a SEPARATE login for the builder (not your agents' one) -"
+  echo "   this runs claude setup-token and saves the login itself, nothing to copy:"
+  echo "     python3 $ROOT/scripts/new-claude-login.py agentroom AGENTROOM_BUILDER_TOKEN"
 fi
 
 echo "== 5. trying every guard"

@@ -1409,15 +1409,16 @@ class Builder:
             return "systemd-run is missing - the sandbox cannot be made"
         tok = builder_token()
         if not tok:
-            return ("the builder has no login of its own yet - make one with `claude setup-token`, then: "
-                    f"python3 /root/ecosystem/scripts/set-credential.py agentroom {BUILDER_TOKEN_NAME}")
+            return ("the builder has no login of its own yet - make one (nothing to copy): "
+                    f"python3 /root/ecosystem/scripts/new-claude-login.py agentroom {BUILDER_TOKEN_NAME}")
         try:
             agents = mod("wake").plan_token()
         except Exception:
             agents = ""
         if agents and tok == agents:
-            return ("the builder's login is the same one your agents use - make a separate one with "
-                    "`claude setup-token`, so it can be cancelled on its own")
+            return ("the builder's login is the same one your agents use - make a separate one, so it can "
+                    f"be cancelled on its own: python3 /root/ecosystem/scripts/new-claude-login.py agentroom "
+                    f"{BUILDER_TOKEN_NAME}")
         if os.geteuid() != 0:
             return "the runner must run as root to start the sandbox"
         return None
@@ -1991,7 +1992,8 @@ def builder_login():
     out.append(f"{'PASS' if ok else 'FAIL'}  Claude {'accepted' if ok else 'refused'} it: {said}")
     if not ok and agents and len(tok) != len(agents):
         out.append("      It is a different length from the login that works: most likely part of it was "
-                   "lost when it was copied. Make a new one and save it again.")
+                   "lost when it was copied. Make a new one - nothing to copy: python3 "
+                   f"/root/ecosystem/scripts/new-claude-login.py agentroom {BUILDER_TOKEN_NAME}")
     return out, 0 if ok else 1
 
 

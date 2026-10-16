@@ -154,20 +154,27 @@ def write(path, name, value):
     return len(existing)
 
 
+def credentials_path(agent):
+    """(path, None) for an agent's credentials.env, or (None, why not).
+    new-claude-login.py asks here too, so a key has one home."""
+    if agent in ELSEWHERE:
+        return ELSEWHERE[agent](), None
+    if not (ROOT / "agents" / agent).is_dir():
+        have = sorted(p.name for p in (ROOT / "agents").iterdir() if p.is_dir()) \
+            if (ROOT / "agents").is_dir() else []
+        return None, f"no agent called '{agent}'. There is: {', '.join(have) or 'none'}"
+    return ROOT / "agents" / agent / "state" / "credentials.env", None
+
+
 def main():
     if len(sys.argv) < 3:
         print("usage: set-credential.py <agent> <KEY_NAME>\n"
               "  e.g. set-credential.py scout ETSY_API_KEY", file=sys.stderr)
         return 2
     agent, name = sys.argv[1], sys.argv[2]
-    path = ROOT / "agents" / agent / "state" / "credentials.env"
-    if agent in ELSEWHERE:
-        path = ELSEWHERE[agent]()
-    elif not (ROOT / "agents" / agent).is_dir():
-        have = sorted(p.name for p in (ROOT / "agents").iterdir() if p.is_dir()) \
-            if (ROOT / "agents").is_dir() else []
-        print(f"no agent called '{agent}'. There is: {', '.join(have) or 'none'}",
-              file=sys.stderr)
+    path, why = credentials_path(agent)
+    if why:
+        print(why, file=sys.stderr)
         return 1
 
     show = "--show" in sys.argv
