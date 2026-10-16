@@ -36,6 +36,20 @@ ten minutes can still be crossed by more than that between two looks; the
 book records what the sale would really have fetched, and 0.1% of fee each
 way, so the paper account errs on the side it would lose money on.
 
+BOLT + NEWS, A SECOND BOOK (owner, 2026-10-16: "Would it be worth
+implement something for bolt to trade more like belforts research model" -
+Belfort's no-AI shadow was doing much worse than Belfort). $10,000 more,
+the same rules and the same exits at the same ticks, with one difference:
+before it buys the coin code picked, that coin's last 48 hours of headlines
+(CoinDesk, Cointelegraph, The Block, Decrypt) go to Haiku on the owner's
+Claude plan as one question - is there a specific, citable catalyst, and is
+there bad news? Code reads the answer: it buys only on a score of 7+ that
+cites one of the headlines it was shown, with no bad news. No headlines, no
+question and no buy. At most NEWS_WAKES_PER_DAY questions an Eastern day.
+Exits never wait for a model. The plain book carries on exactly as before,
+so the two side by side say whether news helps crypto the way it helps
+Belfort.
+
 THE HALT RESUMES ITSELF (owner: "it's just paper trading"). Down 15% from
 where he last started counting, he opens nothing for 24 hours; then he starts
 again and counts from the equity he restarts at.
@@ -43,12 +57,16 @@ again and counts from the equity he restarts at.
 Standard library only.
 """
 
+import email.utils
+import importlib.util
 import json
 import os
+import re
 import ssl
 import sys
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -101,6 +119,30 @@ MA_FAST, MA_SLOW = 20, 50     # hours
 MIN_SCORE = 7
 CHASE_PCT = 20.0              # up this much on the day: no buying the top
 STALE_MINUTES = 30            # the screen calls prices older than this stale
+
+# Bolt + news (see the docstring).
+NEWS_BOOK = AGENT / "state" / "news-portfolio.json"
+NEWS_EQUITY = AGENT / "state" / "news-equity.jsonl"
+NEWS_CALLS = AGENT / "state" / "news-calls.jsonl"
+NEWS_USE = AGENT / "state" / "news-wakes.json"
+NEWS_WAKES_PER_DAY = 5        # owner, 2026-10-16: "put the cap at 5"
+NEWS_HOURS = 48
+NEWS_MAX = 8                  # headlines shown per question
+NEWS_MIN_SCORE = 7            # Belfort's bar
+FEED_TIMEOUT = 15
+ASK_TIMEOUT = 120
+# Checked from here 2026-10-16: each answered with 20-36 items (CoinDesk's
+# address without the trailing slash - with it, a redirect).
+FEEDS = (("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss"),
+         ("Cointelegraph", "https://cointelegraph.com/rss"),
+         ("The Block", "https://www.theblock.co/rss.xml"),
+         ("Decrypt", "https://decrypt.co/feed"))
+# How a headline names each coin. Names in any case; tickers in capitals
+# only, so "link" and "dot" in a sentence are not Chainlink and Polkadot,
+# and "Binance" (the exchange) is not BNB.
+NAMES = {"BTC": ["Bitcoin"], "ETH": ["Ethereum", "Ether"], "SOL": ["Solana"], "BNB": ["BNB Chain"],
+         "XRP": ["Ripple"], "ADA": ["Cardano"], "AVAX": ["Avalanche"], "LINK": ["Chainlink"],
+         "DOT": ["Polkadot"], "LTC": ["Litecoin"]}
 
 
 class BadData(Exception):
@@ -223,9 +265,10 @@ def seed(now):
             "last_cycle_block": None, "last_cycle_utc": None, "last_tick_utc": None}
 
 
-def load_book(now=None):
-    if BOOK.is_file():
-        return json.loads(BOOK.read_text())
+def load_book(now=None, path=None):
+    path = path or BOOK
+    if path.is_file():
+        return json.loads(path.read_text())
     return seed(now or utcnow())
 
 
@@ -359,8 +402,10 @@ def update_halt(book, eq, now):
     return None
 
 
-def run(book, market, now):
-    """One tick on this tick's prices. Changes the book; returns what happened."""
+def run(book, market, now, gate=None):
+    """One tick on this tick's prices. Changes the book; returns what happened.
+    gate(pick) -> (ok, note) is asked before a buy, the news book's check;
+    the plain book has none."""
     coins = market["coins"]
     marks = {s: c["price"] for s, c in coins.items()}
     btc = market.get("btc_change_24h")
@@ -415,12 +460,174 @@ def run(book, market, now):
             action = (f"no entry: {pick['symbol']} scored {pick['score']}, but the "
                       f"{CASH_FLOOR_PCT:g}% cash floor leaves {money(notional)} to spend")
         else:
-            bought = buy(book, pick["symbol"], marks[pick["symbol"]], notional, now,
-                         f"scored {pick['score']}/10: " + "; ".join(pick["points"]))
-            action = (f"bought {pick['symbol']}: {money(notional)} at "
-                      f"{money(marks[pick['symbol']])}, scored {pick['score']}/10")
+            ok, note = gate(pick) if gate else (True, None)
+            if not ok:
+                action = f"no entry: {pick['symbol']} scored {pick['score']}, but the news check said no - {note}"
+            else:
+                bought = buy(book, pick["symbol"], marks[pick["symbol"]], notional, now,
+                             f"scored {pick['score']}/10: " + "; ".join(pick["points"])
+                             + (f" · news: {note}" if note else ""))
+                action = (f"bought {pick['symbol']}: {money(notional)} at "
+                          f"{money(marks[pick['symbol']])}, scored {pick['score']}/10"
+                          + (f" · news: {note}" if note else ""))
     ev["cycle"] = {"rows": rows, "action": action, "bought": bought}
     return ev
+
+
+# ---------------------------------------------------------------- the news
+
+def http_text(url, timeout=FEED_TIMEOUT):
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/rss+xml, text/xml"})
+    with urllib.request.urlopen(req, timeout=timeout, context=ssl.create_default_context()) as r:
+        return r.read(2_000_000).decode("utf-8", "replace")
+
+
+def parse_feed(text, source):
+    """[{title, link, published, source}] from one RSS feed. A broken feed is
+    no headlines, not a crash."""
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return []
+    out = []
+    for it in root.iter("item"):
+        title = " ".join((it.findtext("title") or "").split())
+        try:
+            when = email.utils.parsedate_to_datetime(it.findtext("pubDate") or "")
+            when = when.astimezone(timezone.utc) if when.tzinfo else when.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            when = None
+        if title and when:
+            out.append({"title": title, "link": (it.findtext("link") or "").strip(),
+                        "published": iso(when), "source": source})
+    return out
+
+
+def fetch_news(get=http_text):
+    """Every feed's headlines, newest first; a feed that fails is left out."""
+    items = []
+    for source, url in FEEDS:
+        try:
+            items += parse_feed(get(url), source)
+        except Exception:
+            continue
+    return sorted(items, key=lambda x: x["published"], reverse=True)
+
+
+def mentions(sym, title):
+    if re.search(rf"(?<![A-Za-z$])\$?{re.escape(sym)}(?![A-Za-z])", title):
+        return True
+    return any(re.search(rf"\b{re.escape(n)}\b", title, re.I) for n in NAMES.get(sym, []))
+
+
+def headlines_for(sym, items, now):
+    """This coin's headlines of the last NEWS_HOURS, newest first, each title
+    once, with the ids the question cites them by."""
+    since, seen, out = now - timedelta(hours=NEWS_HOURS), set(), []
+    for x in items:
+        when = parse_iso(x["published"])
+        key = x["title"].lower()
+        if when and when >= since and key not in seen and mentions(sym, x["title"]):
+            seen.add(key)
+            out.append(dict(x, id=f"h{len(out) + 1}"))
+        if len(out) >= NEWS_MAX:
+            break
+    return out
+
+
+NEWS_ASK = """You judge news for a paper-trading crypto bot. Code has already checked the price trend; your only job is the news.
+
+Coin: {name} ({sym})
+Its headlines from the last {hours} hours:
+{lines}
+
+A CATALYST is a specific, checkable event that could move this coin: an exchange listing, an ETF filing, approval or inflows, a protocol upgrade or launch, a major partnership or adoption, a regulatory decision or court ruling in its favour.
+NOT a catalyst: a headline that only describes a price move or a prediction ("X surges", "price analysis", "could hit $Y"), a market roundup, an opinion piece.
+BAD NEWS for this coin: a hack or exploit, a large token unlock, a lawsuit, ban or delisting, an outage.
+
+Reply with JSON only:
+{{"score": 0-10, "headline": "the id (h1, h2...) of the one headline that is the catalyst, or none", "bad_news": true or false, "why": "one sentence"}}
+Score 7 or more only for a specific positive event in one of the headlines above. A price-move headline is never above 6."""
+
+
+def news_question(sym, heads):
+    name = (NAMES.get(sym) or [sym])[0]
+    lines = "\n".join(f"[{h['id']}] {h['published'][:16].replace('T', ' ')} UTC · {h['source']} · {h['title']}"
+                      for h in heads)
+    return NEWS_ASK.format(name=name, sym=sym, hours=NEWS_HOURS, lines=lines)
+
+
+def read_verdict(text, heads):
+    """(ok, score, headline, why) - code's reading of the answer. Anything it
+    cannot read is a no: an unread check is not a passed one."""
+    m = re.search(r"\{.*\}", text or "", re.S)
+    try:
+        d = json.loads(m.group(0)) if m else None
+    except ValueError:
+        d = None
+    if not isinstance(d, dict):
+        return False, None, None, "the answer could not be read"
+    score = d.get("score")
+    score = score if isinstance(score, (int, float)) and not isinstance(score, bool) else None
+    head = next((h for h in heads if h["id"] == str(d.get("headline") or "").strip()), None)
+    why = " ".join(str(d.get("why") or "").split())[:200]
+    if score is None:
+        return False, None, head, "no score in the answer"
+    if d.get("bad_news") is True:
+        return False, score, head, f"bad news - {why}"
+    if score < NEWS_MIN_SCORE:
+        return False, score, head, f"scored {score:g}, under {NEWS_MIN_SCORE} - {why}"
+    if not head:
+        return False, score, None, "scored high without citing one of the headlines it was shown"
+    return True, score, head, why
+
+
+def news_wakes(now, bump=False):
+    """Questions asked this Eastern day; bump=True counts one more first."""
+    day = et_time.day(et_time.to_eastern(now))
+    try:
+        d = json.loads(NEWS_USE.read_text())
+    except Exception:
+        d = {}
+    n = int(d.get("n") or 0) if d.get("day") == day else 0
+    if bump:
+        n += 1
+        write_json(NEWS_USE, {"day": day, "n": n})
+    return n
+
+
+def _ask(question):
+    spec = importlib.util.spec_from_file_location("wake_bolt", Path(__file__).resolve().parent / "wake.py")
+    w = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(w)
+    return w.ask("bolt", question, ASK_TIMEOUT)
+
+
+def news_gate(pick, now, news=None, ask=None):
+    """(ok, note) for the news book's buy of pick, and the call written down."""
+    news, ask = news or fetch_news, ask or _ask
+    sym = pick["symbol"]
+    heads = headlines_for(sym, news(), now)
+    rec = {"utc": iso(now), "symbol": sym, "score_10": pick["score"], "headlines": len(heads)}
+    if not heads:
+        ok, note = False, f"no {sym} headlines in the last {NEWS_HOURS}h - it buys only on a catalyst"
+    elif news_wakes(now) >= NEWS_WAKES_PER_DAY:
+        ok, note = False, f"today's {NEWS_WAKES_PER_DAY} news checks are used"
+    else:
+        news_wakes(now, bump=True)
+        answered, text = ask(news_question(sym, heads))
+        if not answered:
+            ok, note = False, f"the news check could not run ({text[:120]})"
+        else:
+            ok, score, head, why = read_verdict(text, heads)
+            rec.update(asked=True, news_score=score, headline=(head or {}).get("title"),
+                       source=(head or {}).get("source"), link=(head or {}).get("link"))
+            note = (f"{score:g}/10 on \"{head['title'][:90]}\" ({head['source']}) - {why}" if ok else why)
+    rec.update(ok=ok, note=note)
+    NEWS_CALLS.parent.mkdir(parents=True, exist_ok=True)
+    with open(NEWS_CALLS, "a") as f:
+        f.write(json.dumps(rec) + "\n")
+    return ok, note
 
 
 # ---------------------------------------------------------------- checking
@@ -538,9 +745,10 @@ def memory_line(book, ev):
             f"{ev['cycle']['action']}")
 
 
-def save_equity(book, now):
-    EQUITY.parent.mkdir(parents=True, exist_ok=True)
-    with open(EQUITY, "a") as f:
+def save_equity(book, now, path=None):
+    path = path or EQUITY
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as f:
         f.write(json.dumps({"t": iso(now), "equity": round(equity(book), 2),
                             "btc_hold": round(btc_hold(book, book["marks"]) or 0, 2),
                             "cash": round(book["cash"], 2)}) + "\n")
@@ -594,13 +802,38 @@ def cmd_tick(now=None, fetch=fetch_raw):
         append_report(now, cycle_text(book, market, ev, now))
         remember.remember(AGENT, memory_line(book, ev), now=et_time.to_eastern(now))
 
+    news_line = tick_news_book(market, now)
+
     eq = equity(book)
     print(f"bolt: {money(eq)} ({signed(pct(eq, book['starting_cash']))}%), cash {money(book['cash'])}, "
           f"{len(book['positions'])} open"
           + "".join(f"\n  {exit_line(t)}" for t in ev["exits"])
           + (f"\n  {ev['halt']}" if ev["halt"] else "")
-          + (f"\n  cycle: {ev['cycle']['action']}" if ev["cycle"] else ""))
+          + (f"\n  cycle: {ev['cycle']['action']}" if ev["cycle"] else "")
+          + (f"\n  {news_line}" if news_line else ""))
     return 0
+
+
+def tick_news_book(market, now, gate=None):
+    """The news book's turn on the same prices. Its own file and its own
+    balance check; a failure here is said, and never stops the plain book."""
+    try:
+        nbook = load_book(now, NEWS_BOOK)
+        nev = run(nbook, market, now, gate=gate or (lambda pick: news_gate(pick, now)))
+        bad = problems(nbook)
+        if bad:
+            return "bolt + news: THE BOOK DOES NOT BALANCE - nothing saved: " + "; ".join(bad)
+        write_json(NEWS_BOOK, nbook)
+        save_equity(nbook, now, NEWS_EQUITY)
+        for t in nev["exits"]:
+            append_report(now, f"## {et_clock(now)} - Bolt + news: {exit_line(t)}")
+        if nev["cycle"]:
+            append_report(now, f"**Bolt + news:** {nev['cycle']['action']}")
+        eq = equity(nbook)
+        return (f"bolt + news: {money(eq)} ({signed(pct(eq, nbook['starting_cash']))}%)"
+                + (f" - {nev['cycle']['action']}" if nev["cycle"] else ""))
+    except Exception as exc:
+        return f"bolt + news: failed this tick - {type(exc).__name__}: {str(exc)[:200]}"
 
 
 def cmd_check():
@@ -646,6 +879,59 @@ def series(points, limit=400):
     return out
 
 
+def position_rows(book, marks, now):
+    out = []
+    for p in book["positions"]:
+        px = marks.get(p["symbol"]) or p["entry_price"]
+        opened = parse_iso(p["opened_utc"])
+        out.append({**p, "price": px, "value": p["qty"] * px,
+                    "pnl": p["qty"] * px - p["cost"], "pnl_pct": pnl_pct(p, px),
+                    "held_hours": (now - opened).total_seconds() / 3600 if opened else None,
+                    "breakeven": p["stop_price"] >= p["entry_price"]})
+    return out
+
+
+def closed_stats(book):
+    sells = [t for t in book["trades"] if t["side"] == "sell"]
+    wins = [t for t in sells if t["pnl"] > 0]
+    return {"n": len(sells), "wins": len(wins), "losses": len(sells) - len(wins),
+            "win_rate": len(wins) / len(sells) * 100 if sells else None,
+            "realized": sum(t["pnl"] for t in sells),
+            "fees": sum(t["fee"] for t in book["trades"])}
+
+
+def read_curve(path):
+    out = []
+    if path.is_file():
+        for line in path.read_text().splitlines():
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                continue
+    return out
+
+
+def news_board(now, marks):
+    """The news book, for the screen: its account, its holdings, and every
+    question asked with code's verdict - worked out here, drawn there."""
+    nb = load_book(now, NEWS_BOOK)
+    eq = equity(nb, marks)
+    calls = []
+    if NEWS_CALLS.is_file():
+        for line in NEWS_CALLS.read_text().splitlines()[-15:]:
+            try:
+                calls.append(json.loads(line))
+            except ValueError:
+                continue
+    return {"started_utc": nb.get("started_utc"), "equity": eq, "cash": nb["cash"],
+            "pnl": eq - nb["starting_cash"], "pnl_pct": pct(eq, nb["starting_cash"]),
+            "positions": position_rows(nb, marks, now), "closed": closed_stats(nb),
+            "trades": list(reversed(nb["trades"][-30:])), "curve": series(read_curve(NEWS_EQUITY)),
+            "calls": list(reversed(calls)), "asked_today": news_wakes(now),
+            "cap": NEWS_WAKES_PER_DAY, "hours": NEWS_HOURS, "min_score": NEWS_MIN_SCORE,
+            "feeds": [n for n, _u in FEEDS], "balances": not problems(nb)}
+
+
 def board(now=None):
     """Everything the screen shows. The page draws this and works nothing out."""
     now = now or utcnow()
@@ -671,23 +957,8 @@ def board(now=None):
                       "spark": c.get("spark") or [],
                       "ma20_line": rolling(c.get("spark") or [], MA_FAST),
                       "ma50_line": rolling(c.get("spark") or [], MA_SLOW)})
-    positions = []
-    for p in book["positions"]:
-        px = marks.get(p["symbol"]) or p["entry_price"]
-        opened = parse_iso(p["opened_utc"])
-        positions.append({**p, "price": px, "value": p["qty"] * px,
-                          "pnl": p["qty"] * px - p["cost"], "pnl_pct": pnl_pct(p, px),
-                          "held_hours": (now - opened).total_seconds() / 3600 if opened else None,
-                          "breakeven": p["stop_price"] >= p["entry_price"]})
-    sells = [t for t in book["trades"] if t["side"] == "sell"]
-    wins = [t for t in sells if t["pnl"] > 0]
-    curve = []
-    if EQUITY.is_file():
-        for line in EQUITY.read_text().splitlines():
-            try:
-                curve.append(json.loads(line))
-            except ValueError:
-                continue
+    positions = position_rows(book, marks, now)
+    curve = read_curve(EQUITY)
     fetched = parse_iso((market or {}).get("fetched_utc"))
     age = (now - fetched).total_seconds() / 60 if fetched else None
     nxt = datetime.fromtimestamp((cycle_block(now) + 1) * int(CYCLE_HOURS * 3600), timezone.utc)
@@ -704,10 +975,8 @@ def board(now=None):
                      "from_reference_pct": pct(eq, h["reference"]), "reference": h["reference"],
                      "halt_at": -MAX_DRAWDOWN_PCT, "halted": bool(h.get("active")),
                      "halted_since": h.get("since_utc"), "resumed_utc": h.get("resumed_utc")},
-        "closed": {"n": len(sells), "wins": len(wins), "losses": len(sells) - len(wins),
-                   "win_rate": len(wins) / len(sells) * 100 if sells else None,
-                   "realized": sum(t["pnl"] for t in sells),
-                   "fees": sum(t["fee"] for t in book["trades"])},
+        "closed": closed_stats(book),
+        "news": news_board(now, marks),
         "trades": list(reversed(book["trades"][-40:])),
         "curve": series(curve),
         "market": {"fetched_utc": (market or {}).get("fetched_utc"), "age_min": age,

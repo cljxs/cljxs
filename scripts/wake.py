@@ -7,6 +7,8 @@ wake.py — wake one agent for one cycle, on the engine it is set to run on.
     wake.py check                   is the Claude plan ready? one tiny run on it
     wake.py test [agent ...]        each plan agent, woken once with its real
                                     instructions but no tools - not a cycle
+    wake.py ask --agent bolt < q    one question, one answer: one turn, no
+                                    tools, no instructions (bolt.py's news check)
 
 The flags are OpenClaw's own, so a cycle script swaps `openclaw agent` for
 `python3 scripts/wake.py` and changes nothing else.
@@ -343,6 +345,47 @@ def login_test(binary, token, model="haiku"):
                   f"in {res.get('duration_ms', 0) / 1000:.1f}s")
 
 
+# ONE QUESTION (2026-10-16). Bolt's news book asks a single judgement - is
+# this headline a real catalyst? - of the agent's model on the plan. No
+# workspace, no instructions, no tools, one turn: the question carries all
+# it needs, and code reads the answer. Never falls back to OpenRouter: a
+# question the plan will not answer is a no, not a bill.
+ASK_SYSTEM = ("You answer one question for a script, in exactly the format it asks for. "
+              "You have no tools. No preamble and no follow-up.")
+
+
+def ask(agent, question, timeout=150, run=subprocess.run):
+    """(answered, text). The agent's engine must be the plan."""
+    s = setting(agent)
+    if s["engine"] != "claude":
+        return False, f"{agent} is not on the Claude plan in tasks/engines.json"
+    binary, token = claude_bin(), plan_token()
+    if not binary:
+        return False, "the claude CLI is not installed - see plan/README.md"
+    if not token:
+        return False, f"no {TOKEN_KEY} in {PLAN_CREDENTIALS}"
+    with tempfile.TemporaryDirectory() as d:
+        pf = Path(d) / "system.md"
+        pf.write_text(ASK_SYSTEM)
+        try:
+            r = run([binary, "-p", question, "--output-format", "json", "--model", str(s["model"]),
+                     "--max-turns", "1", "--tools", "", "--system-prompt-file", str(pf),
+                     "--strict-mcp-config", "--no-session-persistence"],
+                    cwd=d, env=claude_env(token), capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return False, f"no answer in {timeout} seconds"
+    res = last_json(r.stdout) or {}
+    if res.get("is_error") or r.returncode:
+        return False, str(res.get("result") or (r.stderr or r.stdout).strip())[:300]
+    return True, str(res.get("result") or "")
+
+
+def cmd_ask(a):
+    ok, text = ask(a.agent, sys.stdin.read(), a.timeout)
+    print(text)
+    return 0 if ok else 1
+
+
 TEST_MESSAGE = ("This is a connection test, not a cycle. Do not do your cycle and do not try to "
                 "use any tool. Reply with one line: your name, and the first thing your "
                 "instructions say every cycle must produce.")
@@ -411,6 +454,11 @@ def main(argv=None):
         ap = argparse.ArgumentParser(prog="wake.py test")
         ap.add_argument("agents", nargs="*")
         return cmd_test(ap.parse_args(argv[1:]))
+    if argv[:1] == ["ask"]:
+        ap = argparse.ArgumentParser(prog="wake.py ask")
+        ap.add_argument("--agent", required=True)
+        ap.add_argument("--timeout", type=int, default=150)
+        return cmd_ask(ap.parse_args(argv[1:]))
     if argv[:1] == ["check"]:
         ap = argparse.ArgumentParser(prog="wake.py check")
         ap.add_argument("--model", default="haiku")

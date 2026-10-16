@@ -126,14 +126,14 @@
 <div class="frame">
   <div class="head">
     <div class="title"><b>⚡</b>BOLT</div>
-    <div class="who">Bolt · crypto momentum · paper $10,000 · plain code, no AI</div>
+    <div class="who">Bolt · crypto momentum · paper $10,000 · plain code, and a twin that checks the news</div>
     <div class="acct" id="acct"></div>
     <div class="sp"></div>
     <a class="btn" id="back" href="/dashboard">← Deck</a>
     <button class="btn" id="close" style="display:none">✕ Esc</button>
   </div>
   <div class="show">
-    <div class="showtop"><div class="k">The race — Bolt against BTC bought on his first day and held</div>
+    <div class="showtop"><div class="k">The race — Bolt, Bolt + news, and BTC bought on his first day and held</div>
       <div class="k" id="since"></div></div>
     <div id="race"><div class="empty">loading…</div></div>
     <div id="curve"></div>
@@ -148,6 +148,7 @@
         <button class="tab on" data-t="report">Report</button>
         <button class="tab" data-t="history">History</button>
         <button class="tab" data-t="trades">Trades</button>
+        <button class="tab" data-t="news">News book</button>
         <button class="tab" data-t="rules">Rules</button>
       </div>
       <div class="doc" id="side"></div>
@@ -214,7 +215,8 @@ function render() {
     <div><div class="l">Open</div><div class="v num">${B.positions.length}</div></div>`;
 
   const h = B.btc_hold || {};
-  const rows = [{ name: 'Bolt', pct: B.pnl_pct }, { name: 'BTC held', pct: h.pnl_pct }];
+  const N = B.news || {};
+  const rows = [{ name: 'Bolt', pct: B.pnl_pct }, { name: 'Bolt + news', pct: N.pnl_pct }, { name: 'BTC held', pct: h.pnl_pct }];
   const scale = Math.max(1, ...rows.map(r => Math.abs(r.pct || 0)));
   $('race').innerHTML = rows.map(r => {
     const w = has(r.pct) ? Math.min(50, Math.abs(r.pct) / scale * 50) : 0;
@@ -405,6 +407,7 @@ async function side() {
         : `<div class="empty">No trades yet. He buys only what scores ${B.rules.min_score} or more, at most one coin every ${B.rules.cycle_hours} hours.</div>`}`;
     return;
   }
+  if (tab === 'news') return newsTab(host);
   const r = B.rules;
   host.innerHTML = `<div class="sect" style="margin-top:0">How Bolt trades</div>
     <div class="muted">All of it is code (scripts/bolt.py). No AI is woken, so nothing here costs anything and no number is made up.</div>
@@ -424,7 +427,37 @@ async function side() {
       <li>+2 within 2% of the 20h average and rising this hour</li>
       <li>+2 up 1% to 15% on the day</li><li>+1 up on the week</li><li>+1 BTC up on the day</li></ul>
     <div class="sect">If it goes wrong</div><ul class="rules">
-      <li>Down <b>${r.max_drawdown_pct}%</b>: no new buys for <b>${r.halt_hours}h</b>, then he starts again on his own and counts from there.</li></ul>`;
+      <li>Down <b>${r.max_drawdown_pct}%</b>: no new buys for <b>${r.halt_hours}h</b>, then he starts again on his own and counts from there.</li></ul>
+    <div class="sect">Bolt + news, the twin</div><ul class="rules">
+      <li>A second $10,000 book, the same rules and exits at the same moments.</li>
+      <li>Before it buys the coin code picked, that coin's last <b>${(B.news || {}).hours || 48}h</b> of headlines (${esc(((B.news || {}).feeds || []).join(', '))}) go to Haiku on your Claude plan: is there a real, specific catalyst, and any bad news?</li>
+      <li>It buys only on <b>${(B.news || {}).min_score || 7}/10</b> or more citing one of those headlines, with no bad news. No headlines: no question, no buy.</li>
+      <li>At most <b>${(B.news || {}).cap || 5}</b> questions a day. Exits never wait for it.</li></ul>`;
+}
+
+// The news-checked twin: its account, what it holds, and every question it
+// asked with code's verdict.
+function newsTab(host) {
+  const N = B.news || {}, s = N.closed || {};
+  const calls = N.calls || [];
+  host.innerHTML = `<div class="stats">
+      <div class="stat"><div class="l">Value</div><div class="v num">${money(N.equity)}</div></div>
+      <div class="stat"><div class="l">Since start</div><div class="v num ${cls(N.pnl_pct)}">${pct(N.pnl_pct)}</div></div>
+      <div class="stat"><div class="l">Open</div><div class="v num">${(N.positions || []).length}</div></div>
+      <div class="stat"><div class="l">News checks today</div><div class="v num">${N.asked_today ?? 0} / ${N.cap ?? 5}</div></div></div>
+    ${(N.positions || []).length ? '<div class="sect">Holding</div>' + N.positions.map(p =>
+      `<div class="muted">${esc(p.symbol)} · <span class="num ${cls(p.pnl_pct)}">${pct(p.pnl_pct, 1)}</span> · in at ${price(p.entry_price)} · stop ${price(p.stop_price)}</div>`).join('') : ''}
+    <div class="sect">The news checks, newest first</div>
+    ${calls.length ? calls.map(c => `<div style="padding:8px 0;border-bottom:1px solid var(--line)">
+        <div><b class="${c.ok ? 'up' : 'down'}">${c.ok ? '✓ BUY' : '✕ NO'}</b> ${esc(c.symbol)} · ${when(c.utc)}${has(c.news_score) ? ' · news ' + esc(c.news_score) + '/10' : ''}</div>
+        <div class="muted" style="font-size:12px">${esc(c.note)}</div>
+        ${c.headline ? `<div style="font-size:12px">${c.link ? `<a href="${esc(c.link)}" target="_blank" rel="noopener">${esc(c.headline)}</a>` : esc(c.headline)} · ${esc(c.source || '')}</div>` : ''}</div>`).join('')
+      : '<div class="empty">No checks yet - one happens only when code is about to buy a coin scoring 7 or more.</div>'}
+    <div class="sect">Its trades · ${s.n || 0} closed${has(s.win_rate) ? ', ' + Math.round(s.win_rate) + '% won' : ''}</div>
+    ${(N.trades || []).length ? `<div class="tw"><table class="tbl"><tr><th>When</th><th></th><th>Coin</th><th>Price</th><th>P&amp;L</th></tr>${
+      N.trades.map(t => `<tr title="${esc(t.reason)}"><td>${when(t.utc)}</td><td class="${t.side === 'buy' ? 'up' : 'down'}">${t.side === 'buy' ? 'BUY' : 'SELL'}</td>
+        <td>${esc(t.symbol)}</td><td class="num">${price(t.price)}</td><td class="num ${cls(t.pnl)}">${t.side === 'sell' ? pct(t.pnl_pct, 1) : ''}</td></tr>`).join('')}</table></div>`
+      : '<div class="empty">No trades yet.</div>'}`;
 }
 
 load();

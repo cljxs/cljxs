@@ -19662,6 +19662,11 @@ class BoltBase(unittest.TestCase):
         self.b.AGENT, self.b.MARKET = a, a / "data" / "market.json"
         self.b.BOOK, self.b.EQUITY, self.b.REPORTS = a / "state" / "portfolio.json", \
             a / "state" / "equity.jsonl", a / "reports"
+        # The news book (2026-10-16): its files here too, and no network -
+        # no headlines means no question and no buy.
+        self.b.NEWS_BOOK, self.b.NEWS_EQUITY = a / "state" / "news-portfolio.json", a / "state" / "news-equity.jsonl"
+        self.b.NEWS_CALLS, self.b.NEWS_USE = a / "state" / "news-calls.jsonl", a / "state" / "news-wakes.json"
+        self.b.fetch_news = lambda get=None: []
         self.rows = json.loads((FIXTURES / "coingecko-markets-bolt-10.json").read_text())
 
     def coin(self, price=100.0, ma20=98.0, ma50=95.0, ch1=0.5, ch24=5.0, ch7=3.0,
@@ -19978,6 +19983,169 @@ class BoltWithoutPricesTradesNothing(BoltBase):
             self.b.cmd_tick(now=self.T0 + timedelta(minutes=10), fetch=lambda: self.rows)
         self.assertEqual(len((self.b.AGENT / "MEMORY.md").read_text().strip().splitlines()), 1,
                          "a tick between cycles records nothing")
+
+
+class BoltPlusNews(BoltBase):
+    """Owner, 2026-10-16: Belfort's no-AI shadow trailed Belfort, so "would it
+    be worth implement something for bolt to trade more like belforts
+    research model" - "build it and put the cap at 5". A second book, the
+    same rules, with Haiku asked about the news before it buys. The feeds are
+    real captures (2026-10-16, titles, links and dates only)."""
+
+    NOW = datetime(2026, 10, 16, 16, 0, 0, tzinfo=timezone.utc)
+
+    def setUp(self):
+        super().setUp()
+        self.items = []
+        for name, src in (("coindesk", "CoinDesk"), ("cointelegraph", "Cointelegraph"),
+                          ("theblock", "The Block"), ("decrypt", "Decrypt")):
+            self.items += self.b.parse_feed((FIXTURES / f"crypto-rss-{name}.xml").read_text(), src)
+        self.items.sort(key=lambda x: x["published"], reverse=True)
+
+    def heads(self, sym):
+        return self.b.headlines_for(sym, self.items, self.NOW)
+
+    def test_the_four_real_feeds_parse(self):
+        self.assertEqual(len(self.items), 48)
+        self.assertEqual({x["source"] for x in self.items}, {"CoinDesk", "Cointelegraph", "The Block", "Decrypt"})
+        self.assertTrue(all(x["published"].endswith("Z") or "+00:00" in x["published"] for x in self.items))
+        self.assertEqual(self.b.parse_feed("<html>not a feed", "x"), [], "a broken feed is no headlines")
+
+    def test_which_coin_a_headline_is_about(self):
+        m = self.b.mentions
+        self.assertTrue(m("SOL", "Solana’s Liu says Shanghai event postponed over registration surge"))
+        self.assertTrue(m("ETH", "OpenAI says research model spent another wallet’s testnet ETH without authorization"))
+        title = "XRP has failed to make holders rich like bitcoin and ether. Here’s why"
+        self.assertTrue(m("XRP", title) and m("BTC", title) and m("ETH", title))
+        self.assertTrue(m("SOL", "Why $SOL is moving"))
+        self.assertFalse(m("LINK", "Click the link in our bio"), "a ticker counts in capitals only")
+        self.assertFalse(m("BNB", "Binance lists a new token"), "the exchange is not the coin")
+        self.assertFalse(m("ETH", "Ethiopia launches a stablecoin pilot"))
+
+    def test_only_its_own_recent_headlines_with_ids(self):
+        sol = self.heads("SOL")
+        self.assertTrue(sol)
+        self.assertTrue(all(self.b.mentions("SOL", h["title"]) for h in sol))
+        self.assertEqual([h["id"] for h in sol], [f"h{i + 1}" for i in range(len(sol))])
+        self.assertEqual(self.b.headlines_for("SOL", self.items, self.NOW + timedelta(days=5)), [],
+                         f"older than {self.b.NEWS_HOURS}h is not news")
+        self.assertLessEqual(len(self.heads("BTC")), self.b.NEWS_MAX)
+
+    def test_code_reads_the_answer(self):
+        heads = self.heads("SOL")
+        rv = lambda d: self.b.read_verdict(d if isinstance(d, str) else json.dumps(d), heads)
+        ok, score, head, _ = rv({"score": 8, "headline": "h1", "bad_news": False, "why": "a listing"})
+        self.assertEqual((ok, score, head["id"]), (True, 8, "h1"))
+        self.assertTrue(rv("```json\n" + json.dumps({"score": 7, "headline": "h1", "bad_news": False, "why": "x"}) + "\n```")[0])
+        self.assertFalse(rv({"score": 9, "headline": "h1", "bad_news": True, "why": "an exploit"})[0])
+        self.assertFalse(rv({"score": 6, "headline": "h1", "bad_news": False, "why": "a price move"})[0])
+        self.assertIn("without citing", rv({"score": 9, "headline": "h99", "bad_news": False, "why": "x"})[3])
+        self.assertFalse(rv("I think it looks good!")[0], "an answer it cannot read is a no")
+        self.assertFalse(rv({"headline": "h1", "bad_news": False})[0])
+
+    def gate(self, answers, sym="SOL"):
+        asked = []
+
+        def ask(q):
+            asked.append(q)
+            return answers.pop(0) if answers else (True, json.dumps({"score": 2, "headline": "none", "bad_news": False, "why": "-"}))
+        return (lambda: self.b.news_gate({"symbol": sym, "score": 8}, self.NOW, news=lambda: self.items, ask=ask)), asked
+
+    def test_a_catalyst_buys_and_says_which(self):
+        go, asked = self.gate([(True, json.dumps({"score": 8, "headline": "h1", "bad_news": False, "why": "real event"}))])
+        ok, note = go()
+        self.assertTrue(ok)
+        self.assertIn(self.heads("SOL")[0]["title"][:40], note)
+        self.assertIn("Solana", asked[0])
+        self.assertIn("[h1]", asked[0])
+        call = json.loads(self.b.NEWS_CALLS.read_text().splitlines()[-1])
+        self.assertEqual((call["ok"], call["symbol"], call["news_score"]), (True, "SOL", 8))
+
+    def test_no_headlines_means_no_question_and_no_buy(self):
+        go, asked = self.gate([], sym="LTC")
+        self.assertEqual(self.heads("LTC"), [])
+        ok, note = go()
+        self.assertEqual((ok, asked), (False, []))
+        self.assertIn("no LTC headlines", note)
+        self.assertEqual(self.b.news_wakes(self.NOW), 0, "a question not asked is not counted")
+
+    def test_five_questions_a_day_then_none(self):
+        self.assertEqual(self.b.NEWS_WAKES_PER_DAY, 5)
+        go, asked = self.gate([])
+        for _ in range(7):
+            go()
+        self.assertEqual(len(asked), 5)
+        self.assertIn("today's 5 news checks are used", json.loads(self.b.NEWS_CALLS.read_text().splitlines()[-1])["note"])
+        _go, asked2 = self.gate([])
+        self.b.news_gate({"symbol": "SOL", "score": 8}, self.NOW + timedelta(days=1), news=lambda: self.items,
+                         ask=lambda q: asked2.append(q) or (True, "{}"))
+        self.assertEqual(len(asked2), 1, "a new Eastern day, a new five")
+
+    def test_a_question_the_plan_will_not_answer_is_a_no(self):
+        go, _ = self.gate([(False, "usage limit reached")])
+        ok, note = go()
+        self.assertFalse(ok)
+        self.assertIn("could not run", note)
+
+    def test_the_two_books_trade_side_by_side(self):
+        m = self.market(SOL=self.coin(price=100.0, ma20=99.0, ma50=95.0, ch1=0.5, ch24=5.0, ch7=3.0))
+        plain = self.b.load_book(self.T0)
+        self.b.run(plain, m, self.T0)
+        self.assertEqual([p["symbol"] for p in plain["positions"]], ["SOL"])
+        vetoed = self.b.load_book(self.T0, self.b.NEWS_BOOK)
+        ev = self.b.run(vetoed, m, self.T0, gate=lambda pick: (False, "scored 4, under 7 - a price move"))
+        self.assertEqual(vetoed["positions"], [])
+        self.assertIn("the news check said no - scored 4", ev["cycle"]["action"])
+        approved = self.b.load_book(self.T0, self.b.NEWS_BOOK)
+        self.b.run(approved, m, self.T0, gate=lambda pick: (True, "8/10 on a listing"))
+        self.assertIn("news: 8/10 on a listing", approved["trades"][0]["reason"])
+        flat = self.b.load_book(self.T0, self.b.NEWS_BOOK)
+        called = []
+        self.b.run(flat, self.market(), self.T0, gate=lambda pick: called.append(pick) or (True, "x"))
+        self.assertEqual(called, [], "nothing to buy, nothing asked")
+
+    def test_a_tick_runs_both_and_keeps_them_apart(self):
+        m = self.market(SOL=self.coin(price=100.0, ma20=99.0, ma50=95.0, ch1=0.5, ch24=5.0, ch7=3.0))
+        line = self.b.tick_news_book(m, self.T0, gate=lambda pick: (True, "8/10 on a listing"))
+        self.assertIn("bolt + news", line)
+        nb = json.loads(self.b.NEWS_BOOK.read_text())
+        self.assertEqual([p["symbol"] for p in nb["positions"]], ["SOL"])
+        self.assertFalse(self.b.BOOK.exists(), "the plain book is not touched by the news book's turn")
+        self.assertEqual(self.b.problems(nb), [])
+        later = self.T0 + timedelta(hours=self.b.CYCLE_HOURS)      # the next buy check
+        m2 = self.market(ETH=self.coin(price=100.0, ma20=99.0, ma50=95.0, ch1=0.5, ch24=5.0, ch7=3.0))
+        broken = self.b.tick_news_book(m2, later, gate=lambda pick: 1 / 0)
+        self.assertIn("failed this tick", broken, "a failure is said, never raised into the plain book's tick")
+
+    def test_the_board_carries_the_twin(self):
+        self.b.tick_news_book(self.market(SOL=self.coin(price=100.0, ma20=99.0, ma50=95.0)), self.T0,
+                              gate=lambda pick: (False, "no"))
+        n = self.b.board(self.T0)["news"]
+        for k in ("equity", "pnl_pct", "positions", "closed", "calls", "asked_today", "cap", "curve"):
+            self.assertIn(k, n)
+        self.assertEqual(n["cap"], 5)
+        page = (ROOT / "mission-control-api" / "public" / "bolt.html").read_text()
+        self.assertIn("{ name: 'Bolt + news', pct: N.pnl_pct }", page)
+        self.assertIn('data-t="news"', page)
+
+    def test_the_question_goes_to_haiku_on_the_plan_with_no_tools(self):
+        doc = json.loads((ROOT / "tasks" / "engines.json").read_text())
+        self.assertEqual(doc["agents"]["bolt"], {"engine": "claude", "model": "haiku", "max_turns": 1, "fallback": "none"})
+        w = load("wake_bolt_ask", "wake.py")
+        seen = []
+        res = json.dumps({"type": "result", "is_error": False, "result": '{"score": 3}'})
+        old = (w.claude_bin, w.plan_token)
+        self.addCleanup(lambda: (setattr(w, "claude_bin", old[0]), setattr(w, "plan_token", old[1])))
+        w.claude_bin, w.plan_token = (lambda: "/bin/claude"), (lambda: "plan-login-placeholder")
+        ok, text = w.ask("bolt", "q?", run=lambda cmd, **kw: seen.append(cmd) or
+                         types.SimpleNamespace(returncode=0, stdout=res, stderr=""))
+        self.assertEqual((ok, text), (True, '{"score": 3}'))
+        cmd = seen[0]
+        self.assertEqual(cmd[cmd.index("--tools") + 1], "")
+        self.assertEqual(cmd[cmd.index("--max-turns") + 1], "1")
+        self.assertEqual(cmd[cmd.index("--model") + 1], "haiku")
+        self.assertEqual((ROOT / "deploy" / "bolt-cycle.service").read_text().split("TimeoutStartSec=")[1][:3], "300",
+                         "room for four feeds and one answer")
 
 
 class BoltsScreenDrawsTheBoard(BoltBase):
