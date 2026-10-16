@@ -375,7 +375,7 @@ function renderDetail() {
       <div class="acts"><button class="btn go" data-act="build">Start building</button></div>
     </div>` : r.state === 'building' ? `
     <div class="gate" style="border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.06)">
-      <b>Building - ${r.phases_passed} of ${r.phases} phases done.</b> <span class="muted">${r.dry ? 'Practice build.' : `The builder works ${night}; outside those hours it waits.`} The Build tab shows each phase.</span>
+      <b>Building - ${r.phases_passed} of ${r.phases} phases done.</b> <span class="muted">${r.dry ? 'Practice build.' : `The builder works ${night} (or in a build-now window); outside those hours it waits.`} The Build tab shows each phase.</span>
       ${appLink(r) ? `<div class="acts">${appLink(r)}</div>` : ''}
     </div>` : r.state === 'phase_ready' ? `
     <div class="gate">
@@ -396,6 +396,10 @@ function renderDetail() {
       <div style="margin-top:4px">${esc(r.error || '')}</div>
       <div class="muted" style="margin-top:4px">Nothing runs until you decide. Read the Room and Build tabs. Resume if it is fine; Stop if it is not.</div>
       <div class="acts"><button class="btn go" data-act="resume">Resume</button><button class="btn warn" data-act="stop">Stop</button></div>
+    </div>` : r.state === 'stopped' && r.build_started ? `
+    <div class="gate">
+      <b>The build was stopped - ${r.phases_passed} of ${r.phases} phases done.</b> <span class="muted">Resume carries it on from phase ${(r.build_phase || 0) + 1}, on top of what it already wrote, ${r.dry ? 'straight away' : `when the builder may work (${night}, or a build-now window)`}.</span>
+      <div class="acts"><button class="btn go" data-act="resume">Resume</button>${appLink(r)}</div>
     </div>` : r.state === 'built' ? `
     <div class="gate">
       <b>Every phase is built and passing its tests.</b>
@@ -456,7 +460,7 @@ async function act(what, btn) {
     if (body.note.length < 3) { alert('Write a note first.'); return; }
   }
   if (what === 'build' && !detail.run.dry && !confirm('Start building? The builder will work in its night window, in its sandbox, on its own Claude login.')) return;
-  if (what === 'resume' && !confirm('Resume the build? Only if you have read why it was held and you are happy with it.')) return;
+  if (what === 'resume' && !confirm(detail.run.state === 'stopped' ? 'Carry on building from where it was stopped?' : 'Resume the build? Only if you have read why it was held and you are happy with it.')) return;
   if (what === 'stop' && !confirm('Stop this run? It stops before its next AI call.')) return;
   if (what === 'retry' && !confirm('Carry this run on from where it stopped? What is already done is kept and not paid for again; the step that failed is asked again.')) return;
   btn.disabled = true;

@@ -397,6 +397,29 @@ class TheNight(Base):
         with self.assertRaises(ValueError):
             self.m.open_build_now(self.conn, 9)
 
+    def test_a_stopped_build_can_be_resumed(self):
+        # Guards: Stop during a build leaving no button to carry on (owner,
+        # 2026-10-16: "The start button disappeared") - and a resumed build
+        # stopping again at once on the old Stop.
+        rid = self.approved_run()
+        b = FakeBuilder(self.m)
+        with unittest.mock.patch.object(self.m, "builder_for", return_value=b):
+            self.m.start_build(self.conn, rid)
+        self.m.stop(self.conn, rid)
+        run = self.build(rid, b, [reply(OK), reply(APPROVE)])
+        self.assertEqual(run["state"], "stopped")
+        self.assertTrue(self.m.run_view(self.conn, run)["build_started"])
+        self.m.resume_build(self.conn, rid)
+        self.assertEqual(self.m.next_run(self.conn, now=NOW), rid)
+        run = self.build(rid, b, [reply(OK), reply(APPROVE)])
+        self.assertEqual(run["state"], "building")
+        self.assertEqual(run["build_phase"], 1, "phase 1 passed after the resume")
+        planning = self.conn.execute(
+            "INSERT INTO runs (slug, title, idea, dry, state, created_utc, updated_utc) "
+            "VALUES ('p', 'p', 'an idea long enough', 0, 'stopped', '', '')").lastrowid
+        with self.assertRaises(ValueError, msg="a run stopped before building has nothing to resume"):
+            self.m.resume_build(self.conn, planning)
+
     def test_at_most_n_phases_a_night_then_the_owner(self):
         self.set_roles(phases_per_night=1)
         rid = self.approved_run()

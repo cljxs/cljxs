@@ -1687,15 +1687,24 @@ def continue_build(conn, rid):
     return "building"
 
 
+def build_started(conn, rid):
+    return conn.execute("SELECT COUNT(*) FROM phases WHERE run_id = ?", (rid,)).fetchone()[0] > 0
+
+
 def resume_build(conn, rid):
-    """The owner looked at what held the build and lets it carry on."""
+    """The owner lets a held build carry on - or a stopped one: Stop during
+    a build was a dead end, no button left to carry on (owner, 2026-10-16).
+    It carries on from the phase it was on, on top of what is there."""
     run = get_run(conn, rid)
     if not run:
         raise ValueError(f"no run {rid}")
-    if run["state"] != "held":
-        raise ValueError(f"run {rid} is not held (it is {run['state']})")
-    set_run(conn, rid, state="building", error=None)
-    say(conn, rid, "You", "owner", "I have looked at what held the build - carry on.")
+    stopped = run["state"] == "stopped" and build_started(conn, rid)
+    if run["state"] != "held" and not stopped:
+        raise ValueError(f"run {rid} is not a held or stopped build (it is {run['state']})")
+    set_run(conn, rid, state="building", error=None, stop_requested=0)
+    say(conn, rid, "You", "owner",
+        f"Carry on building, from phase {run['build_phase'] + 1}." if stopped
+        else "I have looked at what held the build - carry on.")
     return "building"
 
 
@@ -2193,6 +2202,7 @@ def run_view(conn, run):
             "phases_passed": conn.execute("SELECT COUNT(*) FROM phases WHERE run_id = ? AND status = 'passed'",
                                           (run["id"],)).fetchone()[0],
             "site": site_dir(conn, run["slug"]) is not None,
+            "build_started": build_started(conn, run["id"]),
             "created_utc": run["created_utc"], "updated_utc": run["updated_utc"]}
 
 
