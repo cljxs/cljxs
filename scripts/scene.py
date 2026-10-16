@@ -566,31 +566,38 @@ CHECK_MAX_TOKENS = 800
 LIMITS_KEYS = ("tiktok_daily_ai", "tiktok_leave_for_emily")
 LIMITS_DEFAULTS = {"tiktok_daily_ai": 0.30, "tiktok_leave_for_emily": 0.50}
 
-# Faces are cropped out on purpose: an AI face is the thing viewers spot
-# first and TikTok labels most strictly, and the product is the point.
+# WHOLE PEOPLE, WITH FACES (owner, 2026-10-16, on a bookshop shopper and a
+# street walker drawn without heads: "This looks bad can we add an entire
+# body figure and a ai generated face/head"). Told to keep the face out of
+# frame, the image model kept the frame and left the head off. So a person
+# is now the whole person - head to at least the knees, a natural face -
+# an ordinary adult, never anyone recognisable (WHO, below); the design
+# check refuses a missing or cut-off head and strange hands (person_ok).
+# Kits with AI scenes already say "AI-generated content" for TikTok.
+WHO = ("an ordinary adult with a natural, friendly face (not a celebrity or anyone recognisable), "
+       "shown whole from head to at least the knees")
 # Seven each: a kit asks for five and tries two more when the design check
 # refuses one (tiktok-kit.py), and a place asked for twice is a duplicate.
 #
 # THE TOTE (owner, 2026-10-16, on a bag drawn floating in front of a chair:
 # "The bag isn't hanging off of anything. Also can we use people holding the
 # bag... If not could we use the mockup pictures from printify and just
-# change the background"). So: people carrying it, faces out of frame, and
+# change the background"). So: people carrying it, and
 # FLAT places - "flat:" - where the real mockup keeps its exact pose and
 # only the plain backdrop is replaced by a surface it lies on, seen from
 # above. Nothing hangs from furniture: that is what came out floating.
 # Alternated, so any five in a row hold both kinds.
 FLAT_LAY = "flat:"
 PAID_SCENES = {
-    "tote bag": ["carried on the shoulder of a woman walking down a sunny autumn street, one hand on the strap, "
-                 "cropped at the shoulders so no face shows",
+    "tote bag": [f"carried on the shoulder of {WHO}, a woman walking down a sunny autumn street, smiling, "
+                 "one hand on the strap",
                  f"{FLAT_LAY} a rustic wooden table beside a latte and an open book",
-                 "held out by one hand at a farmers market stall, the fingers wrapped round both straps, "
-                 "flowers softly blurred behind, no face shown",
+                 f"held by both straps by {WHO}, browsing flowers at a farmers market stall",
                  f"{FLAT_LAY} a red and white picnic blanket on grass beside a basket of strawberries",
-                 "carried in the crook of the arm of a person browsing a bookshop, cropped at the chin so no face shows",
+                 f"carried on the shoulder of {WHO}, reaching for a book in a cozy bookshop, seen from the side",
                  f"{FLAT_LAY} light oak floorboards with a few autumn leaves around it",
-                 "slung over the shoulder of a person waiting at a cafe counter, seen from behind, no face shown"],
-    "mug": ["held in two hands with cozy sweater sleeves beside a rainy window, no face shown",
+                 f"slung over the shoulder of {WHO}, waiting at a cafe counter with a coffee in hand"],
+    "mug": [f"held in two hands by {WHO}, in a cozy sweater, sitting by a rainy window",
             "on a kitchen counter beside a coffee pot in soft morning light",
             "on a desk next to an open notebook and a laptop, warm lamp light",
             "on a bedside table beside a stack of books and a small lamp",
@@ -603,12 +610,12 @@ PAID_SCENES = {
                 "stuck on a phone case lying on a cafe table",
                 "stuck on a notebook beside a cup of coloured pencils",
                 "stuck on a guitar case in a sunny room"],
-    "t-shirt": ["worn by a person standing in a sunny park, cropped at the chin so no face shows",
+    "t-shirt": [f"worn by {WHO}, standing in a sunny park",
                 "folded neatly on a wooden bench beside a pair of sneakers",
-                "worn by a person sitting in a cafe, cropped at the chin so no face shows",
+                f"worn by {WHO}, sitting at a cafe table",
                 "laid flat on a bed beside a denim jacket and sunglasses",
                 "hanging on a wooden hanger against a white brick wall",
-                "worn by a person walking down a city street, cropped at the chin so no face shows",
+                f"worn by {WHO}, walking down a city street",
                 "folded on a shelf in a bright little boutique"],
 }
 PAID_SCENES["bag"] = PAID_SCENES["tote bag"]
@@ -616,7 +623,7 @@ for _k in ("shirt", "sweatshirt", "hoodie"):
     PAID_SCENES[_k] = PAID_SCENES["t-shirt"]
 PAID_DEFAULT = ["on a cafe table beside a latte, seen from slightly above",
                 "on a wooden shelf in a bright living room with plants",
-                "held in one hand in soft daylight, no face shown",
+                f"held in one hand by {WHO}, in soft daylight",
                 "on a bedside table beside a small lamp and a book",
                 "on a sunny windowsill among potted plants",
                 "on a wooden desk beside a notebook and a cup of coffee",
@@ -655,7 +662,10 @@ DESIGN_ASK = (
     ' "added_text": true or false (are there words in B that are not printed on the product),\n'
     ' "physically_real": true or false (is the product in B held, worn, lying on or hanging from something '
     'the way a real one would be - not floating in the air or in front of things, straps actually round '
-    'what holds them, touching what it rests on)}')
+    'what holds them, touching what it rests on),\n'
+    ' "person_ok": true or false (true if no person is in B; if one is: a whole person with a complete head '
+    'and a natural face - not cut off at the neck or chin, not headless - and natural hands with five '
+    'fingers)}')
 
 
 class SpendError(SceneError):
@@ -722,7 +732,7 @@ def design_problems(reading):
     if not isinstance(reading, dict):
         return ["the design check's answer could not be read"]
     need = ("product_visible", "same_design", "words_a", "words_b", "differences", "added_text",
-            "physically_real")
+            "physically_real", "person_ok")
     missing = [k for k in need if k not in reading]
     if missing:
         return [f"the design check did not answer {', '.join(missing)}"]
@@ -742,6 +752,8 @@ def design_problems(reading):
     if reading["physically_real"] is not True:
         out.append("it does not sit in the scene the way a real one would - floating, or its straps "
                    "holding onto nothing")
+    if reading["person_ok"] is not True:
+        out.append("the person is not whole - a missing or cut-off head, an unnatural face, or strange hands")
     return out
 
 
@@ -813,7 +825,8 @@ def paid_scene(photo, thing, out, n, scratch, spent_today=0.0, key=None, generat
             break
     failed = [v["said"] for v in (last or {}).values() if not v["ok"]]
     return {"ok": bool(last) and not failed, "why": "; ".join(failed) or (None if last else "nothing was drawn"),
-            "checks": last or {}, "prompt": prompt, "source": "paid", "cost": round(spent, 4)}
+            "checks": last or {}, "prompt": prompt, "source": "paid", "cost": round(spent, 4),
+            "flat": prompt.startswith(FLAT_ASK[:60])}
 
 
 MODES = ("paid", "free", "off")

@@ -670,7 +670,7 @@ class TheDesignCheck(SceneBase):
     questions; code decides what counts as a problem."""
 
     GOOD = {"product_visible": True, "same_design": True, "words_a": "FERN", "words_b": "Fern!",
-            "differences": [], "added_text": False, "physically_real": True}
+            "differences": [], "added_text": False, "physically_real": True, "person_ok": True}
 
     def test_a_faithful_redraw_passes(self):
         self.assertEqual(self.sc.design_problems(self.GOOD), [], "case and punctuation are not a change")
@@ -682,7 +682,9 @@ class TheDesignCheck(SceneBase):
                              (dict(differences=["the leaves are blue"]), "the leaves are blue"),
                              (dict(added_text=True), "words were added"),
                              # Owner, 2026-10-16: "The bag isn't hanging off of anything."
-                             (dict(physically_real=False), "the way a real one would")):
+                             (dict(physically_real=False), "the way a real one would"),
+                             # Owner, 2026-10-16: headless shoppers - "This looks bad".
+                             (dict(person_ok=False), "the person is not whole")):
             got = " | ".join(self.sc.design_problems(dict(self.GOOD, **change)))
             self.assertIn(said, got, change)
 
@@ -725,8 +727,18 @@ class PeopleAndRealPlaces(SceneBase):
     def test_people_carry_it_and_nothing_hangs_from_furniture(self):
         people = [p for p in self.places() if not p.startswith(self.sc.FLAT_LAY)]
         self.assertGreaterEqual(len(people), 3)
-        self.assertTrue(all("no face" in p for p in people), "faces stay out of frame")
         self.assertFalse([p for p in self.places() if "chair" in p or "hanging from" in p])
+
+    def test_a_person_is_whole_with_a_face(self):
+        # Owner, 2026-10-16, on two headless shoppers: "can we add an entire body
+        # figure and a ai generated face/head". "No face shown" produced them.
+        every = [p for k, v in self.sc.PAID_SCENES.items() for p in v] + list(self.sc.PAID_DEFAULT)
+        self.assertFalse([p for p in every if "no face" in p or "cropped at" in p])
+        people = [p for p in self.places() if not p.startswith(self.sc.FLAT_LAY)]
+        self.assertTrue(all(self.sc.WHO in p for p in people))
+        self.assertIn("natural, friendly face", self.sc.WHO)
+        self.assertIn("not a celebrity", self.sc.WHO)
+        self.assertIn("person_ok", self.sc.DESIGN_ASK)
 
     def test_the_mockup_on_a_real_surface_keeps_its_pose(self):
         flat = [n for n, p in enumerate(self.places()) if p.startswith(self.sc.FLAT_LAY)]
@@ -936,6 +948,20 @@ class KitsWithScenes(unittest.TestCase):
         kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make,
                                 wait=lambda s: None, scenes=3, how="paid")
         self.assertEqual(kit["ai_slides"], ["01.jpg"], "three identical scenes are one")
+
+    def test_the_hook_goes_on_a_flat_lay_not_over_a_face(self):
+        # 2026-10-16: scenes now show whole people, and the hook's words cover
+        # the top of the first slide - a face. A flat lay carries the hook.
+        make, _ = self.maker()
+
+        def flat_third(photo, thing, out, n, seed, scratch, **kw):
+            rep = make(photo, thing, out, n, seed, scratch, **kw)
+            return dict(rep, flat=(n == 2), prompt=f"scene {n}")
+        kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=flat_third,
+                                wait=lambda s: None, scenes=3, how="paid")
+        self.assertEqual(kit["scenes"][0]["slide"], "01.jpg")
+        self.assertEqual(kit["scenes"][0]["prompt"], "scene 2", "the flat lay carries the hook")
+        self.assertEqual(len(kit["scenes"]), 3, "every scene still shown once")
 
     def test_todays_allowance_running_out_stops_the_rest(self):
         make, calls = self.maker(fail=lambda n, name: self.sc.SpendError("today's scene allowance is spent")

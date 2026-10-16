@@ -570,6 +570,10 @@ def choose(scenes, photos):
             keep.append((path, rep))
         else:
             left_out.append("an AI scene that looked like another one")
+    # The hook's words cover the top of the first slide, which on a scene
+    # with a whole person is their face (2026-10-16): a flat lay goes first
+    # when there is one.
+    keep.sort(key=lambda u: 0 if (u[1] or {}).get("flat") else 1)
     shown = []
     for p in photos:
         if keep and plain_backdrop(p):
