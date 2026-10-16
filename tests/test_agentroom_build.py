@@ -488,6 +488,32 @@ class ThePhaseLoop(Base):
             self.assertEqual(hook["matcher"], "*")
             self.assertIn("guard.py", hook["hooks"][0]["command"])
             self.assertEqual((Path(lib) / "guard.py").read_text(), (SCRIPTS / "agentroom-guard.py").read_text())
+            # Guards: the builder's commands reaching any site at all (empty
+            # list: npm blocked; a wildcard: everything open). npm's only.
+            self.assertEqual(s["sandbox"]["network"]["allowedDomains"], ["registry.npmjs.org"])
+
+    def test_the_selftest_passes_only_with_all_four_answers(self):
+        # Guards: a self-test that says "safe" without the npm registry check
+        # (2026-10-16: sessions could not reach it until socat was installed).
+        def stream(npm_answer):
+            used = [{"type": "tool_use", "name": "Bash", "input": {"command": "echo selftest-hello"}}]
+            return [{"type": "assistant", "message": {"content": used}},
+                    {"type": "user", "message": {"content": [
+                        {"type": "tool_result", "content": "selftest-hello"},
+                        {"type": "tool_result", "content": self.m.GUARD_DENIED + ": listing the environment"},
+                        {"type": "tool_result", "content": "token-vars:0"},
+                        {"type": "tool_result", "content": npm_answer}]}},
+                    {"type": "result", "is_error": False, "result": "done"}]
+        for npm_answer, want in (("1.3.0", 0), ("npm error network: blocked by the sandbox", 1)):
+            b = unittest.mock.MagicMock()
+            b.ready.return_value = None
+            b.session.return_value = stream(npm_answer)
+            with unittest.mock.patch.object(self.m, "Builder", return_value=b), \
+                 unittest.mock.patch.object(self.m, "builder_home", return_value=self.d), \
+                 unittest.mock.patch.object(self.m, "give_to_builder"), \
+                 unittest.mock.patch.object(self.m, "builder_token", return_value="fake-login-SECRET"):
+                out, rc = self.m.builder_selftest()
+            self.assertEqual(rc, want, "\n".join(out))
 
 
 if __name__ == "__main__":

@@ -71,11 +71,17 @@ class Redactor:
                 cut = i + j
                 break
         self.held = buf[cut:]
-        return TOKEN.sub(MASK, buf[:cut])
+        return hide(buf[:cut])
 
     def flush(self):
-        out, self.held = TOKEN.sub(MASK, self.held), b""
+        out, self.held = hide(self.held), b""
         return out
+
+
+def hide(data):
+    # As wide as the login, so the screen's redraw leaves none of the line
+    # behind it showing (2026-10-16: "[login caught - hidden]Term2, Fn in...").
+    return TOKEN.sub(lambda m: MASK.ljust(len(m.group(0))), data)
 
 
 def caught(raw):

@@ -1137,6 +1137,7 @@ NOT_CLAUDE = ["ProtectKernelTunables=yes", "ProtectKernelLogs=yes", "ProtectHost
 # by default): the setup script copies it here, runnable by root and the
 # builder only, and lets AppArmor allow this path alone.
 BUILDER_BWRAP = BUILDER_LIB / "bin" / "bwrap"
+BUILDER_HOSTS = ("registry.npmjs.org",)   # all a builder command may reach (install_guard)
 
 BUILDER_RULES = """You are the Builder in the Agent Room. You build the project in this folder
 one phase at a time, from PLAN.md and plan.json. Nobody is watching this run and
@@ -1334,6 +1335,10 @@ def install_guard():
         "hooks": {"PreToolUse": [{"matcher": "*", "hooks": [
             {"type": "command", "command": f"/usr/bin/python3 -I {guard}", "timeout": 60}]}]},
         "permissions": {"deny": ["WebFetch", "WebSearch", "Task", "Agent"]},
+        # The only host the builder's commands can reach (through Claude's
+        # sandbox proxy): npm's registry, for the packages the guard vetted.
+        # Anything else is refused - there is nobody to ask.
+        "sandbox": {"network": {"allowedDomains": list(BUILDER_HOSTS)}},
     }
     (BUILDER_LIB / "settings.json").write_text(json.dumps(settings, indent=1))
     wrapper = BUILDER_LIB / "with-token.sh"
@@ -1405,6 +1410,8 @@ class Builder:
                     "bash /root/ecosystem/scripts/agentroom-builder-setup.sh")
         if not os.access(BUILDER_BWRAP, os.X_OK):
             return "the builder's bubblewrap is not set up - run the builder setup script again"
+        if not shutil.which("socat"):
+            return "socat is not installed (Claude's sandbox needs it) - run the builder setup script again"
         if not shutil.which("systemd-run"):
             return "systemd-run is missing - the sandbox cannot be made"
         tok = builder_token()
@@ -1959,11 +1966,12 @@ def builder_check():
     return out, 1 if bad else 0
 
 
-SELFTEST = """This is a test of your sandbox, not a build. Run each of these three commands
+SELFTEST = """This is a test of your sandbox, not a build. Run each of these four commands
 with Bash, one at a time, exactly as written, and do nothing else:
 1. echo selftest-hello
 2. printenv
 3. node -e "console.log('token-vars:' + Object.keys(process.env).filter(k => /TOKEN|ANTHROPIC/.test(k)).length)"
+4. npm view left-pad version
 Then reply with one line saying what each printed or whether it was refused."""
 
 
@@ -2023,10 +2031,14 @@ def builder_selftest():
     ok2 = denials >= 1
     m = re.search(r"token-vars:(\d+)", texts)
     ok3 = bool(m) and m.group(1) == "0"
+    # left-pad's last version, from the registry: the one host a command may
+    # reach (BUILDER_HOSTS), for the vetted installs a build needs.
+    ok4 = any("1.3.0" in json.dumps(e) for e in events if e.get("type") == "user")
     out.append(f"{'PASS' if ok1 else 'FAIL'}  an ordinary command runs")
     out.append(f"{'PASS' if ok2 else 'FAIL'}  the guard refused printenv ({denials} refused)")
     out.append(f"{'PASS' if ok3 else 'FAIL'}  commands see no login ({'token-vars:' + m.group(1) if m else 'no answer'})")
-    good = ok1 and ok2 and ok3
+    out.append(f"{'PASS' if ok4 else 'FAIL'}  commands reach npm's registry, the one site they may (for vetted packages)")
+    good = ok1 and ok2 and ok3 and ok4
     if not good:
         # 2026-10-15: three bare FAILs and no way to tell why. Claude's own
         # words say it: a refused login, a limit, or what it did instead.

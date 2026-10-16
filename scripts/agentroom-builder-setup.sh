@@ -36,12 +36,17 @@ chown -R "$USER_NAME:$USER_NAME" "$HOME_DIR"
 chmod 750 "$HOME_DIR"
 chmod 700 /root
 
-echo "== 2. bubblewrap"
-if command -v bwrap >/dev/null 2>&1; then
-  echo "   installed"
-else
-  apt-get install -y bubblewrap >/dev/null && echo "   installed bubblewrap" || { echo "   could not install bubblewrap"; exit 1; }
-fi
+echo "== 2. bubblewrap and socat"
+# socat carries the network for Claude's sandboxed commands, through its own
+# proxy, to the hosts in the guard's settings only (2026-10-16: "the sandbox
+# couldn't start (socat isn't installed)").
+for tool in bwrap:bubblewrap socat:socat; do
+  if command -v "${tool%%:*}" >/dev/null 2>&1; then
+    echo "   ${tool#*:} installed"
+  else
+    apt-get install -y "${tool#*:}" >/dev/null && echo "   installed ${tool#*:}" || { echo "   could not install ${tool#*:}"; exit 1; }
+  fi
+done
 
 # Ubuntu 24.04 stops ordinary accounts making the namespaces bubblewrap needs
 # ("bwrap: setting up uid map: Permission denied"). Rather than lift that for
