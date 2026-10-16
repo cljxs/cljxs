@@ -52,5 +52,28 @@ class TheFrameLeavesTheVillageAlone(unittest.TestCase):
                       "under the houses' panels (20) and pages (60)")
 
 
+class TheFeedAndTheFaces(unittest.TestCase):
+    """Owner, 2026-10-16: "The activity feed isn't working. Instead of a letter
+    next to the names do a picture of their character." """
+
+    def test_feed_rows_keep_their_height(self):
+        # The bug: .feed is a flex column with a fixed height, so every row
+        # shrank to fit it and the lines were drawn on top of each other.
+        rule = re.search(r"\.feed \.row\{[^}]*\}", PAGE).group(0)
+        self.assertIn("flex:0 0 auto", rule)
+        self.assertIn('<div class="row" data-go=', PAGE, "a feed row opens its agent")
+
+    def test_each_face_is_the_agents_own_sprite(self):
+        src = PAGE.split("function avatarSrc(name) {", 1)[1].split("\n}", 1)[0]
+        self.assertIn("`${look(name)}-down-0`", src, "the texture the village walks, not a second drawing")
+        self.assertIn("getSourceImage()", src)
+        frame = PAGE.split("function renderFrame(offline) {", 1)[1].split("\nfunction tickClock", 1)[0]
+        self.assertEqual(frame.count("avatarBox(a.name)"), 2, "agents list and feed")
+        self.assertNotIn("a.name[0].toUpperCase()", frame, "no letter where a face goes")
+        # The textures exist only after create(); the faces are filled in then.
+        create = PAGE.split("function create() {", 1)[1][:200]
+        self.assertIn("makeTextures(this);\n  fillAvatars();", create)
+
+
 if __name__ == "__main__":
     unittest.main()

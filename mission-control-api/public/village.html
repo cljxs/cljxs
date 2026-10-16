@@ -82,8 +82,10 @@
   .kv span{color:var(--hd)} .kv b{font-weight:600}
   .ag{display:flex;align-items:center;gap:9px;padding:6px 4px;border-bottom:1px solid rgba(255,255,255,.05);cursor:pointer}
   .ag:last-child{border-bottom:0}
-  .ag .av{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;font:700 14px ui-monospace,monospace;
-    color:#0a0f1e;flex:0 0 auto;box-shadow:0 0 0 1px rgba(255,255,255,.15)}
+  .ag .av{width:40px;height:40px;border-radius:8px;display:grid;place-items:center;font:700 14px ui-monospace,monospace;
+    color:#0a0f1e;flex:0 0 auto;box-shadow:0 0 0 1px rgba(255,255,255,.15);overflow:hidden}
+  .av img{display:block;image-rendering:pixelated;image-rendering:crisp-edges}
+  .ag .av img{width:40px;height:40px}
   .ag .nm{font-size:12.5px;font-weight:600;text-transform:capitalize}
   .ag .rl{font-size:10.5px;color:var(--hd)}
   .ag .st{margin-left:auto;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
@@ -93,8 +95,14 @@
   .wl .i{flex:0 0 auto} .wl .t b{display:block;font-weight:600}
   .wl .t span{color:var(--hd);font-size:10.5px}
   .feed{display:flex;flex-direction:column;gap:3px;overflow-y:auto;height:calc(100% - 22px)}
-  .feed div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11.5px}
-  .feed .tm{color:var(--hd);margin-right:8px} .feed .who{color:var(--hm);margin-right:6px;text-transform:capitalize}
+  /* rows keep their height: a flex column with a fixed height otherwise
+     shrinks every row to fit, and the lines draw on top of each other */
+  .feed .row{flex:0 0 auto;display:flex;align-items:center;gap:7px;min-height:24px;font-size:11.5px;line-height:16px;cursor:pointer}
+  .feed .row .av{width:22px;height:22px;border-radius:5px;flex:0 0 auto;display:grid;place-items:center;overflow:hidden;
+    font:700 10px ui-monospace,monospace;color:#0a0f1e}
+  .feed .row .av img{width:22px;height:22px}
+  .feed .tx{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .feed .tm{color:var(--hd);flex:0 0 auto;min-width:54px} .feed .who{color:var(--hm);margin-right:6px;text-transform:capitalize}
   /* narrow screens: the sides become drawers over the village, the feed goes */
   @media (max-width: 1000px), (max-height: 560px){
     :root{--fl:0px;--fr:0px;--fb:0px;--ft:58px}
@@ -1972,6 +1980,7 @@ function preload() {}
 function create() {
   scene = this;
   makeTextures(this);
+  fillAvatars();
   npcs = [];
 
   const ground = this.add.renderTexture(0, 0, W, H).setOrigin(0).setDepth(0);
@@ -3980,6 +3989,36 @@ function openFromFrame(key) {
   if ((DATA.agents || []).some(a => a.name === key)) return openPanel(key);
 }
 
+/* Each agent's face in the frame is the sprite walking around the village:
+   the same texture (look() picks it), cropped to head and shoulders. The
+   textures exist only once Phaser's create() has run, so until then a row
+   shows the agent's initial, and fillAvatars() swaps the picture in. */
+const AVATAR = {};
+function avatarSrc(name) {
+  if (name in AVATAR) return AVATAR[name];
+  const key = `${look(name)}-down-0`;
+  if (!scene || !scene.textures || !scene.textures.exists(key)) return null;
+  try {
+    const c = document.createElement('canvas');
+    c.width = 20; c.height = 20;
+    c.getContext('2d').drawImage(scene.textures.get(key).getSourceImage(), 2, 0, 20, 20, 0, 0, 20, 20);
+    AVATAR[name] = c.toDataURL();
+  } catch { AVATAR[name] = null; }
+  return AVATAR[name];
+}
+function avatarHtml(name) {
+  const src = avatarSrc(name);
+  return src ? `<img src="${src}" alt="">` : esc(name[0].toUpperCase());
+}
+function avatarBox(name) {
+  return `<div class="av" data-av="${esc(name)}" style="background:${HUE[name] || '#9aa4bb'}" title="${esc(name)}">${avatarHtml(name)}</div>`;
+}
+function fillAvatars() {
+  document.querySelectorAll('[data-av]').forEach(el => {
+    if (!el.querySelector('img') && avatarSrc(el.dataset.av)) el.innerHTML = avatarHtml(el.dataset.av);
+  });
+}
+
 function renderFrame(offline) {
   const agents = DATA.agents || [], k = DATA.kpis || {}, h = DATA.health || {};
   const active = agents.filter(a => a.status === 'active').length;
@@ -4017,7 +4056,7 @@ function renderFrame(offline) {
   $('fAgN').textContent = `${active} active · ${agents.length}`;
   $('fAgents').innerHTML = agents.map(a => {
     const [c, word] = STATUS[a.status] || ['#7f8bb0', a.status || '?'];
-    return `<div class="ag" data-go="${esc(a.name)}"><div class="av" style="background:${HUE[a.name] || '#9aa4bb'}">${esc(a.name[0].toUpperCase())}</div>
+    return `<div class="ag" data-go="${esc(a.name)}">${avatarBox(a.name)}
       <div><div class="nm">${esc(a.name)}</div><div class="rl">${esc(ROLE[a.name] || 'Agent')} · ${agoTxt(a.last_run_age_min)}</div></div>
       <div class="st" style="color:${c}"><span class="dot" style="background:${c}"></span>${esc(word)}</div></div>`;
   }).join('') || '<div class="kv"><span>No agents yet</span></div>';
@@ -4036,7 +4075,7 @@ function renderFrame(offline) {
     .map(a => ({ a, t: a.last_run ? new Date(a.last_run) : null }))
     .sort((x, y) => (y.t || 0) - (x.t || 0));
   $('fFeedList').innerHTML = feed.map(({ a, t }) =>
-    `<div><span class="tm">${t && !isNaN(t) ? t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—'}</span><span class="who">${esc(a.name)}</span>${esc(a.memory_line || a.headline)}</div>`).join('')
+    `<div class="row" data-go="${esc(a.name)}" title="${esc(a.memory_line || a.headline)}">${avatarBox(a.name)}<span class="tm">${t && !isNaN(t) ? t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—'}</span><span class="tx"><span class="who">${esc(a.name)}</span>${esc(a.memory_line || a.headline)}</span></div>`).join('')
     || '<div class="tm">Nothing yet - each agent\'s latest note appears here.</div>';
 }
 
