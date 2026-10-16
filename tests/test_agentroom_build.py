@@ -540,6 +540,38 @@ class ThePhaseLoop(Base):
             # list: npm blocked; a wildcard: everything open). npm's only.
             self.assertEqual(s["sandbox"]["network"]["allowedDomains"], ["registry.npmjs.org"])
 
+    def test_the_watchdog_and_the_room_see_why_each_command_was_refused(self):
+        # Guards: "4 refused" with no reasons - the watchdog could not judge
+        # them and held the build (owner, 2026-10-16). Shape as claude 2.1.300
+        # streams a hook refusal: a tool_use, then a tool_result naming it.
+        events = [
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "npx vitest"}},
+                {"type": "tool_use", "id": "t2", "name": "Bash", "input": {"command": "ls"}}]}},
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "t1", "is_error": True,
+                 "content": self.m.GUARD_DENIED + ": running packages straight from the internet is not allowed."},
+                {"type": "tool_result", "tool_use_id": "t2", "content": "site"}]}},
+            {"type": "result", "is_error": False, "result": "done"}]
+        _, commands, _, refused = self.m.session_facts(events)
+        self.assertEqual(commands, ["npx vitest", "ls"])
+        self.assertEqual(len(refused), 1)
+        self.assertIn("npx vitest", refused[0])
+        self.assertIn("straight from the internet", refused[0])
+        rid = self.approved_run()
+        b = FakeBuilder(self.m)
+        b.session = lambda *a, **k: events
+        with unittest.mock.patch.object(self.m, "builder_for", return_value=b):
+            self.m.start_build(self.conn, rid)
+        room = self.room(reply(OK), reply(APPROVE))
+        with unittest.mock.patch.object(self.m, "ask", wraps=self.m.ask) as ask, \
+             unittest.mock.patch.object(self.m, "builder_for", return_value=b):
+            self.m.step(self.conn, rid, room, b, now=NOW)
+        evidence = ask.call_args_list[0][0][6]
+        self.assertIn("npx vitest  ->  running packages straight from the internet", evidence)
+        said = json.dumps(self.m.show(self.conn, rid)["messages"])
+        self.assertIn("straight from the internet", said, "the owner sees it in the Room too")
+
     def test_the_selftest_passes_only_with_all_four_answers(self):
         # Guards: a self-test that says "safe" without the npm registry check
         # (2026-10-16: sessions could not reach it until socat was installed).
