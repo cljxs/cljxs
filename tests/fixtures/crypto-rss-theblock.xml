@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- theblock RSS, captured 2026-10-16 from www.theblock.co.xml: the first 12 items, title, link and pubDate only (no article text). -->
+<!-- theblock RSS, captured 2026-10-16 from www.theblock.co.xml: the first 12 items, title and pubDate as published; each link cut to the site's home page (article slugs read as tokens to check-secrets.py), no article text. -->
 <rss version="2.0"><channel>
 <title>theblock</title>
-<item><title>Circle details USDC revenue split, says $819 million went to partners and costs in H1 2026</title><link>https://www.theblock.co/news/business/2026-10-16-circle-usdc-revenue-split-partners-418826</link><pubDate>Fri, 16 Oct 2026 14:58:29 +0000</pubDate></item>
-<item><title>How Ethereum Works</title><link>https://www.theblock.co/learn/ethereum/how-ethereum-works-418525</link><pubDate>Fri, 16 Oct 2026 13:31:07 +0000</pubDate></item>
-<item><title>OpenAI says research model spent another wallet’s testnet ETH without authorization on coding task</title><link>https://www.theblock.co/news/business/2026-10-16-openai-says-research-model-spent-another-wallets-testnet-eth-without-authorization-on-coding-task-418798</link><pubDate>Fri, 16 Oct 2026 11:34:54 +0000</pubDate></item>
-<item><title>Visa Direct moves USDC prefunding into commercial production with Inyo Global</title><link>https://www.theblock.co/news/business/2026-10-16-visa-direct-moves-usdc-prefunding-into-commercial-production-with-inyo-global-418802</link><pubDate>Fri, 16 Oct 2026 11:25:12 +0000</pubDate></item>
-<item><title>Google demonstrates quantum computing breakthrough as observers weigh Q-day implications</title><link>https://www.theblock.co/news/web3/2026-10-16-google-quantum-computing-breakthrough-418787</link><pubDate>Fri, 16 Oct 2026 10:13:32 +0000</pubDate></item>
-<item><title>Capital B posts wider H1 net loss of $78 million on bitcoin impairment charge</title><link>https://www.theblock.co/news/business/2026-10-16-capital-b-wider-h1-net-loss-418781</link><pubDate>Fri, 16 Oct 2026 09:30:21 +0000</pubDate></item>
-<item><title>US federal judge denies joint Gemini-CFTC bid to undo $5 million settlement</title><link>https://www.theblock.co/news/regulation/2026-10-16-us-judge-denies-joint-gemini-cftc-bid-418775</link><pubDate>Fri, 16 Oct 2026 05:44:05 +0000</pubDate></item>
-<item><title>MSCI finalizes index rules that put Strategy, crypto treasury firms at risk of exclusion</title><link>https://www.theblock.co/news/business/2026-10-15-msci-rules-could-exclude-strategy-mstr-from-indexes-418729</link><pubDate>Thu, 15 Oct 2026 22:15:56 +0000</pubDate></item>
-<item><title>Farcaster acquired by Balaji’s Network School, with new ‘social smart contract’ for users</title><link>https://www.theblock.co/news/ecosystems/2026-10-15-network-school-acquires-farcaster-from-neynar-418720</link><pubDate>Thu, 15 Oct 2026 21:41:14 +0000</pubDate></item>
-<item><title>CleanSpark and BitFuFu see bitcoin production slip in September as Canaan remains flat</title><link>https://www.theblock.co/news/business/2026-10-15-cleanspark-bitfufu-bitcoin-production-slip-september-canaan-remains-flat-418686</link><pubDate>Thu, 15 Oct 2026 16:06:00 +0000</pubDate></item>
-<item><title>Multiliquid, a settlement platform for tokenized assets, raises $8 million</title><link>https://www.theblock.co/news/deals/2026-10-15-multiliquid-tokenized-assets-funding-418693</link><pubDate>Thu, 15 Oct 2026 16:00:02 +0000</pubDate></item>
-<item><title>DeFi Development boosts CHAD dividend to 14% amid push to grow Solana holdings</title><link>https://www.theblock.co/news/markets/2026-10-15-defi-development-chad-dividend-rate-14-418694</link><pubDate>Thu, 15 Oct 2026 15:48:32 +0000</pubDate></item>
+<item><title>Circle details USDC revenue split, says $819 million went to partners and costs in H1 2026</title><link>https://www.theblock.co/</link><pubDate>Fri, 16 Oct 2026 14:58:29 +0000</pubDate></item>
+<item><title>How Ethereum Works</title><link>https://www.theblock.co/</link><pubDate>Fri, 16 Oct 2026 13:31:07 +0000</pubDate></item>
+<item><title>OpenAI says research model spent another wallet’s testnet ETH without authorization on coding task</title><link>https://www.theblock.co/</link><pubDate>Fri, 16 Oct 2026 11:34:54 +0000</pubDate></item>
+<item><title>Visa Direct moves USDC prefunding into commercial production with Inyo Global</title><link>https://www.theblock.co/</link><pubDate>Fri, 16 Oct 2026 11:25:12 +0000</pubDate></item>
+<item><title>Google demonstrates quantum computing breakthrough as observers weigh Q-day implications</title><link>https://www.theblock.co/</link><pubDate>Fri, 16 Oct 2026 10:13:32 +0000</pubDate></item>
+<item><title>Capital B posts wider H1 net loss of $78 million on bitcoin impairment charge</title><link>https://www.theblock.co/</link><pubDate>Fri, 16 Oct 2026 09:30:21 +0000</pubDate></item>
+<item><title>US federal judge denies joint Gemini-CFTC bid to undo $5 million settlement</title><link>https://www.theblock.co/</link><pubDate>Fri, 16 Oct 2026 05:44:05 +0000</pubDate></item>
+<item><title>MSCI finalizes index rules that put Strategy, crypto treasury firms at risk of exclusion</title><link>https://www.theblock.co/</link><pubDate>Thu, 15 Oct 2026 22:15:56 +0000</pubDate></item>
+<item><title>Farcaster acquired by Balaji’s Network School, with new ‘social smart contract’ for users</title><link>https://www.theblock.co/</link><pubDate>Thu, 15 Oct 2026 21:41:14 +0000</pubDate></item>
+<item><title>CleanSpark and BitFuFu see bitcoin production slip in September as Canaan remains flat</title><link>https://www.theblock.co/</link><pubDate>Thu, 15 Oct 2026 16:06:00 +0000</pubDate></item>
+<item><title>Multiliquid, a settlement platform for tokenized assets, raises $8 million</title><link>https://www.theblock.co/</link><pubDate>Thu, 15 Oct 2026 16:00:02 +0000</pubDate></item>
+<item><title>DeFi Development boosts CHAD dividend to 14% amid push to grow Solana holdings</title><link>https://www.theblock.co/</link><pubDate>Thu, 15 Oct 2026 15:48:32 +0000</pubDate></item>
 </channel></rss>

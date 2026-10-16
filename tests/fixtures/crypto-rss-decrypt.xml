@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- decrypt RSS, captured 2026-10-16 from decrypt.co.xml: the first 12 items, title, link and pubDate only (no article text). -->
+<!-- decrypt RSS, captured 2026-10-16 from decrypt.co.xml: the first 12 items, title and pubDate as published; each link cut to the site's home page (article slugs read as tokens to check-secrets.py), no article text. -->
 <rss version="2.0"><channel>
 <title>decrypt</title>
-<item><title>Three Canadian Armed Forces Members Charged in Kidnapping of Crypto Exchange Owner</title><link>https://decrypt.co/381148/three-canadian-armed-forces-members-charged-in-kidnapping-of-crypto-exchange-owner</link><pubDate>Fri, 16 Oct 2026 15:43:58 +0000</pubDate></item>
-<item><title>Scammer Lost $4.8M in Bitcoin to Tampered Ledger Wallets: Chainalysis</title><link>https://decrypt.co/381141/scammer-lost-4-8m-in-bitcoin-to-tampered-ledger-wallets-chainalysis</link><pubDate>Fri, 16 Oct 2026 12:22:18 +0000</pubDate></item>
-<item><title>Morning Minute: Google Clears a Major Quantum Hurdle, Bitcoin Still Safe</title><link>https://decrypt.co/381138/morning-minute-google-clears-a-major-quantum-hurdle-bitcoin-still-safe</link><pubDate>Fri, 16 Oct 2026 11:46:54 +0000</pubDate></item>
-<item><title>OpenAI Model Used Testnet Ethereum Wallet Without Permission to Finish Coding Task</title><link>https://decrypt.co/381123/openai-model-used-testnet-ethereum-wallet-without-permission-to-finish-coding-task</link><pubDate>Fri, 16 Oct 2026 10:39:08 +0000</pubDate></item>
-<item><title>GTA 6 Trailer Features Meme Coin—And Solana Copycat Soars 2,900%</title><link>https://decrypt.co/381122/gta-6-trailer-features-meme-coin-and-solana-copycat-soars-2900</link><pubDate>Fri, 16 Oct 2026 10:16:06 +0000</pubDate></item>
-<item><title>What Is a Hardware Wallet? Crypto Cold Storage Explained</title><link>https://decrypt.co/resources/what-is-a-hardware-wallet-crypto-cold-storage-explained</link><pubDate>Fri, 16 Oct 2026 09:10:48 +0000</pubDate></item>
-<item><title>Hidden Text, a Fake Mailbox: How Researchers Got Rogue AI Agents to Talk</title><link>https://decrypt.co/381109/researchers-fleet-rouge-ai-agents-talk-alibaba</link><pubDate>Thu, 15 Oct 2026 22:16:03 +0000</pubDate></item>
-<item><title>Google Says It Just Cracked One of Quantum Computing's Biggest Bottlenecks</title><link>https://decrypt.co/381102/google-cracked-quantum-computing-biggest-bottlenecks</link><pubDate>Thu, 15 Oct 2026 21:46:04 +0000</pubDate></item>
-<item><title>Russia Will Soon Ban Peer-to-Peer Bitcoin Trading, Central Bank Confirms</title><link>https://decrypt.co/381079/russia-ban-peer-to-peer-bitcoin-trading</link><pubDate>Thu, 15 Oct 2026 20:31:04 +0000</pubDate></item>
-<item><title>Boom or Bust, Bitcoin Wins the AI Trade, Bitwise CIO Says</title><link>https://decrypt.co/381077/bitwise-cio-bitcoin-wins-ai-boom-or-bust</link><pubDate>Thu, 15 Oct 2026 19:16:04 +0000</pubDate></item>
-<item><title>BlackRock’s Larry Fink Warns AI Data Center Halt Could Tip US Into Recession</title><link>https://decrypt.co/381068/blackrock-larry-fink-ai-data-center-halt-recession</link><pubDate>Thu, 15 Oct 2026 18:16:04 +0000</pubDate></item>
-<item><title>Google Says AI Isn't Building Itself Yet—Even Though It Writes 75% of the Code</title><link>https://decrypt.co/381061/google-deepmind-ai-isnt-building-itself-writes-most-code</link><pubDate>Thu, 15 Oct 2026 17:36:05 +0000</pubDate></item>
+<item><title>Three Canadian Armed Forces Members Charged in Kidnapping of Crypto Exchange Owner</title><link>https://decrypt.co/</link><pubDate>Fri, 16 Oct 2026 15:43:58 +0000</pubDate></item>
+<item><title>Scammer Lost $4.8M in Bitcoin to Tampered Ledger Wallets: Chainalysis</title><link>https://decrypt.co/</link><pubDate>Fri, 16 Oct 2026 12:22:18 +0000</pubDate></item>
+<item><title>Morning Minute: Google Clears a Major Quantum Hurdle, Bitcoin Still Safe</title><link>https://decrypt.co/</link><pubDate>Fri, 16 Oct 2026 11:46:54 +0000</pubDate></item>
+<item><title>OpenAI Model Used Testnet Ethereum Wallet Without Permission to Finish Coding Task</title><link>https://decrypt.co/</link><pubDate>Fri, 16 Oct 2026 10:39:08 +0000</pubDate></item>
+<item><title>GTA 6 Trailer Features Meme Coin—And Solana Copycat Soars 2,900%</title><link>https://decrypt.co/</link><pubDate>Fri, 16 Oct 2026 10:16:06 +0000</pubDate></item>
+<item><title>What Is a Hardware Wallet? Crypto Cold Storage Explained</title><link>https://decrypt.co/</link><pubDate>Fri, 16 Oct 2026 09:10:48 +0000</pubDate></item>
+<item><title>Hidden Text, a Fake Mailbox: How Researchers Got Rogue AI Agents to Talk</title><link>https://decrypt.co/</link><pubDate>Thu, 15 Oct 2026 22:16:03 +0000</pubDate></item>
+<item><title>Google Says It Just Cracked One of Quantum Computing's Biggest Bottlenecks</title><link>https://decrypt.co/</link><pubDate>Thu, 15 Oct 2026 21:46:04 +0000</pubDate></item>
+<item><title>Russia Will Soon Ban Peer-to-Peer Bitcoin Trading, Central Bank Confirms</title><link>https://decrypt.co/</link><pubDate>Thu, 15 Oct 2026 20:31:04 +0000</pubDate></item>
+<item><title>Boom or Bust, Bitcoin Wins the AI Trade, Bitwise CIO Says</title><link>https://decrypt.co/</link><pubDate>Thu, 15 Oct 2026 19:16:04 +0000</pubDate></item>
+<item><title>BlackRock’s Larry Fink Warns AI Data Center Halt Could Tip US Into Recession</title><link>https://decrypt.co/</link><pubDate>Thu, 15 Oct 2026 18:16:04 +0000</pubDate></item>
+<item><title>Google Says AI Isn't Building Itself Yet—Even Though It Writes 75% of the Code</title><link>https://decrypt.co/</link><pubDate>Thu, 15 Oct 2026 17:36:05 +0000</pubDate></item>
 </channel></rss>
