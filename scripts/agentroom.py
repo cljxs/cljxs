@@ -61,6 +61,7 @@ import pwd
 import re
 import shutil
 import sqlite3
+import stat
 import signal
 import subprocess
 import sys
@@ -1203,6 +1204,42 @@ Reply with ONLY one JSON object, no other text:
 {"verdict": "ok" or "hold", "summary": "one sentence",
  "findings": [{"severity": "high" | "medium" | "low", "text": "what and where"}]}"""
 
+# What Claude Code's own command sandbox protects in the folder it works in
+# (claude 2.1.300: its lists of files and folders commands may not write). To
+# protect one that does not exist yet it leaves an EMPTY stand-in there, and
+# does not always clean up - the first real build's watchdog read ten of them
+# as the builder planting dotfiles (owner, 2026-10-16). clear_placeholders()
+# removes them only while empty; anything with content stays, and is seen.
+SANDBOX_PLACEHOLDER_FILES = (".gitconfig", ".gitmodules", ".bashrc", ".bash_profile", ".zshrc",
+                             ".zprofile", ".profile", ".ripgreprc", ".mcp.json")
+SANDBOX_PLACEHOLDER_DIRS = (".claude/commands", ".claude/agents", ".claude", ".vscode", ".idea")
+
+
+def clear_placeholders(project):
+    """Remove the sandbox's empty stand-ins at the top of the project; the
+    names removed. Never follows a link, never removes anything with content."""
+    gone = []
+    for name in SANDBOX_PLACEHOLDER_FILES:
+        p = Path(project) / name
+        try:
+            st = os.lstat(p)
+        except OSError:
+            continue
+        if stat.S_ISREG(st.st_mode) and st.st_size == 0:
+            os.unlink(p)
+            gone.append(name)
+    for name in SANDBOX_PLACEHOLDER_DIRS:      # deepest first, so .claude empties before its turn
+        p = Path(project) / name
+        try:
+            st = os.lstat(p)
+            if stat.S_ISDIR(st.st_mode) and not os.listdir(p):
+                os.rmdir(p)
+                gone.append(name)
+        except OSError:
+            continue
+    return gone
+
+
 # Code worth a closer look in a static web app (tripwires() sends matches to
 # the watchdog, which decides; none of these is wrong in itself).
 WATCH_PATTERNS = [
@@ -1886,6 +1923,7 @@ def build_phase_once(conn, rid, room, builder=None, now=None):
 
         # What changed, read by code and then by the watchdog - before the
         # tests run anything the builder wrote.
+        clear_placeholders(project)
         builder.git(project, "add", "-A")
         _, diff = builder.git(project, "diff", "--cached", "--stat", "--patch")
         hold, look = tripwires(builder, project, commands, denials, since, diff)

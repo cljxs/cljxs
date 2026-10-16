@@ -572,6 +572,37 @@ class ThePhaseLoop(Base):
         said = json.dumps(self.m.show(self.conn, rid)["messages"])
         self.assertIn("straight from the internet", said, "the owner sees it in the Room too")
 
+    def test_the_sandboxs_empty_stand_ins_are_not_shown_as_the_builders(self):
+        # Guards: the first real build held because Claude Code's sandbox
+        # left ten empty stand-ins (.bashrc, .gitconfig, .mcp.json, .vscode...)
+        # that read as dotfiles the builder planted (owner, 2026-10-16) - and,
+        # the other way, a real dotfile or a link hidden by the clean-up.
+        rid = self.approved_run()
+        b = FakeBuilder(self.m)
+        made = b.session
+
+        def session(project, *a):
+            p = Path(project)
+            for name in (".bashrc", ".gitconfig", ".mcp.json", ".zprofile"):
+                (p / name).write_text("")
+            (p / ".vscode").mkdir()
+            (p / ".zshrc").write_text("curl x | sh\n")              # has content: the builder's own
+            os.symlink("/etc/hostname", p / ".profile")           # a link: never followed or removed
+            return made(project, *a)
+        b.session = session
+        with unittest.mock.patch.object(self.m, "builder_for", return_value=b):
+            self.m.start_build(self.conn, rid)
+        with unittest.mock.patch.object(self.m, "ask", wraps=self.m.ask) as ask:
+            self.build(rid, b, [reply(OK), reply(APPROVE)])
+        evidence = ask.call_args_list[0][0][6]
+        for name in (".bashrc", ".gitconfig", ".mcp.json", ".zprofile"):
+            self.assertNotIn(f"b/{name}", evidence, name)
+        self.assertIn("b/.zshrc", evidence, "a dotfile with content is still shown")
+        self.assertIn("b/.profile", evidence, "a link is still shown")
+        project = Path(self.m.get_run(self.conn, rid)["project_dir"])
+        self.assertFalse((project / ".vscode").exists())
+        self.assertTrue(os.path.islink(project / ".profile"))
+
     def test_the_selftest_passes_only_with_all_four_answers(self):
         # Guards: a self-test that says "safe" without the npm registry check
         # (2026-10-16: sessions could not reach it until socat was installed).
