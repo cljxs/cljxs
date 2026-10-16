@@ -52,7 +52,46 @@ function readFocus() {
   try { return fs.readFileSync(FOCUS, 'utf8').trim() || null; } catch { return null; }
 }
 
+// THE SCAN BUTTON (owner, 2026-10-16: "add a run scan option inside scouts
+// house"). It starts the unit the 06:30 timer starts - scout-niches.service,
+// niche-scan.py run: no model, the same Etsy budget and the same hour's
+// limit, and systemd never runs it twice at once. The house reads back
+// whether it is running and when a scan last landed in state/scans/.
+const SCAN_UNIT = 'scout-niches.service';
+const SCANS = path.join(AGENTS_DIR, 'scout', 'state', 'scans');
+
+function systemctl(args) {
+  return new Promise(resolve => execFile('systemctl', args, { timeout: 20000 },
+    (err, stdout, stderr) => resolve({ ok: !err, out: String(stdout || '').trim(), err: String(stderr || err && err.message || '').trim() })));
+}
+
+function lastScan() {
+  try {
+    let newest = 0;
+    for (const f of fs.readdirSync(SCANS)) {
+      if (f.endsWith('.json')) newest = Math.max(newest, fs.statSync(path.join(SCANS, f)).mtimeMs);
+    }
+    return newest ? new Date(newest).toISOString() : null;
+  } catch { return null; }
+}
+
+async function scanState() {
+  const r = await systemctl(['is-active', SCAN_UNIT]);
+  // "activating" is a oneshot at work; anything else is not running.
+  return { running: r.out === 'activating', unit: SCAN_UNIT, last_scan_utc: lastScan() };
+}
+
 function register(app, port) {
+  app.get('/api/scout/scan', async (req, res) => res.json(await scanState()));
+
+  app.post('/api/scout/scan', async (req, res) => {
+    const now = await scanState();
+    if (now.running) return res.status(409).json(Object.assign({ error: 'a scan is already running' }, now));
+    const r = await systemctl(['start', '--no-block', SCAN_UNIT]);
+    if (!r.ok) return res.status(500).json({ error: `could not start the scan: ${r.err || 'systemctl failed'}` });
+    res.status(202).json(Object.assign({ started: true }, await scanState()));
+  });
+
   app.get('/api/scout/ideas', (req, res) => {
     const ideas = readIdeas();
     if (ideas === null) {

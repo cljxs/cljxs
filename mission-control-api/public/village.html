@@ -2431,7 +2431,8 @@ function openPanel(name) {
     ${a.headline ? `<div class="quote">${esc(a.headline)}</div>` : ''}
     ${a.latest_report ? `<div class="muted" style="margin-top:10px">📄 <span class="doclink" onclick="openDoc('${esc(a.name)}','${esc(a.latest_report)}')">${esc(a.latest_report)}</span></div>`
       : `<div class="muted" style="margin-top:10px">📄 <span class="doclink" onclick="openDoc('${esc(a.name)}')">reports…</span></div>`}
-    ${a.name === 'scout' ? `<h2 style="font-size:15px;margin:18px 0 8px">Ideas awaiting you</h2>
+    ${a.name === 'scout' ? `<div id="scoutScan"></div>
+      <h2 style="font-size:15px;margin:18px 0 8px">Ideas awaiting you</h2>
       <div id="scoutIdeas"><div class="muted">loading…</div></div>` : ''}
     ${a.name === 'emily' ? `<button class="shopbtn" onclick="openFrame('shop')">🛍 Open the Shop - today's TikTok kit and the listing board</button>
       <div id="emilyShop"></div>
@@ -2448,7 +2449,7 @@ function openPanel(name) {
   $('card').className = '';
   $('panel').style.display = 'flex';
   $('close').onclick = closePanel;
-  if (a.name === 'scout') loadScoutIdeas();
+  if (a.name === 'scout') { loadScoutIdeas(); loadScoutScan(); }
   if (a.name === 'emily') { loadEmilyShop(); loadEmilyBuilds(); }
 }
 
@@ -2632,6 +2633,39 @@ function drawIdeas(){
     None of the numbers above was typed by a model &mdash; each was copied from a
     market scan, and an idea with no measurement behind it cannot be filed at all.
   </div>`;
+}
+
+// Run a scan now (owner, 2026-10-16) - the same market scan the 06:30
+// timer runs, no AI. While it runs the button says so and checks back.
+let scanPoll = null;
+async function loadScoutScan(started) {
+  const host = document.getElementById('scoutScan');
+  clearTimeout(scanPoll);
+  if (!host) return;
+  let s;
+  try { s = await (await fetch('/api/scout/scan', { cache: 'no-store' })).json(); }
+  catch { host.innerHTML = '<div class="muted">Could not ask about the scan.</div>'; return; }
+  const last = s.last_scan_utc ? new Date(s.last_scan_utc).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'never';
+  host.innerHTML = s.running
+    ? `<button class="shopbtn" disabled>⏳ Scanning Etsy now - this takes a few minutes, up to an hour</button>
+       <div class="muted">Last scan landed ${esc(last)}. New niches and ideas show up after it finishes.</div>`
+    : `<button class="shopbtn" onclick="runScoutScan(this)">🔭 Run a market scan now</button>
+       <div class="muted">Last scan ${esc(last)} · it also runs every morning at 6:30 Central · no AI, nothing to pay${started ? ' · <b>finished</b>' : ''}</div>`;
+  if (s.running) scanPoll = setTimeout(() => loadScoutScan(true), 15000);
+}
+async function runScoutScan(btn) {
+  btn.disabled = true;
+  btn.textContent = 'Starting…';
+  try {
+    const r = await fetch('/api/scout/scan', { method: 'POST' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok && r.status !== 409) throw new Error(j.error || 'HTTP ' + r.status);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Could not start it: ' + e.message;
+    return;
+  }
+  loadScoutScan();
 }
 
 async function loadScoutIdeas() {
