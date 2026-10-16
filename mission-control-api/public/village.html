@@ -11,17 +11,105 @@
 <meta name="theme-color" content="#1b2a1f">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Pixel Village</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen&display=swap">
 <style>
   :root{ --ink:#e8ecf5; --mute:#9aa4bb; --card:#141824; --line:rgba(255,255,255,.10);
          --up:#34d399; --down:#fb7185; --warn:#fbbf24; --c1:#22d3ee; --c2:#a78bfa; }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#1b2a1f;
     font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink)}
-  #game{position:fixed;inset:0}
+  /* THE FRAME (owner, 2026-10-16: a command-centre frame round the village,
+     "Do not make the design in the middle of the screen just the stuff around
+     the edges. I want my village to stay the same"). The village keeps its
+     own box; the frame takes the edges. --ft/--fl/--fr/--fb are the frame's
+     four sides; hiding the frame sets them to 0 and the village is the whole
+     screen again. */
+  :root{--ft:64px;--fl:226px;--fr:286px;--fb:112px;
+    --hb:#070b18;--hp:rgba(12,18,38,.94);--hl:rgba(56,225,255,.22);--hc:#38e1ff;--hm:#ff5fa2;--hg:#f5c451;
+    --hr:#ff5a6e;--hv:#9b8cff;--ht:#d9e4ff;--hd:#7f8bb0}
+  body.noframe{--ft:0px;--fl:0px;--fr:0px;--fb:0px}
+  #game{position:fixed;top:var(--ft);left:var(--fl);right:var(--fr);bottom:var(--fb)}
   canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges}
   .num{font-variant-numeric:tabular-nums}
 
+  /* the frame's parts */
+  .fx{position:fixed;z-index:10;background:var(--hp);color:var(--ht);
+    font:12px/1.4 ui-monospace,"SF Mono",Menlo,Consolas,monospace;letter-spacing:.02em}
+  body.noframe .fx{display:none}
+  #fTop{top:0;left:0;right:0;height:var(--ft);display:flex;align-items:stretch;gap:8px;padding:8px 10px;
+    border-bottom:1px solid var(--hl);box-shadow:0 0 18px rgba(56,225,255,.08)}
+  /* only the tiles scroll on a narrow screen; the buttons stay in reach */
+  #fTiles{flex:1;display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;min-width:0}
+  #fTiles::-webkit-scrollbar{display:none}
+  .brand{display:flex;align-items:center;gap:10px;padding-right:8px;flex:0 0 auto}
+  .brand .logo{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;font-size:18px;
+    background:linear-gradient(135deg,rgba(255,95,162,.25),rgba(56,225,255,.25));border:1px solid var(--hm);
+    box-shadow:0 0 12px rgba(255,95,162,.35)}
+  .brand b{display:block;font:15px/1.1 "Silkscreen",ui-monospace,monospace;color:var(--hm);letter-spacing:.06em;
+    text-shadow:0 0 10px rgba(255,95,162,.45)}
+  .brand i{display:block;font-style:normal;font-size:10.5px;color:var(--hc);letter-spacing:.14em;margin-top:3px}
+  .tile{flex:0 0 auto;min-width:104px;padding:5px 11px;border:1px solid var(--hl);border-radius:8px;
+    background:rgba(8,13,30,.8);display:flex;flex-direction:column;justify-content:center}
+  .tile .l{font-size:9.5px;color:var(--hd);letter-spacing:.14em;text-transform:uppercase}
+  .tile .v{font-size:17px;font-weight:700;color:var(--hc);line-height:1.15}
+  .tile .v small{font-size:11px;color:var(--hd);font-weight:400}
+  .tile .s{font-size:9.5px;color:var(--hd);letter-spacing:.1em;text-transform:uppercase}
+  .tile.gold .v{color:var(--hg)} .tile.red .v{color:var(--hr)} .tile.ok .v{color:#3ee8a5}
+  .tile.clock{margin-left:auto;text-align:right;min-width:120px}
+  .tile.clock .v{color:var(--hm)}
+  .fbtn{flex:0 0 auto;align-self:center;border:1px solid var(--hl);background:rgba(8,13,30,.8);color:var(--hc);
+    border-radius:8px;padding:8px 10px;font:inherit;cursor:pointer}
+  #fLeft{top:var(--ft);left:0;bottom:0;width:var(--fl);border-right:1px solid var(--hl);overflow-y:auto;padding:10px}
+  #fRight{top:var(--ft);right:0;bottom:0;width:var(--fr);border-left:1px solid var(--hl);overflow-y:auto;padding:10px}
+  #fFeed{left:var(--fl);right:var(--fr);bottom:0;height:var(--fb);border-top:1px solid var(--hl);padding:8px 12px;overflow:hidden}
+  .fsec{border:1px solid var(--hl);border-radius:10px;padding:9px 10px;margin-bottom:10px;background:rgba(8,13,30,.6)}
+  .fh{font-size:10.5px;letter-spacing:.16em;color:var(--hm);text-transform:uppercase;margin-bottom:7px;
+    display:flex;justify-content:space-between;align-items:center}
+  .fh span{color:var(--hd)}
+  .nav{display:flex;align-items:center;gap:9px;width:100%;padding:7px 8px;border-radius:7px;border:1px solid transparent;
+    background:none;color:var(--ht);font:inherit;font-size:12.5px;text-align:left;cursor:pointer;text-decoration:none}
+  .nav:hover,.nav:focus-visible{border-color:var(--hl);background:rgba(56,225,255,.06);outline:none}
+  .nav .ic{width:18px;text-align:center}
+  .nav .bd{margin-left:auto;min-width:18px;height:18px;padding:0 5px;border-radius:9px;font-size:10.5px;font-weight:700;
+    line-height:18px;text-align:center;background:var(--hg);color:#1a1306}
+  .nav .bd.alert{background:var(--hr);color:#fff}
+  .qa{display:flex;align-items:center;gap:8px;width:100%;margin-bottom:6px;padding:7px 9px;border-radius:7px;
+    border:1px solid rgba(56,225,255,.35);background:rgba(56,225,255,.06);color:var(--hc);font:inherit;font-size:11.5px;
+    cursor:pointer;text-align:left}
+  .qa:disabled{opacity:.5;cursor:default}
+  .kv{display:flex;justify-content:space-between;gap:8px;padding:3px 0;font-size:11.5px}
+  .kv span{color:var(--hd)} .kv b{font-weight:600}
+  .ag{display:flex;align-items:center;gap:9px;padding:6px 4px;border-bottom:1px solid rgba(255,255,255,.05);cursor:pointer}
+  .ag:last-child{border-bottom:0}
+  .ag .av{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;font:700 14px ui-monospace,monospace;
+    color:#0a0f1e;flex:0 0 auto;box-shadow:0 0 0 1px rgba(255,255,255,.15)}
+  .ag .nm{font-size:12.5px;font-weight:600;text-transform:capitalize}
+  .ag .rl{font-size:10.5px;color:var(--hd)}
+  .ag .st{margin-left:auto;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:middle}
+  .wl{display:flex;gap:8px;padding:6px 2px;font-size:11.5px;border-bottom:1px solid rgba(255,255,255,.05);cursor:pointer}
+  .wl:last-child{border-bottom:0}
+  .wl .i{flex:0 0 auto} .wl .t b{display:block;font-weight:600}
+  .wl .t span{color:var(--hd);font-size:10.5px}
+  .feed{display:flex;flex-direction:column;gap:3px;overflow-y:auto;height:calc(100% - 22px)}
+  .feed div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11.5px}
+  .feed .tm{color:var(--hd);margin-right:8px} .feed .who{color:var(--hm);margin-right:6px;text-transform:capitalize}
+  /* narrow screens: the sides become drawers over the village, the feed goes */
+  @media (max-width: 1000px), (max-height: 560px){
+    :root{--fl:0px;--fr:0px;--fb:0px;--ft:58px}
+    #fLeft,#fRight{width:min(300px,86vw);transform:translateX(-105%);transition:transform .18s;z-index:12;
+      box-shadow:0 0 40px rgba(0,0,0,.6)}
+    #fRight{transform:translateX(105%)}
+    body.dl #fLeft,body.dr #fRight{transform:none}
+    #fFeed{display:none}
+    .tile.wide{display:none}
+    .brand i{display:none}
+  }
+  @media (min-width: 1001px) and (min-height: 561px){ .drawerbtn{display:none} }
+
   /* HUD */
+  body:not(.noframe) #hud{display:none}
   #hud{position:fixed;top:0;left:0;right:0;padding:10px 14px;display:flex;gap:10px;
     align-items:center;pointer-events:none;z-index:5;
     background:linear-gradient(180deg,rgba(8,12,10,.72),transparent)}
@@ -30,18 +118,18 @@
     border:1px solid var(--line);border-radius:999px;padding:4px 10px}
 
   /* interaction prompt */
-  #prompt{position:fixed;left:50%;bottom:112px;transform:translateX(-50%);z-index:6;
+  #prompt{position:fixed;left:calc(var(--fl) + (100vw - var(--fl) - var(--fr)) / 2);bottom:calc(var(--fb) + 112px);transform:translateX(-50%);z-index:6;
     background:rgba(10,14,12,.88);border:1px solid var(--line);border-radius:12px;
     padding:9px 16px;font-size:13px;display:none;pointer-events:none;
     box-shadow:0 8px 26px rgba(0,0,0,.45)}
   #prompt b{color:var(--c1)}
 
   /* touch controls */
-  #stick{position:fixed;left:20px;bottom:22px;width:132px;height:132px;z-index:7;
+  #stick{position:fixed;left:calc(var(--fl) + 20px);bottom:calc(var(--fb) + 22px);width:132px;height:132px;z-index:7;
     border-radius:50%;background:rgba(0,0,0,.26);border:1px solid var(--line);touch-action:none;display:none}
   #nub{position:absolute;left:50%;top:50%;width:56px;height:56px;margin:-28px 0 0 -28px;
     border-radius:50%;background:rgba(255,255,255,.30);border:1px solid rgba(255,255,255,.4)}
-  #act{position:fixed;right:22px;bottom:38px;width:88px;height:88px;z-index:7;border-radius:50%;
+  #act{position:fixed;right:calc(var(--fr) + 22px);bottom:calc(var(--fb) + 38px);width:88px;height:88px;z-index:7;border-radius:50%;
     background:linear-gradient(135deg,var(--c1),var(--c2));border:0;color:#06121a;font-weight:800;
     font-size:15px;display:none;box-shadow:0 8px 26px rgba(0,0,0,.5)}
   #act:active{transform:scale(.94)}
@@ -254,6 +342,32 @@
 </head>
 <body>
 <div id="game"></div>
+
+<!-- THE FRAME round the village (see the CSS) -->
+<div class="fx" id="fTop">
+  <button class="fbtn drawerbtn" onclick="drawer('dl')" aria-label="Navigation">☰</button>
+  <div class="brand"><div class="logo">🏡</div><div><b>PIXEL VILLAGE</b><i>AGENT COMMAND CENTRE</i></div></div>
+  <div id="fTiles"></div>
+  <button class="fbtn drawerbtn" onclick="drawer('dr')" aria-label="Agents">👥</button>
+  <button class="fbtn" onclick="toggleFrame()" title="Hide the frame - the village full screen">⤢</button>
+</div>
+<div class="fx" id="fLeft">
+  <div class="fsec"><div class="fh">Navigation</div><div id="fNav"></div></div>
+  <div class="fsec"><div class="fh">Quick actions</div>
+    <button class="qa" data-qa="kit">＋ Make a TikTok kit</button>
+    <button class="qa" data-qa="scan">🔭 Run a market scan</button>
+    <button class="qa" data-qa="find">🧭 Find Paul prospects</button>
+  </div>
+  <div class="fsec"><div class="fh">System status</div><div id="fSys"></div></div>
+</div>
+<div class="fx" id="fRight">
+  <div class="fsec"><div class="fh">Active agents <span id="fAgN"></span></div><div id="fAgents"></div></div>
+  <div class="fsec"><div class="fh">Waiting on you</div><div id="fWait"></div></div>
+  <div class="fsec"><div class="fh">System alerts</div><div id="fAlerts"></div></div>
+</div>
+<div class="fx" id="fFeed"><div class="fh">Activity feed <span>each agent's latest note</span></div><div class="feed" id="fFeedList"></div></div>
+<button class="fbtn" id="fShow" onclick="toggleFrame()" title="Show the frame"
+  style="display:none;position:fixed;top:10px;right:10px;z-index:10">⤡ Frame</button>
 
 <div id="hud">
   <div class="title">🏡 Pixel Village</div>
@@ -2281,7 +2395,9 @@ function create() {
 
 function zoomForViewport() {
   // Show roughly 800px of world width: enough for three or four houses at once.
-  const z = Math.min(window.innerWidth / 800, window.innerHeight / 560);
+  // The village's own box, not the window: the frame takes the edges.
+  const g = $('game');
+  const z = Math.min((g.clientWidth || window.innerWidth) / 800, (g.clientHeight || window.innerHeight) / 560);
   return Math.max(1.0, Math.min(1.9, z));
 }
 
@@ -3793,6 +3909,8 @@ async function pull(first) {
     const changed = first || (next.agents || []).length !== (DATA.agents || []).length;
     DATA = next;
     $('chip').textContent = `${DATA.agents.length} agent${DATA.agents.length===1?'':'s'} · ${DATA.health.status}`;
+    LAST_PULL = Date.now();
+    renderFrame();
     if (first) boot();
     else if (changed && scene) scene.scene.restart();   // a new agent gets a house
     // NO PANEL IS REDRAWN HERE. The pull keeps the village itself current -
@@ -3805,6 +3923,7 @@ async function pull(first) {
     // panel's own buttons reload what they changed.
   } catch (e) {
     $('chip').textContent = 'offline';
+    renderFrame(true);
     if (first) $('boot').textContent = 'Cannot reach /api/dashboard — is mission-control-api running?';
   }
 }
@@ -3822,6 +3941,161 @@ function boot() {
     if (scene) scene.cameras.main.setZoom(zoomForViewport());
   });
 }
+
+/* ---------------- the frame ---------------- */
+// Everything here is drawn from what the Deck already serves: /api/dashboard
+// (the pull above), /api/attention (the Deck's tab badges). The frame holds
+// no rules of its own - a count here is the same count the page it opens shows.
+
+// Who each one is, for the agents list. Display only.
+const ROLE = { ace: 'Sports bettor', belfort: 'Stock trader', bolt: 'Crypto trader', emily: 'Etsy designer',
+  fury: 'Morning briefing', paul: 'Website builder', scout: 'Market research', stan: 'Idea hunter' };
+const HUE = { ace: '#f28c28', belfort: '#7fa7ff', bolt: '#f7931a', emily: '#ff8fc0', fury: '#ff6b6b',
+  paul: '#5ad1e8', scout: '#9bd36a', stan: '#ff8a3d' };
+const STATUS = { active: ['#38e1ff', 'Active'], idle: ['#9b8cff', 'Idle'], stale: ['#ff5a6e', 'Stale'],
+  waiting: ['#7f8bb0', 'Waiting'] };
+// The Deck's pages, opened over the village as the houses open them.
+const NAV = [['deck', '🛰', 'Command Deck'], ['ace', '🏀', 'Ace'], ['peter', '📈', 'Peter'],
+  ['belfort', '🏦', 'Markets'], ['bolt', '⚡', 'Bolt'], ['paul', '📐', "Paul's Studio"], ['shop', '🛍', 'Shop'],
+  ['stan', '💡', 'Stan'], ['agentroom', '🧩', 'Agent Room']];
+// attention.py's tabs and the Deck's stale rule, keyed the way NAV is.
+const ATT_KEY = { shop: 'shop', stan: 'stan', agentroom: 'agentroom', bolt: 'bolt' };
+let ATT = {}, LAST_PULL = 0;
+
+const agoTxt = m => m === null || m === undefined ? 'never' : m < 1 ? 'just now' : m < 90 ? Math.round(m) + 'm ago'
+  : m < 2880 ? Math.round(m / 60) + 'h ago' : Math.round(m / 1440) + 'd ago';
+
+function badgeFor(key) {
+  const a = ATT[ATT_KEY[key]] || {};
+  const stale = (DATA.agents || []).some(x => x.name === key && x.status === 'stale');
+  const alert = stale || (a.tone === 'alert' && a.n > 0);
+  if (alert) return '<span class="bd alert">!</span>';
+  return a.n > 0 ? `<span class="bd">${a.n > 99 ? '99+' : a.n}</span>` : '';
+}
+
+function openFromFrame(key) {
+  document.body.classList.remove('dl', 'dr');
+  if (key === 'deck') { location.href = '/dashboard'; return; }
+  if (FRAMES[key]) return openFrame(key);
+  if ((DATA.agents || []).some(a => a.name === key)) return openPanel(key);
+}
+
+function renderFrame(offline) {
+  const agents = DATA.agents || [], k = DATA.kpis || {}, h = DATA.health || {};
+  const active = agents.filter(a => a.status === 'active').length;
+  const todo = Object.values(ATT).filter(a => a && a.tone === 'todo').reduce((s, a) => s + (a.n || 0), 0);
+  const alerts = [];
+  agents.filter(a => a.status === 'stale').forEach(a => alerts.push([a.name, `${a.name}'s data is stale`, 'last fresh ' + agoTxt(a.data_age_min)]));
+  Object.entries(ATT).forEach(([tab, a]) => {
+    if (a && a.tone === 'alert') (a.why || []).forEach(w => alerts.push([tab, w, 'open ' + tab + ' to see']));
+    if (a && a.error) alerts.push([tab, `${tab} could not be read`, a.error]);
+  });
+  const pnl = k.total_pnl_pct;
+  $('fTiles').innerHTML = [
+    `<div class="tile"><div class="l">Agents</div><div class="v">${active}<small> / ${agents.length}</small></div><div class="s">active now</div></div>`,
+    `<div class="tile ${todo ? 'gold' : ''}"><div class="l">Waiting on you</div><div class="v">${todo}</div><div class="s">decisions</div></div>`,
+    `<div class="tile ${alerts.length ? 'red' : 'ok'}"><div class="l">Alerts</div><div class="v">${alerts.length}</div><div class="s">${alerts.length ? 'need a look' : 'all clear'}</div></div>`,
+    `<div class="tile wide"><div class="l">Portfolios</div><div class="v">${k.total_value != null ? '$' + Math.round(k.total_value).toLocaleString() : '—'}</div><div class="s" style="color:${pnl > 0 ? '#3ee8a5' : pnl < 0 ? '#ff5a6e' : 'inherit'}">${pnl != null ? (pnl > 0 ? '+' : '') + pnl.toFixed(2) + '%' : 'paper money'}</div></div>`,
+    `<div class="tile wide"><div class="l">Runs</div><div class="v">${(k.runs_total || 0).toLocaleString()}</div><div class="s">all time</div></div>`,
+    `<div class="tile ${offline ? 'red' : h.status === 'healthy' ? 'ok' : 'gold'}"><div class="l">System</div><div class="v">${offline ? 'OFFLINE' : h.status === 'healthy' ? 'ONLINE' : 'DEGRADED'}</div><div class="s">${DATA.queue ? 'queue ' + DATA.queue.total : ''}</div></div>`,
+    `<div class="tile clock"><div class="l">Local time</div><div class="v" id="fClock"></div><div class="s" id="fDate"></div></div>`,
+  ].join('');
+  tickClock();
+
+  $('fNav').innerHTML = NAV.map(([key, ic, label]) =>
+    `<button class="nav" data-go="${key}"><span class="ic">${ic}</span>${esc(label)}${badgeFor(key)}</button>`).join('');
+
+  $('fSys').innerHTML = [
+    ['Deck', offline ? '<b style="color:#ff5a6e">unreachable</b>' : '<b style="color:#3ee8a5">live</b>'],
+    ['Updated', LAST_PULL ? new Date(LAST_PULL).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }) : '—'],
+    ['Agents stale', `<b>${h.agents_stale || 0}</b>`],
+    ['Task queue', `<b>${DATA.queue ? DATA.queue.total : '—'}</b>`],
+    ['US market', h.market_open ? '<b style="color:#3ee8a5">open</b>' : '<b>closed</b>'],
+    ['AI spend today', k.has_cost_data ? `<b>$${(k.spend_today || 0).toFixed(2)}</b>` : '<b>—</b>'],
+  ].map(([l, v]) => `<div class="kv"><span>${l}</span>${v}</div>`).join('');
+
+  $('fAgN').textContent = `${active} active · ${agents.length}`;
+  $('fAgents').innerHTML = agents.map(a => {
+    const [c, word] = STATUS[a.status] || ['#7f8bb0', a.status || '?'];
+    return `<div class="ag" data-go="${esc(a.name)}"><div class="av" style="background:${HUE[a.name] || '#9aa4bb'}">${esc(a.name[0].toUpperCase())}</div>
+      <div><div class="nm">${esc(a.name)}</div><div class="rl">${esc(ROLE[a.name] || 'Agent')} · ${agoTxt(a.last_run_age_min)}</div></div>
+      <div class="st" style="color:${c}"><span class="dot" style="background:${c}"></span>${esc(word)}</div></div>`;
+  }).join('') || '<div class="kv"><span>No agents yet</span></div>';
+
+  const waits = Object.entries(ATT).filter(([, a]) => a && a.tone === 'todo' && a.n > 0)
+    .flatMap(([tab, a]) => (a.why || []).map(w => [tab, w]));
+  $('fWait').innerHTML = waits.length ? waits.map(([tab, w]) =>
+    `<div class="wl" data-go="${esc(tab)}"><span class="i" style="color:var(--hg)">◆</span><div class="t"><b>${esc(w)}</b><span>open ${esc(tab)}</span></div></div>`).join('')
+    : '<div class="wl"><span class="i" style="color:#3ee8a5">✓</span><div class="t"><b>Nothing waiting</b><span>every decision is made</span></div></div>';
+
+  $('fAlerts').innerHTML = alerts.length ? alerts.map(([key, t, s]) =>
+    `<div class="wl" data-go="${esc(key)}"><span class="i" style="color:var(--hr)">⚠</span><div class="t"><b>${esc(t)}</b><span>${esc(s)}</span></div></div>`).join('')
+    : '<div class="wl"><span class="i" style="color:#3ee8a5">✓</span><div class="t"><b>All systems operational</b><span>no issues detected</span></div></div>';
+
+  const feed = agents.filter(a => a.memory_line || a.headline)
+    .map(a => ({ a, t: a.last_run ? new Date(a.last_run) : null }))
+    .sort((x, y) => (y.t || 0) - (x.t || 0));
+  $('fFeedList').innerHTML = feed.map(({ a, t }) =>
+    `<div><span class="tm">${t && !isNaN(t) ? t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—'}</span><span class="who">${esc(a.name)}</span>${esc(a.memory_line || a.headline)}</div>`).join('')
+    || '<div class="tm">Nothing yet - each agent\'s latest note appears here.</div>';
+}
+
+function tickClock() {
+  const c = $('fClock'), d = $('fDate'), now = new Date();
+  if (c) c.textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (d) d.textContent = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+}
+setInterval(tickClock, 15000);
+
+async function loadFrameAttention() {
+  try {
+    const j = await (await fetch('/api/attention', { cache: 'no-store' })).json();
+    if (j.ok) { delete j.ok; ATT = j; renderFrame(); }
+  } catch { /* the frame keeps its last answer */ }
+}
+setInterval(loadFrameAttention, 60000);
+loadFrameAttention();
+
+function frameClick(e) {
+  const go = e.target.closest('[data-go]');
+  if (go) return openFromFrame(go.dataset.go);
+  const qa = e.target.closest('[data-qa]');
+  if (qa) return quickAction(qa);
+}
+['fLeft', 'fRight', 'fFeed'].forEach(id => $(id).addEventListener('click', frameClick));
+
+const QA = {
+  kit: ['/api/shop/tiktok/make', 'Make a new TikTok kit now? It draws up to five AI pictures (about $0.20).', 'Making a kit - about a minute'],
+  scan: ['/api/scout/scan', 'Run a market scan on Etsy now? No AI, nothing to pay.', 'Scan started'],
+  find: ['/api/paul/find', "Start Paul's next cycle now? It runs on your Claude plan.", "Paul's cycle started"],
+};
+async function quickAction(btn) {
+  const [url, ask, ok] = QA[btn.dataset.qa];
+  if (!confirm(ask)) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch(url, { method: 'POST' });
+    const j = await r.json().catch(() => ({}));
+    btn.textContent = r.ok ? '✓ ' + ok : '✕ ' + (j.error || j.out || 'could not start').split('\n')[0].slice(0, 60);
+  } catch { btn.textContent = '✕ the Deck could not be reached'; }
+  setTimeout(() => { btn.disabled = false; renderQA(); }, 6000);
+}
+const QA_LABEL = { kit: '＋ Make a TikTok kit', scan: '🔭 Run a market scan', find: '🧭 Find Paul prospects' };
+function renderQA() { document.querySelectorAll('[data-qa]').forEach(b => { if (!b.disabled) b.textContent = QA_LABEL[b.dataset.qa]; }); }
+
+function drawer(cls) {
+  const on = document.body.classList.contains(cls);
+  document.body.classList.remove('dl', 'dr');
+  if (!on) document.body.classList.add(cls);
+}
+function toggleFrame() {
+  const off = document.body.classList.toggle('noframe');
+  $('fShow').style.display = off ? '' : 'none';
+  try { localStorage.setItem('village-frame', off ? 'off' : 'on'); } catch {}
+  // The village sizes itself to its box: tell it the box changed.
+  window.dispatchEvent(new Event('resize'));
+}
+try { if (localStorage.getItem('village-frame') === 'off') { document.body.classList.add('noframe'); $('fShow').style.display = ''; } } catch {}
 
 pull(true);
 setInterval(() => pull(false), 6000);
