@@ -332,6 +332,23 @@ class TheSandbox(Base):
         log = self.m.state_dir() / "selftest-last.jsonl"
         self.assertNotIn("SECRET", log.read_text(), "the login never reaches the saved session")
 
+    def test_builder_login_shows_a_cut_off_login_without_showing_it(self):
+        # Guards: the builder's login refused (401, 2026-10-16) with nothing
+        # to say why - and any check that prints the login to find out.
+        wake = self.m.mod("wake")
+        with unittest.mock.patch.object(self.m, "builder_token", return_value="fake-login-SECRET-cut"), \
+             unittest.mock.patch.object(wake, "plan_token", return_value="other-login-SECRET-whole-and-longer"), \
+             unittest.mock.patch.object(wake, "login_test",
+                                        return_value=(False, "Failed to authenticate. API Error: 401")) as lt:
+            out, rc = self.m.builder_login()
+        text = "\n".join(out)
+        self.assertEqual(rc, 1)
+        self.assertEqual(lt.call_args[0][1], "fake-login-SECRET-cut", "it tests the builder's login, not the agents'")
+        self.assertIn("21 characters", text)
+        self.assertIn("35 characters", text)
+        self.assertIn("part of it was lost", text)
+        self.assertNotIn("SECRET", text)
+
     def test_the_agents_login_is_refused(self):
         with unittest.mock.patch.object(self.m, "builder_home", return_value=Path("/home/agentbuilder")), \
              unittest.mock.patch.object(self.m.os, "access", return_value=True), \

@@ -1966,6 +1966,35 @@ with Bash, one at a time, exactly as written, and do nothing else:
 Then reply with one line saying what each printed or whether it was refused."""
 
 
+def builder_login():
+    """Is the builder's own login accepted? One tiny no-tools run on it (the
+    same test as `wake.py check`), and its length beside the agents' working
+    login - a login cut short when pasted is the usual reason it is not
+    (2026-10-16: "401 Invalid bearer token" at its 92 characters)."""
+    tok = builder_token()
+    if not tok:
+        return ["FAIL  the builder has no login yet - see agentroom/README.md, 'Setting it up'"], 1
+    wake = mod("wake")
+    try:
+        agents = wake.plan_token()
+    except Exception:
+        agents = ""
+    out = [f"the builder's login:   {len(tok)} characters"]
+    if agents:
+        out.append(f"your agents' login:    {len(agents)} characters (the one that works)")
+    if agents and tok == agents:
+        return out + ["FAIL  it is the same login your agents use - make a separate one"], 1
+    binary = BUILDER_CLAUDE if os.access(BUILDER_CLAUDE, os.X_OK) else wake.claude_bin()
+    if not binary:
+        return out + ["FAIL  the claude program is not installed"], 1
+    ok, said = wake.login_test(binary, tok)
+    out.append(f"{'PASS' if ok else 'FAIL'}  Claude {'accepted' if ok else 'refused'} it: {said}")
+    if not ok and agents and len(tok) != len(agents):
+        out.append("      It is a different length from the login that works: most likely part of it was "
+                   "lost when it was copied. Make a new one and save it again.")
+    return out, 0 if ok else 1
+
+
 def builder_selftest():
     """One small real Claude session on the builder's own login (a few cents
     of plan use): the guard must refuse printenv, and the commands Claude
@@ -2228,6 +2257,7 @@ def main(argv=None):
     sub.add_parser("site").add_argument("slug")
     sub.add_parser("builder-check")
     sub.add_parser("builder-selftest")
+    sub.add_parser("builder-login")
     sb = sub.add_parser("sendback")
     sb.add_argument("id", type=int)
     sb.add_argument("--note", required=True)
@@ -2241,8 +2271,9 @@ def main(argv=None):
         lines, rc = check_text()
         print("\n".join(lines))
         return rc
-    if a.cmd in ("builder-check", "builder-selftest"):
-        lines, rc = (builder_check if a.cmd == "builder-check" else builder_selftest)()
+    if a.cmd in ("builder-check", "builder-selftest", "builder-login"):
+        lines, rc = {"builder-check": builder_check, "builder-selftest": builder_selftest,
+                     "builder-login": builder_login}[a.cmd]()
         print("\n".join(lines))
         return rc
     conn = connect()

@@ -316,19 +316,31 @@ def cmd_check(a):
         print(f"then store it:  python3 scripts/set-credential.py plan {TOKEN_KEY}")
         return 1
     print(f"token:       stored ({len(token)} characters)")
-    with tempfile.TemporaryDirectory() as d:
-        r = subprocess.run([binary, "-p", "Reply with the single word OK.", "--output-format", "json",
-                            "--model", a.model, "--max-turns", "1", "--tools", "",
-                            "--no-session-persistence"],
-                           cwd=d, env=claude_env(token), capture_output=True, text=True, timeout=180)
-    res = last_json(r.stdout) or {}
-    if res.get("is_error") or r.returncode:
-        print(f"the plan refused a test run: {res.get('result') or (r.stderr or r.stdout).strip()[:300]}")
+    ok, said = login_test(binary, token, a.model)
+    if not ok:
+        print(f"the plan refused a test run: {said}")
         return 1
-    print(f"test run:    answered {res.get('result')!r} on {', '.join(res.get('modelUsage') or {}) or a.model} "
-          f"in {res.get('duration_ms', 0) / 1000:.1f}s")
+    print(f"test run:    {said}")
     print("The plan is ready. Move an agent onto it in tasks/engines.json.")
     return 0
+
+
+def login_test(binary, token, model="haiku"):
+    """(answered, what happened) for one tiny run on a login: no tools, one
+    turn. agentroom.py builder-login tests the builder's own login with it."""
+    with tempfile.TemporaryDirectory() as d:
+        try:
+            r = subprocess.run([binary, "-p", "Reply with the single word OK.", "--output-format", "json",
+                                "--model", model, "--max-turns", "1", "--tools", "",
+                                "--no-session-persistence"],
+                               cwd=d, env=claude_env(token), capture_output=True, text=True, timeout=180)
+        except subprocess.TimeoutExpired:
+            return False, "no answer in 180 seconds"
+    res = last_json(r.stdout) or {}
+    if res.get("is_error") or r.returncode:
+        return False, str(res.get("result") or (r.stderr or r.stdout).strip())[:300]
+    return True, (f"answered {res.get('result')!r} on {', '.join(res.get('modelUsage') or {}) or model} "
+                  f"in {res.get('duration_ms', 0) / 1000:.1f}s")
 
 
 TEST_MESSAGE = ("This is a connection test, not a cycle. Do not do your cycle and do not try to "
