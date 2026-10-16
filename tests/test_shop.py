@@ -670,7 +670,7 @@ class TheDesignCheck(SceneBase):
     questions; code decides what counts as a problem."""
 
     GOOD = {"product_visible": True, "same_design": True, "words_a": "FERN", "words_b": "Fern!",
-            "differences": [], "added_text": False}
+            "differences": [], "added_text": False, "physically_real": True}
 
     def test_a_faithful_redraw_passes(self):
         self.assertEqual(self.sc.design_problems(self.GOOD), [], "case and punctuation are not a change")
@@ -680,7 +680,9 @@ class TheDesignCheck(SceneBase):
                              (dict(words_b="FEM"), "lettering changed"),
                              (dict(product_visible=False), "not clearly shown"),
                              (dict(differences=["the leaves are blue"]), "the leaves are blue"),
-                             (dict(added_text=True), "words were added")):
+                             (dict(added_text=True), "words were added"),
+                             # Owner, 2026-10-16: "The bag isn't hanging off of anything."
+                             (dict(physically_real=False), "the way a real one would")):
             got = " | ".join(self.sc.design_problems(dict(self.GOOD, **change)))
             self.assertIn(said, got, change)
 
@@ -708,6 +710,41 @@ class TheDesignCheck(SceneBase):
         urls = [p["image_url"]["url"] for p in parts if p["type"] == "image_url"]
         self.assertEqual(len(urls), 2)
         self.assertTrue(all(u.startswith("data:image/jpeg;base64,") for u in urls))
+
+
+class PeopleAndRealPlaces(SceneBase):
+    """Owner, 2026-10-16, on a tote drawn floating in front of a chair: "The
+    bag isn't hanging off of anything. Also can we use people holding the bag
+    in any of these pictures. If not could we use the mockup pictures from
+    printify and just change the background so it isn't plain white." Both:
+    people carrying it, and the mockup laid flat on a real surface."""
+
+    def places(self):
+        return self.sc.PAID_SCENES["tote bag"]
+
+    def test_people_carry_it_and_nothing_hangs_from_furniture(self):
+        people = [p for p in self.places() if not p.startswith(self.sc.FLAT_LAY)]
+        self.assertGreaterEqual(len(people), 3)
+        self.assertTrue(all("no face" in p for p in people), "faces stay out of frame")
+        self.assertFalse([p for p in self.places() if "chair" in p or "hanging from" in p])
+
+    def test_the_mockup_on_a_real_surface_keeps_its_pose(self):
+        flat = [n for n, p in enumerate(self.places()) if p.startswith(self.sc.FLAT_LAY)]
+        self.assertGreaterEqual(len(flat), 2)
+        prompt = self.sc.paid_prompt("tote bag", flat[0])
+        self.assertIn("replace only the plain background", prompt)
+        self.assertIn("seen from directly above", prompt)
+        self.assertNotIn("flat:", prompt)
+
+    def test_five_in_a_row_always_hold_both_kinds(self):
+        kinds = [p.startswith(self.sc.FLAT_LAY) for p in self.places()]
+        for start in range(len(kinds)):
+            five = [kinds[(start + k) % len(kinds)] for k in range(5)]
+            self.assertTrue(any(five) and not all(five), start)
+
+    def test_every_scene_is_told_about_physics(self):
+        self.assertIn("Nothing floats", self.sc.paid_prompt("tote bag", 0))
+        self.assertIn("physically_real", self.sc.DESIGN_ASK)
 
 
 class APaidScene(SceneBase):

@@ -570,14 +570,26 @@ LIMITS_DEFAULTS = {"tiktok_daily_ai": 0.30, "tiktok_leave_for_emily": 0.50}
 # first and TikTok labels most strictly, and the product is the point.
 # Seven each: a kit asks for five and tries two more when the design check
 # refuses one (tiktok-kit.py), and a place asked for twice is a duplicate.
+#
+# THE TOTE (owner, 2026-10-16, on a bag drawn floating in front of a chair:
+# "The bag isn't hanging off of anything. Also can we use people holding the
+# bag... If not could we use the mockup pictures from printify and just
+# change the background"). So: people carrying it, faces out of frame, and
+# FLAT places - "flat:" - where the real mockup keeps its exact pose and
+# only the plain backdrop is replaced by a surface it lies on, seen from
+# above. Nothing hangs from furniture: that is what came out floating.
+# Alternated, so any five in a row hold both kinds.
+FLAT_LAY = "flat:"
 PAID_SCENES = {
-    "tote bag": ["carried on the shoulder of a woman walking down a sunny autumn street, cropped at the shoulders so no face shows",
-                 "held up by one hand at a farmers market stall, flowers softly blurred behind",
-                 "lying on a cafe table beside a latte and an open book, seen from slightly above",
-                 "hanging from the back of a wooden chair in a cozy reading nook with bookshelves",
-                 "on a picnic blanket in a park beside a basket of strawberries",
-                 "in the front basket of a bicycle parked on a cobblestone street",
-                 "resting on a made bed with a cozy knit throw in soft morning light"],
+    "tote bag": ["carried on the shoulder of a woman walking down a sunny autumn street, one hand on the strap, "
+                 "cropped at the shoulders so no face shows",
+                 f"{FLAT_LAY} a rustic wooden table beside a latte and an open book",
+                 "held out by one hand at a farmers market stall, the fingers wrapped round both straps, "
+                 "flowers softly blurred behind, no face shown",
+                 f"{FLAT_LAY} a red and white picnic blanket on grass beside a basket of strawberries",
+                 "carried in the crook of the arm of a person browsing a bookshop, cropped at the chin so no face shows",
+                 f"{FLAT_LAY} light oak floorboards with a few autumn leaves around it",
+                 "slung over the shoulder of a person waiting at a cafe counter, seen from behind, no face shown"],
     "mug": ["held in two hands with cozy sweater sleeves beside a rainy window, no face shown",
             "on a kitchen counter beside a coffee pot in soft morning light",
             "on a desk next to an open notebook and a laptop, warm lamp light",
@@ -615,8 +627,22 @@ PAID_ASK = (
     "Keep the product identical to the photo: the same printed design, the same colours, the same "
     "lettering spelled exactly the same, the same shape and proportions. Do not redraw, simplify, "
     "restyle, add to or remove anything printed on it, and keep its design facing the camera and fully "
-    "visible. Photorealistic lifestyle photography, natural light, vertical 9:16 frame. No added text, "
+    "visible. It obeys real physics: it is held, worn or resting exactly as a real {thing} would be - "
+    "its weight pulling down on whatever holds it, straps actually round the hand or shoulder that holds "
+    "them, touching what it rests on, with a matching shadow. Nothing floats. Hands and arms look natural. "
+    "Photorealistic lifestyle photography, natural light, vertical 9:16 frame. No added text, "
     "logos, captions or watermarks anywhere in the picture.")
+
+# The mockup with a real place behind it instead of studio white: the
+# product exactly as photographed, lying on a surface, seen from straight
+# above - the one pose in which a flat mockup is also physically true.
+FLAT_ASK = (
+    "Here is a product photo of a {thing} on a plain studio background. Keep THIS EXACT {thing} as it is "
+    "in the photo - the same shape, angle, printed design, colours and lettering, not redrawn - and "
+    "replace only the plain background: it lies flat on {scene}, seen from directly above, touching the "
+    "surface, with a soft natural shadow where it meets it and the same soft daylight on both. "
+    "Photorealistic overhead flat-lay photography, vertical 9:16 frame, the whole product in view. "
+    "No added text, logos, captions or watermarks anywhere in the picture.")
 
 DESIGN_ASK = (
     "Image A is a product photo. Image B is meant to show the SAME product in a new scene. "
@@ -626,7 +652,10 @@ DESIGN_ASK = (
     ' "words_a": "every word printed on the product in A, exactly as spelled, or empty",\n'
     ' "words_b": "every word printed on the product in B, exactly as spelled, or empty",\n'
     ' "differences": ["each way the product in B differs from A - design, colours, lettering, shape"],\n'
-    ' "added_text": true or false (are there words in B that are not printed on the product)}')
+    ' "added_text": true or false (are there words in B that are not printed on the product),\n'
+    ' "physically_real": true or false (is the product in B held, worn, lying on or hanging from something '
+    'the way a real one would be - not floating in the air or in front of things, straps actually round '
+    'what holds them, touching what it rests on)}')
 
 
 class SpendError(SceneError):
@@ -676,7 +705,10 @@ def allowance(spent_today, about_to, budget_read, caps):
 
 def paid_prompt(thing, n):
     places = PAID_SCENES.get(thing) or PAID_DEFAULT
-    return PAID_ASK.format(thing=thing, scene=places[n % len(places)])
+    place = places[n % len(places)]
+    if place.startswith(FLAT_LAY):
+        return FLAT_ASK.format(thing=thing, scene=place[len(FLAT_LAY):].strip())
+    return PAID_ASK.format(thing=thing, scene=place)
 
 
 def _letters(text):
@@ -689,7 +721,8 @@ def design_problems(reading):
     unread check is not a passed one."""
     if not isinstance(reading, dict):
         return ["the design check's answer could not be read"]
-    need = ("product_visible", "same_design", "words_a", "words_b", "differences", "added_text")
+    need = ("product_visible", "same_design", "words_a", "words_b", "differences", "added_text",
+            "physically_real")
     missing = [k for k in need if k not in reading]
     if missing:
         return [f"the design check did not answer {', '.join(missing)}"]
@@ -706,6 +739,9 @@ def design_problems(reading):
     out += [f"changed: {x}" for x in diffs]
     if reading["added_text"] is True:
         out.append("words were added that are not on the product")
+    if reading["physically_real"] is not True:
+        out.append("it does not sit in the scene the way a real one would - floating, or its straps "
+                   "holding onto nothing")
     return out
 
 
