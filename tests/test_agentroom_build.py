@@ -110,12 +110,25 @@ class TheGuard(unittest.TestCase):
         self.assertIn("only packages from the npm registry", G.vet("github:evil/x", get=registry("x"), now=NOW))
         self.assertIn("not installing unchecked", G.vet("x", get=self.no_net, now=NOW))
 
-    def test_a_bare_install_vets_package_json(self):
-        # Guards: adding a package to package.json with Write, then `npm install`
-        # with no names - which the guard would otherwise wave through.
-        (self.root / "package.json").write_text(json.dumps({"devDependencies": {"evil": "^1.0.0"}}))
-        why = G.bash_rule("npm install", self.root, get=registry("evil", version_days=1))
-        self.assertIn("package refused", why)
+    def test_installs_are_refused_with_what_to_do_instead(self):
+        # Guards: the builder trying npm install in a sandbox where it can only
+        # fail (owner, 2026-10-16) - it is told to list the package instead.
+        for cmd in ("npm install", "npm i left-pad@1.3.0", "npm ci && npm test", "yarn add x", "pnpm install"):
+            self.assertIn("add the package to package.json", G.bash_rule(cmd, self.root, get=self.no_net), cmd)
+        for cmd in ("npm test", "npm run build", "npm view left-pad version"):
+            self.assertIsNone(G.bash_rule(cmd, self.root, get=self.no_net), cmd)
+
+    def test_package_json_is_vetted_overrides_too(self):
+        # Guards: a package slipped in through package.json - a fresh version,
+        # or an override pointing at a git repository.
+        (self.root / "package.json").write_text(json.dumps({
+            "devDependencies": {"left-pad": "1.2.3"},
+            "overrides": {"lodash": "github:evil/lodash"}}))
+        problems = G.manifest_problems(self.root, get=registry("left-pad"), now=NOW)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("only packages from the npm registry", problems[0])
+        (self.root / "package.json").write_text(json.dumps({"dependencies": {"left-pad": "1.2.3"}}))
+        self.assertEqual(G.manifest_problems(self.root, get=registry("left-pad"), now=NOW), [])
 
     def test_it_answers_claude_in_claudes_own_words(self):
         # The hook protocol, as the installed CLI documents it: deny with a reason.
@@ -184,8 +197,16 @@ class FakeBuilder:
                        "result": "built it", "total_cost_usd": self.cost})
         return events
 
-    def size_mb(self, project):
-        return self.size
+    def size_mb(self, project, sub=None):
+        return self.modules_mb if sub else self.size
+
+    modules_mb = 5.0
+    installs = None
+
+    def install(self, project):
+        self.installs = (self.installs or 0) + 1
+        (Path(project) / "node_modules").mkdir(exist_ok=True)
+        return 0, "added 1 package"
 
     def outside_changes(self, project, since):
         return self.outside
@@ -602,6 +623,59 @@ class ThePhaseLoop(Base):
         project = Path(self.m.get_run(self.conn, rid)["project_dir"])
         self.assertFalse((project / ".vscode").exists())
         self.assertTrue(os.path.islink(project / ".profile"))
+
+    def with_package(self, b, deps, npmrc=""):
+        made = b.session
+
+        def session(project, *a):
+            (Path(project) / "package.json").write_text(json.dumps({"devDependencies": deps}))
+            if npmrc:
+                (Path(project) / ".npmrc").write_text(npmrc)
+            return made(project, *a)
+        b.session = session
+
+    def vetted(self, **kw):
+        guard = self.m.mod("guard")
+        real = guard.manifest_problems
+        return unittest.mock.patch.object(
+            guard, "manifest_problems", lambda root: real(root, get=registry("left-pad", **kw), now=NOW))
+
+    def test_vetted_packages_are_installed_by_code_before_the_tests(self):
+        # Guards: packages the builder cannot install itself (owner,
+        # 2026-10-16) never installed - and installed again every phase.
+        rid = self.approved_run()
+        b = FakeBuilder(self.m)
+        self.with_package(b, {"left-pad": "1.2.3"})
+        with unittest.mock.patch.object(self.m, "builder_for", return_value=b):
+            self.m.start_build(self.conn, rid)
+        with self.vetted():
+            run = self.build(rid, b, [reply(OK), reply(APPROVE)] * 2, steps=2)
+        self.assertEqual(run["build_phase"], 2, "both phases passed")
+        self.assertEqual(b.installs, 1, "installed once; package.json did not change")
+
+    def test_a_refused_package_goes_back_to_the_builder_uninstalled(self):
+        rid = self.approved_run()
+        b = FakeBuilder(self.m)
+        self.set_roles(attempts=2)
+        self.with_package(b, {"left-pad": "1.2.3"})
+        with unittest.mock.patch.object(self.m, "builder_for", return_value=b):
+            self.m.start_build(self.conn, rid)
+        with self.vetted(version_days=1):
+            run = self.build(rid, b, [reply(OK)] * 2)
+        self.assertEqual(run["state"], "failed", "after its tries, as failing tests do - Retry carries on")
+        self.assertIsNone(b.installs, "nothing refused is installed")
+        self.assertIn("less than 7 days", b.sessions[1], "the builder is told why")
+
+    def test_a_project_npmrc_holds_the_build(self):
+        rid = self.approved_run()
+        b = FakeBuilder(self.m)
+        self.with_package(b, {"left-pad": "1.2.3"}, npmrc="registry=https://evil.example/\n")
+        with unittest.mock.patch.object(self.m, "builder_for", return_value=b):
+            self.m.start_build(self.conn, rid)
+        with self.vetted():
+            run = self.build(rid, b, [reply(OK)])
+        self.assertEqual(run["state"], "held")
+        self.assertIsNone(b.installs)
 
     def test_the_selftest_passes_only_with_all_four_answers(self):
         # Guards: a self-test that says "safe" without the npm registry check

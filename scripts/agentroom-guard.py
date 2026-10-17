@@ -24,16 +24,18 @@ WHAT IT REFUSES
   * npm with its safety off: --ignore-scripts=false, --unsafe-perm, -g, a
     custom registry or config, npm config / publish / exec / login.
 
-PACKAGES (the booby-trap rules). `npm install <name>` is allowed only when
-every package passes vet(): it exists on the npm registry, the version to be
-installed was published at least MIN_VERSION_AGE_DAYS ago (hijacked versions
-are found and pulled within days), the package itself is older than
-MIN_PACKAGE_AGE_DAYS, it is not deprecated, and it is downloaded at least
-MIN_WEEKLY_DOWNLOADS times a week. A bare `npm install` / `npm ci` vets
-everything package.json asks for - package.json is a file the builder writes,
-so it is checked the same way. Git, URL and tarball specs are refused. Install
-scripts never run at all: npm's ignore-scripts is forced on by agentroom.py.
-Nothing is cached between calls: a cache in the builder's home would be a
+PACKAGES (the booby-trap rules). The builder never installs anything: Claude
+Code's own sandbox makes package files read-only to its commands, so `npm
+install` there could only fail (owner, 2026-10-16, after the first real
+build's installs kept failing). Install commands are refused with that
+reason; the builder lists packages in package.json instead, and after its
+session agentroom.py installs them - only when every one passes vet() here:
+it exists on the npm registry, the version to be installed was published at
+least MIN_VERSION_AGE_DAYS ago (hijacked versions are found and pulled
+within days), the package itself is older than MIN_PACKAGE_AGE_DAYS, it is
+not deprecated, and it is downloaded at least MIN_WEEKLY_DOWNLOADS times a
+week. Git, URL and tarball specs are refused. Install scripts never run.
+Nothing is cached between checks: a cache in the builder's home would be a
 file the builder could edit.
 
 Every decision is printed to stderr as one line, which agentroom.py keeps
@@ -90,7 +92,11 @@ BASH_RULES = [
     (r"\b(xmrig|minerd|cpuminer|ethminer)\b|stratum\+tcp", "that is a crypto miner"),
 ]
 
-NPM_INSTALL = re.compile(r"\bnpm\s+(install|i|add|ci|update|up)\b([^;&|]*)")
+NPM_INSTALL = re.compile(r"\b(npm\s+(install|i|add|ci|update|up|uninstall|remove|rm)|"
+                         r"(yarn|pnpm|bun)\s+(add|install|i|remove))\b")
+INSTALL_REFUSED = ("packages are not installed by commands here (your commands cannot write package "
+                   "files): add the package to package.json with an exact version at least a week old, "
+                   "and the Agent Room checks and installs it after your session, before check.sh runs")
 
 
 def project():
@@ -119,16 +125,6 @@ def path_rule(tool, path, root):
     if re.match(r"^(/root|/proc|/etc/(shadow|sudoers|ssh)|/home/(?!agentbuilder\b))", str(Path(s).expanduser())):
         return "that folder is off limits"
     return None
-
-
-def specs(argline):
-    """The package specs on an npm install line - flags dropped."""
-    out = []
-    for tok in argline.split():
-        if tok.startswith("-"):
-            continue
-        out.append(tok.strip("'\""))
-    return out
 
 
 def split_spec(spec):
@@ -189,6 +185,13 @@ def vet(spec, get=_get, now=None):
     if re.match(r"^(git\+|git:|github:|gitlab:|bitbucket:|https?:|file:|link:|\.|/)", spec) or spec.endswith((".tgz", ".tar.gz")):
         return f"{spec}: only packages from the npm registry, by name"
     name, want = split_spec(spec)
+    # package.json gives name@version, so the version is checked too: there
+    # "github:x/y", a URL or a tarball replaces the registry altogether.
+    if want and (re.match(r"^(git\+|git:|github:|gitlab:|bitbucket:|https?:|file:|link:|\.|/)", want)
+                 or want.endswith((".tgz", ".tar.gz")) or "/" in want):
+        return f"{spec}: only packages from the npm registry, by name"
+    if want and want.startswith("npm:"):
+        return f"{spec}: an alias for another package - name that package itself"
     if not re.match(r"^(@[a-z0-9][\w.-]*/)?[a-z0-9][\w.-]*$", name):
         return f"{spec}: not a package name"
     try:
@@ -216,15 +219,28 @@ def vet(spec, get=_get, now=None):
 
 
 def package_json_specs(root):
+    """Every package package.json asks for, overrides and resolutions too -
+    an override is a package as much as a dependency is."""
     try:
         d = json.loads((root / "package.json").read_text())
     except (OSError, ValueError):
         return []
     out = []
-    for k in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
+    for k in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies",
+              "overrides", "resolutions"):
         for name, want in (d.get(k) or {}).items():
+            if isinstance(want, dict):                  # a nested override: its own "." entry
+                want = want.get(".")
+            if not isinstance(want, str):
+                continue
             out.append(f"{name}@{want}" if want else name)
     return out
+
+
+def manifest_problems(root, get=_get, now=None):
+    """Why each package in package.json may not be installed; [] when all may.
+    agentroom.py asks this before it installs anything."""
+    return [w for w in (vet(s, get=get, now=now) for s in package_json_specs(root)) if w]
 
 
 def bash_rule(cmd, root, get=_get):
@@ -232,13 +248,8 @@ def bash_rule(cmd, root, get=_get):
     for pattern, why in BASH_RULES:
         if re.search(pattern, cmd):
             return why
-    for m in NPM_INSTALL.finditer(cmd):
-        named = specs(m.group(2))
-        todo = named or package_json_specs(root)
-        for s in todo:
-            why = vet(s, get=get)
-            if why:
-                return "package refused: " + why
+    if NPM_INSTALL.search(cmd):
+        return INSTALL_REFUSED
     return None
 
 

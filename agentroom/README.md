@@ -92,10 +92,13 @@ in the AI's commands.
 switch off: `--setting-sources ""` and a root-owned `--settings`). It refuses
 writes outside the project, sudo, cron, background processes, network tools,
 the environment and `/proc`, code from the internet (`| sh`, npx, pip...),
-and npm with its safety off. **Packages:** install scripts never run; a
-package is installed only if that version is a week old, the package a month
-old, it is used (500+ downloads a week) and not deprecated - package.json
-included.
+and npm with its safety off. **Packages:** the builder cannot install any -
+Claude Code's sandbox makes package files read-only to its commands, and the
+guard refuses `npm install`. It lists them in package.json; after its session
+code installs them (no lockfile, install scripts off, npm's registry only),
+and only if every one - overrides too - is a week-old version of a month-old
+package, used (500+ downloads a week), not deprecated, and not a git, URL or
+alias spec. A project .npmrc, or installed packages over 800MB, hold the build.
 
 **Held.** After every session: tripwires (5+ refused commands, files changed
 outside the project, a project over 300MB) and the watchdog (a different AI,
