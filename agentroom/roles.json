@@ -22,7 +22,11 @@
     "itself counts it at list prices. attempts: sessions a phase gets to pass.",
     "bug_checker reads each phase's changes; watchdog (a different AI) reads",
     "every session and HOLDS the build when anything looks wrong. Both are",
-    "paid, under agentroom_build_max in tasks/limits.json."
+    "paid, under agentroom_build_max in tasks/limits.json.",
+    "judge (owner, 2026-10-16): the second opinion. When the watchdog holds",
+    "for more than low concerns, it reads the same evidence; the build",
+    "waits for the owner only if it agrees, or its reply cannot be read.",
+    "Low-only concerns carry on, listed in the Room. Paid like the others."
   ],
   "planner": {
     "name": "Kimi",
@@ -52,6 +56,11 @@
     "name": "GPT",
     "model": "openai/gpt-5.4-mini",
     "max_tokens": 8000
+  },
+  "judge": {
+    "name": "DeepSeek",
+    "model": "deepseek/deepseek-v4-pro",
+    "max_tokens": 16000
   },
   "builder": {
     "model": "sonnet",

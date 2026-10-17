@@ -488,9 +488,11 @@ class HoldingTheBuild(Base):
         # Guards: the owner's ask - anything odd stops the builder until they look.
         b = FakeBuilder(self.m)
         rid = self.started(b)
-        run = self.build(rid, b, [reply({"verdict": "hold", "summary": "it read ~/.ssh", "findings": []})])
+        run = self.build(rid, b, [reply({"verdict": "hold", "summary": "it read ~/.ssh", "findings": []}),
+                                  reply({"verdict": "hold", "summary": "agreed: that is a login folder"})])
         self.assertEqual(run["state"], "held")
         self.assertIn("it read ~/.ssh", run["error"])
+        self.assertIn("second opinion agreed", run["error"])
         self.assertIsNone(self.m.next_run(self.conn, now=NOW), "nothing runs while held")
         self.m.resume_build(self.conn, rid)
         self.assertEqual(self.m.get_run(self.conn, rid)["state"], "building")
@@ -501,6 +503,45 @@ class HoldingTheBuild(Base):
         run = self.build(rid, b, [{"choices": [{"message": {"content": "I think it is probably fine"}}],
                                    "usage": {"cost": 0.001}}])
         self.assertEqual(run["state"], "held")
+
+    def test_low_concerns_alone_carry_on_listed_in_the_room(self):
+        # Guards: the owner's rule (2026-10-16) - holds for low concerns the
+        # watchdog itself calls normal stop asking them, but are still shown.
+        b = FakeBuilder(self.m)
+        rid = self.started(b)
+        low = {"verdict": "hold", "summary": "mostly ordinary",
+               "findings": [{"severity": "low", "text": "a test runs npm run build"}]}
+        run = self.build(rid, b, [reply(low), reply(APPROVE)])
+        self.assertEqual(run["build_phase"], 1, "the phase passed")
+        self.assertIn("a test runs npm run build", json.dumps(self.m.show(self.conn, rid)["messages"]))
+
+    def test_a_second_opinion_decides_more_than_low_concerns(self):
+        # Guards: a medium concern let through without anyone judging it -
+        # and, the other way, every such hold waiting for the owner.
+        b = FakeBuilder(self.m)
+        rid = self.started(b)
+        medium = {"verdict": "hold", "summary": "env-dependent build",
+                  "findings": [{"severity": "medium", "text": "vite.config reads process.env.MANIFEST_FILE"}]}
+        with unittest.mock.patch.object(self.m, "ask", wraps=self.m.ask) as ask:
+            run = self.build(rid, b, [reply(medium),
+                                      reply({"verdict": "carry_on", "summary": "a build setting, ordinary",
+                                             "reasons": ["MANIFEST_FILE picks the dev or release manifest"]}),
+                                      reply(APPROVE)])
+        self.assertEqual(run["build_phase"], 1)
+        judged = ask.call_args_list[1][0]
+        self.assertIs(judged[5], self.m.JUDGE_SYSTEM)
+        self.assertIn("MANIFEST_FILE", judged[6], "it reads the watchdog's concerns")
+        self.assertIn("What changed", judged[6], "and the same evidence")
+        self.assertIn("picks the dev or release manifest", json.dumps(self.m.show(self.conn, rid)["messages"]))
+
+    def test_an_unreadable_second_opinion_holds(self):
+        b = FakeBuilder(self.m)
+        rid = self.started(b)
+        high = {"verdict": "hold", "summary": "s", "findings": [{"severity": "high", "text": "curl in a test"}]}
+        run = self.build(rid, b, [reply(high), {"choices": [{"message": {"content": "probably fine"}}],
+                                                "usage": {"cost": 0.001}}])
+        self.assertEqual(run["state"], "held")
+        self.assertIn("could not be read", run["error"])
 
     def test_tripwires_hold_without_asking_any_ai(self):
         for b, word in ((FakeBuilder(self.m, denials=5), "refused 5"),

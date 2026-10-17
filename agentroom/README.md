@@ -104,7 +104,12 @@ alias spec. A project .npmrc, or installed packages over 800MB, hold the build.
 outside the project, a project over 300MB) and the watchdog (a different AI,
 `roles.json` watchdog) read every command and change. Anything wrong - or a
 watchdog reply that cannot be read - HOLDS the build: the Deck and
-Sylvester's lamp turn red until you press **Resume** or **Stop**.
+Sylvester's lamp turn red until you press **Resume** or **Stop**. Which
+watchdog holds wait for you (owner, 2026-10-16): only low concerns, and the
+build carries on, the concerns listed in the Room; anything more, and a second
+AI (`roles.json` judge, from a different company) reads the same evidence -
+the build waits for you only if it agrees, or its reply cannot be read. The
+tripwires above always wait for you. Resume tells the builder why it was held.
 
 **Done** means `bash check.sh` passed, run by code, offline. Then the bug
 checker reads the phase, it is committed, and the next one starts.
