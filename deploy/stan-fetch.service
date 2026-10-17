@@ -1,0 +1,20 @@
+[Unit]
+Description=Stan's fetcher - Hacker News posts that name a software pain (plain code - costs nothing)
+Documentation=https://github.com/cljxs/cljxs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=ECOSYSTEM_ROOT=/root/ecosystem
+WorkingDirectory=/root/ecosystem
+# No model. Ten searches of Hacker News's public search (no account, no key),
+# a second apart; new posts into agents/stan/data/backlog.json. Exits 1 only
+# when every search failed.
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/stan-fetch.py
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal

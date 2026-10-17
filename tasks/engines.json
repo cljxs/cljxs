@@ -1,0 +1,54 @@
+{
+  "_about": [
+    "Which engine wakes each agent - read by scripts/wake.py, the one place",
+    "that starts an agent's model. An agent not listed runs on openclaw",
+    "(OpenRouter, paid per token), exactly as before this file existed.",
+    "",
+    "  {\"engine\": \"claude\", \"model\": \"haiku\"}   the owner's Claude plan",
+    "",
+    "model: haiku, sonnet, opus, or a full claude-... id.",
+    "max_turns: the most turns one wake may take (default 60).",
+    "fallback: \"openclaw\" (default) sends the wake through OpenRouter when",
+    "the plan refuses it before it starts (login rejected, usage limit);",
+    "\"none\" lets that wake fail instead.",
+    "",
+    "Check before moving an agent:  python3 scripts/wake.py check",
+    "See what runs where:           python3 scripts/wake.py engines",
+    "",
+    "bolt is plain code; only its news book asks the plan one question a time",
+    "(wake.py ask), at most 5 a day - bolt.py NEWS_WAKES_PER_DAY."
+  ],
+  "agents": {
+    "ace": {
+      "engine": "claude",
+      "model": "haiku",
+      "max_turns": 40
+    },
+    "belfort": {
+      "engine": "claude",
+      "model": "haiku",
+      "max_turns": 40
+    },
+    "scout": {
+      "engine": "claude",
+      "model": "haiku",
+      "max_turns": 40
+    },
+    "emily": {
+      "engine": "claude",
+      "model": "haiku",
+      "max_turns": 60
+    },
+    "paul": {
+      "engine": "claude",
+      "model": "sonnet",
+      "max_turns": 80
+    },
+    "bolt": {
+      "engine": "claude",
+      "model": "haiku",
+      "max_turns": 1,
+      "fallback": "none"
+    }
+  }
+}

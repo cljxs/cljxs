@@ -1,0 +1,638 @@
+{
+ "week": {
+  "number": 5
+ },
+ "events": [
+  {
+   "id": "401872994",
+   "uid": "s:20~l:28~e:401872994",
+   "date": "2026-10-13T00:15Z",
+   "name": "Buffalo Bills at Los Angeles Rams",
+   "shortName": "BUF @ LAR",
+   "season": {
+    "year": 2026,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "week": {
+    "number": 5
+   },
+   "competitions": [
+    {
+     "id": "401872994",
+     "uid": "s:20~l:28~e:401872994~c:401872994",
+     "date": "2026-10-13T00:15Z",
+     "attendance": 0,
+     "type": {
+      "id": "1",
+      "abbreviation": "STD"
+     },
+     "timeValid": true,
+     "neutralSite": false,
+     "conferenceCompetition": false,
+     "playByPlayAvailable": false,
+     "recent": false,
+     "venue": {
+      "id": "7065",
+      "fullName": "SoFi Stadium",
+      "address": {
+       "city": "Inglewood",
+       "state": "CA",
+       "country": "USA"
+      },
+      "indoor": false
+     },
+     "competitors": [
+      {
+       "id": "14",
+       "uid": "s:20~l:28~t:14",
+       "type": "team",
+       "order": 0,
+       "homeAway": "home",
+       "team": {
+        "id": "14",
+        "uid": "s:20~l:28~t:14",
+        "location": "Los Angeles",
+        "name": "Rams",
+        "abbreviation": "LAR",
+        "displayName": "Los Angeles Rams",
+        "shortDisplayName": "Rams",
+        "color": "003594",
+        "alternateColor": "ffd100",
+        "isActive": true,
+        "venue": {
+         "id": "477"
+        }
+       },
+       "score": "0",
+       "curatedRank": {
+        "current": 99
+       },
+       "statistics": [],
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Any",
+         "type": "total",
+         "summary": "2-2"
+        },
+        {
+         "name": "Home",
+         "type": "home",
+         "summary": "1-1"
+        },
+        {
+         "name": "Road",
+         "type": "road",
+         "summary": "1-1"
+        }
+       ]
+      },
+      {
+       "id": "2",
+       "uid": "s:20~l:28~t:2",
+       "type": "team",
+       "order": 1,
+       "homeAway": "away",
+       "team": {
+        "id": "2",
+        "uid": "s:20~l:28~t:2",
+        "location": "Buffalo",
+        "name": "Bills",
+        "abbreviation": "BUF",
+        "displayName": "Buffalo Bills",
+        "shortDisplayName": "Bills",
+        "color": "00338d",
+        "alternateColor": "d50a0a",
+        "isActive": true,
+        "venue": {
+         "id": "3883"
+        }
+       },
+       "score": "0",
+       "curatedRank": {
+        "current": 99
+       },
+       "statistics": [],
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Any",
+         "type": "total",
+         "summary": "3-1"
+        },
+        {
+         "name": "Home",
+         "type": "home",
+         "summary": "2-1"
+        },
+        {
+         "name": "Road",
+         "type": "road",
+         "summary": "1-0"
+        }
+       ]
+      }
+     ],
+     "notes": [],
+     "status": {
+      "clock": 0.0,
+      "displayClock": "0:00",
+      "period": 0,
+      "type": {
+       "id": "1",
+       "name": "STATUS_SCHEDULED",
+       "state": "pre",
+       "completed": false,
+       "description": "Scheduled",
+       "detail": "Mon, October 12th at 8:15 PM EDT",
+       "shortDetail": "10/12 - 8:15 PM EDT"
+      },
+      "isTBDFlex": false
+     },
+     "format": {
+      "regulation": {
+       "periods": 4
+      },
+      "overtime": {
+       "periods": 1
+      }
+     },
+     "startDate": "2026-10-13T00:15Z",
+     "broadcast": "ESPN/ABC"
+    }
+   ],
+   "weather": {
+    "displayValue": "Intermittent clouds",
+    "temperature": 67,
+    "highTemperature": 67,
+    "conditionId": "4",
+    "link": {
+     "language": "en-US",
+     "rel": [
+      "90301"
+     ],
+     "href": "http://www.accuweather.com/en/us/sofi-stadium-ca/90301/hourly-weather-forecast/209205_poi?day=1&hbhhour=17&lang=en-us",
+     "text": "Weather",
+     "shortText": "Weather",
+     "isExternal": true,
+     "isPremium": false
+    }
+   },
+   "status": {
+    "clock": 0.0,
+    "displayClock": "0:00",
+    "period": 0,
+    "type": {
+     "id": "1",
+     "name": "STATUS_SCHEDULED",
+     "state": "pre",
+     "completed": false,
+     "description": "Scheduled",
+     "detail": "Mon, October 12th at 8:15 PM EDT",
+     "shortDetail": "10/12 - 8:15 PM EDT"
+    }
+   }
+  },
+  {
+   "id": "401872980",
+   "uid": "s:20~l:28~e:401872980",
+   "date": "2026-10-09T00:15Z",
+   "name": "Tampa Bay Buccaneers at Dallas Cowboys",
+   "shortName": "TB @ DAL",
+   "season": {
+    "year": 2026,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "week": {
+    "number": 5
+   },
+   "competitions": [
+    {
+     "id": "401872980",
+     "uid": "s:20~l:28~e:401872980~c:401872980",
+     "date": "2026-10-09T00:15Z",
+     "attendance": 92351,
+     "type": {
+      "id": "1",
+      "abbreviation": "STD"
+     },
+     "timeValid": true,
+     "neutralSite": false,
+     "conferenceCompetition": false,
+     "playByPlayAvailable": true,
+     "recent": false,
+     "venue": {
+      "id": "3687",
+      "fullName": "AT&T Stadium",
+      "address": {
+       "city": "Arlington",
+       "state": "TX",
+       "country": "USA"
+      },
+      "indoor": true
+     },
+     "competitors": [
+      {
+       "id": "6",
+       "uid": "s:20~l:28~t:6",
+       "type": "team",
+       "order": 0,
+       "homeAway": "home",
+       "winner": false,
+       "team": {
+        "id": "6",
+        "uid": "s:20~l:28~t:6",
+        "location": "Dallas",
+        "name": "Cowboys",
+        "abbreviation": "DAL",
+        "displayName": "Dallas Cowboys",
+        "shortDisplayName": "Cowboys",
+        "color": "002a5c",
+        "alternateColor": "b0b7bc",
+        "isActive": true,
+        "venue": {
+         "id": "3687"
+        }
+       },
+       "score": "16",
+       "linescores": [
+        {
+         "value": 7.0,
+         "displayValue": "7",
+         "period": 1
+        },
+        {
+         "value": 3.0,
+         "displayValue": "3",
+         "period": 2
+        },
+        {
+         "value": 0.0,
+         "displayValue": "0",
+         "period": 3
+        },
+        {
+         "value": 6.0,
+         "displayValue": "6",
+         "period": 4
+        }
+       ],
+       "statistics": [],
+       "curatedRank": {
+        "current": 99
+       },
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Game",
+         "type": "total",
+         "summary": "2-3"
+        },
+        {
+         "name": "Home",
+         "type": "home",
+         "summary": "1-2"
+        },
+        {
+         "name": "Road",
+         "type": "road",
+         "summary": "1-1"
+        }
+       ]
+      },
+      {
+       "id": "27",
+       "uid": "s:20~l:28~t:27",
+       "type": "team",
+       "order": 1,
+       "homeAway": "away",
+       "winner": true,
+       "team": {
+        "id": "27",
+        "uid": "s:20~l:28~t:27",
+        "location": "Tampa Bay",
+        "name": "Buccaneers",
+        "abbreviation": "TB",
+        "displayName": "Tampa Bay Buccaneers",
+        "shortDisplayName": "Buccaneers",
+        "color": "bd1c36",
+        "alternateColor": "3e3a35",
+        "isActive": true,
+        "venue": {
+         "id": "3886"
+        }
+       },
+       "score": "24",
+       "linescores": [
+        {
+         "value": 0.0,
+         "displayValue": "0",
+         "period": 1
+        },
+        {
+         "value": 7.0,
+         "displayValue": "7",
+         "period": 2
+        },
+        {
+         "value": 17.0,
+         "displayValue": "17",
+         "period": 3
+        },
+        {
+         "value": 0.0,
+         "displayValue": "0",
+         "period": 4
+        }
+       ],
+       "statistics": [],
+       "curatedRank": {
+        "current": 99
+       },
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Game",
+         "type": "total",
+         "summary": "1-4"
+        },
+        {
+         "name": "Home",
+         "type": "home",
+         "summary": "0-3"
+        },
+        {
+         "name": "Road",
+         "type": "road",
+         "summary": "1-1"
+        }
+       ]
+      }
+     ],
+     "notes": [],
+     "status": {
+      "clock": 0.0,
+      "displayClock": "0:00",
+      "period": 4,
+      "type": {
+       "id": "3",
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "description": "Final",
+       "detail": "Final",
+       "shortDetail": "Final"
+      },
+      "isTBDFlex": false
+     },
+     "format": {
+      "regulation": {
+       "periods": 4
+      },
+      "overtime": {
+       "periods": 1
+      }
+     },
+     "startDate": "2026-10-09T00:15Z",
+     "broadcast": "Prime Video"
+    }
+   ],
+   "status": {
+    "clock": 0.0,
+    "displayClock": "0:00",
+    "period": 4,
+    "type": {
+     "id": "3",
+     "name": "STATUS_FINAL",
+     "state": "post",
+     "completed": true,
+     "description": "Final",
+     "detail": "Final",
+     "shortDetail": "Final"
+    }
+   }
+  },
+  {
+   "id": "401872990",
+   "uid": "s:20~l:28~e:401872990",
+   "date": "2026-10-11T17:00Z",
+   "name": "Chicago Bears at Green Bay Packers",
+   "shortName": "CHI @ GB",
+   "season": {
+    "year": 2026,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "week": {
+    "number": 5
+   },
+   "competitions": [
+    {
+     "id": "401872990",
+     "uid": "s:20~l:28~e:401872990~c:401872990",
+     "date": "2026-10-11T17:00Z",
+     "attendance": 77755,
+     "type": {
+      "id": "1",
+      "abbreviation": "STD"
+     },
+     "timeValid": true,
+     "neutralSite": false,
+     "conferenceCompetition": false,
+     "playByPlayAvailable": true,
+     "recent": false,
+     "venue": {
+      "id": "3798",
+      "fullName": "Lambeau Field",
+      "address": {
+       "city": "Green Bay",
+       "state": "WI",
+       "country": "USA"
+      },
+      "indoor": false
+     },
+     "competitors": [
+      {
+       "id": "9",
+       "uid": "s:20~l:28~t:9",
+       "type": "team",
+       "order": 0,
+       "homeAway": "home",
+       "winner": true,
+       "team": {
+        "id": "9",
+        "uid": "s:20~l:28~t:9",
+        "location": "Green Bay",
+        "name": "Packers",
+        "abbreviation": "GB",
+        "displayName": "Green Bay Packers",
+        "shortDisplayName": "Packers",
+        "color": "204e32",
+        "alternateColor": "ffb612",
+        "isActive": true,
+        "venue": {
+         "id": "3798"
+        }
+       },
+       "score": "31",
+       "linescores": [
+        {
+         "value": 7.0,
+         "displayValue": "7",
+         "period": 1
+        },
+        {
+         "value": 7.0,
+         "displayValue": "7",
+         "period": 2
+        },
+        {
+         "value": 9.0,
+         "displayValue": "9",
+         "period": 3
+        },
+        {
+         "value": 8.0,
+         "displayValue": "8",
+         "period": 4
+        }
+       ],
+       "statistics": [],
+       "curatedRank": {
+        "current": 99
+       },
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Game",
+         "type": "total",
+         "summary": "3-2"
+        },
+        {
+         "name": "Home",
+         "type": "home",
+         "summary": "1-1"
+        },
+        {
+         "name": "Road",
+         "type": "road",
+         "summary": "2-1"
+        }
+       ]
+      },
+      {
+       "id": "3",
+       "uid": "s:20~l:28~t:3",
+       "type": "team",
+       "order": 1,
+       "homeAway": "away",
+       "winner": false,
+       "team": {
+        "id": "3",
+        "uid": "s:20~l:28~t:3",
+        "location": "Chicago",
+        "name": "Bears",
+        "abbreviation": "CHI",
+        "displayName": "Chicago Bears",
+        "shortDisplayName": "Bears",
+        "color": "0b1c3a",
+        "alternateColor": "e64100",
+        "isActive": true,
+        "venue": {
+         "id": "3933"
+        }
+       },
+       "score": "7",
+       "linescores": [
+        {
+         "value": 0.0,
+         "displayValue": "0",
+         "period": 1
+        },
+        {
+         "value": 7.0,
+         "displayValue": "7",
+         "period": 2
+        },
+        {
+         "value": 0.0,
+         "displayValue": "0",
+         "period": 3
+        },
+        {
+         "value": 0.0,
+         "displayValue": "0",
+         "period": 4
+        }
+       ],
+       "statistics": [],
+       "curatedRank": {
+        "current": 99
+       },
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Game",
+         "type": "total",
+         "summary": "3-2"
+        },
+        {
+         "name": "Home",
+         "type": "home",
+         "summary": "2-1"
+        },
+        {
+         "name": "Road",
+         "type": "road",
+         "summary": "1-1"
+        }
+       ]
+      }
+     ],
+     "notes": [],
+     "status": {
+      "clock": 0.0,
+      "displayClock": "0:00",
+      "period": 4,
+      "type": {
+       "id": "3",
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "description": "Final",
+       "detail": "Final",
+       "shortDetail": "Final"
+      },
+      "isTBDFlex": false
+     },
+     "format": {
+      "regulation": {
+       "periods": 4
+      },
+      "overtime": {
+       "periods": 1
+      }
+     },
+     "startDate": "2026-10-11T17:00Z",
+     "broadcast": "Fox"
+    }
+   ],
+   "status": {
+    "clock": 0.0,
+    "displayClock": "0:00",
+    "period": 4,
+    "type": {
+     "id": "3",
+     "name": "STATUS_FINAL",
+     "state": "post",
+     "completed": true,
+     "description": "Final",
+     "detail": "Final",
+     "shortDetail": "Final"
+    }
+   }
+  }
+ ]
+}

@@ -1,0 +1,13 @@
+[Unit]
+Description=Belfort's sell-rule check, every hour 10:35-15:35 Eastern on weekdays
+
+[Timer]
+# Hourly since 2026-10-15 (owner: check more often). Was 12:35 only, so a
+# stop crossed at 10:00 waited until midday and one crossed at 13:00 until
+# the 15:55 wake. With the 9:35 and 15:55 wakes, the rules are now checked
+# eight times a trading day. The fetcher has prices from 10 minutes before.
+OnCalendar=Mon..Fri 10..15:35 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

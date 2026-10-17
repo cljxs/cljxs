@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""
+emily-new-build.py — approve an idea and hand it to Emily.
+
+This is the bridge the whole agent depends on. The dispatcher only watches the
+QUEUE: a folder, an email or a note somewhere is inert. Nothing reaches Emily
+until a row exists in tasks/queue.db with assignee="emily". This script writes
+that row.
+
+    emily-new-build.py "Cosy Cabin Reading Poster" \
+        --brief "warm muted cabin, rain on the window, for book lovers" \
+        --product poster
+
+Standard library only.
+"""
+
+import argparse
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+API = os.environ.get("MISSION_CONTROL_API", "http://127.0.0.1:3001")
+
+# There is no count of builds a day. There was one - 3, raised a day at a
+# time with emily-cap.py - and the owner removed it on 2026-09-30. What bounds
+# the spending is money, not a count: every build is booked at COST_ESTIMATE
+# against the task queue's daily_total_spend_cap, and the AI calls run under
+# daily_ai_budget (tasks/limits.json, budget.py).
+
+# What one build is booked at against the task queue's spend caps: the
+# artwork plus Emily's run. An estimate, not a measurement - the real cost is
+# on OpenRouter's bill. gm.py reads it too, to decide whether today's AI
+# allowance has room before it sends a build.
+COST_ESTIMATE = 0.25
+
+
+def call(method, path, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(API + path, data=data, method=method,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.status, json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read() or b"{}")
+        except Exception:
+            return e.code, {}
+    except Exception as exc:
+        print(f"cannot reach mission-control-api at {API}: {exc}", file=sys.stderr)
+        print("is it running?  systemctl status mission-control-api", file=sys.stderr)
+        sys.exit(2)
+
+
+def slugify(s):
+    return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", s.lower())).strip("-")[:60]
+
+
+def _assets():
+    """emily-assets.py as a module - it owns the prompt and the art direction."""
+    spec = importlib.util.spec_from_file_location(
+        "emily_assets", Path(__file__).resolve().parent / "emily-assets.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def generate_artwork(slug, idea, brief, product, evidence=None):
+    """Make the artwork here, in plain code, before Emily ever wakes.
+
+    Emily was told to run emily-assets.py. She wrote 49-byte text files named
+    design.png instead, recorded their byte counts in build.json, and set
+    "art_generated": "yes". Fury did the same with its briefing and Scout with
+    its log - told to run a tool, wrote a file. Rewording never fixed it once.
+
+    So the step she keeps faking is done for her, from the brief that is
+    already in the task. She can still replace it with something better, and
+    the verifier's size floor means a hand-written file cannot pass either way.
+
+    Returns (ok, message). A failure here is not fatal: the task is still
+    queued, and the verifier will reject the build if no real art appears.
+    """
+    here = Path(__file__).resolve().parent
+    # ECOSYSTEM_ROOT like everything else here - the redraw calls this too.
+    root = Path(os.environ.get("ECOSYSTEM_ROOT", here.parent))
+    out = root / "agents" / "emily" / "builds" / slug / "design.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    # THE prompt is composed in emily-assets.py, imported rather than built
+    # again here. This line used to append its own art direction - 'Flat
+    # vector illustration ..., clean edges, no text' - alongside
+    # PRINT_DIRECTION, which says the same thing differently. They had
+    # already drifted on whether text was allowed.
+    ea = _assets()
+    prompt = ea.compose(
+        idea, brief, product, evidence,
+        ea.prior_designs(out.parent.parent, (evidence or {}).get("phrase")))
+
+    try:
+        res = subprocess.run(
+            [sys.executable, str(here / "emily-assets.py"),
+             "--prompt", prompt, "--out", str(out), "--size", "1024",
+             # The product decides the art direction, so it has to travel
+             # with the prompt. Without it an all-over tote is drawn with
+             # PRINT_DIRECTION's plain background and prints a blob in the
+             # middle of an even field.
+             "--product", str(product or ""),
+             # The proofread refuses art that prints this.
+             "--name", str(idea or "")],
+            capture_output=True, text=True, timeout=180,
+        )
+    except Exception as exc:
+        return False, f"could not run emily-assets.py: {exc}"
+
+    if res.returncode != 0:
+        return False, (res.stderr or res.stdout or "unknown error").strip()[:300]
+
+    size = out.stat().st_size if out.is_file() else 0
+    mode = "generated" if '"generated"' in res.stdout else (
+        "placeholder" if "placeholder" in res.stdout else "unknown")
+    if size < 2000:
+        return False, f"wrote only {size} bytes - that is not artwork"
+    msg = f"{out.name} {size // 1024} KB ({mode})"
+    if mode == "placeholder":
+        # WHY the real drawing failed. emily-assets says so on stderr and this
+        # used to keep only "(placeholder)": on 2026-10-04 the redraw reported
+        # two failures and not one word of the reason.
+        msg += f" - the image call failed: {why_failed(res.stderr)}"
+    return True, msg
+
+
+def why_failed(stderr):
+    """The error emily-assets printed when the image call failed, or what it
+    said instead if that line is not there."""
+    for line in reversed(str(stderr or "").splitlines()):
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(d, dict) and d.get("error"):
+            return str(d["error"])[:200]
+    return (str(stderr or "").strip()[-200:]) or "no reason given"
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("idea", help="the approved idea, in a few words")
+    ap.add_argument("--brief", default="", help="what the design should feel like")
+    ap.add_argument("--product", default="poster", help="poster, tee, mug, tote ...")
+    ap.add_argument("--evidence", default="",
+                    help="JSON from the approved idea: the measured phrase, "
+                         "supply, price band and the market's own tags")
+    ap.add_argument("--priority", type=int, default=0)
+    ap.add_argument("--cost-estimate", type=float, default=COST_ESTIMATE)
+    a = ap.parse_args()
+
+    slug = slugify(a.idea)
+
+    evidence = None
+    if a.evidence.strip():
+        try:
+            evidence = json.loads(a.evidence)
+        except Exception as exc:
+            # Not fatal: a build with no evidence is the old behaviour, and
+            # losing the build over a bad argument would be worse. But it is
+            # said out loud, because silently unmeasured is how this started.
+            print(f"  --evidence did not parse ({exc}); building WITHOUT "
+                  f"market direction.", file=sys.stderr)
+    if not isinstance(evidence, dict) or not evidence.get("phrase"):
+        evidence = None
+        print("  no market evidence with this build - the art prompt will "
+              "carry no\n  competition, price or tag direction.")
+
+    # Do the art before queueing, so the task Emily receives already has real
+    # pixels sitting in its build folder.
+    if evidence:
+        # Kept with the build, so the draft step can say whether Emily's
+        # product is the blank this market's selling listings use.
+        root = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
+        bdir = root / "agents" / "emily" / "builds" / slug
+        try:
+            bdir.mkdir(parents=True, exist_ok=True)
+            (bdir / "evidence.json").write_text(json.dumps(evidence, indent=1) + "\n")
+        except OSError as exc:
+            print(f"  evidence not saved with the build ({exc})", file=sys.stderr)
+
+    # THE PRODUCT ORDERED, kept with the build, so the listing step can refuse
+    # any other. The first test run's emblem was ordered as one thing and
+    # listed as a sticker - the example in Emily's instructions said sticker.
+    root = Path(os.environ.get("ECOSYSTEM_ROOT", Path(__file__).resolve().parent.parent))
+    try:
+        (root / "agents" / "emily" / "builds" / slug).mkdir(parents=True, exist_ok=True)
+        (root / "agents" / "emily" / "builds" / slug / "order.json").write_text(
+            json.dumps({"product": a.product, "name": a.idea, "brief": a.brief}, indent=1) + "\n")
+    except OSError as exc:
+        print(f"  the ordered product was not saved with the build ({exc})", file=sys.stderr)
+
+    print(f"generating artwork for '{slug}' ...")
+    art_ok, art_msg = generate_artwork(slug, a.idea, a.brief, a.product,
+                                       evidence)
+    print(("  ok: " if art_ok else "  FAILED: ") + art_msg)
+
+    # NO REAL ART, NO EMILY. Her run needs the same OpenRouter money the
+    # picture did: on 2026-10-03 the money was out, the art came back as the
+    # placeholder, Emily was woken anyway and her run ended at once - a FAILED
+    # card and nothing retrying it. So the build waits, and the hourly redraw
+    # (emily-finish.py --redraw) draws it and sends it to her once the art is
+    # real. The approval still counts: the idea is not lost.
+    if not art_ok or _assets().is_placeholder(root / "agents" / "emily" / "builds" / slug / "design.png"):
+        hold(root / "agents" / "emily" / "builds" / slug)
+        print("  no real art - most likely the day's image money is out. The build is\n"
+              "  WAITING FOR ART: the hourly redraw will draw it and then send it to Emily.")
+        return 0
+    return queue(slug, a.idea, a.brief, a.product, evidence, a.priority, a.cost_estimate)
+
+
+WAITING = "waiting_for_art"
+
+
+def hold(bdir):
+    """Mark a build as waiting for its art, keeping anything already in build.json."""
+    path = bdir / "build.json"
+    try:
+        build = json.loads(path.read_text())
+        build = build if isinstance(build, dict) else {}
+    except Exception:
+        build = {}
+    build["status"] = WAITING
+    path.write_text(json.dumps(build, indent=1) + "\n")
+
+
+def queue(slug, idea, brief, product, evidence, priority=0, cost_estimate=COST_ESTIMATE):
+    """Hand a build with real art to Emily. 0 when she has it."""
+    status, task = call("POST", "/tasks", {
+        "created_by": "you",
+        "assignee": "emily",
+        "type": "product-build",
+        "priority": priority,
+        "cost_estimate": cost_estimate,
+        "dedupe_key": f"emily-build-{slug}",
+        "payload": {
+            "idea": idea,
+            "brief": brief,
+            "product": product,
+            "slug": slug,
+            "build_dir": f"builds/{slug}",
+            "artwork": "already generated at builds/%s/design.png - do NOT create it" % slug,
+            "evidence": evidence,
+            "approved_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        },
+        "notes": "DRAFT ONLY - Emily must not publish.",
+        "kill_criteria": "Stop if assets cannot be produced, or if the idea "
+                         "requires trademarked IP.",
+    })
+
+    if status == 201:
+        print(f"queued task #{task['id']} for emily -> builds/{slug}")
+        print("the dispatcher will pick it up within a couple of seconds")
+        return 0
+    if status == 409:
+        print(f"an open build for '{slug}' already exists - nothing queued", file=sys.stderr)
+        return 1
+    if status == 429:
+        print(f"spend cap hit: {task.get('error')}", file=sys.stderr)
+        return 1
+    print(f"unexpected response {status}: {task}", file=sys.stderr)
+    return 1
+
+if __name__ == "__main__":
+    sys.exit(main())

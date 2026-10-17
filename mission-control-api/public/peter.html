@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a0d16">
+<title>Peter</title>
+<!-- Peter's desk: NFL player-prop forecasts (owner, 2026-10-12 - the Props
+     Hall, renamed, in the style of Belfort's Markets page). Every number
+     comes from props-forecast.py through /api/props/week (games, weather,
+     the run) and /api/ace/forecasts (the forecasts): the page draws and
+     works nothing out. Opened inside the hall in the village (?embed=1) and
+     as its own tab from the Command Deck. No odds are held or shown. -->
+<style>
+  :root{
+    --bg:#0a0d16; --panel:#0e1220; --panel2:#121729; --line:rgba(255,255,255,.07);
+    --gold:#c9a24a; --gold2:#e8c26a; --ink:#e9e4d4; --mute:#8b90a0; --dim:#596074;
+    --up:#2fd39b; --down:#f0646f; --warn:#f2c14e; --c20:#4cc9f0; --c50:#a78bfa;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink)}
+  body{font:13px/1.5 var(--mono);-webkit-font-smoothing:antialiased;padding:14px}
+  body.embed{padding:10px;background:rgba(5,7,12,.92)}
+  .frame{max-width:1500px;margin:0 auto;border:1.5px solid var(--gold);border-radius:10px;background:var(--panel);
+    box-shadow:0 0 0 1px rgba(0,0,0,.6),0 18px 60px rgba(0,0,0,.55);overflow:hidden}
+  .num{font-variant-numeric:tabular-nums}
+  .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--mute)}
+  .k{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}
+  .muted{color:var(--mute)}
+
+  /* header */
+  .head{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:16px 20px;border-bottom:1px solid var(--line)}
+  .title{font-size:24px;font-weight:700;letter-spacing:.18em}
+  .who{color:var(--mute);letter-spacing:.12em;font-size:11.5px;text-transform:uppercase}
+  .sp{flex:1}
+  .acct{display:flex;gap:22px;flex-wrap:wrap;align-items:baseline;margin-left:8px}
+  .acct .l{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}
+  .acct .v{font-size:19px;font-weight:800}
+  .acct .v.big{font-size:22px;color:var(--gold2)}
+  .btn{font:inherit;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink);background:transparent;
+    border:1px solid var(--line);border-radius:6px;padding:8px 14px;cursor:pointer;text-decoration:none}
+  .btn:hover{border-color:var(--gold)}
+  .btn.on{border-color:var(--gold);color:var(--gold2);background:rgba(201,162,74,.08)}
+  .status{display:flex;gap:14px;flex-wrap:wrap;padding:9px 20px;border-bottom:1px solid var(--line);color:var(--mute);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase}
+  .status .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--up);margin-right:6px;vertical-align:1px}
+
+  /* body */
+  .grid{display:grid;grid-template-columns:290px minmax(0,1fr) 360px;gap:14px;padding:14px 20px 20px}
+  .box{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:14px}
+  .empty{color:var(--mute);padding:20px 4px;text-align:center}
+
+  /* games: Belfort's watchlist, one card a game */
+  .gsearch{width:100%;font:inherit;font-size:13px;color:var(--ink);background:var(--panel2);border:1px solid var(--line);
+    border-radius:8px;padding:10px 12px;margin-bottom:10px}
+  .gsearch:focus{outline:none;border-color:var(--gold)}
+  .games{display:flex;flex-direction:column;gap:8px;max-height:calc(100vh - 250px);overflow:auto;padding-right:2px}
+  .gday{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold2);margin:8px 0 0}
+  .gbtn{display:block;width:100%;text-align:left;font:inherit;color:var(--ink);cursor:pointer;border:1px solid var(--line);
+    border-radius:8px;padding:10px 12px;background:var(--panel2)}
+  .gbtn:hover{border-color:rgba(201,162,74,.5)}
+  .gbtn.on{border-color:var(--gold);background:rgba(201,162,74,.06)}
+  .gbtn .row{display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .gbtn .fx{font-weight:700;font-size:14px;letter-spacing:.05em}
+  .gbtn .gt{color:var(--mute);font-size:11.5px}
+  .gbtn .gw{color:var(--mute);font-size:11.5px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .gbtn .gok{color:var(--up);font-size:11px}
+  .wx-rain,.wx-snow{color:var(--c20)} .wx-wind{color:var(--warn)} .wx-dome{color:var(--c50)}
+
+  /* centre: market tabs and the player cards */
+  .center{display:flex;flex-direction:column;gap:12px;min-width:0}
+  .ptabs{display:flex;flex-wrap:wrap;border-bottom:1px solid var(--line)}
+  .ptab{font:inherit;font-size:11px;letter-spacing:.14em;text-transform:uppercase;padding:10px 12px;color:var(--mute);
+    background:transparent;border:0;border-bottom:2px solid transparent;cursor:pointer}
+  .ptab.on{color:var(--gold2);border-bottom-color:var(--gold);background:rgba(201,162,74,.06)}
+  .ptab .ptn{opacity:.6;margin-left:5px}
+  .mhead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}
+  .mhead .t{font-size:20px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
+  .fcards{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
+  .fcard{border:1px solid var(--line);border-radius:8px;background:var(--panel2);padding:14px}
+  .fcard.done{opacity:.85}
+  .fchead{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+  .fclabel{font-size:9.5px;letter-spacing:.14em;color:var(--gold);white-space:nowrap}
+  .fcname{font-size:16px;font-weight:800;margin-top:3px;overflow-wrap:anywhere}
+  .fcsub{font-size:11.5px;color:var(--mute);margin-top:2px;letter-spacing:.04em}
+  .fcbig{font-size:26px;font-weight:800;color:var(--gold2);text-align:right;line-height:1.1}
+  .fcbigl{font-size:10.5px;color:var(--mute);font-weight:400}
+  .fctiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(58px,1fr));gap:6px;margin:12px 0 10px}
+  .fct{border:1px solid var(--line);border-radius:6px;padding:6px 4px;text-align:center}
+  .fct.on{border-color:var(--gold);background:rgba(201,162,74,.07)}
+  .fctl{font-size:10px;color:var(--mute);letter-spacing:.08em}
+  .fctv{font-size:15px;font-weight:800}
+  .fctr{font-size:9.5px;color:var(--dim);margin-top:1px}
+  .recent{border-top:1px solid var(--line);padding-top:8px;margin-top:2px}
+  .recent svg{display:block;width:100%;height:auto}
+  .recent .none{color:var(--dim);font-size:11.5px;padding:6px 0}
+  .fcfoot{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:10.5px;letter-spacing:.06em;color:var(--mute);margin-top:8px}
+  .fcwarn{color:var(--warn);font-weight:700}
+  .fcline{color:var(--c20)}
+  .fcres{margin-top:10px;padding-top:8px;border-top:1px solid var(--line);font-size:12px;font-weight:700;letter-spacing:.06em}
+  .fcres.pend{color:var(--dim);font-weight:400}
+  svg text{font-family:var(--mono)}
+
+  /* right: the game picked */
+  .right{display:flex;flex-direction:column;gap:14px}
+  .gname{font-size:26px;font-weight:800;letter-spacing:.06em}
+  .wxbig{display:flex;gap:14px;align-items:center;margin:10px 0 6px}
+  .wxbig .ic{font-size:40px;line-height:1}
+  .wxbig .lab{font-size:15px;font-weight:700}
+  .wxgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0}
+  .wxgrid .stat{border:1px solid var(--line);border-radius:6px;padding:8px;text-align:center}
+  .wxgrid .l{color:var(--mute);font-size:10px;letter-spacing:.12em;text-transform:uppercase}
+  .wxgrid .v{font-size:17px;font-weight:800}
+  .note{color:var(--mute);font-size:11.5px;line-height:1.6}
+  .grun{border-left:2px solid var(--gold);padding:8px 10px;background:rgba(201,162,74,.05);font-size:12.5px}
+  .grun pre{white-space:pre-wrap;font-size:11px;max-height:280px;overflow:auto;color:var(--mute)}
+  .grun summary{cursor:pointer;color:var(--mute);margin-top:6px}
+
+  /* the report card: props-forecast.py's calibration, drawn */
+  .cal{width:100%;border-collapse:collapse;margin-top:8px;font-size:12px}
+  .cal th{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);font-weight:400;text-align:right;padding:4px 6px;border-bottom:1px solid var(--line)}
+  .cal th:first-child,.cal td:first-child{text-align:left}
+  .cal td{text-align:right;padding:5px 6px;border-bottom:1px solid var(--line)}
+  .gap-ok{color:var(--up)} .gap-over{color:var(--down)} .gap-under{color:var(--warn)}
+  .thin{color:var(--warn);font-size:11.5px;line-height:1.55;margin-top:8px}
+  .gradebig{font-size:22px;font-weight:800;color:var(--gold2)}
+
+  @media (max-width:1180px){ .grid{grid-template-columns:260px minmax(0,1fr)} .right{grid-column:1 / -1} }
+  @media (max-width:760px){
+    body{padding:6px} .grid{grid-template-columns:1fr;padding:10px}
+    .games{flex-direction:row;overflow-x:auto;max-height:none} .gbtn{min-width:220px} .gday{display:none}
+  }
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="head">
+    <div class="title">PETER</div>
+    <div class="who">Peter · NFL player props · model forecasts · no odds</div>
+    <div class="acct" id="acct"></div>
+    <div class="sp"></div>
+    <button class="btn" id="gradeBtn" title="Score every forecast whose game is over">✓ Grade</button>
+    <a class="btn" id="back" href="/dashboard">← Deck</a>
+    <button class="btn" id="close" style="display:none">✕ Esc</button>
+  </div>
+  <div class="status" id="status"><span><span class="dot"></span>loading</span></div>
+  <div class="grid">
+    <div>
+      <div class="k" style="margin-bottom:8px">This week's games · <span id="gcount">0</span></div>
+      <input id="gsearch" class="gsearch" type="search" autocomplete="off" placeholder="search a team - packers, GB…">
+      <div class="games" id="gameList"><div class="empty">loading this week…</div></div>
+    </div>
+    <div class="center" id="propsBody"><div class="box empty">loading the forecasts…</div></div>
+    <div class="right">
+      <div class="box" id="gradeBox"><div class="empty">loading the report card…</div></div>
+      <div class="box" id="gameBox"><div class="empty">Pick a game.</div></div>
+      <div class="box note">
+        <div class="k" style="margin-bottom:6px">How to read a card</div>
+        Each percentage is how often he has cleared that bar in his own games over two seasons,
+        smoothed, with its 90% range underneath - how far it moves when his games are resampled,
+        so a small sample says so. It is what he does <b>when he plays</b>: PLAYED n/m marks the
+        rows where he has missed games. A sportsbook's line, where one is posted, is shown in blue
+        to read beside it; no percentage was computed from it. LAST 5 is his five most recent games
+        of that stat - a glance, not a model. The weather is shown, not used: no percentage moves
+        with it.
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+const EMBED = new URLSearchParams(location.search).has('embed');
+if (EMBED) {
+  document.body.classList.add('embed');
+  $('back').style.display = 'none';
+  $('close').style.display = '';
+  const close = () => parent.postMessage({ type: 'peter-close' }, '*');
+  $('close').onclick = close;
+  addEventListener('keydown', e => { if (e.key === 'Escape' && e.target.id !== 'gsearch') close(); });
+}
+
+let PROPS = null;          // /api/ace/forecasts
+let WEEK = null;           // /api/props/week
+let propsTab = null;
+let propsEvent = null;     // the game picked, or null for every forecast
+let propsPoll = null;
+let CAL = null;            // /api/props/calibration
+
+/* ---- the weather: props-forecast.py names the kind, this only picks a picture ---- */
+const WX_ICON = { sun: '☀️', cloud: '⛅', rain: '🌧️', snow: '❄️', wind: '💨', dome: '🏟️' };
+function wxIcons(w){
+  if(!w || !w.kinds || !w.kinds.length) return '';
+  return w.kinds.map(k => WX_ICON[k] || '').join('');
+}
+function wxShort(w){
+  if(!w) return '';
+  if(w.kind === 'dome') return 'indoors';
+  const bits = [];
+  if(w.temp_f !== null && w.temp_f !== undefined) bits.push(Math.round(w.temp_f) + '°');
+  if(w.kinds && w.kinds.includes('rain') && w.rain_pct !== null && w.rain_pct !== undefined) bits.push('rain ' + Math.round(w.rain_pct) + '%');
+  if(w.wind_mph !== null && w.wind_mph !== undefined) bits.push('wind ' + Math.round(w.wind_mph));
+  if(!bits.length && w.sky) bits.push(w.sky);
+  return bits.join(' · ') || w.label || '';
+}
+
+/* ---------------- the cards ---------------- */
+
+// His last games of this market as bars, oldest on the left, against the bar
+// the card leads with. Drawn from the row's own `recent` - props-forecast.py
+// picks the games, newest first; nothing here sorts or counts them.
+function recentChart(f, lead){
+  const games = Array.isArray(f.recent) ? f.recent.slice().reverse() : [];
+  const label = String(f.market || '').replace(/_/g, ' ');
+  if(!games.length){
+    return `<div class="recent"><div class="k">Last 5 · ${esc(label)}</div>
+      <div class="none">Shows after this game is forecast again - Re-run on the right.</div></div>`;
+  }
+  // The bars keep clear of the right edge, where the bar's own label sits.
+  const W = 300, H = 96, top = 16, base = 70, plot = 266;
+  const vals = games.map(g => Number(g.value) || 0);
+  const max = Math.max(1, lead || 0, ...vals) * 1.08;
+  const slot = plot / games.length, bw = Math.min(38, slot * 0.56);
+  const y = v => base - (v / max) * (base - top);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="last ${games.length} games">`;
+  games.forEach((g, i) => {
+    const v = Number(g.value) || 0, x = slot * i + (slot - bw) / 2;
+    const hit = lead !== null && v >= lead;
+    const col = lead === null ? '#8b90a0' : hit ? '#2fd39b' : '#f0646f';
+    svg += `<rect x="${x.toFixed(1)}" y="${y(v).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1, base - y(v)).toFixed(1)}" rx="2" fill="${col}" opacity=".85"/>`
+         + `<text x="${(x + bw / 2).toFixed(1)}" y="${(y(v) - 4).toFixed(1)}" text-anchor="middle" font-size="10.5" font-weight="700" fill="#e9e4d4">${esc(Math.round(v))}</text>`
+         + `<text x="${(x + bw / 2).toFixed(1)}" y="${base + 12}" text-anchor="middle" font-size="9.5" fill="#8b90a0">${esc((g.at === '@' ? '@' : '') + (g.opp || '?'))}</text>`
+         + `<text x="${(x + bw / 2).toFixed(1)}" y="${base + 23}" text-anchor="middle" font-size="8.5" fill="#596074">${esc(String(g.date || '').slice(5).replace('-', '/'))}</text>`;
+  });
+  if(lead !== null){
+    svg += `<line x1="0" x2="${plot + 2}" y1="${y(lead).toFixed(1)}" y2="${y(lead).toFixed(1)}" stroke="#c9a24a" stroke-dasharray="4 3" stroke-width="1"/>`
+         + `<text x="${W}" y="${(y(lead) + 3).toFixed(1)}" text-anchor="end" font-size="9.5" fill="#e8c26a">${esc(lead)}+</text>`;
+  }
+  svg += `</svg>`;
+  const over = lead === null ? '' : ` · ${vals.filter(v => v >= lead).length} of ${vals.length} at ${lead}+`;
+  return `<div class="recent"><div class="k">Last ${games.length} · ${esc(label)}${esc(over)}</div>${svg}</div>`;
+}
+
+function fcTile(label, pct, on, band){
+  // The interval rides under every tile, not just the shaky ones. "76% off
+  // fifteen games" and "76% off a hundred" are different claims and a card
+  // that printed them identically would be making the weaker one look like
+  // the stronger.
+  const range = Array.isArray(band)
+    ? `<div class="fctr num">${Math.round(band[0])}–${Math.round(band[1])}</div>` : '';
+  return `<div class="fct${on ? ' on' : ''}"><div class="fctl">${esc(label)}</div>`
+       + `<div class="fctv num">${pct === undefined || pct === null ? '—' : Number(pct).toFixed(1) + '%'}</div>`
+       + range + `</div>`;
+}
+
+function forecastCard(f){
+  const probs = f.probabilities || {};
+  const keys = Object.keys(probs).map(Number).sort((x, y) => x - y);
+  // The headline is the middle threshold.
+  const lead = keys.length ? keys[Math.floor((keys.length - 1) / 2)] : null;
+  // The unit comes off the row: a card reading "FINAL 6 yds" under a
+  // receptions forecast would be a lie the script it came from does not tell.
+  const unit = f.unit || 'yds';
+  const graded = f.actual !== null && f.actual !== undefined;
+
+  const band = f.interval || {};
+  const tiles = keys.map(t => fcTile(t + '+', probs[String(t)], t === lead,
+                                     band[String(t)])).join('');
+  const hit = graded && lead !== null ? Number(f.actual) >= lead : null;
+
+  return `<div class="fcard${graded ? ' done' : ''}">
+    <div class="fchead">
+      <div>
+        <div class="fclabel">MODEL FORECAST · NOT A BET</div>
+        <div class="fcname">${esc(f.player)}</div>
+        <div class="fcsub">${esc(f.team || '')}${f.position ? ' · ' + esc(f.position) : ''} · ${esc((f.market || '').replace(/_/g, ' '))}${
+          lead !== null ? ' · ' + lead + '+' : ''}</div>
+      </div>
+      <div class="fcbig num">${lead === null ? '—' : Number(probs[String(lead)]).toFixed(1) + '%'}
+        <div class="fcbigl">${lead === null ? '' : lead + '+'}${
+          Array.isArray(band[String(lead)])
+            ? ` · ${Math.round(band[String(lead)][0])}–${Math.round(band[String(lead)][1])}`
+            : ''}</div></div>
+    </div>
+    <div class="fctiles">${tiles}</div>
+    ${recentChart(f, lead)}
+    <div class="fcfoot">
+      <span>EXP ${f.sample_mean === undefined ? '—' : Number(f.sample_mean).toFixed(1)} ${esc(unit)}</span>
+      <span>P25–P75 ${f.p25 ?? '—'}–${f.p75 ?? '—'}</span>
+      <span>${f.sample_games ?? '?'} GAMES</span>
+      ${f.availability && f.availability.thin
+        ? `<span class="fcwarn">PLAYED ${f.availability.played}/${f.availability.team_games}</span>` : ''}
+      ${f.coarse ? `<span class="fcwarn">FLAT</span>` : ''}
+      ${f.line && f.line.shown ? `<span class="fcline">${esc(f.line.shown)}</span>` : ''}
+      ${f.injury && f.injury.status
+        ? `<span class="fcwarn">⚠ ${esc(String(f.injury.status).toUpperCase())}${
+            f.injury.date ? ' ' + esc(String(f.injury.date).slice(5)) : ''}</span>` : ''}
+    </div>
+    ${graded ? `<div class="fcres ${hit ? 'up' : 'down'}">
+        FINAL ${Number(f.actual).toFixed(0)} ${esc(unit)} · ${lead}+ ${hit ? 'HIT' : 'MISS'}</div>`
+      : `<div class="fcres pend">awaiting the final score</div>`}
+  </div>`;
+}
+
+/* ---------------- the games ---------------- */
+
+function gameOf(id){ return ((WEEK && WEEK.games) || []).find(g => g.event_id === id) || null; }
+
+async function loadWeek(){
+  try{
+    const r = await fetch('/api/props/week', {cache:'no-store'});
+    WEEK = await r.json();
+  }catch(e){ WEEK = {available:false, reason:'the Deck could not be reached', games:[]}; }
+  drawWeek();
+  drawHead();
+  // A run started earlier - from this tablet or another - is picked up
+  // rather than forgotten because the page was closed.
+  const job = WEEK && WEEK.job;
+  if(job && job.state === 'running'){ propsEvent = propsEvent || job.event_id; watchJob(); }
+  drawGame(job);
+  drawGrade(job);
+}
+
+function drawWeek(){
+  const host = $('gameList');
+  if(!host) return;
+  if(!WEEK || !WEEK.available){
+    host.innerHTML = `<div class="empty">${esc((WEEK && WEEK.reason) || 'no games this week')}</div>`;
+    return;
+  }
+  $('gcount').textContent = WEEK.games.length;
+  const q = (($('gsearch') || {}).value || '').trim().toLowerCase();
+  const games = WEEK.games.filter(g => !q || [g.fixture, g.away, g.home, g.away_name, g.home_name]
+    .some(x => String(x || '').toLowerCase().includes(q)));
+  if(!games.length){ host.innerHTML = `<div class="empty">no game this week matches "${esc(q)}".</div>`; return; }
+  // Still to play first - those are the ones to forecast - then the played.
+  const ahead = games.filter(g => g.state !== 'post'), played = games.filter(g => g.state === 'post');
+  let out = '', day = null;
+  for(const g of ahead.concat(played)){
+    const head = g.state === 'post' ? 'Played' : g.day_et;
+    if(head !== day){ day = head; out += `<div class="gday">${esc(day || '?')}</div>`; }
+    const when = g.state === 'post' ? 'FINAL' : g.state === 'in' ? 'LIVE' : (g.time_et || '');
+    const w = g.weather;
+    out += `<button class="gbtn${g.event_id === propsEvent ? ' on' : ''}" data-event="${esc(g.event_id)}">`
+         + `<div class="row"><span class="fx">${esc(g.fixture)}</span><span class="gt">${esc(when)}</span></div>`
+         + (w ? `<div class="gw wx-${esc(w.kind)}">${wxIcons(w)} ${esc(wxShort(w))}</div>` : '')
+         + (g.forecast_rows ? `<div class="gok">✓ ${esc(g.forecast_rows)} forecast</div>` : '')
+         + `</button>`;
+  }
+  host.innerHTML = out;
+}
+
+function drawHead(){
+  const rows = (PROPS && PROPS.forecasts) || [];
+  const games = (WEEK && WEEK.games) || [];
+  const done = games.filter(g => g.forecast_rows).length;
+  const graded = rows.filter(f => f.actual !== null && f.actual !== undefined).length;
+  $('acct').innerHTML = `
+    <div><div class="l">NFL week</div><div class="v big num">${esc(WEEK && WEEK.week ? WEEK.week : '—')}</div></div>
+    <div><div class="l">Games forecast</div><div class="v num">${done}/${games.length}</div></div>
+    <div><div class="l">Forecasts</div><div class="v num">${rows.length}</div></div>
+    <div><div class="l">Graded</div><div class="v num">${graded}</div></div>`;
+  const outdoor = games.filter(g => g.weather && g.weather.kind !== 'dome' && g.weather.kind !== 'unknown').length;
+  $('status').innerHTML = `<span><span class="dot"></span>${esc(WEEK && WEEK.available ? 'ESPN live' : 'ESPN unreachable')}</span>
+    <span>two seasons of game logs a player</span>
+    <span>weather for ${outdoor} outdoor game${outdoor === 1 ? '' : 's'} · Open-Meteo, hourly</span>
+    <span>no odds held or shown</span>`;
+}
+
+function pickGame(id){
+  propsEvent = propsEvent === id ? null : id;     // a second tap shows every game again
+  drawWeek();
+  drawGame(WEEK && WEEK.job);
+  drawProps();
+}
+
+// The right-hand box: the picked game, its weather, and the run.
+function drawGame(job){
+  const host = $('gameBox');
+  if(!host) return;
+  const g = gameOf(propsEvent);
+  if(!g){
+    host.innerHTML = `<div class="k">All games</div><div class="note" style="margin-top:6px">
+      Showing every game forecast so far. Pick a game on the left for its weather and its
+      players - and to forecast it if it has not been.</div>`;
+    return;
+  }
+  const w = g.weather;
+  const v = (x, unit) => x === null || x === undefined ? '—' : Math.round(x) + unit;
+  const running = job && job.state === 'running' && job.event_id === g.event_id;
+  const failed = job && job.state === 'failed' && job.event_id === g.event_id;
+  const log = job && job.log && job.event_id === g.event_id
+    ? `<details><summary>what the script said</summary><pre>${esc(job.log)}</pre></details>` : '';
+  host.innerHTML = `
+    <div class="k">${esc(g.day_et || '')} · ${esc(g.state === 'post' ? 'FINAL' : g.state === 'in' ? 'LIVE' : g.time_et || '')}</div>
+    <div class="gname">${esc(g.fixture)}</div>
+    <div class="muted">${esc((g.away_name || '') + (g.home_name ? ' at ' + g.home_name : ''))}</div>
+    <div class="muted">${esc((g.venue && g.venue.name) || '')}${g.venue && g.venue.city ? ' · ' + esc(g.venue.city) : ''}</div>
+    ${w ? `<div class="wxbig"><div class="ic">${wxIcons(w) || '—'}</div><div class="lab">${esc(w.label)}</div></div>
+      ${w.kind === 'dome' || w.kind === 'unknown' ? '' : `<div class="wxgrid">
+        <div class="stat"><div class="l">Temp</div><div class="v num">${v(w.temp_f, '°')}</div></div>
+        <div class="stat"><div class="l">Rain</div><div class="v num ${w.kinds.includes('rain') ? 'wx-rain' : ''}">${v(w.rain_pct, '%')}</div></div>
+        <div class="stat"><div class="l">Wind</div><div class="v num ${w.kinds.includes('wind') ? 'wx-wind' : ''}">${v(w.wind_mph, '')}</div>
+          <div class="l">${w.gust_mph !== null && w.gust_mph !== undefined ? 'gusts ' + Math.round(w.gust_mph) : 'mph'}</div></div>
+      </div><div class="note">Worst over the three hours of the game. Shown, not used.</div>`}`
+      : `<div class="note" style="margin-top:8px">${g.state === 'pre' ? 'No weather for this game yet.' : 'Played - no weather kept.'}</div>`}
+    <div class="grun" style="margin-top:12px">${
+      running ? `Forecasting <b>${esc(g.fixture)}</b>… reading two seasons of game logs from ESPN for every player. Usually well under a minute.`
+      : failed ? `The forecast did not finish (exit ${esc(job.code)}). <button class="btn" data-rerun="${esc(g.event_id)}">Try again</button>`
+      : g.forecast_rows ? `${esc(g.forecast_rows)} forecasts. <button class="btn" data-rerun="${esc(g.event_id)}">Re-run</button>
+          <div class="note" style="margin-top:6px">Re-run after the injury report moves - about 90 minutes before kickoff the inactives are final.</div>`
+      : `Not forecast yet. <button class="btn" data-rerun="${esc(g.event_id)}">Forecast it</button>`}
+      ${log}</div>`;
+}
+
+async function runForecast(id){
+  const g = gameOf(id);
+  propsEvent = id;
+  drawWeek();
+  let r, d;
+  try{
+    r = await fetch('/api/props/forecast', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({event_id: id, fixture: g ? g.fixture : ''})});
+    d = await r.json();
+  }catch(e){ drawGame({state:'failed', code:'-', log:'the Deck could not be reached', event_id:id}); return; }
+  if(r.status === 409){ watchJob(); return; }
+  if(!r.ok){ drawGame({state:'failed', code:r.status, log:d.error || '', event_id:id}); return; }
+  drawGame(d.job);
+  watchJob();
+}
+
+function watchJob(){
+  clearInterval(propsPoll);
+  propsPoll = setInterval(async () => {
+    let job;
+    try{ job = (await (await fetch('/api/props/job', {cache:'no-store'})).json()).job; }
+    catch(e){ return; }
+    if(!job || job.state === 'running'){ drawGame(job); drawGrade(job); return; }
+    clearInterval(propsPoll);
+    await loadWeek();                 // the row counts have changed
+    loadProps();
+    loadCalibration(job);
+  }, 3000);
+}
+
+/* ---------------- the report card ---------------- */
+
+// Grading fills in the final stat for every forecast whose game is over;
+// the calibration then asks whether "70%" happened about 70% of the time.
+// Both are props-forecast.py's - this draws its numbers and nothing else.
+async function gradeNow(){
+  let r, d;
+  try{
+    r = await fetch('/api/props/grade', {method:'POST'});
+    d = await r.json();
+  }catch(e){ drawGrade({kind:'grade', state:'failed', code:'-', log:'the Deck could not be reached'}); return; }
+  drawGrade(d.job && d.job.kind === 'grade' ? d.job : null, r.status === 409 ? d.error : '');
+  $('gradeBox').scrollIntoView({behavior:'smooth', block:'nearest'});
+  watchJob();
+}
+
+async function loadCalibration(job){
+  try{ CAL = await (await fetch('/api/props/calibration', {cache:'no-store'})).json(); }
+  catch(e){ CAL = {available:false, reason:'the Deck could not be reached'}; }
+  drawGrade(job);
+}
+
+function lastLine(text){
+  return String(text || '').trim().split('\n').filter(l => l.trim()).pop() || '';
+}
+
+// Within five points either way reads as honest; the colour is only that.
+function gapClass(g){ return Math.abs(g) <= 5 ? 'gap-ok' : g < 0 ? 'gap-over' : 'gap-under'; }
+const sgn = x => (x > 0 ? '+' : '') + Number(x).toFixed(1);
+
+// The script's warning is wrapped for a terminal; here its first line is the
+// headline and the rest one paragraph.
+function thinNote(text){
+  const lines = String(text).split('\n').map(l => l.trim()).filter(Boolean);
+  return `<div class="thin"><b>${esc(lines[0] || '')}</b><br>${esc(lines.slice(1).join(' '))}</div>`;
+}
+
+let gradeJob = null;
+function drawGrade(job, note){
+  if(job && job.kind === 'grade') gradeJob = job;
+  const host = $('gradeBox');
+  if(!host) return;
+  const j = gradeJob;
+  const grading = j && j.state === 'running';
+  $('gradeBtn').disabled = !!grading;
+  $('gradeBtn').textContent = grading ? 'Grading…' : '✓ Grade';
+  const run = grading ? `<div class="grun">Grading… reading the final box scores from ESPN.</div>`
+    : j && j.state === 'failed' ? `<div class="grun">Grading did not finish (exit ${esc(j.code)}).
+        <details><summary>what the script said</summary><pre>${esc(j.log)}</pre></details></div>`
+    : j && j.state === 'done' ? `<div class="grun">${esc(lastLine(j.log))}
+        <details><summary>every forecast it scored</summary><pre>${esc(j.log)}</pre></details></div>`
+    : note ? `<div class="grun">${esc(note)}</div>` : '';
+  let body;
+  if(!CAL){ body = `<div class="note">loading…</div>`; }
+  else if(!CAL.available){ body = `<div class="note">${esc(CAL.reason)}</div>`; }
+  else if(!CAL.report){
+    body = `<div class="note" style="margin-top:6px">Nothing graded yet. Press Grade once a game
+      you forecast is final - the scores come from ESPN's box score.</div>`;
+  } else {
+    const c = CAL.report;
+    const rows = c.buckets.map(b => `<tr><td>${esc(b.from)}–${esc(b.to)}%</td>
+      <td class="num">${Number(b.predicted).toFixed(1)}%</td><td class="num">${Number(b.observed).toFixed(1)}%</td>
+      <td class="num ${gapClass(b.gap)}">${sgn(b.gap)}</td><td class="num">${esc(b.n)}</td></tr>`).join('');
+    const markets = c.markets
+      ? `<table class="cal"><tr><th>Market</th><th>Said</th><th>Happened</th><th>Gap</th><th>Calls</th></tr>`
+        + c.markets.map(m => `<tr><td>${esc(String(m.market).replace(/_/g, ' '))}</td>
+          <td class="num">${Number(m.predicted).toFixed(1)}%</td><td class="num">${Number(m.observed).toFixed(1)}%</td>
+          <td class="num ${gapClass(m.gap)}">${sgn(m.gap)}</td><td class="num">${esc(m.calls)}</td></tr>`).join('') + `</table>`
+      : c.market_count > 1 ? `<div class="note" style="margin-top:8px">By market: held back until ${esc(c.min_games)} games -
+          split this thin, every row would be noise.</div>` : '';
+    body = `<div class="gradebig num">${esc(c.graded)} graded</div>
+      <div class="muted">from ${esc(c.games)} game${c.games === 1 ? '' : 's'} · ${esc(c.calls)} calls${
+        c.waiting ? ` · ${esc(c.waiting)} waiting on a final` : ''}</div>
+      ${c.thin ? thinNote(c.thin) : ''}
+      <table class="cal"><tr><th>He said</th><th>Avg</th><th>Happened</th><th>Gap</th><th>Calls</th></tr>${rows}</table>
+      ${markets}
+      <div class="note" style="margin-top:8px">A gap near zero means his percentages mean what they say.
+        <span class="gap-over">Negative</span>: too confident - the one that would cost money.
+        <span class="gap-under">Positive</span>: too cautious. Green is within 5 points.</div>`;
+  }
+  host.innerHTML = `<div class="k">Report card · when he says 70%, does it happen?</div>${run}${body}`;
+}
+
+/* ---------------- the forecasts ---------------- */
+
+async function loadProps(){
+  try{
+    const r = await fetch('/api/ace/forecasts', {cache:'no-store'});
+    PROPS = await r.json();
+  }catch(e){
+    $('propsBody').innerHTML = `<div class="box empty">the forecasts could not be read.</div>`;
+    return;
+  }
+  const tabs = propsTabs();
+  if(!tabs.includes(propsTab)) propsTab = tabs[0] || null;
+  drawHead();
+  drawProps();
+}
+
+// The tab order is the catalogue's order, written by the forecaster: a market
+// added in MARKETS appears here without anyone remembering to add it.
+function propsTabs(){
+  const cat = Object.keys((PROPS && PROPS.markets) || {});
+  if(cat.length) return cat;
+  return [...new Set(((PROPS && PROPS.forecasts) || []).map(f => f.market))];
+}
+
+function propsPick(tab){ propsTab = tab; drawProps(); }
+
+// One filter, used by the tab counts and the cards alike, so a tab can never
+// promise rows the list then does not show.
+function propsInView(){
+  const all = (PROPS && PROPS.forecasts) || [];
+  return propsEvent ? all.filter(f => String(f.event_id) === String(propsEvent)) : all;
+}
+
+function drawProps(){
+  const host = $('propsBody');
+  if(!host || !PROPS) return;
+  if(!PROPS.available || !(PROPS.forecasts || []).length){
+    host.innerHTML = `<div class="box empty">Nothing forecast yet. Pick a game on the left and forecast it.</div>`;
+    return;
+  }
+  const tabs = propsTabs();
+  const inView = propsInView();
+  const rows = inView.filter(f => f.market === propsTab);
+  const spec = ((PROPS.markets || {})[propsTab]) || {};
+  const g = gameOf(propsEvent);
+  const bar = tabs.map(t => `<button class="ptab${t === propsTab ? ' on' : ''}" data-tab="${esc(t)}">`
+    + `${esc(String(t).replace(/_/g, ' '))}<span class="ptn">${inView.filter(f => f.market === t).length}</span></button>`).join('');
+  const bars = Array.isArray(spec.thresholds) ? spec.thresholds.map(t => `${t}+`).join(' · ') : '';
+  host.innerHTML = `<div class="ptabs">${bar}</div>
+    <div class="mhead"><div class="t">${esc(String(propsTab || '').replace(/_/g, ' '))}</div>
+      <div class="k">${esc(g ? g.fixture : 'every game')}${bars ? ' · ' + esc(bars) : ''}${spec.unit ? ' ' + esc(spec.unit) : ''}</div></div>`
+    + (rows.length
+        ? `<div class="fcards">` + rows.map(forecastCard).join('') + `</div>`
+        : `<div class="box empty">Nobody ${g ? 'in ' + esc(g.fixture) + ' ' : ''}reaches ${esc(String(propsTab || '').replace(/_/g, ' '))}
+           in a quarter of his games - the filter working, not a gap.</div>`);
+}
+
+/* ---------------- wiring ---------------- */
+
+$('gsearch').oninput = drawWeek;
+$('gradeBtn').onclick = gradeNow;
+// One listener each, reading data attributes: a fixture inside an inline
+// onclick string would be one apostrophe from breaking the page.
+$('gameList').onclick = e => { const b = e.target.closest('[data-event]'); if(b) pickGame(b.dataset.event); };
+$('gameBox').onclick = e => { const b = e.target.closest('[data-rerun]'); if(b) runForecast(b.dataset.rerun); };
+$('propsBody').onclick = e => { const b = e.target.closest('[data-tab]'); if(b) propsPick(b.dataset.tab); };
+loadWeek();
+loadProps();
+loadCalibration();
+</script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+        "currentTurn": {
+          "promptChars": 351,
+          "runtimeContextChars": 0,
+          "modelOnlyPromptChars": 0
+        }
+      },
+      "finalPromptText": "Task #30 is assigned to you.\nRead it first:\n  python3 ../../scripts/task.py read 30\nThe payload holds everything you need. When you have finished, and only then:\n  python3 ../../scripts/task.py done 30 \"<one line about what you made>\"\nIf you cannot finish, run `done` anyway with an honest line saying why: a task left unfinished blocks your next one.",
+      "replayInvalid": true,
+      "livenessState": "paused",
+      "stopReason": "toolUse",
+      "executionTrace": {
+        "winnerProvider": "openrouter",
+        "winnerModel": "openai/gpt-5-mini",
+        "attempts": [
+          {
+            "provider": "openrouter",
+            "model": "openai/gpt-5-mini",
+            "result": "success",
+            "stage": "assistant"
+          }
+        ],
+        "fallbackUsed": false,
+        "runner": "embedded"
+      },
+      "requestShaping": {
+        "authMode": "auth-profile",
+        "thinking": "low"
+      },
+      "completion": {
+        "stopReason": "toolUse",
+        "finishReason": "toolUse"
+      },
+      "toolSummary": {
+        "calls": 1,
+        "tools": [
+          "ask_user"
+        ],
+        "failures": 1
+      }
+    }
+  }
+}

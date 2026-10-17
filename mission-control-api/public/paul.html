@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<title>Paul's Studio</title>
+<!-- Paul's studio (owner, 2026-10-13, after a screenshot of another
+     ecosystem's): the prospects he found, for the owner to approve or
+     reject, then what he built and the pitches waiting to be sent.
+     Everything comes from `paul.py deck` through /api/paul; the three
+     buttons run `paul.py approve --build`, `reject` and `find`. Opened
+     inside Paul's house in the village (?embed=1). -->
+<style>
+  :root{
+    --bg:#0b1020; --panel:#10172a; --card:#131b31; --line:rgba(148,163,184,.16);
+    --ink:#e6e9f2; --mute:#94a0b8; --dim:#5f6b85;
+    --green:#22c55e; --green2:#4ade80; --amber:#f59e0b; --red:#f43f5e; --blue:#38bdf8; --gray:#94a3b8;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink)}
+  body{font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased;padding:16px}
+  body.embed{padding:10px;background:rgba(5,8,16,.94)}
+  a{color:inherit}
+  .frame{max-width:1280px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    box-shadow:0 20px 70px rgba(0,0,0,.5);overflow:hidden}
+  .head{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;padding:20px 22px 14px}
+  .head h1{margin:0;font-size:26px;letter-spacing:-.01em}
+  .head .sub{color:var(--mute);margin-top:2px}
+  .pills{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .pill{font-size:12.5px;padding:4px 10px;border-radius:7px;border:1px solid var(--line);color:var(--mute)}
+  .pill.g{color:var(--green2);border-color:rgba(34,197,94,.45);background:rgba(34,197,94,.08)}
+  .sp{flex:1}
+  .btn{font:600 13px var(--sans);color:var(--ink);background:transparent;border:1px solid var(--line);
+    border-radius:8px;padding:9px 14px;cursor:pointer;text-decoration:none;white-space:nowrap}
+  .btn:hover{border-color:var(--mute)}
+  .btn.go{color:var(--green2);border-color:rgba(34,197,94,.55);background:rgba(34,197,94,.08)}
+  .btn.go:hover{background:rgba(34,197,94,.16)}
+  .btn:disabled{opacity:.5;cursor:default}
+  .status{margin:0 22px 14px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+  .k{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute);font-weight:600}
+  .status .line{font-weight:600;margin-top:3px}
+  .status .muted{color:var(--mute);font-size:13px;margin-top:2px}
+  .tabs{display:flex;gap:6px;padding:0 22px;border-bottom:1px solid var(--line);overflow-x:auto}
+  .tab{font:600 14px var(--sans);color:var(--mute);background:none;border:0;border-bottom:2px solid transparent;
+    padding:12px 12px;cursor:pointer;white-space:nowrap}
+  .tab.on{color:var(--ink);border-bottom-color:var(--green)}
+  .tab .n{display:inline-block;min-width:20px;padding:0 6px;margin-left:6px;border-radius:10px;font-size:11.5px;
+    background:rgba(148,163,184,.18);color:var(--ink);text-align:center}
+  .body{padding:16px 22px 22px}
+  .sechead{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+  .sechead h2{margin:0;font-size:17px}
+  .sechead .muted{color:var(--mute);font-size:13px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px}
+  .card.done{opacity:.72}
+  .ctop{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+  .cname{font-weight:700;font-size:16.5px}
+  .cmeta{color:var(--mute);font-size:13px;margin-top:2px}
+  .tags{display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+  .tag{font-size:11px;font-weight:700;letter-spacing:.06em;padding:3px 9px;border-radius:999px;white-space:nowrap;border:1px solid}
+  .t-green{color:var(--green2);border-color:rgba(34,197,94,.5);background:rgba(34,197,94,.1)}
+  .t-amber{color:#fbbf24;border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.1)}
+  .t-red{color:#fb7185;border-color:rgba(244,63,94,.5);background:rgba(244,63,94,.1)}
+  .t-blue{color:var(--blue);border-color:rgba(56,189,248,.5);background:rgba(56,189,248,.1)}
+  .t-gray{color:var(--gray);border-color:rgba(148,163,184,.4);background:rgba(148,163,184,.08)}
+  .why{font-size:13.5px;color:#cfd6e4}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{font-size:12.5px;padding:4px 9px;border-radius:7px;border:1px solid var(--line);color:var(--ink);text-decoration:none;white-space:nowrap}
+  a.chip:hover{border-color:var(--mute)}
+  .reach{align-self:flex-start;font-size:11px;font-weight:700;letter-spacing:.08em;padding:3px 9px;border-radius:6px;
+    color:var(--green2);border:1px solid rgba(34,197,94,.45);background:rgba(34,197,94,.08)}
+  .acts{display:flex;gap:8px}
+  .acts .btn{flex:0 0 auto}
+  .said{font-size:12.5px;color:var(--mute)}
+  .foot{margin-top:14px;color:var(--mute);font-size:13px}
+  .empty{color:var(--mute);padding:26px 4px;text-align:center}
+  .act{padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+  .shots{display:grid;grid-template-columns:1fr 2.6fr;gap:8px;align-items:start}
+  .shots img{width:100%;max-height:360px;object-fit:cover;object-position:top;display:block;border-radius:8px;border:1px solid var(--line)}
+  pre{white-space:pre-wrap;font:12.5px/1.55 ui-monospace,Menlo,monospace;color:#cfd6e4;background:rgba(0,0,0,.25);
+    border:1px solid var(--line);border-radius:8px;padding:12px;margin:0}
+  .err{color:#fb7185}
+  /* Google and the owner's photos, on a prospect */
+  .gline{font-size:13px;color:#cfd6e4;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .flag{font-size:12.5px;color:#fbbf24}
+  .photos{border-top:1px solid var(--line);padding-top:10px;display:flex;flex-direction:column;gap:8px}
+  .thumbs{display:flex;gap:8px;flex-wrap:wrap}
+  .thumb{position:relative;width:76px;height:76px}
+  .thumb img{width:76px;height:76px;object-fit:cover;border-radius:8px;border:1px solid var(--line);display:block}
+  .thumb .x{position:absolute;top:-6px;right:-6px;width:26px;height:26px;border-radius:50%;border:1px solid var(--line);
+    background:#0f172a;color:var(--ink);font-size:14px;line-height:22px;padding:0;cursor:pointer}
+  .thumb .src{position:absolute;left:3px;bottom:3px;font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:5px;
+    background:rgba(11,16,32,.85);color:#cfd6e4}
+  .addrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .addrow select{font:600 13px var(--sans);color:var(--ink);background:var(--card);border:1px solid var(--line);
+    border-radius:8px;padding:8px 10px}
+  label.btn input{display:none}
+  .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#0f172a;border:1px solid var(--line);
+    color:var(--ink);padding:10px 16px;border-radius:10px;font-size:13.5px;max-width:90vw;display:none;z-index:9}
+  @media (max-width:760px){ body{padding:6px} .grid{grid-template-columns:1fr} .head,.body{padding-left:14px;padding-right:14px}
+    .status{margin:0 14px 12px} .tabs{padding:0 10px} .shots{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="head">
+    <div>
+      <h1>Paul's Studio</h1>
+      <div class="sub">outreach + website building for local businesses</div>
+      <div class="pills" id="pills"></div>
+    </div>
+    <div class="sp"></div>
+    <a class="btn" id="back" href="/dashboard">← Deck</a>
+    <button class="btn" id="close" style="display:none">✕ Close</button>
+  </div>
+  <div class="status" id="status"><div class="k">Status</div><div class="line">loading…</div></div>
+  <div class="tabs" id="tabs">
+    <button class="tab on" data-t="prospects">Prospects<span class="n" id="n-prospects">0</span></button>
+    <button class="tab" data-t="activity">Activity</button>
+    <button class="tab" data-t="work">Work<span class="n" id="n-work">0</span></button>
+    <button class="tab" data-t="drafts">Drafts<span class="n" id="n-drafts">0</span></button>
+  </div>
+  <div class="body" id="body"><div class="empty">loading…</div></div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const url = u => /^https?:\/\//i.test(String(u || '')) ? String(u) : (u && u !== 'none' && /\./.test(u) ? 'https://' + u : null);
+
+const EMBED = new URLSearchParams(location.search).has('embed');
+if (EMBED) {
+  document.body.classList.add('embed');
+  $('back').style.display = 'none';
+  $('close').style.display = '';
+  const close = () => parent.postMessage({ type: 'paul-close' }, '*');
+  $('close').onclick = close;
+  addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+}
+
+let P = null, tab = 'prospects', busy = false;
+// Where a saved photo came from (paul.py's PHOTO_FROM), as the picker says it.
+const FROM = [['facebook', 'Facebook'], ['instagram', 'Instagram'], ['google', 'Google'],
+              ['website', 'Their website'], ['owner', 'They sent it']];
+const FROM_SHORT = { facebook: 'FB', instagram: 'IG', google: 'G', website: 'WEB', owner: 'THEM' };
+
+// How each documented problem and each way of reaching them reads on a
+// card. The codes and channels are paul.py's (PROBLEMS, CHANNELS).
+const PROBLEM = {
+  'no-site': ['NO SITE', 't-green'], 'dead-domain': ['DEAD DOMAIN', 't-red'], 'parked': ['PARKED DOMAIN', 't-amber'],
+  'no-https': ['NO HTTPS', 't-amber'], 'not-mobile': ['NOT MOBILE', 't-amber'], 'broken': ['BROKEN SITE', 't-red'],
+  'wrong-info': ['WRONG INFO', 't-amber'],
+};
+const CHANNEL = {
+  email: ['EMAIL', 't-green', 'REACH VIA EMAIL'], facebook: ['DM', 't-blue', 'REACH VIA FACEBOOK DM'],
+  instagram: ['DM', 't-blue', 'REACH VIA INSTAGRAM DM'], dm: ['DM', 't-blue', 'REACH VIA DM'],
+  phone: ['PHONE ONLY', 't-gray', 'REACH VIA PHONE'],
+};
+const STATE = {
+  approved: ['APPROVED · BUILDS NEXT', 't-green'], built: ['BUILT', 't-green'],
+  'not built': ['NOT BUILT', 't-amber'], rejected: ['REJECTED', 't-gray'],
+};
+
+async function load() {
+  try {
+    P = await (await fetch('/api/paul', { cache: 'no-store' })).json();
+  } catch (e) { P = { ok: false, error: e.message }; }
+  draw();
+}
+
+function toast(text) {
+  const t = $('toast');
+  t.textContent = text;
+  t.style.display = 'block';
+  clearTimeout(toast.h);
+  toast.h = setTimeout(() => { t.style.display = 'none'; }, 6000);
+}
+
+function plan(p) {
+  const pl = p.plan || {};
+  if (pl.kind === 'build') return `Next cycle: building ${pl.detail} - you approved it`;
+  if (pl.kind === 'scout') return `Next cycle: finding ${pl.detail} new prospect${pl.detail === 1 ? '' : 's'}`;
+  if (pl.kind === 'resume') return 'Next cycle: finishing the build in progress';
+  return pl.detail ? String(pl.detail) : '';
+}
+
+function draw() {
+  if (!P || !P.ok) {
+    $('status').innerHTML = `<div class="k">Status</div><div class="line err">Paul's records could not be read${P && P.error ? ': ' + esc(P.error) : ''}</div>`;
+    $('body').innerHTML = '';
+    return;
+  }
+  const st = P.studio || {};
+  $('pills').innerHTML = [st.studio ? `<span class="pill g">${esc(st.studio)}</span>` : '',
+    st.email ? `<span class="pill">${esc(st.email)}</span>` : '',
+    st.area ? `<span class="pill">${esc(st.area)}</span>` : ''].join('');
+  $('status').innerHTML = `<div class="k">Status</div>
+    <div class="line">${esc(plan(P))}</div>
+    <div class="muted">Last run: ${esc(P.last_run || 'never')}</div>
+    <div class="muted">${P.go_live ? 'Live: previews are published for you to send' : 'Dry runs only: sites are built here and never published'}${
+      P.dry_next ? ' · the next run is a dry run' : ''}${P.focus ? ' · focus: ' + esc(P.focus) : ''}</div>`;
+  const pros = P.prospects || [];
+  const built = (P.builds || []).filter(b => b.site);
+  const drafts = built.filter(b => b.draft && (!b.status || b.status === 'drafted'));
+  $('n-prospects').textContent = pros.filter(p => p.status === 'waiting').length;
+  $('n-work').textContent = built.length;
+  $('n-drafts').textContent = drafts.length;
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.t === tab));
+  const body = $('body');
+  if (tab === 'prospects') body.innerHTML = prospects(pros);
+  else if (tab === 'activity') body.innerHTML = (P.activity || []).map(a => `<div class="act">${esc(a)}</div>`).join('')
+    || '<div class="empty">Nothing yet.</div>';
+  else if (tab === 'work') body.innerHTML = built.length ? `<div class="grid">${built.map(work).join('')}</div>`
+    : '<div class="empty">Nothing built yet - approve a prospect and he builds it.</div>';
+  else body.innerHTML = drafts.length ? `<div class="grid">${drafts.map(draft).join('')}</div>`
+    : '<div class="empty">No pitches waiting to be sent.</div>';
+}
+
+function prospects(rows) {
+  const order = { waiting: 0, approved: 1, 'not built': 2, built: 3, rejected: 4 };
+  const shown = rows.slice().sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
+  const n = s => rows.filter(p => p.status === s).length;
+  const area = (P.studio || {}).area;
+  return `<div class="sechead"><div><h2>Prospects</h2>
+      <div class="muted">${area ? esc(area) + ' · ' : ''}approve to build a preview, reject to drop</div></div>
+      <button class="btn" id="find" ${busy ? 'disabled' : ''}>Find prospects now</button></div>`
+    + (shown.length ? `<div class="grid">${shown.map(card).join('')}</div>`
+       : '<div class="empty">No prospects yet. His next cycle finds some - or press Find prospects now.</div>')
+    + `<div class="foot">${n('waiting')} awaiting your call · ${n('approved')} approved &amp; building · ${n('built')} built · ${n('rejected')} rejected</div>`;
+}
+
+function card(p) {
+  const ch = CHANNEL[p.channel] || [String(p.channel || '?').toUpperCase(), 't-gray', 'REACH VIA ' + String(p.channel || '?').toUpperCase()];
+  const probs = (p.problems || []).map(x => PROBLEM[x.code] || [String(x.code || '').toUpperCase(), 't-amber']);
+  const links = p.links || {};
+  const site = url(p.current_site);
+  const chips = [
+    site ? `<a class="chip" href="${esc(site)}" target="_blank" rel="noopener">Their site ↗</a>` : `<span class="chip">No site yet</span>`,
+    p.channel === 'email' ? `<span class="chip">✉ ${esc(p.contact)}</span>` : '',
+    p.phone ? `<a class="chip" href="tel:${esc(String(p.phone).replace(/[^\d+]/g, ''))}">${esc(p.phone)}</a>` : '',
+    url(links.instagram) ? `<a class="chip" href="${esc(url(links.instagram))}" target="_blank" rel="noopener">IG ↗</a>` : '',
+    url(links.facebook) ? `<a class="chip" href="${esc(url(links.facebook))}" target="_blank" rel="noopener">FB ↗</a>` : '',
+    url(links.maps) ? `<a class="chip" href="${esc(url(links.maps))}" target="_blank" rel="noopener">Maps ↗</a>` : '',
+  ].join('');
+  const state = STATE[p.status];
+  const acts = p.status === 'waiting'
+    ? `<div class="acts"><button class="btn go" data-approve="${esc(p.id)}" ${busy ? 'disabled' : ''}>✓ Approve + build</button>
+         <button class="btn" data-reject="${esc(p.id)}" ${busy ? 'disabled' : ''}>Reject</button></div>`
+    : p.status === 'built' ? `<div class="said">Built ${esc(p.built || '')} - see Work${p.slug ? ` · <a href="/paul/site/${encodeURIComponent(p.slug)}/" target="_blank" rel="noopener">open the site</a>` : ''}</div>`
+    : p.status === 'not built' ? `<div class="said">Not built: ${esc(p.note || '')}</div>`
+    : p.status === 'rejected' ? `<div class="said">Rejected - never proposed again</div>` : '';
+  return `<div class="card ${p.status === 'waiting' || p.status === 'approved' ? '' : 'done'}">
+    <div class="ctop"><div><div class="cname">${esc(p.name)}</div>
+      <div class="cmeta">${esc(p.category || '')}${p.address ? ' · ' + esc(p.address) : ''}</div></div>
+      <div class="tags">${state ? `<span class="tag ${state[1]}">${state[0]}</span>` : ''}
+        <span class="tag ${ch[1]}">${esc(ch[0])}</span>
+        ${probs.map(([t, c]) => `<span class="tag ${c}">${esc(t)}</span>`).join('')}</div></div>
+    <div class="why">${esc(p.why || '')}</div>
+    <div class="chips">${chips}</div>
+    <span class="reach">${esc(ch[2])}</span>
+    ${google(p)}
+    ${acts}
+    ${p.status === 'waiting' || p.status === 'approved' ? photos(p) : ''}
+  </div>`;
+}
+
+// What code made of their Google listing - counts and warnings only; the
+// photos themselves stay on Google, a tap away.
+function google(p) {
+  const g = p.google;
+  const open = p.status === 'waiting' || p.status === 'approved';
+  const again = open ? `<button class="btn" style="padding:5px 10px" data-google="${esc(p.id)}" ${busy ? 'disabled' : ''}>${g ? 'Check again' : 'Check Google'}</button>` : '';
+  if (!g) return open ? `<div class="gline">Not checked on Google yet ${again}</div>` : '';
+  if (g.error) return `<div class="gline">Google: ${esc(g.error)} ${again}</div>`;
+  if (!g.found) return `<div class="gline">No Google listing found by this name ${again}</div>`;
+  return `<div class="gline">Google: ${g.photos} photo${g.photos === 1 ? '' : 's'} · <b>${g.owner_photos} posted by them</b>
+      ${p.maps ? `<a class="chip" href="${esc(p.maps)}" target="_blank" rel="noopener">See their Google photos ↗</a>` : ''} ${again}</div>`
+    + (g.flags || []).map(f => `<div class="flag">⚠ ${esc(f)}</div>`).join('');
+}
+
+// The owner's photos for this business: saved from their Facebook, Instagram
+// or Google on the iPad, then added here. Paul builds with them first.
+function photos(p) {
+  const have = p.supplied || [];
+  return `<div class="photos"><div class="k">Their photos for the site · ${have.length}</div>
+    ${have.length ? `<div class="thumbs">${have.map(x => `<div class="thumb">
+        <a href="/api/paul/photo/${esc(p.id)}/${esc(x.file)}" target="_blank" rel="noopener"><img src="/api/paul/photo/${esc(p.id)}/${esc(x.file)}" alt="" loading="lazy"></a>
+        <span class="src">${esc(FROM_SHORT[x.from] || x.from)}</span>
+        <button class="x" data-unphoto="${esc(p.id)}" data-file="${esc(x.file)}" aria-label="Remove">×</button></div>`).join('')}</div>`
+      : `<div class="said">Save a few of their photos from Facebook, Instagram or Google, then add them here - Paul builds with these first.</div>`}
+    <div class="addrow"><select data-from="${esc(p.id)}">${FROM.map(([v, l]) => `<option value="${v}">From ${l}</option>`).join('')}</select>
+      <label class="btn">＋ Add photos<input type="file" accept="image/*" multiple data-upload="${esc(p.id)}" ${busy ? 'disabled' : ''}></label></div>
+  </div>`;
+}
+
+// Resized to at most MAX_SIDE and re-encoded as JPEG in the browser: a
+// phone photo is 4-12 MB, and the re-encode leaves its location data behind.
+const MAX_SIDE = 2000;
+function shrink(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      c.toBlob(b => b ? resolve(b) : reject(new Error('could not encode')), 'image/jpeg', 0.86);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('not a picture this browser can read')); };
+    img.src = url;
+  });
+}
+
+async function upload(id, files) {
+  const from = (document.querySelector(`select[data-from="${id}"]`) || {}).value || 'facebook';
+  busy = true;
+  let ok = 0, last = '';
+  for (let i = 0; i < files.length; i++) {
+    toast(`Adding photo ${i + 1} of ${files.length}…`);
+    try {
+      const blob = await shrink(files[i]);
+      const r = await fetch(`/api/paul/prospects/${id}/photos?from=${encodeURIComponent(from)}`,
+        { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: blob });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) ok++; else last = j.out || j.error || `HTTP ${r.status}`;
+    } catch (e) { last = e.message; }
+  }
+  busy = false;
+  toast(ok === files.length ? `Added ${ok} photo${ok === 1 ? '' : 's'}` : `Added ${ok} of ${files.length} - ${last}`);
+  await load();
+}
+
+function work(b) {
+  const shot = n => b.shots.includes(n)
+    ? `<a href="/api/paul/shot/${encodeURIComponent(b.slug)}/${n}" target="_blank" rel="noopener"><img src="/api/paul/shot/${encodeURIComponent(b.slug)}/${n}" alt="${esc(b.name)} on a ${n === 'mobile' ? 'phone' : 'computer'}" loading="lazy"></a>`
+    : `<div class="said">no ${n} screenshot</div>`;
+  return `<div class="card"><div class="ctop"><div><div class="cname">${esc(b.name)}</div>
+      <div class="cmeta">${esc(b.day || '')} · ${b.mode === 'live' ? 'live' : 'dry run'}${b.kind ? ' · ' + esc(b.kind) : ''}</div></div>
+      ${b.status ? `<div class="tags"><span class="tag t-gray">${esc(String(b.status).toUpperCase())}</span></div>` : ''}</div>
+    <div class="shots">${shot('mobile')}${shot('desktop')}</div>
+    <div class="acts"><a class="btn" href="/paul/site/${encodeURIComponent(b.slug)}/" target="_blank" rel="noopener">Open the site</a>
+      ${b.preview_url ? `<a class="btn go" href="${esc(b.preview_url)}" target="_blank" rel="noopener">Live preview</a>` : ''}</div>
+    ${b.notes ? `<div class="why"><b>Paul's notes:</b> ${esc(b.notes)}</div>` : ''}
+    ${b.teardown ? `<div class="said">preview comes down ${esc(b.teardown)}</div>` : ''}</div>`;
+}
+
+function draft(b) {
+  return `<div class="card"><div class="cname">${esc(b.name)}</div>
+    <pre>${esc(b.draft)}</pre>
+    <div class="said">Send it yourself, then: python3 scripts/paul.py mark ${esc(b.slug)} sent</div></div>`;
+}
+
+async function act(path, label) {
+  if (busy) return;
+  busy = true; draw();
+  try {
+    const r = await fetch(path, { method: 'POST' });
+    const j = await r.json();
+    toast((j.out || j.error || label).split('\n').slice(0, 3).join(' · '));
+  } catch (e) { toast('The Deck could not be reached'); }
+  busy = false;
+  await load();
+}
+
+$('tabs').onclick = e => { const b = e.target.closest('[data-t]'); if (b) { tab = b.dataset.t; draw(); } };
+$('body').onchange = e => {
+  const f = e.target.closest('[data-upload]');
+  if (f && f.files && f.files.length) upload(f.dataset.upload, Array.from(f.files));
+};
+$('body').onclick = e => {
+  const a = e.target.closest('[data-approve]'), r = e.target.closest('[data-reject]');
+  const g = e.target.closest('[data-google]'), x = e.target.closest('[data-unphoto]');
+  if (g) return act(`/api/paul/prospects/${g.dataset.google}/google`, 'checked');
+  if (x) {
+    if (!confirm('Remove this photo?')) return;
+    return (async () => {
+      const r = await fetch(`/api/paul/prospects/${x.dataset.unphoto}/photos/${x.dataset.file}`, { method: 'DELETE' });
+      toast(r.ok ? 'Removed' : 'Could not remove it');
+      await load();
+    })();
+  }
+  if (e.target.id === 'find') return act('/api/paul/find', 'started');
+  if (a) return act(`/api/paul/prospects/${a.dataset.approve}/approve`, 'approved');
+  if (r) return act(`/api/paul/prospects/${r.dataset.reject}/reject`, 'rejected');
+};
+load();
+setInterval(() => { if (!busy) load(); }, 30000);
+</script>
+</body>
+</html>

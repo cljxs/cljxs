@@ -1,0 +1,11 @@
+[Unit]
+Description=Check every 3 minutes whether a watched Twitch channel is live
+
+[Timer]
+# One cheap API call a tick while offline. Not *-cycle: those names are read
+# as model agents by cost-estimate.py and health-check.py.
+OnCalendar=*:0/3
+Persistent=false
+
+[Install]
+WantedBy=timers.target
