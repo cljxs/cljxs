@@ -677,6 +677,41 @@ class ThePhaseLoop(Base):
         self.assertEqual(run["state"], "held")
         self.assertIsNone(b.installs)
 
+    def test_resume_tells_the_builder_why_it_was_held(self):
+        # Guards: Resume after a hold, and the builder carrying on not knowing
+        # what to fix - held three times for the same check.sh (2026-10-16).
+        rid = self.approved_run()
+        b = FakeBuilder(self.m, denials=5)
+        with unittest.mock.patch.object(self.m, "builder_for", return_value=b):
+            self.m.start_build(self.conn, rid)
+        self.assertEqual(self.build(rid, b, [])["state"], "held")
+        self.m.resume_build(self.conn, rid)
+        b.denials = 0
+        self.build(rid, b, [reply(OK), reply(APPROVE)])
+        self.assertIn("HELD", b.sessions[-1])
+        self.assertIn("refused 5 commands", b.sessions[-1], "with the reason it was held")
+
+    def test_a_check_sh_that_installs_goes_back_without_asking_the_watchdog(self):
+        rid = self.approved_run()
+        b = FakeBuilder(self.m)
+        made = b.session
+        tries = []
+
+        def session(project, *a):
+            events = made(project, *a)
+            tries.append(1)
+            if len(tries) == 1:
+                (Path(project) / "check.sh").write_text("[ -d node_modules ] || npm install\nexit 0\n")
+            return events
+        b.session = session
+        with unittest.mock.patch.object(self.m, "builder_for", return_value=b):
+            self.m.start_build(self.conn, rid)
+        with unittest.mock.patch.object(self.m, "ask", wraps=self.m.ask) as ask:
+            run = self.build(rid, b, [reply(OK), reply(APPROVE)])
+        self.assertEqual(run["build_phase"], 1, "passed on the second try")
+        self.assertIn("take the install out", b.sessions[1])
+        self.assertEqual(ask.call_count, 2, "watchdog and bug checker once each - not for the first try")
+
     def test_the_selftest_passes_only_with_all_four_answers(self):
         # Guards: a self-test that says "safe" without the npm registry check
         # (2026-10-16: sessions could not reach it until socat was installed).

@@ -1782,7 +1782,13 @@ def resume_build(conn, rid):
     stopped = run["state"] == "stopped" and build_started(conn, rid)
     if run["state"] != "held" and not stopped:
         raise ValueError(f"run {rid} is not a held or stopped build (it is {run['state']})")
-    set_run(conn, rid, state="building", error=None, stop_requested=0)
+    # Held: the builder is told why, or it carries on without knowing what
+    # to fix (owner, 2026-10-16: held three times for the same check.sh).
+    note = None if stopped else (
+        f"Your last session was HELD for the owner to look at, because: {run['error']}\n"
+        "The owner looked and lets you carry on. Fix what that points to if it is a real problem; "
+        "if something stays as it is, say why in BUILD-NOTES.md, where the watchdog will read it.")
+    set_run(conn, rid, state="building", error=None, stop_requested=0, build_note=note)
     say(conn, rid, "You", "owner",
         f"Carry on building, from phase {run['build_phase'] + 1}." if stopped
         else "I have looked at what held the build - carry on.")
@@ -1893,6 +1899,22 @@ def install_packages(conn, rid, builder, project):
     return None
 
 
+def check_installs(project):
+    """Why check.sh must change, or None: it runs offline and must never
+    install - the Agent Room installs package.json's packages itself. A rule,
+    so code says it; the watchdog held the first build for it three times."""
+    p = Path(project) / PHASE_TEST
+    try:
+        text = p.read_text() if p.is_file() and not p.is_symlink() else ""
+    except (OSError, UnicodeDecodeError):
+        return None
+    if mod("guard").NPM_INSTALL.search(text):
+        return (f"{PHASE_TEST} installs packages (npm install or the like). It runs with no network and "
+                "must only run the tests: take the install out. Packages go in package.json; the Agent "
+                "Room installs them before check.sh runs.")
+    return None
+
+
 def hold_build(conn, rid, why):
     set_run(conn, rid, state="held", error=why)
     say(conn, rid, "Code", "error",
@@ -1993,6 +2015,11 @@ def build_phase_once(conn, rid, room, builder=None, now=None):
         if hold:
             hold_build(conn, rid, "; ".join(hold))
             return
+        installs = check_installs(project)
+        if installs:
+            say(conn, rid, "Code", "error", f"{label_ph}: {installs}")
+            note = installs
+            continue
         watch = cfg["watchdog"]
         evidence = (f"The phase it was asked to build:\n{json.dumps(ph, indent=1)}\n\n"
                     f"Commands it ran ({len(commands)}):\n" + "\n".join(f"$ {c}" for c in commands[-200:])
