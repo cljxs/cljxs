@@ -1805,7 +1805,15 @@ def build_started(conn, rid):
     return conn.execute("SELECT COUNT(*) FROM phases WHERE run_id = ?", (rid,)).fetchone()[0] > 0
 
 
-def resume_build(conn, rid):
+def owner_decisions(conn, rid):
+    """What the owner said when resuming held builds: [{held_for, said}]."""
+    try:
+        return json.loads(meta_get(conn, f"owner_decisions:{rid}") or "[]")
+    except ValueError:
+        return []
+
+
+def resume_build(conn, rid, note=None):
     """The owner lets a held build carry on - or a stopped one: Stop during
     a build was a dead end, no button left to carry on (owner, 2026-10-16).
     It carries on from the phase it was on, on top of what is there."""
@@ -1815,16 +1823,26 @@ def resume_build(conn, rid):
     stopped = run["state"] == "stopped" and build_started(conn, rid)
     if run["state"] != "held" and not stopped:
         raise ValueError(f"run {rid} is not a held or stopped build (it is {run['state']})")
+    note = (note or "").strip()
+    if note and not 3 <= len(note) <= NOTE_MAX:
+        raise ValueError(f"the note must be 3-{NOTE_MAX} characters")
+    if note and not stopped:
+        # Kept, and shown to the watchdog and the second opinion from now on:
+        # without it they hold again for what the owner already accepted
+        # (owner, 2026-10-16: a hand-written Gmail sample in place of a real one).
+        decided = owner_decisions(conn, rid) + [{"held_for": (run["error"] or "")[:600], "said": note}]
+        meta_set(conn, f"owner_decisions:{rid}", json.dumps(decided[-20:]))
     # Held: the builder is told why, or it carries on without knowing what
     # to fix (owner, 2026-10-16: held three times for the same check.sh).
-    note = None if stopped else (
+    builder_note = None if stopped else (
         f"Your last session was HELD for the owner to look at, because: {run['error']}\n"
         "The owner looked and lets you carry on. Fix what that points to if it is a real problem; "
-        "if something stays as it is, say why in BUILD-NOTES.md, where the watchdog will read it.")
-    set_run(conn, rid, state="building", error=None, stop_requested=0, build_note=note)
+        "if something stays as it is, say why in BUILD-NOTES.md, where the watchdog will read it."
+        + (f"\nThe owner's own words, which come first: {note}" if note else ""))
+    set_run(conn, rid, state="building", error=None, stop_requested=0, build_note=builder_note)
     say(conn, rid, "You", "owner",
-        f"Carry on building, from phase {run['build_phase'] + 1}." if stopped
-        else "I have looked at what held the build - carry on.")
+        (f"Carry on building, from phase {run['build_phase'] + 1}." if stopped
+         else "I have looked at what held the build - carry on.") + (f" {note}" if note else ""))
     return "building"
 
 
@@ -1948,6 +1966,18 @@ def check_installs(project):
     return None
 
 
+def decided_text(conn, rid):
+    """The owner's decisions after earlier holds, for the watchdog and the
+    second opinion: what they accepted is not a reason to hold again."""
+    d = owner_decisions(conn, rid)
+    if not d:
+        return ""
+    return ("\n\nWhat the OWNER decided after earlier holds - the owner's own words; what they accepted "
+            "is not a reason to hold again:\n"
+            + "\n".join(f"- Held for: {x.get('held_for', '')[:300]}\n  The owner said: {x.get('said', '')}"
+                         for x in d[-10:]))
+
+
 def hold_build(conn, rid, why):
     set_run(conn, rid, state="held", error=why)
     say(conn, rid, "Code", "error",
@@ -2060,6 +2090,7 @@ def build_phase_once(conn, rid, room, builder=None, now=None):
                     + f"\nTool calls the guard refused ({denials}) - each was blocked, so none of them ran:\n"
                     + ("\n".join(f"- {r}" for r in refused[:50]) or "none")
                     + ("\n\nCode worth a look:\n" + "\n".join(look) if look else "")
+                    + decided_text(conn, rid)
                     + f"\n\nWhat changed:\n{_tail(diff, DIFF_KEEP)}")
         reply = ask(conn, room, rid, watch, label(watch, "Watchdog"), WATCHDOG_SYSTEM, evidence, stage="build")
         verdict = extract_json(reply) or {}
@@ -2527,8 +2558,11 @@ def main(argv=None):
     n.add_argument("--idea", required=True)
     n.add_argument("--dry", action="store_true")
     sub.add_parser("runner").add_argument("--once", action="store_true")
-    for c in ("step", "approve", "stop", "show", "retry", "build", "continue", "resume"):
+    for c in ("step", "approve", "stop", "show", "retry", "build", "continue"):
         sub.add_parser(c).add_argument("id", type=int)
+    rs = sub.add_parser("resume")
+    rs.add_argument("id", type=int)
+    rs.add_argument("--note", default="")
     fx = sub.add_parser("fixphase")
     fx.add_argument("id", type=int)
     fx.add_argument("--note", required=True)
@@ -2576,7 +2610,7 @@ def main(argv=None):
         elif a.cmd == "continue":
             print(json.dumps({"ok": True, "state": continue_build(conn, a.id)}))
         elif a.cmd == "resume":
-            print(json.dumps({"ok": True, "state": resume_build(conn, a.id)}))
+            print(json.dumps({"ok": True, "state": resume_build(conn, a.id, a.note)}))
         elif a.cmd == "fixphase":
             print(json.dumps({"ok": True, "state": send_back_phase(conn, a.id, a.note)}))
         elif a.cmd == "site":

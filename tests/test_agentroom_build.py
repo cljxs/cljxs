@@ -504,6 +504,27 @@ class HoldingTheBuild(Base):
                                    "usage": {"cost": 0.001}}])
         self.assertEqual(run["state"], "held")
 
+    def test_a_note_with_resume_reaches_the_builder_and_both_watchers(self):
+        # Guards: the owner accepting something (a hand-written Gmail sample,
+        # 2026-10-16) and the builder, watchdog and second opinion not told -
+        # so it is "fixed" when it cannot be, and held again.
+        b = FakeBuilder(self.m)
+        rid = self.started(b)
+        sample = {"verdict": "hold", "summary": "a hand-written Gmail sample",
+                  "findings": [{"severity": "medium", "text": "fixtures/gmail.html is not a real capture"}]}
+        run = self.build(rid, b, [reply(sample), reply({"verdict": "hold", "summary": "agreed"})])
+        self.assertEqual(run["state"], "held")
+        with self.assertRaises(ValueError):
+            self.m.resume_build(self.conn, rid, "ok")            # too short to mean anything
+        self.m.resume_build(self.conn, rid, "The hand-written sample is fine for now.")
+        with unittest.mock.patch.object(self.m, "ask", wraps=self.m.ask) as ask:
+            self.build(rid, b, [reply(sample), reply({"verdict": "carry_on", "summary": "the owner accepted it"}),
+                                reply(APPROVE)])
+        self.assertIn("The hand-written sample is fine for now.", b.sessions[-1])
+        for call in ask.call_args_list[:2]:                      # the watchdog, then the second opinion
+            self.assertIn("The owner said: The hand-written sample is fine for now.", call[0][6])
+        self.assertEqual(self.m.get_run(self.conn, rid)["build_phase"], 1)
+
     def test_low_concerns_alone_carry_on_listed_in_the_room(self):
         # Guards: the owner's rule (2026-10-16) - holds for low concerns the
         # watchdog itself calls normal stop asking them, but are still shown.

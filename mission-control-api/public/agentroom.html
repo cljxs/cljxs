@@ -395,6 +395,7 @@ function renderDetail() {
       <b style="color:#fb7185">The build is HELD for you to look at.</b>
       <div style="margin-top:4px">${esc(r.error || '')}</div>
       <div class="muted" style="margin-top:4px">Nothing runs until you decide. Read the Room and Build tabs. Resume if it is fine; Stop if it is not.</div>
+      <textarea id="rsnote" maxlength="2000" placeholder="Optional: a note with Resume - the builder, the watchdog and the second opinion all read it. E.g. &quot;The hand-written sample is fine for now.&quot;" style="min-height:70px;margin-top:8px"></textarea>
       <div class="acts"><button class="btn go" data-act="resume">Resume</button><button class="btn warn" data-act="stop">Stop</button></div>
     </div>` : r.state === 'stopped' && r.build_started ? `
     <div class="gate">
@@ -458,6 +459,10 @@ async function act(what, btn) {
   if (what === 'sendback' || what === 'fixphase') {
     body.note = ($(what === 'sendback' ? 'sbnote' : 'fxnote').value || '').trim();
     if (body.note.length < 3) { alert('Write a note first.'); return; }
+  }
+  if (what === 'resume' && $('rsnote')) {
+    body.note = ($('rsnote').value || '').trim();
+    if (body.note && body.note.length < 3) { alert('Write a little more, or leave the note empty.'); return; }
   }
   if (what === 'build' && !detail.run.dry && !confirm('Start building? The builder will work in its night window, in its sandbox, on its own Claude login.')) return;
   if (what === 'resume' && !confirm(detail.run.state === 'stopped' ? 'Carry on building from where it was stopped?' : 'Resume the build? Only if you have read why it was held and you are happy with it.')) return;
