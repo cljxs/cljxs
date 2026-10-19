@@ -19766,8 +19766,10 @@ class BoltScoresByTheRubric(BoltBase):
 
 
 class BoltExitsAtTheTicksPrice(BoltBase):
-    """Every exit is code, every tick, at that tick's price - the -4% stop is
-    filled where the price really was, not where the stop sat."""
+    """Every exit is code, every tick, at that tick's price - the stop is
+    filled where the price really was, not where the stop sat. Swing exits
+    since 2026-10-19 (owner: "the bot needs to be almost swing trading like
+    belfort"): -8% stop, an 8% trailing stop, 14 days at most."""
 
     def hold(self, sym="SOL", price=100.0, at=None):
         book = self.b.seed(self.T0)
@@ -19779,35 +19781,48 @@ class BoltExitsAtTheTicksPrice(BoltBase):
         book["last_cycle_block"] = self.b.cycle_block(now)       # exits only, no buying
         return self.b.run(book, self.market(btc=btc, **prices), now)
 
-    def test_take_profit_sells_it_all(self):
+    def test_no_fixed_target_a_winner_runs(self):
+        # The old +15% take profit sold here; now it stays open.
         book = self.hold()
-        ev = self.tick(book, 10, SOL=115.5)
-        self.assertEqual(len(ev["exits"]), 1)
-        self.assertIn("take profit", ev["exits"][0]["reason"])
-        self.assertEqual(book["positions"], [])
+        self.assertEqual(self.tick(book, 10, SOL=125.0)["exits"], [])
+        self.assertEqual(len(book["positions"]), 1)
 
     def test_a_stop_crossed_between_looks_fills_at_the_real_price(self):
         book = self.hold()
-        ev = self.tick(book, 10, SOL=93.0)
+        self.assertEqual(self.tick(book, 10, SOL=93.0)["exits"], [], "-7% is inside the 8% stop")
+        ev = self.tick(book, 20, SOL=90.0)
         t = ev["exits"][0]
         self.assertIn("stop loss", t["reason"])
-        self.assertEqual(t["price"], 93.0, "the tick's price, not the stop's 96")
-        self.assertLess(t["pnl_pct"], -7.0, "and the loss includes both fees")
+        self.assertEqual(t["price"], 90.0, "the tick's price, not the stop's 92")
+        self.assertLess(t["pnl_pct"], -10.0, "and the loss includes both fees")
 
-    def test_breakeven_after_eight_percent(self):
+    def test_the_stop_trails_the_best_price_and_never_falls(self):
         book = self.hold()
-        self.assertEqual(self.tick(book, 10, SOL=108.5)["exits"], [])
-        self.assertEqual(book["positions"][0]["stop_price"], 100.0, "raised to the price paid")
-        ev = self.tick(book, 20, SOL=99.9)
-        self.assertIn("breakeven", ev["exits"][0]["reason"])
+        self.tick(book, 10, SOL=120.0)
+        self.assertAlmostEqual(book["positions"][0]["stop_price"], 110.4, msg="8% under the best, 120")
+        self.tick(book, 20, SOL=112.0)
+        self.assertAlmostEqual(book["positions"][0]["stop_price"], 110.4, msg="a dip does not lower it")
+        ev = self.tick(book, 30, SOL=110.0)
+        self.assertIn("trailing stop", ev["exits"][0]["reason"])
+        self.assertGreater(ev["exits"][0]["pnl_pct"], 9.0, "the gain is kept")
 
-    def test_dead_money_after_a_day_not_before(self):
+    def test_no_dead_money_rule_and_a_14_day_limit(self):
+        # The old rule sold a flat position at 24 hours - 118 of 166 trades in
+        # the replay. Flat for a week is now held; at 14 days it goes.
         book = self.hold()
-        self.assertEqual(self.tick(book, 23 * 60, SOL=101.0)["exits"], [])
-        ev = self.tick(book, 24 * 60 + 10, SOL=101.0)
-        self.assertIn("dead money", ev["exits"][0]["reason"])
-        moving = self.hold()
-        self.assertEqual(self.tick(moving, 24 * 60 + 10, SOL=103.0)["exits"], [], "+3% is not dead")
+        self.assertEqual(self.tick(book, 7 * 24 * 60, SOL=101.0)["exits"], [])
+        ev = self.tick(book, 14 * 24 * 60 + 10, SOL=101.0)
+        self.assertIn("time limit", ev["exits"][0]["reason"])
+
+    def test_a_position_from_the_old_rules_carries_over(self):
+        # Opened before 2026-10-19 with a -4% stop and a +15% target: the next
+        # tick sets its stop from its recorded best and forgets the target.
+        book = self.hold()
+        pos = book["positions"][0]
+        pos.update(stop_price=96.0, take_profit_price=115.0, high_water_pct=1.8)
+        self.assertEqual(self.tick(book, 10, SOL=100.5)["exits"], [])
+        self.assertAlmostEqual(pos["stop_price"], 101.8 * 0.92, msg="the higher of entry -8% (92) and best -8%")
+        self.assertNotIn("take_profit_price", pos)
 
     def test_the_btc_dump_sells_the_altcoins_and_keeps_btc(self):
         book = self.hold("SOL")
@@ -19868,7 +19883,7 @@ class BoltBuysOnTheFourHourCycle(BoltBase):
         coins, up = ("SOL", "ETH", "BNB", "XRP", "ADA", "BTC", "LINK"), {}
         for h, sym in enumerate(coins):
             self.b.run(book, self.market(**dict(up, **{sym: good})), self.T0 + timedelta(hours=4 * h))
-            up[sym] = 103.0                               # +3%: not dead money at a day old
+            up[sym] = 103.0                               # +3%: inside every exit
         eq = self.b.equity(book)
         self.assertEqual(len(book["positions"]), 7)
         for t in book["trades"][:6]:

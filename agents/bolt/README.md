@@ -10,9 +10,10 @@ number. `NO_MODEL` in this folder tells preflight and deploy.sh so.
 Every 10 minutes, every day:
 - one CoinGecko call for BTC, ETH, SOL, BNB, XRP, ADA, AVAX, LINK, DOT, LTC;
   the 20- and 50-hour averages come from the 7 days of hourly prices in it
-- the exits, at that tick's price, less a 0.1% fee: take profit +15%, stop
-  -4% (raised to the price paid after +8%), dead money (24h within 2%), and
-  the BTC dump switch (BTC -5% on the day: every coin but BTC is sold)
+- the exits, at that tick's price, less a 0.1% fee: stop -8%, a trailing
+  stop 8% under the best price since he bought (it only rises; no fixed
+  target), a 14-day time limit, and the BTC dump switch (BTC -5% on the day:
+  every coin but BTC is sold). Swing exits since 2026-10-19.
 
 Every hour and a half (00:00, 01:30, 03:00 ... UTC): at most one new coin, the best
 scoring 7+ on the 10-point rubric, sized at 15% of the account while keeping

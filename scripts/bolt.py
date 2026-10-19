@@ -20,9 +20,10 @@ EVERY TICK (10 minutes): one CoinGecko call for all ten coins, the 20- and
 50-hour averages from the seven days of hourly prices that call returns,
 then the exits, at this tick's prices:
 
-    take profit   +15% on the price paid - all of it
-    stop loss     -4%; raised to the price paid once he has been +8% up
-    dead money    open 24 hours and still within 2% either way
+    stop loss     -8% on the price paid
+    trailing stop 8% under the best price since he bought - it only rises
+    time limit    14 days open, whatever it is doing
+    (no fixed target: a winner runs until the trailing stop takes it)
     BTC dump      BTC down more than 5% on the day: every coin but BTC goes
 
 EVERY HOUR AND A HALF (00:00, 01:30, 03:00 ... UTC): at most one new position, the best
@@ -102,11 +103,17 @@ TARGET_PCT = 15.0             # of the account, per new position (owner, 2026-10
 CASH_FLOOR_PCT = 5.0          # always kept in cash, after the fee (owner, 2026-10-13: was 25)
 MIN_TRADE = 100.0             # a position smaller than this is not worth the fees
 
-TAKE_PROFIT_PCT = 15.0
-STOP_LOSS_PCT = 4.0
-BREAKEVEN_AT_PCT = 8.0
-DEAD_MONEY_HOURS = 24.0
-DEAD_MONEY_BAND_PCT = 2.0
+# SWING EXITS (owner, 2026-10-19: "the bot needs to be almost swing trading
+# like belfort" - a +15% target with a 24-hour dead-money rule wanted a move
+# that takes weeks inside a day). Replayed through run() over 83 days of
+# hourly prices, the old rules closed 118 of 166 trades as dead money before
+# the target could come; quick +5/-2.5 trades lost money in both halves; this
+# made the most and traded a third as often. The stop is a floor that only
+# rises: 8% under the entry, or 8% under the best price since, whichever is
+# higher.
+STOP_LOSS_PCT = 8.0
+TRAIL_PCT = 8.0
+MAX_HOLD_DAYS = 14.0
 BTC_DUMP_PCT = -5.0           # BTC's 24h change below this: close every altcoin
 MAX_DRAWDOWN_PCT = 15.0
 HALT_HOURS = 24.0
@@ -290,7 +297,6 @@ def buy(book, sym, price, notional, now, reason):
         "symbol": sym, "qty": qty, "entry_price": price, "cost": notional + fee,
         "opened_utc": iso(now), "high_water_pct": 0.0,
         "stop_price": price * (1 - STOP_LOSS_PCT / 100.0),
-        "take_profit_price": price * (1 + TAKE_PROFIT_PCT / 100.0),
     })
     t = {"utc": iso(now), "symbol": sym, "side": "buy", "qty": qty, "price": price,
          "notional": notional, "fee": fee, "reason": reason}
@@ -312,22 +318,32 @@ def sell(book, pos, price, now, reason):
     return t
 
 
+def stop_for(pos):
+    """The stop: STOP_LOSS_PCT under the price paid, or TRAIL_PCT under the
+    best price since, whichever is higher - so it only ever rises."""
+    best = pos["entry_price"] * (1 + (pos.get("high_water_pct") or 0.0) / 100.0)
+    return max(pos["entry_price"] * (1 - STOP_LOSS_PCT / 100.0), best * (1 - TRAIL_PCT / 100.0))
+
+
+def trailing(pos):
+    """True once the trailing stop is the one that counts."""
+    return pos["stop_price"] > pos["entry_price"] * (1 - STOP_LOSS_PCT / 100.0) + 1e-12
+
+
 def exit_reason(pos, price, now):
-    """Why this position goes now, or None. Updates its high-water mark and,
-    past +8%, its stop. The order matters only when two fire at once, and
-    then any of them closes it at the same price."""
+    """Why this position goes now, or None. Updates its high-water mark and
+    its stop. A position opened under the old rules (2026-10-19) is carried
+    over: its recorded best price sets the trailing stop from here on."""
     move = pnl_pct(pos, price)
     pos["high_water_pct"] = max(pos.get("high_water_pct") or 0.0, move)
-    if pos["high_water_pct"] >= BREAKEVEN_AT_PCT and pos["stop_price"] < pos["entry_price"]:
-        pos["stop_price"] = pos["entry_price"]
-    if move >= TAKE_PROFIT_PCT:
-        return f"take profit (+{TAKE_PROFIT_PCT:g}%)"
+    pos["stop_price"] = stop_for(pos)
+    pos.pop("take_profit_price", None)
     if price <= pos["stop_price"]:
-        return ("breakeven stop (was up {:.1f}%)".format(pos["high_water_pct"])
-                if pos["stop_price"] >= pos["entry_price"] else f"stop loss (-{STOP_LOSS_PCT:g}%)")
+        return (f"trailing stop ({TRAIL_PCT:g}% off its best, +{pos['high_water_pct']:.1f}%)"
+                if trailing(pos) else f"stop loss (-{STOP_LOSS_PCT:g}%)")
     held = (now - parse_iso(pos["opened_utc"])).total_seconds() / 3600.0
-    if held >= DEAD_MONEY_HOURS and abs(move) <= DEAD_MONEY_BAND_PCT:
-        return f"dead money ({held:.0f}h, {move:+.1f}%)"
+    if held >= MAX_HOLD_DAYS * 24:
+        return f"time limit ({MAX_HOLD_DAYS:g} days, {move:+.1f}%)"
     return None
 
 
@@ -734,7 +750,7 @@ def cycle_text(book, market, ev, now):
         lines.append("")
     for p in book["positions"]:
         lines.append(f"- holding {p['symbol']}: {signed(pnl_pct(p, marks[p['symbol']]), 1)}%, "
-                     f"stop {money(p['stop_price'])}, target {money(p['take_profit_price'])}")
+                     f"stop {money(p['stop_price'])}{' (trailing)' if trailing(p) else ''}")
     lines += ["", f"**Action:** {ev['cycle']['action']}"]
     return "\n".join(lines)
 
@@ -858,7 +874,7 @@ def cmd_show():
     for p in book["positions"]:
         px = book["marks"].get(p["symbol"]) or p["entry_price"]
         print(f"  {p['symbol']:<5} {signed(pnl_pct(p, px), 1)}%  in at {money(p['entry_price'])}, "
-              f"now {money(px)}, stop {money(p['stop_price'])}, target {money(p['take_profit_price'])}")
+              f"now {money(px)}, stop {money(p['stop_price'])}{' (trailing)' if trailing(p) else ''}")
     hold = btc_hold(book, book["marks"])
     if hold:
         print(f"  BTC held from day one: {money(hold)} ({signed(pct(hold, book['starting_cash']))}%)")
@@ -887,7 +903,8 @@ def position_rows(book, marks, now):
         out.append({**p, "price": px, "value": p["qty"] * px,
                     "pnl": p["qty"] * px - p["cost"], "pnl_pct": pnl_pct(p, px),
                     "held_hours": (now - opened).total_seconds() / 3600 if opened else None,
-                    "breakeven": p["stop_price"] >= p["entry_price"]})
+                    "trailing": trailing(p),
+                    "sell_by_utc": iso(opened + timedelta(days=MAX_HOLD_DAYS)) if opened else None})
     return out
 
 
@@ -985,9 +1002,8 @@ def board(now=None):
         "started_utc": book.get("started_utc"), "last_tick_utc": book.get("last_tick_utc"),
         "last_cycle_utc": book.get("last_cycle_utc"), "next_cycle_utc": iso(nxt),
         "balances": not problems(book),
-        "rules": {"take_profit_pct": TAKE_PROFIT_PCT, "stop_loss_pct": STOP_LOSS_PCT,
-                  "breakeven_at_pct": BREAKEVEN_AT_PCT, "dead_money_hours": DEAD_MONEY_HOURS,
-                  "dead_money_band_pct": DEAD_MONEY_BAND_PCT, "btc_dump_pct": BTC_DUMP_PCT,
+        "rules": {"stop_loss_pct": STOP_LOSS_PCT, "trail_pct": TRAIL_PCT,
+                  "max_hold_days": MAX_HOLD_DAYS, "btc_dump_pct": BTC_DUMP_PCT,
                   "max_drawdown_pct": MAX_DRAWDOWN_PCT, "halt_hours": HALT_HOURS,
                   "target_pct": TARGET_PCT,
                   "cash_floor_pct": CASH_FLOOR_PCT, "fee_pct": FEE_PCT, "min_score": MIN_SCORE,

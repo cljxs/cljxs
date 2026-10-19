@@ -288,10 +288,10 @@ function center(c) {
       <div class="stat"><div class="l">Now</div><div class="v num ${cls(p.pnl_pct)}">${pct(p.pnl_pct)}</div></div>
       <div class="stat"><div class="l">Worth</div><div class="v num">${money(p.value)}</div></div>
       <div class="stat"><div class="l">P&amp;L</div><div class="v num ${cls(p.pnl)}">${money(p.pnl)}</div></div>
-      <div class="stat"><div class="l">Stop</div><div class="v num">${price(p.stop_price)}</div><div class="l">${p.breakeven ? 'breakeven' : '-' + B.rules.stop_loss_pct + '%'}</div></div>
-      <div class="stat"><div class="l">Target</div><div class="v num">${price(p.take_profit_price)}</div><div class="l">+${B.rules.take_profit_pct}%</div></div>
-      <div class="stat"><div class="l">Best</div><div class="v num">${pct(p.high_water_pct, 1)}</div><div class="l">breakeven at +${B.rules.breakeven_at_pct}%</div></div>
-      <div class="stat"><div class="l">Held</div><div class="v num">${has(p.held_hours) ? p.held_hours.toFixed(1) + 'h' : '—'}</div><div class="l">dead money at ${B.rules.dead_money_hours}h</div></div>
+      <div class="stat"><div class="l">Stop</div><div class="v num">${price(p.stop_price)}</div><div class="l">${p.trailing ? 'trailing ' + B.rules.trail_pct + '% off best' : '-' + B.rules.stop_loss_pct + '%'}</div></div>
+      <div class="stat"><div class="l">Stop is</div><div class="v num ${cls(p.stop_price / p.entry_price - 1)}">${pct((p.stop_price / p.entry_price - 1) * 100, 1)}</div><div class="l">from his entry</div></div>
+      <div class="stat"><div class="l">Best</div><div class="v num">${pct(p.high_water_pct, 1)}</div><div class="l">stop trails ${B.rules.trail_pct}% under it</div></div>
+      <div class="stat"><div class="l">Held</div><div class="v num">${has(p.held_hours) ? (p.held_hours >= 48 ? (p.held_hours / 24).toFixed(1) + 'd' : p.held_hours.toFixed(1) + 'h') : '—'}</div><div class="l">sold at ${B.rules.max_hold_days} days</div></div>
     </div></div>` : '';
   return `
   <div class="box"><div class="tick">
@@ -413,9 +413,9 @@ async function side() {
     <div class="muted">All of it is code (scripts/bolt.py). No AI is woken, so nothing here costs anything and no number is made up.</div>
     <div class="sect">Every 10 minutes</div><ul class="rules">
       <li>One price check for all ten coins (CoinGecko).</li>
-      <li>Take profit at <b>+${r.take_profit_pct}%</b> - the whole position.</li>
-      <li>Stop loss at <b>-${r.stop_loss_pct}%</b>, raised to the price paid once he has been <b>+${r.breakeven_at_pct}%</b> up.</li>
-      <li>Dead money: open <b>${r.dead_money_hours}h</b> and still within <b>${r.dead_money_band_pct}%</b> either way - sold.</li>
+      <li>Stop loss at <b>-${r.stop_loss_pct}%</b> on the price paid.</li>
+      <li>Trailing stop <b>${r.trail_pct}%</b> under the best price since he bought - it only ever rises. No fixed target: a winner runs until this takes it.</li>
+      <li>Time limit: sold after <b>${r.max_hold_days} days</b>, whatever it is doing.</li>
       <li>BTC down more than <b>${Math.abs(r.btc_dump_pct)}%</b> on the day: every coin but BTC is sold, and nothing new is bought.</li>
       <li>Sales fill at that tick's price, not the stop's, less a <b>${r.fee_pct}%</b> fee.</li></ul>
     <div class="sect">Every ${r.cycle_hours} hours</div><ul class="rules">
