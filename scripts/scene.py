@@ -588,15 +588,21 @@ WHO = ("an ordinary adult with a natural, friendly face (not a celebrity or anyo
 # above. Nothing hangs from furniture: that is what came out floating.
 # Alternated, so any five in a row hold both kinds.
 FLAT_LAY = "flat:"
+# HOW A TOTE IS CARRIED (owner, 2026-10-19, on a farmers-market shopper with
+# one strap on his shoulder and the other in his hand: "There is 2 straps in
+# this picture so people will know its fake"). That scene asked for it "held
+# by both straps", and the image model split them. A real tote's two straps
+# go to the same place, so every carrying scene says which one.
+ON_SHOULDER = "with both of its straps together over one shoulder"
+IN_HAND = "with both of its straps gathered together in one hand, the bag hanging at their side"
 PAID_SCENES = {
-    "tote bag": [f"carried on the shoulder of {WHO}, a woman walking down a sunny autumn street, smiling, "
-                 "one hand on the strap",
+    "tote bag": [f"carried by {WHO}, a woman walking down a sunny autumn street, smiling, {ON_SHOULDER}",
                  f"{FLAT_LAY} a rustic wooden table beside a latte and an open book",
-                 f"held by both straps by {WHO}, browsing flowers at a farmers market stall",
+                 f"carried by {WHO}, browsing flowers at a farmers market stall, {IN_HAND}",
                  f"{FLAT_LAY} a red and white picnic blanket on grass beside a basket of strawberries",
-                 f"carried on the shoulder of {WHO}, reaching for a book in a cozy bookshop, seen from the side",
+                 f"carried by {WHO}, reaching for a book in a cozy bookshop, seen from the side, {ON_SHOULDER}",
                  f"{FLAT_LAY} light oak floorboards with a few autumn leaves around it",
-                 f"slung over the shoulder of {WHO}, waiting at a cafe counter with a coffee in hand"],
+                 f"carried by {WHO}, waiting at a cafe counter with a coffee in hand, {ON_SHOULDER}"],
     "mug": [f"held in two hands by {WHO}, in a cozy sweater, sitting by a rainy window",
             "on a kitchen counter beside a coffee pot in soft morning light",
             "on a desk next to an open notebook and a laptop, warm lamp light",
@@ -628,6 +634,14 @@ PAID_DEFAULT = ["on a cafe table beside a latte, seen from slightly above",
                 "on a sunny windowsill among potted plants",
                 "on a wooden desk beside a notebook and a cup of coffee",
                 "on a picnic blanket in a park on a sunny day"]
+
+# Said to the image model for anything with straps, in every scene with a
+# person in it: the count, where they are sewn on, and that they stay together.
+STRAPS = {"tote bag": ("It has exactly the two straps it has in the photo, each sewn to the top edge of the bag "
+                       "at both ends. The two straps stay together - both over the same shoulder, or both in "
+                       "the same hand - never one on the shoulder and the other in the hand, and no extra, "
+                       "missing, loose or crossed strap. ")}
+STRAPS["bag"] = STRAPS["tote bag"]
 
 PAID_ASK = (
     "Here is a product photo of a {thing}. Make a new photo of THIS EXACT {thing} {scene}. "
@@ -665,7 +679,11 @@ DESIGN_ASK = (
     'what holds them, touching what it rests on),\n'
     ' "person_ok": true or false (true if no person is in B; if one is: a whole person with a complete head '
     'and a natural face - not cut off at the neck or chin, not headless - and natural hands with five '
-    'fingers)}')
+    'fingers),\n'
+    ' "straps_ok": true or false (true if the product has no straps - a mug handle is not a strap; if it '
+    'has: B shows exactly as many straps as A, each attached to the product at both ends, none extra, missing '
+    'or loose, and when someone carries it, all of them over the same shoulder or in the same hand - never '
+    'one on the shoulder and another in the hand)}')
 
 
 class SpendError(SceneError):
@@ -718,7 +736,8 @@ def paid_prompt(thing, n):
     place = places[n % len(places)]
     if place.startswith(FLAT_LAY):
         return FLAT_ASK.format(thing=thing, scene=place[len(FLAT_LAY):].strip())
-    return PAID_ASK.format(thing=thing, scene=place)
+    ask = PAID_ASK.format(thing=thing, scene=place)
+    return ask.replace("Nothing floats. ", "Nothing floats. " + STRAPS[thing]) if thing in STRAPS else ask
 
 
 def _letters(text):
@@ -732,7 +751,7 @@ def design_problems(reading):
     if not isinstance(reading, dict):
         return ["the design check's answer could not be read"]
     need = ("product_visible", "same_design", "words_a", "words_b", "differences", "added_text",
-            "physically_real", "person_ok")
+            "physically_real", "person_ok", "straps_ok")
     missing = [k for k in need if k not in reading]
     if missing:
         return [f"the design check did not answer {', '.join(missing)}"]
@@ -754,6 +773,8 @@ def design_problems(reading):
                    "holding onto nothing")
     if reading["person_ok"] is not True:
         out.append("the person is not whole - a missing or cut-off head, an unnatural face, or strange hands")
+    if reading["straps_ok"] is not True:
+        out.append("the straps are wrong - an extra or missing strap, or one on the shoulder and one in the hand")
     return out
 
 

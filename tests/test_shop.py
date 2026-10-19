@@ -671,7 +671,8 @@ class TheDesignCheck(SceneBase):
     questions; code decides what counts as a problem."""
 
     GOOD = {"product_visible": True, "same_design": True, "words_a": "FERN", "words_b": "Fern!",
-            "differences": [], "added_text": False, "physically_real": True, "person_ok": True}
+            "differences": [], "added_text": False, "physically_real": True, "person_ok": True,
+            "straps_ok": True}
 
     def test_a_faithful_redraw_passes(self):
         self.assertEqual(self.sc.design_problems(self.GOOD), [], "case and punctuation are not a change")
@@ -685,7 +686,9 @@ class TheDesignCheck(SceneBase):
                              # Owner, 2026-10-16: "The bag isn't hanging off of anything."
                              (dict(physically_real=False), "the way a real one would"),
                              # Owner, 2026-10-16: headless shoppers - "This looks bad".
-                             (dict(person_ok=False), "the person is not whole")):
+                             (dict(person_ok=False), "the person is not whole"),
+                             # Owner, 2026-10-19: one strap on the shoulder, one in the hand.
+                             (dict(straps_ok=False), "the straps are wrong")):
             got = " | ".join(self.sc.design_problems(dict(self.GOOD, **change)))
             self.assertIn(said, got, change)
 
@@ -754,6 +757,20 @@ class PeopleAndRealPlaces(SceneBase):
         for start in range(len(kinds)):
             five = [kinds[(start + k) % len(kinds)] for k in range(5)]
             self.assertTrue(any(five) and not all(five), start)
+
+    def test_a_tote_is_carried_by_both_straps_in_one_place(self):
+        # Owner, 2026-10-19: "There is 2 straps in this picture so people will
+        # know its fake" - a shopper asked for "held by both straps" came back
+        # with one strap on his shoulder and the other in his hand.
+        people = [n for n, p in enumerate(self.places()) if not p.startswith(self.sc.FLAT_LAY)]
+        for n in people:
+            place = self.places()[n]
+            self.assertTrue(self.sc.ON_SHOULDER in place or self.sc.IN_HAND in place, place)
+            self.assertIn("never one on the shoulder and the other in the hand", self.sc.paid_prompt("tote bag", n))
+        self.assertFalse([p for p in self.places() if "by both straps" in p], "the wording that split them")
+        self.assertNotIn("straps", self.sc.paid_prompt("mug", 0).split("Nothing floats.")[1][:40],
+                         "a mug is not told about straps")
+        self.assertIn("straps_ok", self.sc.DESIGN_ASK)
 
     def test_every_scene_is_told_about_physics(self):
         self.assertIn("Nothing floats", self.sc.paid_prompt("tote bag", 0))
