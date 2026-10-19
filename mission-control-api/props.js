@@ -17,6 +17,9 @@ const path = require('path');
 const { ROOT } = require('./db');
 
 const SCRIPT = path.join(ROOT, 'scripts', 'props-forecast.py');
+// What each defense allows by position (nfl-defense.py). The page only reads
+// it: the ranks are worked out and saved by peter-defense.timer each morning.
+const DEFENSE = path.join(ROOT, 'scripts', 'nfl-defense.py');
 
 // ESPN event ids are digits. Anything else is refused before it gets near a
 // process - and the process is started with an argument array, never a shell
@@ -112,6 +115,17 @@ function register(app) {
         : `forecasting ${job.fixture || job.event_id} - grade when it finishes`, job });
     }
     res.status(202).json({ job: startJob('grade', ['grade']) });
+  });
+
+  // Defense vs position, as nfl-defense.py saved it. Read-only, no network.
+  app.get('/api/props/defense', (req, res) => {
+    execFile('python3', [DEFENSE, 'table', '--json'], { cwd: ROOT, timeout: 30000, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        let d = null;
+        try { d = err ? null : JSON.parse(stdout); } catch { d = null; }
+        if (!d) return res.json({ available: false, reason: String(stderr || '').trim().slice(-300) || 'unreadable' });
+        res.json({ available: Object.keys(d.teams || {}).length > 0, ...d });
+      });
   });
 
   // The calibration as numbers - props-forecast.py's own report, so the

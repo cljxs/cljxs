@@ -12398,9 +12398,10 @@ class ThePropsHallIsNotRebuiltUnderYourFingers(unittest.TestCase):
         self.assertIn('data-event="', body)
         self.assertNotIn("onclick", body)
 
-    def card(self, row):
+    def card(self, row, defense=None):
         """forecastCard() from the page, rendered by node - the real function,
-        lifted out with the two helpers it calls."""
+        lifted out with the helpers it calls. `defense` stands in for
+        /api/props/defense (nfl-defense.py table --json)."""
         node = shutil.which("node")
         if not node:
             self.skipTest("node is not installed")
@@ -12408,11 +12409,27 @@ class ThePropsHallIsNotRebuiltUnderYourFingers(unittest.TestCase):
         esc = re.search(r"const esc = .*\n", src).group(0)
         # A top-level function ends at the first "}" in column 0.
         fns = "".join(re.search(rf"^function {n}\(.*?^\}}\n", src, re.S | re.M).group(0)
-                      for n in ("recentChart", "fcTile", "forecastCard"))
-        js = esc + fns + f"process.stdout.write(forecastCard({json.dumps(row)}));"
+                      for n in ("recentChart", "fcTile", "opponentOf", "statWords", "dvClass",
+                                "defLine", "forecastCard"))
+        js = (esc + f"let DEF = {json.dumps(defense)};\n" + fns
+              + f"process.stdout.write(forecastCard({json.dumps(row)}));")
         r = subprocess.run([node, "-e", js], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout
+
+    def test_the_card_says_what_the_defense_allows(self):
+        # Owner, 2026-10-19: "the 49ers are allowing the 2nd most fantasy
+        # points ... to running backs". From nfl-defense.py's table, by the
+        # opponent read off the fixture.
+        dv = {"available": True, "of": 32, "words": {"WR": "wide receivers"}, "teams": {"SF": {"WR": {
+            "receptions": {"avg": 14.2, "rank": 2, "said": "2nd most"},
+            "fantasy_points": {"avg": 41.0, "rank": 30, "said": "3rd fewest"}}}}}
+        html = self.card(dict(self.ROW, fixture="HOU @ SF", position="WR"), defense=dv)
+        self.assertIn("vs SF D:", html)
+        self.assertIn("2nd most</b> receptions to wide receivers (14.2/g)", html)
+        self.assertIn("3rd fewest</b> WR fantasy pts", html)
+        self.assertNotIn("vs SF D", self.card(dict(self.ROW, fixture="HOU @ SF", position="WR")),
+                         "no table yet, no line")
 
     ROW = {"player": "Nico Collins", "team": "HOU", "market": "receptions", "unit": "rec",
            "probabilities": {"3": 86.7, "4": 66.1}, "interval": {"3": [81, 92], "4": [54, 77]},

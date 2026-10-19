@@ -94,6 +94,12 @@
   .recent{border-top:1px solid var(--line);padding-top:8px;margin-top:2px}
   .recent svg{display:block;width:100%;height:auto}
   .recent .none{color:var(--dim);font-size:11.5px;padding:6px 0}
+  .fcdef{font-size:11px;margin-top:6px;color:var(--mute);letter-spacing:.03em}
+  .fcdef b{font-weight:700}
+  .dv-soft{color:#3ee8a5} .dv-hard{color:#ff6b7a}
+  .dvtab{width:100%;border-collapse:collapse;font-size:11.5px;margin-top:8px}
+  .dvtab th{color:var(--mute);font-size:10px;letter-spacing:.1em;text-transform:uppercase;text-align:left;padding:4px 2px;font-weight:600}
+  .dvtab td{padding:4px 2px;border-top:1px solid var(--line)}
   .fcfoot{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:10.5px;letter-spacing:.06em;color:var(--mute);margin-top:8px}
   .fcwarn{color:var(--warn);font-weight:700}
   .fcline{color:var(--c20)}
@@ -188,6 +194,7 @@ let propsTab = null;
 let propsEvent = null;     // the game picked, or null for every forecast
 let propsPoll = null;
 let CAL = null;            // /api/props/calibration
+let DEF = null;            // /api/props/defense - what each defense allows by position
 
 /* ---- the weather: props-forecast.py names the kind, this only picks a picture ---- */
 const WX_ICON = { sun: '☀️', cloud: '⛅', rain: '🌧️', snow: '❄️', wind: '💨', dome: '🏟️' };
@@ -255,6 +262,44 @@ function fcTile(label, pct, on, band){
        + range + `</div>`;
 }
 
+/* ---------------- defense vs position (nfl-defense.py) ---------------- */
+
+async function loadDefense(){
+  try{ DEF = await (await fetch('/api/props/defense', {cache:'no-store'})).json(); }
+  catch(e){ DEF = null; }
+  drawProps();
+  drawGame(WEEK && WEEK.job);
+}
+// The other side of "WSH @ SF" (or "BAL VS DAL") from this player's team.
+function opponentOf(fixture, team){
+  const sides = String(fixture || '').split(/\s+(?:@|vs)\s+/i);
+  return sides.length === 2 ? (sides[0] === team ? sides[1] : sides[0]) : null;
+}
+function statWords(m){ return String(m).replace(/_tds$/, ' TDs').replace(/_/g, ' '); }
+// Easy matchup for the player (the defense allows a lot) is green, hard is red.
+function dvClass(r){ const n = (DEF && DEF.of) || 32; return r.rank <= 8 ? 'dv-soft' : r.rank > n - 8 ? 'dv-hard' : ''; }
+function defLine(f){
+  if(!DEF || !DEF.available) return '';
+  const opp = opponentOf(f.fixture, f.team);
+  const d = opp && DEF.teams[opp] && DEF.teams[opp][f.position];
+  if(!d) return '';
+  const r = d[f.market], fp = d.fantasy_points, words = (DEF.words || {})[f.position] || f.position;
+  return `<div class="fcdef">vs ${esc(opp)} D: ${r ? `<b class="${dvClass(r)}">${esc(r.said)}</b> ${esc(statWords(f.market))} to ${esc(words)} (${Number(r.avg).toFixed(1)}/g)` : ''}${
+    fp ? `${r ? ' · ' : ''}<b class="${dvClass(fp)}">${esc(fp.said)}</b> ${esc(f.position)} fantasy pts` : ''}</div>`;
+}
+// The picked game's two defenses, side by side: fantasy points allowed to each position.
+function defTable(g){
+  if(!DEF || !DEF.available || !g) return '';
+  const sides = [g.away, g.home].filter(t => DEF.teams[t]);
+  if(!sides.length) return '';
+  const cell = (t, pos) => { const r = DEF.teams[t][pos] && DEF.teams[t][pos].fantasy_points;
+    return r ? `<td><b class="${dvClass(r)}">${esc(r.said)}</b> <span class="muted">${Number(r.avg).toFixed(1)}</span></td>` : '<td>—</td>'; };
+  return `<div class="k" style="margin-top:14px">Defense vs position · fantasy pts allowed a game</div>
+    <table class="dvtab"><tr><th></th>${sides.map(t => `<th>${esc(t)} D (${DEF.teams[t].games} gm)</th>`).join('')}</tr>
+    ${['QB', 'RB', 'WR', 'TE'].map(pos => `<tr><td>${pos}</td>${sides.map(t => cell(t, pos)).join('')}</tr>`).join('')}</table>
+    <div class="note">PPR, through week ${esc(DEF.through_week)}. Green: allows the most (easy matchup). Red: allows the fewest. Shown, not used in the forecast.</div>`;
+}
+
 function forecastCard(f){
   const probs = f.probabilities || {};
   const keys = Object.keys(probs).map(Number).sort((x, y) => x - y);
@@ -277,6 +322,7 @@ function forecastCard(f){
         <div class="fcname">${esc(f.player)}</div>
         <div class="fcsub">${esc(f.team || '')}${f.position ? ' · ' + esc(f.position) : ''} · ${esc((f.market || '').replace(/_/g, ' '))}${
           lead !== null ? ' · ' + lead + '+' : ''}</div>
+        ${defLine(f)}
       </div>
       <div class="fcbig num">${lead === null ? '—' : Number(probs[String(lead)]).toFixed(1) + '%'}
         <div class="fcbigl">${lead === null ? '' : lead + '+'}${
@@ -406,6 +452,7 @@ function drawGame(job){
           <div class="l">${w.gust_mph !== null && w.gust_mph !== undefined ? 'gusts ' + Math.round(w.gust_mph) : 'mph'}</div></div>
       </div><div class="note">Worst over the three hours of the game. Shown, not used.</div>`}`
       : `<div class="note" style="margin-top:8px">${g.state === 'pre' ? 'No weather for this game yet.' : 'Played - no weather kept.'}</div>`}
+    ${defTable(g)}
     <div class="grun" style="margin-top:12px">${
       running ? `Forecasting <b>${esc(g.fixture)}</b>… reading two seasons of game logs from ESPN for every player. Usually well under a minute.`
       : failed ? `The forecast did not finish (exit ${esc(job.code)}). <button class="btn" data-rerun="${esc(g.event_id)}">Try again</button>`
@@ -597,6 +644,7 @@ $('propsBody').onclick = e => { const b = e.target.closest('[data-tab]'); if(b) 
 loadWeek();
 loadProps();
 loadCalibration();
+loadDefense();
 </script>
 </body>
 </html>
