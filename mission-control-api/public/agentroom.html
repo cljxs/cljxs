@@ -234,6 +234,10 @@ function renderTop() {
     pills.push(`<span class="pill">Daily cap ${dollars(b.cap)}</span>`);
   }
   pills.push(`<span class="pill">Run cap ${dollars(b.run_cap)}</span>`);
+  if (b.apps_cap != null) {
+    const cls = b.apps_today >= b.apps_cap ? 'r' : (b.apps_today > b.apps_cap * 0.75 ? 'a' : '');
+    pills.push(`<span class="pill ${cls}" title="What the built apps' AI helper spent today (resets 8pm Eastern)">Apps' AI ${dollars(b.apps_today)} of ${dollars(b.apps_cap)}</span>`);
+  }
   $('pills').innerHTML = pills.join('');
 
   const notes = [];

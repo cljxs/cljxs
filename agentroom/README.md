@@ -127,6 +127,18 @@ opens (or closes) a window of up to 4 hours now. It has a night's limits -
 are untouched, and every guard is the same. It spends your Claude plan's
 limits while you are using it too, which is why the night is the default.
 
+**The apps' AI helper** (owner, 2026-10-19). A built app may ask an AI:
+it POSTs `{"text": "..."}` to `_ai` beside its page, with the header
+`X-Agent-Room-App: 1`. The sites server hands it to `agentroom.py app-ai`,
+which uses the app's own `site/ai-instructions.txt` (never instructions from
+the page), `roles.json` app_ai's model, and the Agent Room's key - which never
+reaches the browser. Every ask is checked first against `apps_daily_ai` in
+tasks/limits.json ($0.25 a day, OpenRouter's UTC day) and the key's
+`agentroom_daily_ai`; an answer with no cost report counts as its worst case.
+Only an app the Agent Room built may ask; another website in Safari cannot
+(JSON plus the header need a CORS preflight, never answered). The page shows
+today's spend as "Apps' AI".
+
 ### Setting it up, on the droplet
 
     bash /root/ecosystem/scripts/agentroom-builder-setup.sh

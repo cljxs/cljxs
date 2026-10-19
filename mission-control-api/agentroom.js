@@ -31,6 +31,18 @@ function room(args, timeout = 30000) {
   });
 }
 
+// room() with a body on stdin - the apps' AI text never goes on a command line.
+function roomStdin(args, input, timeout = 120000) {
+  return new Promise(resolve => {
+    const child = execFile('python3', [path.join(ROOT, 'scripts', 'agentroom.py'), ...args], {
+      cwd: ROOT, timeout, maxBuffer: 4 * 1024 * 1024,
+    }, (err, stdout, stderr) => resolve({
+      ok: !err, stdout: String(stdout || ''), stderr: String(stderr || ''),
+    }));
+    child.stdin.end(input);
+  });
+}
+
 function said(r) {
   return (r.stderr || r.stdout || '').trim().split('\n').slice(-3).join(' ').slice(0, 500);
 }
@@ -103,6 +115,25 @@ function sitesApp() {
     res.set({ 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
               'Cache-Control': 'no-cache' });
     next();
+  });
+  // The apps' AI helper (owner, 2026-10-19): POST <app>/_ai {"text": "..."}.
+  // agentroom.py app-ai does every check and the spending; this only passes
+  // the text on. JSON with the X-Agent-Room-App header, from this origin
+  // only: a page on another site cannot send that without a CORS preflight,
+  // which is never answered - so it cannot spend the owner's daily cap.
+  app.post('/:slug/_ai', express.json({ limit: '64kb', type: 'application/json' }), async (req, res) => {
+    const { slug } = req.params;
+    if (!SLUG_RE.test(slug)) return res.status(404).json({ ok: false, error: 'no such app' });
+    if (req.get('X-Agent-Room-App') !== '1') return res.status(403).json({ ok: false, error: 'not from an app' });
+    const origin = req.get('Origin');
+    if (origin && origin !== `${req.protocol}://${req.get('host')}`) {
+      return res.status(403).json({ ok: false, error: 'not from this server' });
+    }
+    const t = (req.body || {}).text;
+    if (typeof t !== 'string') return res.status(400).json({ ok: false, error: 'send {"text": "..."}' });
+    const r = await roomStdin(['app-ai', slug], JSON.stringify({ text: t.slice(0, 7000) }));
+    try { return res.json(JSON.parse(r.stdout)); }
+    catch { return res.status(502).json({ ok: false, error: said(r) || 'the AI helper failed' }); }
   });
   app.use('/:slug', async (req, res, next) => {
     const { slug } = req.params;

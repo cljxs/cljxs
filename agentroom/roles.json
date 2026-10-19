@@ -26,7 +26,11 @@
     "judge (owner, 2026-10-16): the second opinion. When the watchdog holds",
     "for more than low concerns, it reads the same evidence; the build",
     "waits for the owner only if it agrees, or its reply cannot be read.",
-    "Low-only concerns carry on, listed in the Room. Paid like the others."
+    "Low-only concerns carry on, listed in the Room. Paid like the others.",
+    "app_ai (owner, 2026-10-19): the AI helper the built apps may ask, through",
+    "the sites server (POST <app>/_ai). Fast and cheap, as a person waits on",
+    "it. Capped by apps_daily_ai in tasks/limits.json, inside the key's",
+    "agentroom_daily_ai. The key never reaches the browser."
   ],
   "planner": {
     "name": "Kimi",
@@ -61,6 +65,11 @@
     "name": "DeepSeek",
     "model": "deepseek/deepseek-v4-pro",
     "max_tokens": 16000
+  },
+  "app_ai": {
+    "name": "DeepSeek Flash",
+    "model": "deepseek/deepseek-v4-flash",
+    "max_tokens": 4000
   },
   "builder": {
     "model": "sonnet",
