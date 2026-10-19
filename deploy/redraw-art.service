@@ -9,7 +9,11 @@ User=root
 Environment=HOME=/root
 WorkingDirectory=/root/ecosystem
 ExecStart=/usr/bin/python3 /root/ecosystem/scripts/emily-finish.py --redraw
-# Three redraws at up to 180s each, plus a draft each at up to 300s.
-TimeoutStartSec=1800
+# REDRAW_PER_RUN (3) builds, each a drawing (ART_TIMEOUT_S, 180s) and a
+# draft (DRAFT_TIMEOUT, 900s): 3240s. This said 1800 after drafts were given
+# 15 minutes, so a slow second draft was killed half way and its build left
+# undrafted with no reason on its card. Under the hour, so runs never overlap.
+# tests/test_shop.py checks this against the code's own numbers.
+TimeoutStartSec=3300
 StandardOutput=journal
 StandardError=journal

@@ -72,6 +72,11 @@ def _assets():
     return mod
 
 
+# How long one drawing may take, proofread redraws included. The Deck's
+# approval (scout.js) and the hourly redraw's service limit are sized from it.
+ART_TIMEOUT_S = 180
+
+
 def generate_artwork(slug, idea, brief, product, evidence=None):
     """Make the artwork here, in plain code, before Emily ever wakes.
 
@@ -114,7 +119,7 @@ def generate_artwork(slug, idea, brief, product, evidence=None):
              "--product", str(product or ""),
              # The proofread refuses art that prints this.
              "--name", str(idea or "")],
-            capture_output=True, text=True, timeout=180,
+            capture_output=True, text=True, timeout=ART_TIMEOUT_S,
         )
     except Exception as exc:
         return False, f"could not run emily-assets.py: {exc}"

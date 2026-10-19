@@ -19,6 +19,7 @@ odd, which is the thing you cannot see from the dashboard alone.
 Standard library only. Read-only: it changes nothing.
 """
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -96,15 +97,36 @@ def timer_next(unit):
     return ""
 
 
-def newest(path, pattern="*"):
+def newest(path, pattern="*", skip=()):
     """mtime of the newest matching file, or None."""
     try:
         if path.is_file():
             return path.stat().st_mtime
-        files = [f for f in path.glob(pattern) if f.is_file()]
+        files = [f for f in path.glob(pattern) if f.is_file() and f.name not in skip]
         return max(f.stat().st_mtime for f in files) if files else None
     except Exception:
         return None
+
+
+# Files in an agent's state/ that something other than its cycle writes on a
+# schedule. ace-fetch --close records every line move into Ace's lines.json
+# and his Pinnacle budget every 5 minutes of game hours, so "disk last" said
+# Ace ran a minute ago while his cycle was 10 hours old, and this called the
+# Deck wrong (2026-10-19). The names come from the scripts that own the files.
+WRITTEN_BY_OTHERS = {"ace": [("ace-clv.py", "LINES"), ("ace-sharp.py", "USAGE")]}
+
+
+def not_a_run(name):
+    out = set()
+    for file, attr in WRITTEN_BY_OTHERS.get(name, []):
+        try:
+            spec = importlib.util.spec_from_file_location(file.replace("-", "_")[:-3], Path(__file__).resolve().parent / file)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            out.add(getattr(mod, attr).name)
+        except Exception as exc:
+            print(f"!! could not read {attr} from {file} ({exc}) - its file counts as a run")
+    return out
 
 
 def deck():
@@ -153,7 +175,7 @@ def main():
         # The newest thing the agent wrote, whatever kind of file it is.
         disk = max((t for t in (
             newest(adir / "reports", "*.md"),
-            newest(adir / "state", "*.json"),
+            newest(adir / "state", "*.json", skip=not_a_run(name)),
             newest(adir / "state" / "last-run.txt"),
             newest(adir / "MEMORY.md"),
         ) if t), default=None)

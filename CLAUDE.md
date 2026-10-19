@@ -85,6 +85,10 @@ shows what runs where; `wake.py check` tests the plan's login.
 
 ## Things that have bitten
 
+* **Restart the Deck with `scripts/restart-deck.py`, not `systemctl
+  restart`.** A restart stops every process the Deck started - an approval
+  drawing a design, Try again drafting, a TikTok kit - half way. The script
+  waits until none is running (`--status` shows what is).
 * **Never `pkill -f` on a port or command pattern.** It has matched this
   session's own shell twice and killed it. Use a fresh port instead.
 * **Credentials never leave the droplet.** They live in

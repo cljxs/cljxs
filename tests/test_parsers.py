@@ -17938,8 +17938,7 @@ class TheDeckWaitsForTheArt(unittest.TestCase):
     def test_the_deck_outwaits_the_art_step(self):
         js = (ROOT / "mission-control-api" / "scout.js").read_text()
         ms = int(re.search(r"timeout:\s*(\d+)", js.split("function runReview", 1)[1]).group(1))
-        art = int(re.search(r"timeout=(\d+)", (SCRIPTS / "emily-new-build.py").read_text()
-                            .split("def generate_artwork(", 1)[1]).group(1))
+        art = load("emily_new_build_art", "emily-new-build.py").ART_TIMEOUT_S
         self.assertGreater(ms / 1000, art)
 
 
