@@ -121,11 +121,66 @@ class KitWords(unittest.TestCase):
         self.assertIn("#etsyfinds", cap)
         self.assertLessEqual(len(cap), self.tk.CAPTION_MAX)
 
+    def test_the_video_gets_its_own_caption(self):
+        # Owner, 2026-10-19: "Can you make a caption for the videos as well /
+        # Hashtags as well". The video is a second post: its own opening line
+        # and its own hashtags, the same listing words and link line.
+        hook = "Rate this tote bag 1-10"
+        cap = self.tk.caption_for(ROW, hook, "VintageLoom Treasures on Etsy")
+        vid = self.tk.video_caption_for(ROW, hook, "VintageLoom Treasures on Etsy")
+        first = vid.split("\n")[0]
+        self.assertNotIn(hook, first, "never the carousel's opening line")
+        self.assertTrue(any(first.startswith(h.format(thing="tote bag", who="book lover")) for h in self.tk.HOOKS))
+        self.assertIn("A sturdy canvas tote printed with antique fern plates.", vid)
+        self.assertIn("Link in bio - VintageLoom Treasures on Etsy", vid)
+        tags_c, tags_v = (set(c.split("\n\n")[-1].split()) - {"#etsyfinds", "#smallbusiness"} for c in (cap, vid))
+        self.assertTrue(tags_v and tags_v != tags_c, "a different mix of the listing's tags")
+        self.assertIn("#etsyfinds", vid)
+        self.assertLessEqual(len(vid), self.tk.CAPTION_MAX)
+
+    def test_a_listing_with_few_tags_still_gets_hashtags_on_the_video(self):
+        row = dict(ROW, tags=["fern tote bag"])
+        self.assertEqual(self.tk.hashtags(row["tags"], skip=3), ["#etsyfinds", "#smallbusiness", "#ferntotebag"])
+
     def test_the_sound_note_names_the_commercial_library(self):
         # A business account that uses a sound outside it can be muted.
         text = self.tk.audio_for("tote bag")
         self.assertIn("Commercial Music", text)
         self.assertIn("silent on purpose", text)
+
+
+class KitsMadeBeforeTheVideoCaption(unittest.TestCase):
+    """The kit on the owner's screen when the video caption was asked for
+    (2026-10-19) was made the day before: it gets one, from its listing."""
+
+    def setUp(self):
+        self.tk = load("tiktok_kit_backfill", "tiktok-kit.py")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.kits = Path(self.tmp.name)
+        p = unittest.mock.patch.object(self.tk, "KITS", self.kits)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def kit(self, kid, status="needs_review", listing_id=ROW["listing_id"]):
+        (self.kits / kid).mkdir()
+        return {"id": kid, "status": status, "listing_id": listing_id, "hook": "Rate this tote bag 1-10"}
+
+    def test_an_unposted_kit_gets_one_and_only_once(self):
+        kits = [self.kit("2026-10-17-1"), self.kit("2026-10-16-2", status="posted"),
+                self.kit("2026-10-15-3", listing_id=999)]
+        self.assertEqual(self.tk.backfill_video_captions(kits, rows=[ROW]), 1)
+        made = (self.kits / "2026-10-17-1" / "video-caption.txt").read_text()
+        self.assertIn("Link in bio", made)
+        self.assertFalse((self.kits / "2026-10-16-2" / "video-caption.txt").exists(), "a posted kit is done")
+        self.assertFalse((self.kits / "2026-10-15-3" / "video-caption.txt").exists(),
+                         "a listing no longer in the snapshot gets nothing made up")
+        self.assertEqual(self.tk.backfill_video_captions(kits, rows=[ROW]), 0)
+
+    def test_the_shop_page_shows_and_copies_it(self):
+        page = (API / "public" / "shop.html").read_text()
+        self.assertIn('<pre id="vcap">', page)
+        self.assertIn('data-copy="vcap"', page)
 
 
 class WhoIsFeaturedNext(unittest.TestCase):
@@ -198,7 +253,7 @@ class KitOnDisk(unittest.TestCase):
         self.assertAlmostEqual(secs, kit["video_seconds"], delta=0.25)
         names = set(zipfile.ZipFile(k / f"{kit['id']}.zip").namelist())
         self.assertEqual(names, {f"{kit['id']}/photos/{s.name}" for s in slides}
-                         | {f"{kit['id']}/{n}" for n in ("video.mp4", "caption.txt", "audio.txt")})
+                         | {f"{kit['id']}/{n}" for n in ("video.mp4", "caption.txt", "video-caption.txt", "audio.txt")})
         saved = json.loads((k / "kit.json").read_text())
         self.assertEqual((saved["status"], saved["listing_id"], saved["slides"]), ("ready", 4412345678, 4))
         self.assertEqual([x["id"] for x in self.tk.read_kits()], [kit["id"]])

@@ -281,15 +281,19 @@ def hashtag(tag):
     return t if 3 <= len(t) <= 24 else None
 
 
-def hashtags(tags):
-    out = list(HASHTAGS_FIXED)
+def hashtags(tags, skip=0):
+    """The fixed few, then HASHTAGS_FROM_TAGS from the listing's own tags,
+    starting `skip` usable tags in (wrapping round), so a second post can
+    reach different searches with the same listing's words."""
+    usable = []
     for t in tags or []:
         h = hashtag(t)
-        if h and h not in out:
-            out.append(h)
-        if len(out) >= len(HASHTAGS_FIXED) + HASHTAGS_FROM_TAGS:
-            break
-    return ["#" + h for h in out]
+        if h and h not in usable and h not in HASHTAGS_FIXED:
+            usable.append(h)
+    if usable:
+        k = skip % len(usable)
+        usable = usable[k:] + usable[:k]
+    return ["#" + h for h in HASHTAGS_FIXED + usable[:HASHTAGS_FROM_TAGS]]
 
 
 def caption_for(row, hook, shop_line):
@@ -304,6 +308,29 @@ def caption_for(row, hook, shop_line):
     parts.append(" ".join(hashtags(row.get("tags"))))
     text = "\n\n".join(parts)
     return text[:CAPTION_MAX]
+
+
+def video_hook_for(row, hook):
+    """The video post's opening line: the hook after the carousel's in the
+    rotation, so the two posts never open with the same words."""
+    thing, who = thing_of(row.get("title")), who_of(row.get("tags"))
+    usable = [h.format(thing=thing, who=who or "") for h in HOOKS if "{who}" not in h or who]
+    return usable[(usable.index(hook) + 1) % len(usable)] if hook in usable else usable[0]
+
+
+def video_caption_for(row, hook, shop_line):
+    """video-caption.txt (owner, 2026-10-19: "Can you make a caption for the
+    videos as well"). The slideshow is a second post, so it gets its own
+    opening line and its own hashtags rather than the carousel's caption
+    twice. Built like caption_for, from the listing's own words."""
+    opener = video_hook_for(row, hook)
+    lead = _store().first_sentence(row.get("description"), 180)
+    parts = [opener if re.search(r"[.!?]$", opener) else opener + " 🎬"]
+    if lead:
+        parts.append(lead)
+    parts.append(f"🛒 Link in bio - {shop_line}")
+    parts.append(" ".join(hashtags(row.get("tags"), skip=HASHTAGS_FROM_TAGS)))
+    return "\n\n".join(parts)[:CAPTION_MAX]
 
 
 AI_NOTE = ["BEFORE YOU POST: some slides are AI-made pictures of your product. In",
@@ -612,8 +639,9 @@ def package(folder, kid):
         # names, never in the download.
         for n, sl in enumerate(slides, start=1):
             z.write(sl, f"{kid}/photos/{n:02d}.jpg")
-        for name in ("video.mp4", "caption.txt", "audio.txt"):
-            z.write(folder / name, f"{kid}/{name}")
+        for name in ("video.mp4", "caption.txt", "video-caption.txt", "audio.txt"):
+            if (folder / name).is_file():
+                z.write(folder / name, f"{kid}/{name}")
     (folder / f"{kid}.zip.part").replace(zpath)
     return slides, seconds
 
@@ -667,6 +695,7 @@ def build_kit(row, photos, day, shop_line, turn, scenes=SCENES_PER_KIT, maker=No
                                        "source": rep.get("source"), "checks": rep.get("checks"),
                                        "cost": rep.get("cost")})
         (part / "caption.txt").write_text(caption_for(row, hook, shop_line) + "\n")
+        (part / "video-caption.txt").write_text(video_caption_for(row, hook, shop_line) + "\n")
         (part / "audio.txt").write_text(audio_for(thing, bool(ai_slides)))
         slides, seconds = package(part, kid)
         kit = {"day": day, "listing_id": int(row["listing_id"]),
@@ -911,17 +940,43 @@ def _make(a):
     return 0
 
 
+def backfill_video_captions(kits, rows=None):
+    """Kits made before the video got its own caption get one, once, from the
+    listing as the latest store snapshot has it. A listing no longer there
+    is left without - nothing is made up."""
+    todo = [k for k in kits if k.get("status") != "posted" and (KITS / k["id"]).is_dir()
+            and not (KITS / k["id"] / "video-caption.txt").is_file()]
+    if not todo:
+        return 0
+    if rows is None:
+        try:
+            snaps = _store().snapshots()
+            rows = (snaps[-1] if snaps else {}).get("listings") or []
+        except Exception:
+            return 0
+    by_id = {str(r.get("listing_id")): r for r in rows}
+    made = 0
+    for k in todo:
+        row = by_id.get(str(k.get("listing_id")))
+        if row and k.get("hook"):
+            (KITS / k["id"] / "video-caption.txt").write_text(
+                video_caption_for(row, k["hook"], _store().SHOP_LINE) + "\n")
+            made += 1
+    return made
+
+
 def cmd_list(a):
     kits = read_kits()
     if a.json:
         # The words ride along, so the page can show and copy them without
         # a second request per kit.
+        backfill_video_captions(kits)
         for k in kits:
-            for name in ("caption", "audio"):
+            for key, name in (("caption", "caption"), ("audio", "audio"), ("video_caption", "video-caption")):
                 try:
-                    k[name] = (KITS / k["id"] / f"{name}.txt").read_text()
+                    k[key] = (KITS / k["id"] / f"{name}.txt").read_text()
                 except OSError:
-                    k[name] = None
+                    k[key] = None
         print(json.dumps({"kits": kits, "today": et_time.day(),
                           "to_post": sum(1 for k in kits if k.get("status") != "posted")}))
         return 0

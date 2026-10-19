@@ -298,10 +298,12 @@ function tiktok(kits) {
         ${stale ? '<div class="rebuild">⏳ Rebuilding the video and the zip without the dropped slides - this updates by itself.</div>'
           : '<div class="said">Silent on purpose - add the sound in TikTok.</div>'}</div>
     </div>
-    <div><div class="k">Caption</div><pre id="cap">${esc(k.caption || '')}</pre></div>
+    <div><div class="k">${k.video_caption ? 'Carousel caption' : 'Caption'}</div><pre id="cap">${esc(k.caption || '')}</pre></div>
+    ${k.video_caption ? `<div><div class="k">Video caption</div><pre id="vcap">${esc(k.video_caption)}</pre></div>` : ''}
     ${k.audio ? `<details><summary class="said">Sound to add</summary><pre>${esc(k.audio)}</pre></details>` : ''}
     <div class="acts">
-      <button class="btn" data-copy="cap">Copy caption</button>
+      <button class="btn" data-copy="cap">Copy ${k.video_caption ? 'carousel ' : ''}caption</button>
+      ${k.video_caption ? '<button class="btn" data-copy="vcap">Copy video caption</button>' : ''}
       ${stale ? '<span class="said">Downloads return when the video is rebuilt</span>'
         : `<a class="btn" href="${base}/file/kit.zip">⬇ Download set (.zip)</a>
       <a class="btn" href="${base}/file/video.mp4?dl=1">⬇ Video</a>`}
