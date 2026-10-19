@@ -406,5 +406,21 @@ class TheApi(unittest.TestCase):
             self.assertEqual(out["retry"][0], 409, "a run that has not failed is not retried")
 
 
+class TheOwnersDevice(unittest.TestCase):
+    def test_every_ai_that_shapes_a_build_knows_the_owner_has_only_an_ipad(self):
+        # Guards: a plan for something the owner cannot try - a Firefox
+        # extension built over four days, then unusable from an iPad
+        # (owner, 2026-10-19) - and plans that use the owner's real accounts.
+        m = load()
+        for name in ("PLANNER_SYSTEM", "REVIEWER_SYSTEM", "BUILDER_RULES"):
+            self.assertIn("iPad", getattr(m, name), name)
+        self.assertIn("Never a browser extension", m.PLANNER_SYSTEM)
+        self.assertIn("real accounts", m.PLANNER_SYSTEM)
+        spec = importlib.util.spec_from_file_location("stan_under_test", SCRIPTS / "stan.py")
+        stan = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(stan)
+        self.assertIn("iPad", stan.SYSTEM, "Stan scores what can be built for it")
+
+
 if __name__ == "__main__":
     unittest.main()

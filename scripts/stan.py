@@ -258,7 +258,10 @@ solutions only if the posts say it; otherwise "unknown - needs checking".
 
 Scores, 0-10, your judgement:
   pay_strength   how clearly someone would pay money for it
-  buildability   10 = a small team ships it in weeks; 0 = needs a giant
+  buildability   10 = a small team ships it in weeks AS A WEB APP the owner can
+                 use in Safari on an iPad (they have no computer); low for
+                 anything that can only be a browser extension, a desktop or
+                 phone app, or needs hardware; 0 = needs a giant
   gap            10 = nothing does this; 0 = a good product already does
 
 Reply with ONLY one JSON object:

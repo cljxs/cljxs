@@ -584,11 +584,17 @@ Write a phased build plan:
   request and its expected answer, a file that must exist). Never "looks good".
 - Nothing that leaves the computer without the owner: no deploying, payments,
   sending email or posting. Say where the owner must decide, in questions.
-- Unless the idea truly needs something else, make it a static web app the
-  owner can open on a tablet: HTML, CSS and JavaScript in a site/ folder that
-  works by opening site/index.html with no server, data kept in the browser,
-  tests with Node's built-in runner. `bash check.sh` is the one command that
-  runs every test; phase 1 creates it.
+- The owner has ONLY an iPad - no computer - and must be able to use what is
+  built (owner, 2026-10-19, after a Firefox extension they could not try).
+  So make it a static web app that works in Safari on an iPad: HTML, CSS and
+  JavaScript in a site/ folder that works by opening site/index.html with no
+  server, touch-friendly on a tablet screen, data kept in the browser, tests
+  with Node's built-in runner. Never a browser extension, desktop or phone
+  app, or command-line tool. Never the owner's real accounts or private data
+  (email, bank, social media): any sample data is made up, inside the
+  project. If the idea cannot work that way, plan the closest version that
+  can and say what changed in questions. `bash check.sh` is the one command
+  that runs every test; phase 1 creates it.
 
 Reply with ONLY one JSON object, no other text, in this shape:
 {PLAN_SHAPE}"""
@@ -599,7 +605,8 @@ a coding agent; code will judge each phase only by running its done_when checks.
 Find what is wrong with the plan: missing pieces, phases too big to build in
 one sitting, done_when checks that a program cannot actually run, wrong order,
 security and privacy problems, anything that would cost the owner money or
-reach outside the computer. Do not rewrite the plan.
+reach outside the computer, and anything the owner could not use or try from
+an iPad in Safari - they have no computer. Do not rewrite the plan.
 
 Reply with ONLY one JSON object, no other text:
 {"verdict": "approve" or "changes",
@@ -1161,7 +1168,8 @@ every phase:
   pass without running the tests. A reviewer reads every change, check.sh too.
 - Unless PLAN.md says otherwise: a static web app. Its pages live in site/, and
   site/index.html must work when opened in a browser with no server; data kept
-  in the browser (localStorage). Tests with Node's built-in runner (node --test).
+  in the browser (localStorage). The owner uses it in Safari on an iPad: make
+  it work by touch, on a tablet-sized screen. Tests with Node's built-in runner (node --test).
   Prefer no packages at all.
 - You cannot install packages: your commands cannot write package files, and
   the guard refuses npm install. To use one, add it to package.json
