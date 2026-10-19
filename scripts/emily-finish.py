@@ -184,9 +184,11 @@ def retry(raw):
     if _json(d / "build.json").get("published"):
         print(f"emily-finish: {d.name} is on sale - not touching a live listing")
         return 1
-    ea = _module("emily_assets_retry", "emily-assets.py")
-    art = d / "design.png"
-    if not art.is_file() or ea.is_placeholder(art):
+    # Emily never had it: drafting needs the listing she writes, so the
+    # missing step is her task, after the art if that is missing too.
+    if not (d / "listing.json").is_file() and not _json(d / "build.json").get("printify_product_id"):
+        return to_emily(d)
+    if needs_art(d):
         print(f"emily-finish: {d.name} has no real art - drawing it again, then drafting")
         return redo(raw)
     if not _json(d / "build.json").get("printify_product_id"):
@@ -358,21 +360,49 @@ def _json(path):
         return {}
 
 
-def stuck(builds_root):
-    """Builds with no Printify draft whose art is still the placeholder, and
-    either a listing to draft from or an order to send to Emily (a build
-    held at approval because the art failed). Oldest first."""
-    ea = _module("emily_assets_redraw", "emily-assets.py")
+def needs_art(d):
+    """No design.png at all, or the placeholder. One answer for the Try again
+    button and the hourly redraw: the redraw used to ask only "placeholder?",
+    so a build with NO art file was never redrawn by anything."""
+    art = Path(d) / "design.png"
+    return not art.is_file() or _module("emily_assets_needs", "emily-assets.py").is_placeholder(art)
+
+
+# An approval draws for up to 180 s (emily-new-build) under the Deck's 240 s
+# limit. A folder with an order and no art older than this is not mid-drawing:
+# its approval was stopped - the "pond side reaction frog sticker", 2026-10-19,
+# a folder with order.json, no picture, no build.json and no task.
+ABANDONED_AFTER_S = 15 * 60
+
+
+def _when(d):
+    for f in ("design.png", "order.json"):
+        if (d / f).is_file():
+            return (d / f).stat().st_mtime
+    return d.stat().st_mtime
+
+
+def stuck(builds_root, now=None):
+    """Builds with no Printify draft and no real art, and either a listing to
+    draft from or an order to send to Emily (held at approval because the
+    art failed, or an approval stopped half way). Oldest first."""
+    now = now if now is not None else datetime.now(timezone.utc).timestamp()
     out = []
     for d in sorted(Path(builds_root).iterdir() if Path(builds_root).is_dir() else []):
         if not d.is_dir() or d.name.startswith("_"):
             continue
         if _json(d / "build.json").get("printify_product_id"):
             continue
-        if ((d / "listing.json").is_file() or (d / "order.json").is_file()) \
-                and ea.is_placeholder(d / "design.png"):
-            out.append(d)
-    return sorted(out, key=lambda d: (d / "design.png").stat().st_mtime)
+        listed, ordered = (d / "listing.json").is_file(), (d / "order.json").is_file()
+        if not (listed or ordered) or not needs_art(d):
+            continue
+        if not (d / "design.png").is_file():
+            # No file at all: only a build Emily never had (one she listed
+            # may name its art otherwise), and only once its approval is over.
+            if listed or now - _when(d) < ABANDONED_AFTER_S:
+                continue
+        out.append(d)
+    return sorted(out, key=_when)
 
 
 def generate(d):
@@ -392,15 +422,16 @@ def redraw(limit=REDRAW_PER_RUN):
     """Redraw and draft up to `limit` stuck builds. Stops at the first redraw
     that is still a placeholder: the money or the model is still out, and the
     rest would fail the same way at a cost."""
-    ea = _module("emily_assets_redraw2", "emily-assets.py")
     todo = stuck(ROOT / "agents" / "emily" / "builds")
     print(f"emily-finish: {len(todo)} build(s) waiting on real art")
     for d in todo[:limit]:
         ok, msg = generate(d)
         print(f"  {d.name}: {msg}")
-        if not ok or ea.is_placeholder(d / "design.png"):
+        if not ok or needs_art(d):
             note_draft(d, {"reason": f"redraw still failing: {msg}"[:REASON_CHARS], "exit": 1,
                            "when_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")})
+            if not (d / "listing.json").is_file():
+                _module("emily_new_build_hold", "emily-new-build.py").hold(d)   # the card says waiting, not "no record"
             print("  still no real art - stopping until the next run")
             return 0
         if (d / "listing.json").is_file():
@@ -408,6 +439,26 @@ def redraw(limit=REDRAW_PER_RUN):
         else:
             send_to_emily(d)
     return 0
+
+
+def to_emily(d):
+    """A build Emily never had - its approval stopped before her task was
+    queued. Draw the art if it is missing, then queue her task. Without real
+    art it is held, and the hourly redraw carries on from there."""
+    if not (d / "order.json").is_file():
+        print(f"emily-finish: {d.name} has no order.json - nothing records what it was "
+              f"approved as. Approve the idea again, or remove this folder.")
+        return 1
+    if needs_art(d):
+        print(f"emily-finish: {d.name} never reached Emily and has no real art - drawing it")
+        ok, msg = generate(d)
+        print(f"  {d.name}: {msg}")
+        if not ok or needs_art(d):
+            _module("emily_new_build_hold", "emily-new-build.py").hold(d)
+            print("  no real art yet - it waits, and the hourly redraw tries again")
+            return 1
+    print(f"emily-finish: {d.name} has its art - sending it to Emily")
+    return send_to_emily(d)
 
 
 def send_to_emily(d):

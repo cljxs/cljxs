@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 import unittest.mock
 import zipfile
@@ -1419,6 +1420,7 @@ class TryAgainInTheGallery(unittest.TestCase):
 
     def build(self, **kw):
         (self.d / "build.json").write_text(json.dumps(dict({"status": "ready_local"}, **kw)))
+        (self.d / "listing.json").write_text(json.dumps({"title": "Side-Eye Cat"}))   # Emily has built it
 
     def art(self, placeholder=False):
         mark = b"emily-assets placeholder - not artwork" if placeholder else b""
@@ -1477,6 +1479,84 @@ class TryAgainInTheGallery(unittest.TestCase):
     def run_quiet_draft(self):
         with contextlib.redirect_stdout(io.StringIO()):
             return self.m.draft(self.d)
+
+
+class AnApprovalThatNeverFinished(unittest.TestCase):
+    """2026-10-19, the "pond side reaction frog sticker": a build folder with
+    the order in it and nothing else - no picture, no build.json, no task.
+    Its approval stopped part way through drawing. The hourly redraw only
+    looked for PLACEHOLDER art, so a build with no art file at all was never
+    picked up, and Try again went straight to drafting, which needs a listing
+    Emily had never written."""
+
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("emily_finish_orphan", SCRIPTS / "emily-finish.py")
+        self.m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.m)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.builds = Path(self.tmp.name)
+        self.d = self.builds / "pond-side-reaction-frog-sticker"
+        self.d.mkdir()
+        (self.d / "order.json").write_text(json.dumps(
+            {"product": "sticker", "name": "pond side reaction frog sticker", "brief": "frog"}))
+        self.m.find_build = lambda raw: self.d
+        self.drawn, self.sent, self.held = [], [], []
+        self.m.redo = lambda *a, **k: self.fail("redo drafts - there is nothing to draft from")
+        self.m.draft = lambda d: self.fail("nothing to draft before Emily has listed it")
+        self.m.send_to_emily = lambda d: self.sent.append(d.name) or 0
+        real = self.m._module
+        hold = types.SimpleNamespace(hold=lambda d: self.held.append(d.name))
+        self.m._module = lambda name, file: hold if file == "emily-new-build.py" else real(name, file)
+
+    def draws(self, real_art):
+        def generate(d):
+            self.drawn.append(d.name)
+            mark = b"" if real_art else b"emily-assets placeholder - not artwork"
+            (d / "design.png").write_bytes(b"\x89PNG\r\n\x1a\n" + mark + b"x" * 3000)
+            return True, "design.png"
+        self.m.generate = generate
+
+    def retry(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return self.m.retry(self.d.name)
+
+    def test_try_again_draws_it_then_sends_it_to_emily(self):
+        self.draws(real_art=True)
+        self.assertEqual(self.retry(), 0)
+        self.assertEqual((self.drawn, self.sent, self.held), ([self.d.name], [self.d.name], []))
+
+    def test_a_drawing_that_fails_again_is_held_for_the_hourly_redraw(self):
+        self.draws(real_art=False)
+        self.assertEqual(self.retry(), 1)
+        self.assertEqual((self.sent, self.held), ([], [self.d.name]))
+
+    def test_real_art_that_never_reached_emily_is_only_sent(self):
+        (self.d / "design.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 3000)
+        self.draws(real_art=True)
+        self.assertEqual(self.retry(), 0)
+        self.assertEqual((self.drawn, self.sent), ([], [self.d.name]), "no money spent redrawing good art")
+
+    def test_without_an_order_it_says_so_and_does_nothing(self):
+        (self.d / "order.json").unlink()
+        self.draws(real_art=True)
+        self.assertEqual(self.retry(), 1)
+        self.assertEqual((self.drawn, self.sent), ([], []))
+
+    def test_the_hourly_redraw_adopts_it_once_the_approval_is_over(self):
+        made = (self.d / "order.json").stat().st_mtime
+        self.assertEqual(self.m.stuck(self.builds, now=made + 60), [], "may still be drawing")
+        self.assertEqual(self.m.stuck(self.builds, now=made + 16 * 60), [self.d])
+
+    def test_a_build_emily_listed_without_a_design_png_is_not_redrawn_by_the_timer(self):
+        # She may have named her art otherwise; Try again still covers it.
+        (self.d / "listing.json").write_text("{}")
+        made = (self.d / "order.json").stat().st_mtime
+        self.assertEqual(self.m.stuck(self.builds, now=made + 99 * 60), [])
+
+    def test_the_card_says_what_to_do(self):
+        js = (API / "emily.js").read_text()
+        self.assertIn("Try again draws the art if it is missing and sends it to her", js)
 
     def test_the_gallery_offers_it_and_the_api_runs_it(self):
         html = (API / "public" / "village.html").read_text()

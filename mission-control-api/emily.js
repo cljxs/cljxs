@@ -137,7 +137,8 @@ function statusWords(status, task) {
                  + `or remove this folder.` };
     case 'no_record':
       return { label: 'no build record', warn: true,
-               note: 'No build.json and no task in the queue for this folder - nothing is working on it.' };
+               note: 'Its approval stopped before Emily got it: no build record, no task in the queue. '
+                 + 'Try again draws the art if it is missing and sends it to her; the hourly redraw also picks it up.' };
     default: return { label: String(status).replace(/_/g, ' '), warn: false, note: null };
   }
 }
