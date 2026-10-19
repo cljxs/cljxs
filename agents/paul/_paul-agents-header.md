@@ -62,32 +62,47 @@ every photo, and each file can be written in one go.
 
 ## 1. SCOUT: find prospects
 
-Search public sources (maps, directories, search) in the FACTS area - and
-if FACTS has a FOCUS line, only that kind of business; code refuses any
-other. A
-business qualifies only with at least one problem a person could check:
+**Start with FACTS `leads`.** Code searched Google's business listings in
+the area and the nearby towns before waking you, and checked the sites the
+businesses have. Each lead is a starting point, not a fact: open its Maps
+link and its other sources, and confirm it before you list it. **A Google
+listing with no website on it is your evidence for `no-site`** - cite the
+Maps link in the evidence and in `sources`. A business whose only page is
+Facebook or Instagram is `social-only`, with that page as `current_site`.
+When the leads run out, search the FACTS area (every town it lists) yourself.
+If FACTS has a FOCUS line, only that kind of business; code refuses any other.
+
+A business qualifies with at least one problem a person could check:
 
     no-site      no website by search or on its Maps listing
+    social-only  its only web presence is a Facebook or Instagram page
     dead-domain  its web address does not load
     parked       the domain shows a parking or for-sale page
     no-https     it only loads without HTTPS
     not-mobile   unusable on a phone
+    no-seo       the home page has no title or no description for search engines
+    outdated     the newest copyright year on the page is 3+ years old
     broken       broken links or images
     wrong-info   wrong hours, phone or address
 
-Prefer ones with a public email **that the business itself published** - on
-its own site, Facebook page or Google listing. Never from an aggregator or
-an AI travel/review site: Milkbox's came from one, at a domain that no
-longer exists. Code looks the domain up and refuses an email that would
-bounce; use their Facebook or Instagram (a DM) instead. Before you commit to
-one:
+Code checks social-only, no-https, not-mobile, no-seo and outdated on the
+page itself - write the code, code confirms it.
+
+**An email is NOT required.** You need one way the owner can reach them:
+email, their Facebook or Instagram page (a DM), or their phone - any of the
+three is a good prospect. Use an email only if **the business itself
+published it** - on its own site, Facebook page or Google listing - never
+one from an aggregator or an AI travel/review site (Milkbox's came from one,
+at a domain that no longer exists). Code refuses an email that would bounce.
+Before you commit to one:
 
     python3 ../../scripts/paul.py seen "<name>" "<phone>"
 
 SEEN means already pitched or excluded - pick another; the FACTS skip list
-also names every prospect already listed, approved or rejected. Find as
-many as FACTS asks for, looking at about fifteen candidates at most, and
-write them all to `work/prospects.json`:
+also names every prospect already listed, approved or rejected. **Keep going
+until you have as many as FACTS asks for or have looked at about fifteen
+candidates** - stopping at six is giving up early. Write them all to
+`work/prospects.json`:
 
     {"prospects": [
       {"name": "...", "category": "dog grooming", "kind": "trade|food|salon|retail|other",

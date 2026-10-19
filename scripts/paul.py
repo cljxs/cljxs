@@ -147,9 +147,16 @@ FREEBIE = ("no strings attached", "yours to keep", "for free", "free of charge",
            "no charge", "on the house", "free website", "free site")
 
 # What makes a business a target. Each one is something a person can check,
-# so "their site looks dated" is not on the list - that is a vibe.
+# so "their site looks dated" is not on the list - that is a vibe. The last
+# three (owner, 2026-10-19: Paul checked six businesses and found nothing,
+# because a working-but-weak site counted for nothing) are weak, not broken,
+# and code confirms each from the page itself.
+OUTDATED_YEARS = 3
 PROBLEMS = {
     "no-site": "no website findable by search or on its Maps listing",
+    "social-only": "its only web presence is a Facebook or Instagram page",
+    "no-seo": "the home page has no title or no description for search engines",
+    "outdated": f"the newest copyright year on the page is {OUTDATED_YEARS}+ years old",
     "dead-domain": "the website address does not load at all",
     "parked": "the domain shows a parking or for-sale page",
     "no-https": "the site only loads without HTTPS",
@@ -157,6 +164,27 @@ PROBLEMS = {
     "broken": "broken links or images",
     "wrong-info": "wrong key information (hours, phone, address)",
 }
+SOCIAL_HOSTS = ("facebook.com", "fb.com", "fb.me", "instagram.com")
+
+
+def is_social(url):
+    host = urllib.parse.urlparse(url if "//" in str(url) else "https://" + str(url)).netloc.lower()
+    return any(host == h or host.endswith("." + h) for h in SOCIAL_HOSTS)
+
+
+def seo_basics(body):
+    """(has a title, has a description) on a page."""
+    title = re.search(r"<title[^>]*>\s*[^<\s][^<]*</title>", body or "", re.I)
+    desc = re.search(r"<meta[^>]+name=[\"']?description[\"']?[^>]+content=[\"']\s*[^\"'\s]", body or "", re.I) or \
+        re.search(r"<meta[^>]+content=[\"']\s*[^\"'\s][^>]+name=[\"']?description", body or "", re.I)
+    return bool(title), bool(desc)
+
+
+def copyright_year(body):
+    """The newest year written next to a copyright mark, or None."""
+    years = [int(y) for y in re.findall(r"(?:©|&copy;|&#169;|copyright)\s*(?:\d{4}\s*[-–]\s*)?((?:19|20)\d{2})",
+                                        body or "", re.I)]
+    return max(years) if years else None
 
 # The quality bar. Two of the five were down when this was written
 # (2026-10-03, DEPLOYMENT_NOT_FOUND), so brief() asks each one every cycle
@@ -1055,9 +1083,17 @@ def verify_problems(t, get=http_get):
     codes = [str((p or {}).get("code") or "") for p in (t.get("problems") or [])
              if isinstance(p, dict)]
     rows = []
+    if site and site.lower() != "none" and is_social(site):
+        # A Facebook or Instagram page is not a website of their own: the
+        # one thing to confirm is that this is what it is.
+        for c in codes:
+            rows.append((c, "confirmed", f"{site} is a social page, not a site of their own")
+                        if c in ("social-only", "no-site") else
+                        (c, "contradicted", f"{site} is a social page - the problem is social-only"))
+        return rows, None
     if not site or site.lower() == "none":
         for c in codes:
-            if c in ("no-site", "wrong-info"):
+            if c in ("no-site", "wrong-info", "social-only"):
                 rows.append((c, "unconfirmed", "cannot be proved by a fetch - your evidence stands"))
             else:
                 rows.append((c, "contradicted",
@@ -1087,6 +1123,23 @@ def verify_problems(t, get=http_get):
             hit = next((m for m in PARKED_MARKERS if m in body), None)
             rows.append((c, "confirmed", f'the page says "{hit}"') if hit else
                         (c, "unconfirmed", "no parking text found - your evidence stands"))
+        elif c == "social-only":
+            rows.append((c, "contradicted", f"{site} is their own site, not a social page"))
+        elif c == "no-seo":
+            if page and page["body"]:
+                has_t, has_d = seo_basics(page["body"])
+                rows.append((c, "contradicted", "it has a title and a description") if has_t and has_d else
+                            (c, "confirmed", "no " + " and no ".join(
+                                w for w, ok in (("title", has_t), ("description", has_d)) if not ok)
+                             + " for search engines"))
+            else:
+                rows.append((c, "unconfirmed", "could not load the page to look"))
+        elif c == "outdated":
+            yr = copyright_year((page or {}).get("body"))
+            now_y = int(today()[:4])
+            rows.append((c, "unconfirmed", "no copyright year on the page - your evidence stands") if yr is None else
+                        (c, "confirmed", f"the newest copyright year is {yr}") if yr <= now_y - OUTDATED_YEARS else
+                        (c, "contradicted", f"the page says {yr}"))
         elif c == "not-mobile":
             if page and page["body"]:
                 vp = re.search(r"<meta[^>]+name=[\"']?viewport", page["body"], re.I)
@@ -2499,9 +2552,9 @@ def places_used(bump=False):
     return n
 
 
-def _places_post(body, key, timeout=20):
+def _places_post(body, key, timeout=20, fields=PLACES_FIELDS):
     req = urllib.request.Request(PLACES_URL, data=json.dumps(body).encode(), method="POST", headers={
-        "Content-Type": "application/json", "X-Goog-Api-Key": key, "X-Goog-FieldMask": PLACES_FIELDS})
+        "Content-Type": "application/json", "X-Goog-Api-Key": key, "X-Goog-FieldMask": fields})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode() or "{}")
@@ -2547,7 +2600,8 @@ def google_check(p, key, post=_places_post):
     theirs, ours = norm_phone(place.get("nationalPhoneNumber")), norm_phone(p.get("phone"))
     if theirs and ours and theirs != ours:
         flags.append("the phone Paul found is not the one on their Google listing")
-    if place.get("websiteUri") and str(p.get("current_site") or "").strip().lower() in ("", "none"):
+    if (place.get("websiteUri") and not is_social(place["websiteUri"])
+            and str(p.get("current_site") or "").strip().lower() in ("", "none")):
         flags.append("Google lists a website for them - Paul said they have none")
     return {"checked": today(), "found": True, "place_id": place.get("id"),
             "photos": len(photos), "owner_photos": len(own), "flags": flags}
@@ -2572,6 +2626,157 @@ def check_on_google(p, key=None, post=_places_post):
     except PlacesError as exc:
         p["google"] = {"checked": today(), "error": str(exc)[:200]}
     return p
+
+
+# --------------------------------------------------------------------------
+# the finder: Google's listings searched for businesses with no site of their
+# own, and code's own checks on the sites the rest have
+# --------------------------------------------------------------------------
+#
+# Owner, 2026-10-19: Paul checked six Cedar Falls businesses and listed none.
+# A web search finds businesses that HAVE websites, and the three he did find
+# with only a Facebook page he dropped because nothing proved they had no
+# site. A Google listing with no website on it is that proof. So before a
+# scout wakes him, code searches a few kinds of business in the area and the
+# nearby towns - a different few each time - and hands him the leads:
+# listings with no website, or only a Facebook or Instagram page, and
+# businesses whose own site fails one of code's checks. He verifies each and
+# finds a way to reach it; code checks his file as before.
+#
+# Nothing Google says is kept: the leads go into this cycle's FACTS and are
+# gone. Only which searches were run, and when, is written down - our own
+# queries - so the next scout asks about something else.
+SEARCHES = (("barber shop", "salon"), ("hair salon", "salon"), ("nail salon", "salon"),
+            ("tattoo shop", "other"), ("auto repair shop", "trade"), ("plumber", "trade"),
+            ("electrician", "trade"), ("roofing contractor", "trade"), ("landscaping company", "trade"),
+            ("house cleaning service", "other"), ("bakery", "food"), ("food truck", "food"),
+            ("family restaurant", "food"), ("coffee shop", "food"), ("clothing boutique", "retail"),
+            ("florist", "retail"), ("pet grooming", "other"), ("photographer", "other"),
+            ("handyman", "trade"), ("painting contractor", "trade"), ("massage therapist", "salon"),
+            ("gift shop", "retail"), ("catering", "food"), ("lawn care", "trade"))
+SEARCHES_PER_SCOUT = 4
+SITES_CHECKED_PER_SCOUT = 10      # each is two fetches; the rest wait for the next scout
+LEADS_MAX = 15                    # about what Paul is told to look at
+KEEP_FOR_PROSPECTS = 6            # Google lookups left for check_on_google on the day's finds
+FINDER_FIELDS = ("places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,"
+                 "places.websiteUri,places.businessStatus")
+WEAK = ("dead-domain", "parked", "no-https", "not-mobile", "no-seo", "outdated")
+
+
+def towns():
+    """The area, then the nearby towns the owner added (`paul.py nearby`)."""
+    s = load_sender()[0]
+    extra = [t for t in (read_json(A("state", "nearby.json"), []) or []) if str(t).strip()]
+    return [t for t in [str(s.get("area") or "").strip()] + extra if t]
+
+
+def next_searches(n=SEARCHES_PER_SCOUT, focus=None, done=None):
+    """The n (kind of business, town) pairs searched longest ago - never yet
+    first - within the focus if there is one. Each kind is listed town by
+    town, so a scout covers the nearby towns too, not only once the area's
+    every kind is done."""
+    done = done if done is not None else (read_json(A("state", "finder.json"), {}) or {}).get("done", {})
+    pairs = [(q, k, t) for q, k in SEARCHES for t in towns() if not focus or k == focus]
+    pairs.sort(key=lambda x: done.get(f"{x[0]}|{x[2]}", ""))          # stable: the order above breaks ties
+    return pairs[:n]
+
+
+def site_weakness(url, get=http_get):
+    """[(code, detail)] code confirms on a business's own site."""
+    rows, _page = verify_problems({"current_site": url, "problems": [{"code": c} for c in WEAK]}, get)
+    return [(c, d) for c, verdict, d in rows if verdict == "confirmed"]
+
+
+def find_leads(key, post=_places_post, get=http_get, say=print, remember=True):
+    """Leads for this scout, as plain dicts that live only as long as it.
+    remember=False (paul.py leads) leaves the searches for the next scout."""
+    known = {norm_name(p.get("name")) for p in load_prospects()}
+    leads, seen_ids, sites = [], set(), 0
+    state = read_json(A("state", "finder.json"), {}) or {}
+    done = state.get("done", {})
+    for q, kind, town in next_searches(focus=focus_kind(), done=done):
+        if places_used() >= PLACES_DAILY - KEEP_FOR_PROSPECTS:
+            say(f"finder: stopping at today's Google allowance ({PLACES_DAILY}, {KEEP_FOR_PROSPECTS} kept back)")
+            break
+        places_used(bump=True)
+        try:
+            d = post({"textQuery": f"{q} in {town}", "pageSize": 20}, key, fields=FINDER_FIELDS)
+        except PlacesError as exc:
+            say(f"finder: {q} in {town} - {exc}")
+            continue
+        done[f"{q}|{town}"] = today()
+        for x in d.get("places") or []:
+            name = (x.get("displayName") or {}).get("text") or ""
+            if (not name or x.get("id") in seen_ids or x.get("businessStatus") not in (None, "OPERATIONAL")
+                    or norm_name(name) in known or seen_row(name, x.get("nationalPhoneNumber") or "")):
+                continue
+            seen_ids.add(x.get("id"))
+            site = str(x.get("websiteUri") or "").strip()
+            lead = {"name": name, "kind": kind, "category": q, "address": x.get("formattedAddress") or "",
+                    "phone": x.get("nationalPhoneNumber") or "", "maps": maps_link(name, x.get("id"))}
+            if not site:
+                lead.update(code="no-site", why="no-site: no website on its Google listing")
+            elif is_social(site):
+                lead.update(code="social-only", why=f"social-only: its Google listing's website is {site}", site=site)
+            elif sites < SITES_CHECKED_PER_SCOUT:
+                sites += 1
+                weak = site_weakness(site, get)
+                if not weak:
+                    continue
+                lead.update(code=weak[0][0], why=f"{site} - " + "; ".join(f"{c}: {d}" for c, d in weak), site=site)
+            else:
+                continue
+            leads.append(lead)
+    if remember:
+        write_json(A("state", "finder.json"), {**state, "done": done})
+    # No site at all first, then a social page, then a weak site.
+    order = {"no-site": 0, "social-only": 1}
+    leads.sort(key=lambda l: order.get(l["code"], 2))
+    return leads[:LEADS_MAX]
+
+
+def lead_lines(leads):
+    if not leads:
+        return ["leads        none from Google today - search the area yourself"]
+    out = ["leads        from Google's listings and code's checks of their sites, today. Start",
+           "             here. Each is a lead, not a fact: open its Maps link and its sources,",
+           "             and confirm before you list it. A listing with no website IS your",
+           "             no-site evidence - cite the Maps link."]
+    for i, l in enumerate(leads, 1):
+        out.append(f"             {i:>2}. {l['name']} ({l['category']}, kind {l['kind']}) | {l['address']}"
+                   f" | {l['phone'] or 'no phone listed'}")
+        out.append(f"                 {l['why']}")
+        out.append(f"                 {l['maps']}")
+    return out
+
+
+def cmd_leads(a):
+    """What the next scout would be handed, without waking Paul or using up
+    its searches. Costs Google lookups from today's allowance."""
+    key = places_key()
+    if not key:
+        print("no GOOGLE_PLACES_KEY - python3 scripts/set-credential.py paul GOOGLE_PLACES_KEY")
+        return 1
+    print("searching: " + "; ".join(f"{q} in {t}" for q, _k, t in next_searches(focus=focus_kind())))
+    print("\n".join(lead_lines(find_leads(key, remember=False))))
+    print(f"\nGoogle lookups today: {places_used()} of {PLACES_DAILY}")
+    return 0
+
+
+def cmd_nearby(a):
+    """Other towns the finder searches besides the area."""
+    path = A("state", "nearby.json")
+    cur = [t for t in (read_json(path, []) or []) if str(t).strip()]
+    if a.clear:
+        cur = []
+    for t in a.towns or []:
+        t = " ".join(t.split())
+        if t and t not in cur:
+            cur.append(t)
+    if a.towns or a.clear:
+        write_json(path, cur)
+    print("searched: " + " · ".join(towns()))
+    return 0
 
 
 def cmd_places(a, post=_places_post):
@@ -3067,7 +3272,7 @@ def cmd_brief(a, get=http_get):
         L += ["mode         LIVE: after you finish, code checks your files, deploys a private",
               "             preview, puts the link in your draft and files the records."]
     L += [f"today        {today()} (Eastern)",
-          f"area         {s.get('area', '?')}",
+          f"area         {' · '.join(towns()) or s.get('area', '?')}",
           f"studio       {s.get('studio', '?')} - code writes the footer and the signature",
           f"offer        ${s.get('price', '?')}, one time. It covers {OFFER_COVERS}.",
           f"yearly       the one cost that stays: their web address, about ${DOMAIN_FEE} a year,",
@@ -3096,6 +3301,9 @@ def cmd_brief(a, get=http_get):
           '             python3 ../../scripts/paul.py seen "<name>" "<phone>"']
     for r in recent[::-1]:
         L.append(f"             {r}")
+    if kind == "scout":
+        key = places_key()
+        L += lead_lines(find_leads(key, say=lambda m: print(m, file=sys.stderr)) if key else [])
     if lays:
         L.append("last builds  " + lays[-1])
         L += [f"             {x}" for x in lays[-2::-1]]
@@ -3473,6 +3681,10 @@ def main(argv=None):
     p = sub.add_parser("focus", help="look only for one kind of business, until cleared")
     p.add_argument("kind", nargs="?", help=f"one of: {', '.join(KINDS)}")
     p.add_argument("--clear", action="store_true")
+    sub.add_parser("leads", help="preview what the next scout is handed (uses Google lookups)")
+    p = sub.add_parser("nearby", help="other towns the finder searches besides the area")
+    p.add_argument("towns", nargs="*", help='e.g. "Waterloo, IA"')
+    p.add_argument("--clear", action="store_true")
     p = sub.add_parser("should-run", help="(wrapper) wake the model or hold")
     p.add_argument("--dry", action="store_true")
     p.add_argument("--record", action="store_true")
@@ -3492,7 +3704,7 @@ def main(argv=None):
             "revise": cmd_revise, "prospects": cmd_prospects, "approve": cmd_approve,
             "reject": cmd_reject, "find": cmd_find, "remove": cmd_remove,
             "places": cmd_places, "photo": cmd_photo,
-            "focus": cmd_focus, "deck": cmd_deck,
+            "focus": cmd_focus, "nearby": cmd_nearby, "leads": cmd_leads, "deck": cmd_deck,
             "should-run": cmd_should_run, "brief": cmd_brief, "finish": cmd_finish,
             "seen": cmd_seen, "check": cmd_check}[a.cmd](a)
 

@@ -2086,3 +2086,122 @@ class TheOwnerCanRemoveABusinessForGood(PaulCase):
         self.assertEqual(rc, 1)
         self.assertIn("more than one", out)
         self.assertEqual(len(paul.builds()), 2)
+
+
+class PaulIsHandedLeads(PaulCase):
+    """Owner, 2026-10-19: "It seems Paul is struggling to find prospects".
+    He checked six Cedar Falls businesses and listed none: a web search finds
+    businesses that HAVE sites, and three with only a Facebook page he dropped
+    because nothing proved they had no site. Code now searches Google's
+    listings first and hands him leads; weak-but-working sites count; an
+    email is not required; and the nearby towns are searched too."""
+
+    LISTINGS = [
+        {"id": "P1", "displayName": {"text": "The Parlor"}, "formattedAddress": "1 Main St, Cedar Falls, IA",
+         "nationalPhoneNumber": "(319) 555-0101", "businessStatus": "OPERATIONAL"},
+        {"id": "P2", "displayName": {"text": "Goodlookin Salon"}, "businessStatus": "OPERATIONAL",
+         "websiteUri": "https://www.facebook.com/goodlookin"},
+        {"id": "P3", "displayName": {"text": "Old Site Barbers"}, "businessStatus": "OPERATIONAL",
+         "websiteUri": "http://oldsite.test"},
+        {"id": "P4", "displayName": {"text": "Good Site Co"}, "businessStatus": "OPERATIONAL",
+         "websiteUri": "https://good.test"},
+        {"id": "P5", "displayName": {"text": "Gone Shop"}, "businessStatus": "CLOSED_PERMANENTLY"},
+    ]
+    GOOD = ('<html><head><meta name="viewport" content="width=device-width"><title>Good</title>'
+            '<meta name="description" content="We fix things"></head><p>&copy; 2026</p></html>')
+    WEAK = "<html><title>Old</title><p>&copy; 2016 Old Site</p></html>"
+
+    def setUp(self):
+        super().setUp()
+        paul.write_json(paul.A("state", "sender.json"), dict(SENDER, area="Cedar Falls, IA"))
+        paul.write_json(paul.A("state", "nearby.json"), ["Waterloo, IA"])
+        self.asked = []
+
+    def post(self, body, key, timeout=20, fields=None):
+        self.asked.append((body["textQuery"], fields))
+        return {"places": self.LISTINGS}
+
+    def get(self, url, timeout=20, limit=0):
+        if "oldsite" in url:
+            return page(self.WEAK, url=url) if url.startswith("http:") else offline(url)
+        return page(self.GOOD, url=url)
+
+    def leads(self, **kw):
+        return paul.find_leads("k", post=self.post, get=self.get, say=lambda m: None, **kw)
+
+    def test_no_site_and_social_only_first_then_a_weak_site(self):
+        got = self.leads()
+        self.assertEqual([(l["name"], l["code"]) for l in got],
+                         [("The Parlor", "no-site"), ("Goodlookin Salon", "social-only"),
+                          ("Old Site Barbers", "no-https")], "closed and good sites are not leads")
+        self.assertIn("outdated: the newest copyright year is 2016", got[2]["why"])
+        self.assertIn("query_place_id=P1", got[0]["maps"])
+        self.assertIn("places.websiteUri", self.asked[0][1])
+
+    def test_each_scout_searches_new_ground_in_both_towns(self):
+        first = paul.next_searches()
+        self.assertEqual({t for _q, _k, t in first}, {"Cedar Falls, IA", "Waterloo, IA"})
+        self.leads()
+        self.assertTrue(set(paul.next_searches()).isdisjoint(first), "the next scout asks about other kinds")
+        before = paul.next_searches()
+        self.leads(remember=False)
+        self.assertEqual(paul.next_searches(), before, "a preview leaves the rotation alone")
+
+    def test_a_focus_searches_only_its_kind(self):
+        paul.A("state", "focus").write_text("trade")
+        self.assertTrue(all(k == "trade" for _q, k, _t in paul.next_searches(focus="trade")))
+
+    def test_known_and_contacted_businesses_are_not_leads(self):
+        paul.save_prospects([{"id": 1, "name": "The Parlor", "status": "rejected"}])
+        self.assertNotIn("The Parlor", [l["name"] for l in self.leads()])
+
+    def test_google_lookups_are_kept_back_for_the_days_prospects(self):
+        paul.write_json(paul.A("state", "places-usage.json"),
+                        {"day": paul.today(), "n": paul.PLACES_DAILY - paul.KEEP_FOR_PROSPECTS})
+        self.assertEqual(self.leads(), [])
+        self.assertEqual(self.asked, [])
+
+    def test_nothing_of_googles_is_stored(self):
+        self.leads()
+        for f in paul.A("state").iterdir():
+            text = f.read_text() if f.is_file() else ""
+            self.assertNotIn("The Parlor", text, f.name)
+            self.assertNotIn("555-0101", text, f.name)
+
+    def test_the_scout_brief_carries_the_leads(self):
+        lines = "\n".join(paul.lead_lines(self.leads()))
+        self.assertIn("A listing with no website IS your", lines)
+        self.assertIn("The Parlor", lines)
+        self.assertIn("leads        none from Google today", "\n".join(paul.lead_lines([])))
+        src = (SCRIPTS / "paul.py").read_text()
+        self.assertIn("L += lead_lines(find_leads(key", src)
+
+    def test_weak_sites_are_confirmed_from_the_page(self):
+        weak = page(self.WEAK, url="https://w.test/")
+        rows, _ = paul.verify_problems(
+            {"current_site": "https://w.test", "problems": [{"code": "no-seo"}, {"code": "outdated"}]},
+            lambda url, timeout=20, limit=0: weak)
+        self.assertEqual([v for _c, v, _d in rows], ["confirmed", "confirmed"])
+        good = page(self.GOOD, url="https://g.test/")
+        rows, _ = paul.verify_problems(
+            {"current_site": "https://g.test", "problems": [{"code": "no-seo"}, {"code": "outdated"}]},
+            lambda url, timeout=20, limit=0: good)
+        self.assertEqual([v for _c, v, _d in rows], ["contradicted", "contradicted"])
+
+    def test_a_facebook_page_is_social_only(self):
+        rows, _ = paul.verify_problems({"current_site": "https://facebook.com/goodlookin",
+                                        "problems": [{"code": "social-only"}]}, offline)
+        self.assertEqual(rows[0][1], "confirmed")
+        flags = paul.google_check(prospect(current_site="none"), "k",
+                                  lambda body, key: {"places": [dict(PLACES["places"][0],
+                                                     websiteUri="https://facebook.com/rosas")]})["flags"]
+        self.assertFalse([f for f in flags if "website" in f], "a Facebook page is not a website")
+
+    def test_the_instructions_say_it(self):
+        head = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
+        self.assertIn("Start with FACTS `leads`", head)
+        self.assertIn("A Google\nlisting with no website on it is your evidence for `no-site`", head)
+        self.assertIn("**An email is NOT required.**", head)
+        self.assertIn("stopping at six is giving up early", head)
+        for code in paul.PROBLEMS:
+            self.assertIn(f"    {code}", head, f"every problem code is explained ({code})")
