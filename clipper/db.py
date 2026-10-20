@@ -65,7 +65,7 @@ MIGRATIONS = [
       start REAL NOT NULL,
       end REAL NOT NULL,
       score REAL NOT NULL,
-      status TEXT NOT NULL DEFAULT 'rendered',  -- rendered, approved, rejected, published, failed
+      status TEXT NOT NULL DEFAULT 'rendered',  -- rendered, approved, rejected, posted, deleted
       meta TEXT NOT NULL,
       created_at TEXT NOT NULL
     );

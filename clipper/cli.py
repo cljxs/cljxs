@@ -35,14 +35,11 @@
     reject CLIP --why "..."
     publish                     post anything approved and still waiting
     posted CLIP tiktok [--url U]   you posted it by hand
+    delete CLIP                 its video goes and it leaves the studio (not a rejection)
     youtube-login               sign Clip in to your YouTube channel (a code for the iPad)
 
-  Twitch and Dropbox (a stream you may clip, clips you download yourself):
-    source rules NAME --twitch LOGIN            the channel the watcher follows
+  Dropbox (videos you put in a shared folder):
     source rules NAME --dropbox-folder LINK     a shared folder: every video put in it is picked up
-    twitch-login                sign Clip in to your Twitch account (a code for the iPad)
-    watch                       while a watched channel is live, clip where its chat explodes
-    moments                     the most-clipped moments of recent past broadcasts, to clip yourself
     pickup [--run]              ingest new videos from the Dropbox folders (and render them)
 
   Spotter, the research assistant:
@@ -57,7 +54,7 @@ import re
 import sys
 
 from clipper import (campaign, config, db, dropbox, inbox, ingest, media, pipeline, postcopy, publish, report,
-                     rights, score, transcribe, trends, twitch, youtube)
+                     rights, score, storage, transcribe, trends, youtube)
 
 
 def open_all():
@@ -74,8 +71,8 @@ def cmd_source(a):
         print(f"source {row['name']} added ({row['rights']}: {rights.RIGHTS[row['rights']]})")
         return 0
     if a.action == "rules":
-        if a.twitch is not None or a.dropbox_folder is not None:
-            set_pickup(conn, a.name, a.twitch, a.dropbox_folder)
+        if a.dropbox_folder is not None:
+            set_pickup(conn, a.name, a.dropbox_folder)
         if a.cutlist:
             for ep, (section, n, first) in campaign.import_list(conn, a.name, a.cutlist).items():
                 print(f"campaign list for YouTube {ep} ({section}): {n} moments, {first} to start with")
@@ -157,69 +154,21 @@ def cmd_source(a):
     return 0
 
 
-TWITCH_LOGIN = re.compile(r"(?:https?://)?(?:www\.|m\.)?(?:twitch\.tv/)?@?([A-Za-z0-9_]{3,25})/?")
-
-
-def set_pickup(conn, name, twitch_login, folder):
-    """A source's Twitch channel and Dropbox folder; "" clears either."""
-    if twitch_login:
-        m = TWITCH_LOGIN.fullmatch(twitch_login.strip())
-        if not m:
-            raise ValueError(f"{twitch_login!r} is not a Twitch channel - the name in "
-                             f"twitch.tv/<name>, e.g. plaqueboymax")
-        twitch_login = m.group(1).lower()
+def set_pickup(conn, name, folder):
+    """A source's Dropbox folder; "" clears it."""
     if folder and not (folder.startswith("https://") and ingest.is_dropbox_folder(folder)):
         raise ValueError("--dropbox-folder wants a Dropbox folder's share link "
                          "(https://www.dropbox.com/scl/fo/...)")
     with conn:
-        for col, value in (("twitch", twitch_login), ("dropbox_folder", folder)):
-            if value is not None:
-                n = conn.execute(f"UPDATE sources SET {col} = ? WHERE name = ?",
-                                 (value or None, name)).rowcount
-                if not n:
-                    raise ValueError(f"no source named {name!r}")
-    if twitch_login:
-        print(f"the watcher follows twitch.tv/{twitch_login} for {name}")
-    elif twitch_login == "":
-        print(f"the watcher no longer follows a channel for {name}")
+        n = conn.execute("UPDATE sources SET dropbox_folder = ? WHERE name = ?",
+                         (folder or None, name)).rowcount
+        if not n:
+            raise ValueError(f"no source named {name!r}")
     if folder:
         print(f"every new video in that Dropbox folder becomes a {name} video "
               f"(python3 -m clipper pickup, or its timer)")
     elif folder == "":
         print(f"no Dropbox folder is picked up for {name} any more")
-
-
-def cmd_twitch_login(a):
-    twitch.login()
-    return 0
-
-
-def cmd_watch(a):
-    cfg, paths, conn = open_all()
-    srcs = twitch.watched(conn)
-    if not srcs:
-        print("no source has a Twitch channel - source rules NAME --twitch LOGIN")
-        return 0
-    api = twitch.Api()
-    for src in srcs:
-        r = twitch.watch(conn, cfg, src, api=api)
-        if not r["live"]:
-            print(f"{src['twitch']} is not live")
-        else:
-            print(f"{src['twitch']} went offline: {r['clips']} clip(s) asked for. "
-                  f"Past moments: python3 -m clipper moments")
-    return 0
-
-
-def cmd_moments(a):
-    cfg, paths, conn = open_all()
-    if not a.cached:
-        for ch, n in twitch.moments(conn, cfg).items():
-            print(f"{ch}: {n} moment(s) viewers clipped in the last {cfg['twitch_moments_hours']} h")
-    for m in report.twitch_state(conn, cfg)["moments"]:
-        print(f"  {m['views']:>8,} views  {m['channel']}: {(m['title'] or '')[:60]}\n"
-              f"           {m['link']}")
-    return 0
 
 
 def cmd_pickup(a):
@@ -398,7 +347,6 @@ def cmd_forget(a):
 
 
 def cmd_storage(a):
-    from clipper import storage
     cfg, paths, conn = open_all()
     for what, (n, size) in storage.report(conn, paths).items():
         print(f"{what:<45} {n:>4}  {storage.mb(size)}")
@@ -408,7 +356,6 @@ def cmd_storage(a):
 def cmd_cleanup(a):
     """Finished clips' videos, and with --sources the source videos with
     nothing left waiting. Lists without --yes; deletes with it."""
-    from clipper import storage
     cfg, paths, conn = open_all()
     lines, total = storage.cleanup(conn, sources=a.sources, apply=a.yes)
     for line in lines:
@@ -564,6 +511,14 @@ def cmd_reject(a):
     return 0
 
 
+def cmd_delete(a):
+    cfg, paths, conn = open_all()
+    was, freed = publish.delete(conn, a.clip)
+    print(f"clip {a.clip} deleted ({storage.mb(freed)} freed)"
+          + (" - it stays posted where it went; take it down there if you want it gone" if was == "posted" else ""))
+    return 0
+
+
 def cmd_publish(a):
     cfg, paths, conn = open_all()
     results = publish.publish(conn, cfg)
@@ -683,7 +638,6 @@ def main(argv=None):
     s.add_argument("--spell", help="names Whisper mishears: \"Trae Young: try young; Knicks: nicks\"")
     s.add_argument("--watermark-top", type=int,
                    help="how far down the 1920-high frame the watermark's top edge sits")
-    s.add_argument("--twitch", help="the Twitch channel the watcher follows (\"\" to stop)")
     s.add_argument("--dropbox-folder", help="a Dropbox folder's share link: every video in it is "
                                             "picked up for this source (\"\" to stop)")
     s.set_defaults(fn=cmd_source)
@@ -771,17 +725,15 @@ def main(argv=None):
     x.add_argument("--why", required=True)
     x.set_defaults(fn=cmd_reject)
     sub.add_parser("publish").set_defaults(fn=cmd_publish)
+    x = sub.add_parser("delete", help="delete a clip: its video goes and it leaves the studio")
+    x.add_argument("clip", type=int)
+    x.set_defaults(fn=cmd_delete)
     x = sub.add_parser("posted")
     x.add_argument("clip", type=int)
     x.add_argument("platform", choices=["tiktok", "youtube"])
     x.add_argument("--url")
     x.set_defaults(fn=cmd_posted)
     sub.add_parser("youtube-login").set_defaults(fn=cmd_login)
-    sub.add_parser("twitch-login").set_defaults(fn=cmd_twitch_login)
-    sub.add_parser("watch", help="clip live streams where chat explodes, until they end").set_defaults(fn=cmd_watch)
-    x = sub.add_parser("moments", help="recent past-broadcast moments viewers clipped")
-    x.add_argument("--cached", action="store_true", help="the last list, without asking Twitch")
-    x.set_defaults(fn=cmd_moments)
     x = sub.add_parser("pickup", help="ingest new videos from the sources' Dropbox folders")
     x.add_argument("--run", action="store_true", help="and render them")
     x.set_defaults(fn=cmd_pickup)

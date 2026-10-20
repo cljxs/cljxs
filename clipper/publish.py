@@ -64,6 +64,25 @@ def reject(conn, clip_id, reason):
 
 
 
+def delete(conn, clip_id):
+    """The owner's Delete on a clip (2026-10-20: "I want a delete option by the
+    videos so I can manually delete the clips"). Its video files go and it
+    leaves the studio. Not a rejection: no reason is asked and Clip learns
+    nothing from it. The row stays, marked deleted, so the moment is never
+    cut again and a post it already made is still on record - which keeps it
+    from ever being posted twice. Anything still queued to post is not posted:
+    publish() only posts approved clips."""
+    clip = _clip(conn, clip_id)
+    if clip["status"] == "deleted":
+        raise ValueError(f"clip {clip_id} is already deleted")
+    with conn:
+        conn.execute("UPDATE clips SET status = 'deleted' WHERE id = ?", (clip_id,))
+    freed = storage.drop_clip_files(clip)
+    db.event(conn, "review", f"clip {clip_id} deleted by you ({clip['status']}, {storage.mb(freed)} freed)",
+             clip_id=clip_id)
+    return clip["status"], freed
+
+
 def approve(conn, cfg, clip_id, note=None, post=True, **kw):
     """Record the verdict, then post. Returns publish()'s results - or [] with
     post=False, when the caller posts separately (the village: an upload can

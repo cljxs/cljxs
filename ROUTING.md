@@ -25,7 +25,7 @@ the change that needs it.
 | Emily | designs -> Printify drafts (never publishes) | task queue (`scripts/task-dispatcher.py`); `redraw-art` hourly | `scripts/emily-new-build.py`, `scripts/emily-assets.py`, `scripts/emily-finish.py` (`needs_art`, `stuck`, redraw), `scripts/emily-printify.py`, `scripts/emily-listing.py`, `scripts/emily-build.py`, `scripts/emily-verify.py`, `scripts/emily-banner.py`, `scripts/knockout.py`, `scripts/blanks.py`, `scripts/disclosures.py` | `mission-control-api/emily.js`; village `loadEmilyBuilds`, `retryBuild` | test_parsers `Emily*`, `Printify`/`Sticker`/`Mug` classes |
 | Shop / TikTok kits | store board, Etsy report, daily TikTok kit (never posts) | `tiktok-kit` 09:48 | `scripts/store-board.py`, `scripts/store-report.py`, `scripts/tiktok-kit.py`, `scripts/scene.py` (places, people, paid scenes), `scripts/listing-video.py` (STYLES) | `/shop` `mission-control-api/shop.js`, `mission-control-api/public/shop.html` | `tests/test_shop.py` |
 | Paul | local-business websites + pitches (never contacts anyone) | `paul-cycle` 16:45 CT; Studio buttons | `scripts/paul-cycle.sh`, `scripts/paul.py`, `agents/paul/templates/` | `/paul` `mission-control-api/paul.js`, `mission-control-api/public/paul.html` | `tests/test_paul.py`; test_parsers `PaulHasAWorkshop` |
-| Clip (+ Spotter) | permitted video -> captioned shorts; YouTube research | `clip-pickup` /15 min; `clip-watch` /3 min | `clipper/` (see below) | `mission-control-api/clip.js`; village `openClipPanel`, `drawClip`, `drawPost`, `editSubtitles` | `tests/test_clipper.py`; test_parsers `ClipHasAStudio` |
+| Clip (+ Spotter) | permitted video -> captioned shorts; YouTube research | `clip-pickup` /15 min | `clipper/` (see below) | `mission-control-api/clip.js`; village `openClipPanel`, `drawClip`, `drawPost`, `editSubtitles` | `tests/test_clipper.py`; test_parsers `ClipHasAStudio` |
 | Stan | software pains from Hacker News | `stan-fetch` 06:12 CT; `stan-cycle` 06:22 CT | `scripts/stan-fetch.py`, `scripts/stan.py` | `/stan` `mission-control-api/stan.js`, `mission-control-api/public/stan.html` | `tests/test_stan.py` |
 | Agent Room (Sylvester) | idea -> reviewed build plan | `agentroom-runner` | `scripts/agentroom.py`, `scripts/agentroom-guard.py`, `scripts/agentroom-builder-setup.sh`, `agentroom/roles.json` | `/agentroom` `mission-control-api/agentroom.js`, `mission-control-api/public/agentroom.html` | `tests/test_agentroom.py`, `tests/test_agentroom_build.py`, `tests/test_app_ai.py`, `tests/test_site.py` |
 | Fury | collects the whole ecosystem's state | `fury-cycle` 08:30 CT | `scripts/fury-collect.py` | Deck dashboard | test_parsers |
@@ -83,9 +83,9 @@ generated - edit the header, then `scripts/deploy.sh <name>`).
 | ffmpeg render, clean copy, `burn`, watermark | `clipper/render.py`, `clipper/media.py`, `clipper/cutout.py` |
 | Captions (ASS) | `clipper/captions.py` |
 | Title/caption/hashtags | `clipper/postcopy.py` |
-| Approve, reject, post; YouTube upload | `clipper/publish.py`, `clipper/youtube.py` |
+| Approve, reject, delete, post; YouTube upload | `clipper/publish.py` (`delete`), `clipper/youtube.py` |
 | Spotter (YouTube research, quota) | `clipper/trends.py` |
-| Twitch, trimming | `clipper/twitch.py`, `clipper/trim.py` |
+| Trimming a short clip to its moment | `clipper/trim.py` |
 | What the Deck shows | `clipper/report.py` (`snapshot`) |
 | Disk space: finished clips' videos deleted, `cleanup`, `report` | `clipper/storage.py` (`drop_clip_files`, `finished_sources`) |
 

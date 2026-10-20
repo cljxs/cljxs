@@ -87,25 +87,6 @@ DEFAULTS = {
     "spot_daily_units": 3000,        # of the free 10,000/day; the rest is left for uploads later
     "spot_min_match": 0.5,           # share of a trending clip's words found in the footage
 
-    # --- Twitch: the chat watcher (twitch.py) --------------------------------
-    # A clip is asked for when chat runs twitch_spike_ratio times faster than
-    # usual AND at least twitch_spike_min_rate messages a second - believed
-    # values, from three minutes of one busy chat (5-7 a second); tune them
-    # on what the first streams produce.
-    "twitch_spike_ratio": 3.0,
-    "twitch_spike_min_rate": 2.0,
-    "twitch_clip_seconds": 60,        # 5-60: Twitch keeps the last this-many of ~90 s
-    # Asked this long after chat explodes, so the reaction is in the clip.
-    "twitch_clip_delay_seconds": 5,
-    "twitch_cooldown_seconds": 180,   # between two clips of one stream
-    # Every moment over the bar is clipped (Twitch can only clip live, so it
-    # cannot wait to see which are best); when the stream ends the
-    # twitch_keep_best biggest chat jumps are marked best for you. The
-    # first night stopped at 8 two hours in and missed the last four.
-    "twitch_keep_best": 8,
-    "twitch_max_clips_per_stream": 40,  # a safety ceiling, never a flood
-    "twitch_moments_hours": 48,       # past broadcasts' top clips from this far back
-
     # --- posting ------------------------------------------------------------
     "platforms": ["youtube", "tiktok"],
     # Asked for; YouTube itself keeps uploads private until the Google Cloud
@@ -126,12 +107,21 @@ def home():
     return Path(os.environ.get("CLIPPER_HOME", PACKAGE / "var"))
 
 
+# Settings of features that are gone - the Twitch chat watcher (removed
+# 2026-10-20: "get rid of this auto clipping bot, I don't use it anymore").
+# A config.json written while it ran may still hold them; they are skipped, so
+# the removal does not stop Clip at its next start.
+RETIRED = {"twitch_spike_ratio", "twitch_spike_min_rate", "twitch_clip_seconds",
+           "twitch_clip_delay_seconds", "twitch_cooldown_seconds", "twitch_keep_best",
+           "twitch_max_clips_per_stream", "twitch_moments_hours"}
+
+
 def load(path=None):
     """Defaults, overlaid with config.json. Raises on an unknown key."""
     cfg = dict(DEFAULTS)
     path = Path(path) if path else home() / "config.json"
     if path.exists():
-        user = json.loads(path.read_text())
+        user = {k: v for k, v in json.loads(path.read_text()).items() if k not in RETIRED}
         unknown = sorted(set(user) - set(DEFAULTS))
         if unknown:
             raise ValueError(f"{path}: unknown setting(s) {', '.join(unknown)} - "

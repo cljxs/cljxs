@@ -5803,6 +5803,33 @@ class ClipHasAStudio(unittest.TestCase):
         self.assertIn("/api/clip/file/${encodeURIComponent(k.video_id)}/${encodeURIComponent(k.rank)}?v=", self.html)
         self.assertIn("k.subtitles_pending ?", self.html, "the card says the fixes are not in the video yet")
 
+    def test_every_clip_has_a_delete_button(self):
+        # Owner, 2026-10-20: "a delete option by the videos".
+        self.assertIn('<button class="no" data-clip="delete" data-id="${k.id}">Delete</button>', self.html)
+        self.assertIn("} else if (kind === 'delete') {", self.html, "it asks first")
+        js = (ROOT / "mission-control-api" / "clip.js").read_text()
+        route = js.split("app.post('/api/clip/delete/:id'", 1)[1].split("app.post(", 1)[0]
+        self.assertIn("clipper(['delete', req.params.id])", route)
+
+    def test_the_twitch_watcher_is_gone(self):
+        # Owner, 2026-10-20: "We need to get rid of this auto clipping bot I
+        # don't use it anymore."
+        self.assertFalse((ROOT / "clipper" / "twitch.py").exists())
+        self.assertFalse((ROOT / "deploy" / "clip-watch.timer").exists())
+        self.assertNotIn("drawTwitch", self.html)
+        self.assertNotIn("Twitch", self.html.split("function drawPickup(", 1)[1].split("\n}\n", 1)[0])
+        import importlib, json, tempfile
+        sys.path.insert(0, str(ROOT))
+        from clipper import config
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "config.json"
+            f.write_text(json.dumps({"twitch_keep_best": 8, "min_score": 10}))
+            self.assertEqual(config.load(f)["min_score"], 10, "a setting left from the watcher stops nothing")
+            self.assertNotIn("twitch_keep_best", config.load(f))
+            f.write_text(json.dumps({"twitch_keep_bset": 8}))
+            with self.assertRaises(ValueError):
+                config.load(f)
+
     def test_a_clip_whose_video_was_let_go_says_so(self):
         # 2026-10-20: a posted or rejected clip's video is deleted to save
         # space; its card must not ask for a still that is no longer there.

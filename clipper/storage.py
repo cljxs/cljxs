@@ -41,7 +41,7 @@ def _size(files):
 
 
 def finished_clips(conn):
-    return conn.execute("SELECT * FROM clips WHERE status IN ('posted', 'rejected')").fetchall()
+    return conn.execute("SELECT * FROM clips WHERE status IN ('posted', 'rejected', 'deleted')").fetchall()
 
 
 def finished_sources(conn):

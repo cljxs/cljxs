@@ -239,101 +239,6 @@ applied. To make approved clips go out public, apply for the audit (the
 YouTube API documentation). It takes weeks. Until it passes, a private
 upload can't be switched to public.
 
-## Twitch: clips from a live stream
-
-For a campaign whose footage is a Twitch channel, such as Plaqueboymax on
-clipping.net. Twitch lets any signed-in account press **Clip** on a live
-stream, through its API as well as its player. Only the streamer or their
-editors can clip a past broadcast or download a clip through the API, so
-those two stay with you. What happens:
-
-1. **While he's live**, the watcher reads his chat anonymously and
-   read-only, like a logged-out viewer. When chat suddenly runs three times
-   faster than usual, it waits five seconds and clips the last minute on
-   your account. It clips **every** such moment, 3 minutes apart, up to a
-   safety ceiling of 40 a stream. It keeps measuring for 20 seconds after
-   chat crosses the bar, because the crossing is always just over 3x and the
-   peak after it shows how big the moment really was.
-   When the stream ends, the 8 biggest jumps are marked **best**
-   (`twitch_keep_best`). The ranking uses the jump over usual, not raw speed,
-   since chat is busiest at the end of every stream.
-2. **The next morning**, Clip's studio lists those clips, with what chat
-   was saying. Each also has a **Clip it at 1:23:45** link: his past
-   broadcast, opened at the same minute the watcher clipped. Clips made
-   through the API by a new account don't always last (7 of the first
-   night's 8 were gone by morning), but one you make yourself from the
-   broadcast does. Run `python3 -m clipper moments` to add the links to
-   clips from before this change. It also lists the most-viewed moments other viewers clipped
-   from recent past broadcasts, each linked to its second of the broadcast,
-   for you to clip yourself.
-3. **You download each clip**: dashboard.twitch.tv → Content → Clips →
-   the clip → Share → Download → Landscape. It lands in Files → Downloads
-   on the iPad. Move it into the source's Dropbox folder (next section).
-4. **Clip picks it up** within 15 minutes, trims it to its moment and adds
-   the watermark and captions. A video of 60 seconds or less counts as a clip
-   someone already cut, so it isn't searched like an episode. Instead it's
-   cut around its moment (`clipper/trim.py`):
-   - **The moment** is the stretch where the clip gets clearly louder than
-     its own usual level (laughing, yelling, a reaction). With no loud burst,
-     the strongest exclamation in what's said ("no way", "oh my god")
-     stands in.
-   - **The start** is the setup: a whole sentence about 12 seconds before the
-     moment, never opening on "and", "so" or "he" when another start is in
-     reach.
-   - **The end** comes after the reaction: once the noise settles, at the end
-     of the sentence being said.
-   - **No moment at all:** only the dead air at either end is cut.
-
-   The clip's reasons in the studio say where the moment was and what was
-   cut. To use clips whole instead, set `"trim_clips": false` in
-   `clipper/var/config.json`. The numbers to tune are at the top of
-   `trim.py`; they haven't been tried on a real Plaqueboymax clip yet.
-
-Setup, once:
-
-1. **Register an app** at dev.twitch.tv/console → *Register Your
-   Application*: name `Clip`, OAuth Redirect URL `http://localhost`,
-   category *Application Integration*, **Client Type: Public**. A public app
-   has no secret. Copy its *Client ID*, then:
-
-```
-cd /root/ecosystem && python3 scripts/set-credential.py clip TWITCH_CLIENT_ID
-```
-
-2. **Sign in.** The command shows a code; open twitch.tv/activate on the iPad,
-   check the code, and approve:
-
-```
-cd /root/ecosystem && python3 -m clipper twitch-login
-```
-
-3. **Follow the channel** on your Twitch account. Some channels only let
-   followers clip.
-4. **Add the source and its channel.** The evidence is the campaign page:
-
-```
-cd /root/ecosystem && python3 -m clipper source add plaqueboymax --rights permission --evidence "clipping.net Plaqueboymax campaign: clips of PBM from his Twitch, watermark required"
-```
-```
-cd /root/ecosystem && python3 -m clipper source rules plaqueboymax --twitch plaqueboymax
-```
-
-5. **Start the timers.** The watcher checks every 3 minutes whether he's live,
-   and the pickup looks in Dropbox every 15:
-
-```
-cd /root/ecosystem && scripts/deploy.sh clip
-```
-
-Twitch's sign-in lasts while it's used. A refresh token unused for 30 days
-lapses, and a watcher checking every 3 minutes never leaves it that long. If
-it does lapse, the studio says so; run `twitch-login` again.
-
-The spike rule (3x usual, and at least 2 messages a second) comes from three
-minutes of one busy chat, so treat it as a starting point. If the clips miss,
-change `twitch_spike_ratio`, `twitch_spike_min_rate` or
-`twitch_clip_delay_seconds` in `clipper/var/config.json`.
-
 ## One video from a Dropbox link (Clip's house)
 
 In the village, Clip's house -> **Add a video**: pick whose video it is, paste
@@ -407,8 +312,9 @@ what was picked up and anything that couldn't be.
 | `python -m clipper retry <video>` | Puts a failed video back at the stage that failed. |
 | `python -m clipper forget <video>` | Removes a video and every clip made from it, such as a test run. It refuses if a clip was posted, unless you add `--including-posted`; the post stays online. |
 | `python -m clipper source list` | Sources and their evidence. |
-| `python -m clipper watch` | While a watched Twitch channel is live, clips where its chat explodes. Its timer runs it. |
-| `python -m clipper moments` | The most-viewed moments of recent past broadcasts, linked to their second, for you to clip. |
+| `python -m clipper delete <clip>` | Deletes a clip: its video goes and it leaves the studio (the Delete button). Not a rejection - Clip learns nothing from it. A posted clip stays up where it was posted. |
+| `python -m clipper storage` | Where Clip's disk space is going. |
+| `python -m clipper cleanup [--sources] [--yes]` | Lists, then with `--yes` deletes, the videos of posted, rejected and deleted clips; `--sources` also the original videos with no clip left waiting. A posted or rejected clip's video is deleted on its own as it happens. |
 | `python -m clipper pickup --run` | Ingests new videos from the sources' Dropbox folders and renders them. Its timer runs it. |
 
 Finished clips are saved in `clipper/var/clips/<video>/`, as `01.mp4` (best

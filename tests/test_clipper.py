@@ -509,7 +509,7 @@ class ClipsHouseLoadsStillsNotVideos(unittest.TestCase):
 
     def test_the_grid_has_no_video_until_one_is_tapped(self):
         html = (self.API / "public" / "village.html").read_text()
-        grid = html.split("$('clipClips').innerHTML = clips.length", 1)[1].split("$('clipTwitch')", 1)[0]
+        grid = html.split("$('clipClips').innerHTML = clips.length", 1)[1].split("$('clipPickup')", 1)[0]
         self.assertNotIn("<video", grid)
         self.assertIn("/api/clip/poster/", grid)
         self.assertIn("function playClip(", html)
@@ -1254,6 +1254,39 @@ class Posting(EndToEnd):
         with self.assertRaises(ValueError) as e:
             pipeline.cut_clip(self.cfg, video, srow, c, [], path.with_name("99.mp4"), self.conn)
         self.assertIn("deleted to save space", str(e.exception), "a later cut says why, not an ffmpeg error")
+
+    # Owner, 2026-10-20: "I want a delete option by the videos so I can
+    # manually delete the clips".
+
+    def test_delete_takes_the_video_and_the_card_and_keeps_the_record(self):
+        self.ready()
+        path = Path(self.clip["path"])
+        code, said = self.cli("delete", str(self.clip["id"]))
+        self.assertEqual(code, 0, said)
+        self.assertFalse(path.exists())
+        self.assertEqual(self.row()["status"], "deleted", "kept, so the moment is never cut again")
+        snap = report.snapshot(self.conn, config.paths(), self.cfg)
+        self.assertNotIn(self.clip["id"], [c["id"] for c in snap["clips"]], "it leaves the studio")
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM reviews WHERE clip_id = ?",
+                                           (self.clip["id"],)).fetchone()[0], 0, "not a rejection to learn from")
+        with self.assertRaises(ValueError):
+            publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
+        self.assertNotEqual(self.cli("recut", str(self.clip["id"]))[0], 0)
+        self.assertNotEqual(self.cli("delete", str(self.clip["id"]))[0], 0)
+
+    def test_a_deleted_clip_waiting_to_post_is_never_posted(self):
+        self.ready()
+        publish.approve(self.conn, self.cfg, self.clip["id"], post=False)
+        publish.delete(self.conn, self.clip["id"])
+        publish.publish(self.conn, self.cfg, upload=self.upload)
+        self.assertEqual(self.sent, [], "deleted before its upload: never uploaded")
+
+    def test_deleting_a_posted_clip_says_it_is_still_up(self):
+        self.ready()
+        publish.approve(self.conn, dict(self.cfg, platforms=["youtube"]), self.clip["id"], upload=self.upload)
+        code, said = self.cli("delete", str(self.clip["id"]))
+        self.assertIn("stays posted where it went", said)
+        self.assertEqual(self.pubs()["youtube"]["status"], "posted", "its post is still on record")
 
     def test_a_source_with_a_clip_waiting_is_kept(self):
         self.ready()
@@ -2538,375 +2571,9 @@ class CampaignListEndToEnd(EndToEnd):
         self.assertIn("not transcribed yet", said)
 
 
-# ---------------------------------------------------------------- Twitch: the chat watcher
+# ---------------------------------------------------------------- Dropbox pickup
 
-from clipper import dropbox, twitch  # noqa: E402
-
-CHAT_LINES = [l.split("\t", 1) for l in (FIXTURES / "twitch-irc-chat.txt").read_text().splitlines()
-              if l and not l.startswith("#")]
-# Real timings from three minutes of a busy chat (#forsen, 2026-09-30).
-CHAT = [(float(t), twitch.parse(line)[1]) for t, line in CHAT_LINES
-        if twitch.parse(line)[0] == "PRIVMSG"]
-
-
-class ChatLines(unittest.TestCase):
-    """Every line of a real anonymous session, as Twitch sent it."""
-
-    def test_the_real_session_is_1023_messages_and_nothing_else(self):
-        cmds = [twitch.parse(line)[0] for _, line in CHAT_LINES]
-        self.assertEqual(cmds.count("PRIVMSG"), 1023)
-        self.assertEqual(len(CHAT), 1023)
-        self.assertEqual(CHAT[0][1], "message 1")
-        self.assertEqual(CHAT[-1][1], "message 1023")
-        # the welcome, JOIN and NAMES lines are not chat
-        self.assertEqual(set(cmds) - {"PRIVMSG"}, {"001", "002", "003", "004", "375", "372", "376",
-                                                    "JOIN", "353", "366"})
-
-    def test_a_message_keeps_everything_after_the_first_colon(self):
-        # Bug guarded: splitting on every " :" would cut "look at this :)"
-        line = CHAT_LINES[-1][1].replace("message 1023", "LUL look :) at : this")
-        self.assertEqual(twitch.parse(line), ("PRIVMSG", "LUL look :) at : this"))
-
-    def test_ping_and_reconnect_and_tags(self):
-        # Twitch's documented forms: a missed PONG drops the connection.
-        self.assertEqual(twitch.parse("PING :tmi.twitch.tv\r\n"), ("PING", "tmi.twitch.tv"))
-        self.assertEqual(twitch.parse(":tmi.twitch.tv RECONNECT")[0], "RECONNECT")
-        tagged = "@badge-info=;color=#0000FF;display-name=x :x!x@x.tmi.twitch.tv PRIVMSG #bar :hi there"
-        self.assertEqual(twitch.parse(tagged), ("PRIVMSG", "hi there"))
-
-
-def burst(at, n, seconds=5.0, text="KEKW"):
-    return [(at + i * seconds / n, text) for i in range(n)]
-
-
-class ChatSpikes(unittest.TestCase):
-
-    def feed(self, msgs, ratio=3.0, min_rate=2.0, every=1.0):
-        """Feed messages in time order; return the times a spike was seen."""
-        meter, hits, next_look = twitch.Chat(ratio, min_rate), [], 0.0
-        for t, text in sorted(msgs):
-            meter.add(t, text)
-            if t >= next_look:
-                next_look = t + every
-                if meter.spike(t):
-                    hits.append(t)
-        return hits
-
-    def test_a_busy_chat_being_busy_is_not_a_moment(self):
-        # Bug guarded: a fixed messages-per-second bar would clip a big
-        # channel all stream long. 5-7 a second is simply how this chat is.
-        self.assertEqual(self.feed(CHAT), [])
-
-    def test_chat_exploding_is(self):
-        hits = self.feed(CHAT + burst(150, 100))
-        self.assertTrue(hits, "100 messages in 5 s over a usual ~5/s")
-        # seen while the burst is within the last NOW seconds, and only then
-        self.assertTrue(all(150 <= t <= 155 + twitch.Chat.NOW for t in hits), hits)
-
-    def test_nothing_fires_before_there_is_a_usual(self):
-        # Bug guarded: joining mid-stream, the first seconds of chat measured
-        # against nothing look like an explosion.
-        self.assertEqual(self.feed(CHAT + burst(30, 100)), [])
-
-    def test_a_small_chat_needs_the_minimum_rate(self):
-        quiet = [(t, "hi") for t in range(0, 300, 10)]          # one message every 10 s
-        self.assertEqual(self.feed(quiet + burst(200, 8, 10.0)), [],
-                         "0.8 a second is 8x usual, but not a moment")
-        self.assertTrue(self.feed(quiet + burst(200, 40, 10.0)))
-
-    def test_an_earlier_burst_does_not_raise_the_bar(self):
-        # Bug guarded: a mean would count the first explosion into "usual"
-        # and miss the second one a minute later; the median does not.
-        hits = self.feed(CHAT + burst(130, 100) + burst(170, 100))
-        self.assertTrue(any(130 <= t <= 140 for t in hits))
-        self.assertTrue(any(170 <= t <= 180 for t in hits))
-
-    def test_what_chat_was_saying_counts_each_word_once_a_message(self):
-        meter = twitch.Chat()
-        for t, text in [(0, "LUL LUL LUL"), (1, "LUL W"), (2, "W"), (3, "OMEGALUL")]:
-            meter.add(t, text)
-        self.assertEqual(meter.words(3.5, 2), [("LUL", 2), ("W", 2)])
-
-
-class FakeTwitch:
-    """Twitch's API as its reference documents the replies."""
-
-    def __init__(self, live_until=10 ** 9, refuse=None):
-        self.live_until, self.refuse, self.now = live_until, refuse, 0.0
-        self.made, self.asked_ids = [], []
-
-    def stream(self, login):
-        return ({"user_id": "4444", "user_login": login, "title": "stream", "started_at": "2026-09-30T20:00:00Z"}
-                if self.now < self.live_until else None)
-
-    def create_clip(self, bid, duration):
-        if self.refuse:
-            raise twitch.TwitchError(403, self.refuse)
-        cid = f"Clip{len(self.made) + 1}"
-        self.made.append((self.now, bid, duration))
-        return {"id": cid, "edit_url": f"https://clips.twitch.tv/{cid}/edit"}
-
-    def clips(self, **params):
-        if "id" in params:
-            self.asked_ids.append((self.now, list(params["id"])))
-            return [{"id": i, "url": f"https://clips.twitch.tv/{i}"} for i in params["id"]]
-        return [
-            {"id": "Top", "view_count": 9000, "creator_id": "7", "creator_name": "fan", "title": "the moment",
-             "video_id": "v1", "vod_offset": 3723, "duration": 30, "created_at": "2099-01-01T00:00:00Z"},
-            {"id": "Same", "view_count": 50, "creator_id": "8", "creator_name": "fan2", "title": "same moment",
-             "video_id": "v1", "vod_offset": 3730, "duration": 30, "created_at": "2099-01-01T00:00:00Z"},
-            {"id": "Mine", "view_count": 800, "creator_id": "me", "creator_name": "you", "title": "yours",
-             "video_id": "v1", "vod_offset": 100, "duration": 60, "created_at": "2099-01-01T00:00:00Z"},
-            {"id": "NoVod", "view_count": 700, "creator_id": "9", "creator_name": "x", "title": "no vod",
-             "video_id": "", "vod_offset": None, "duration": 30, "created_at": "2099-01-01T00:00:00Z"}]
-
-    def me(self):
-        return {"id": "me"}
-
-    def videos(self, user_id):
-        # the past broadcast of this stream, and an older one
-        return [{"id": "v900", "created_at": "2026-09-30T20:00:09Z"},
-                {"id": "v800", "created_at": "2026-09-28T21:00:00Z"}]
-
-    def user(self, login):
-        return {"id": "4444", "login": login}
-
-
-class Watcher(unittest.TestCase):
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.conn = db.connect(Path(self.tmp.name) / "c.db")
-        self.cfg = dict(CFG)
-        with self.conn:
-            self.conn.execute("INSERT INTO sources (name, rights, evidence, created_at, twitch) "
-                              "VALUES ('pbm', 'permission', 'campaign', ?, 'plaqueboymax')", (db.now(),))
-        self.src = twitch.watched(self.conn)[0]
-
-    def run_watch(self, msgs, api, tick_until=None):
-        """The real chat, with ticks every second like the IRC reader's."""
-        end = tick_until or (max(t for t, _ in msgs) + 1)
-        stream = sorted(msgs + [(float(t), None) for t in range(int(end) + 1)], key=lambda m: m[0])
-
-        def chat(login):
-            for t, text in stream:
-                api.now = t
-                yield t, text
-        return twitch.watch(self.conn, self.cfg, self.src, api=api, chat=chat,
-                            now=lambda: api.now, say=lambda s: None)
-
-    def test_offline_asks_once_and_leaves(self):
-        api = FakeTwitch(live_until=-1)
-        self.assertEqual(self.run_watch(CHAT, api), {"live": False, "clips": 0})
-        self.assertEqual(api.made, [])
-
-    def test_one_explosion_is_one_clip_asked_for_after_the_delay(self):
-        api = FakeTwitch()
-        r = self.run_watch(CHAT + burst(150, 100), api, tick_until=400)
-        self.assertEqual(r["clips"], 1, "the burst lasts seconds; the cooldown makes it one clip")
-        at, bid, duration = api.made[0]
-        self.assertEqual((bid, duration), ("4444", 60))
-        # chat first reads as exploding at ~155 s (ChatSpikes), when the burst is complete
-        self.assertGreaterEqual(at, 155 + self.cfg["twitch_clip_delay_seconds"],
-                                "asked after the delay, so the reaction is in it")
-        row = self.conn.execute("SELECT * FROM twitch_clips").fetchone()
-        self.assertEqual(row["status"], "made", "confirmed once Twitch listed it")
-        asked_at, ids = api.asked_ids[0]
-        self.assertEqual(ids, ["Clip1"])
-        self.assertTrue(at + twitch.CONFIRM_AFTER <= asked_at <= at + twitch.CONFIRM_AFTER + 11,
-                        "confirmed during the stream, so the Deck says so the same night")
-        self.assertEqual(row["url"], "https://clips.twitch.tv/Clip1")
-        self.assertEqual(json.loads(row["chat_words"])[0][0], "KEKW")
-        self.assertGreater(row["chat_rate"], 3 * row["chat_usual"])
-
-    def test_the_cooldown_and_the_cap(self):
-        api = FakeTwitch()
-        bursts = [m for k in range(6) for m in burst(130 + 40 * k, 150)]
-        # bursts every 40 s: a 60 s cooldown alone would allow three clips
-        self.cfg.update(twitch_cooldown_seconds=60, twitch_max_clips_per_stream=2)
-        r = self.run_watch(CHAT + bursts, api, tick_until=400)
-        self.assertEqual(r["clips"], 2)
-        self.assertGreaterEqual(api.made[1][0] - api.made[0][0], 60)
-        self.cfg.update(twitch_max_clips_per_stream=8)
-        with self.conn:
-            self.conn.execute("DELETE FROM twitch_clips")
-        self.assertEqual(self.run_watch(CHAT + bursts, FakeTwitch(), tick_until=400)["clips"], 3)
-
-    def test_every_moment_is_clipped_and_the_biggest_jumps_are_best(self):
-        # 2026-10-01: the first night clipped the first 8 moments over the bar,
-        # reached the limit two hours in, and was blind for the last four.
-        # Now every one is clipped and the biggest jumps are marked best.
-        loop = [(t + 180 * k, m) for k in range(9) for t, m in CHAT]      # 27 minutes of real chat
-        # Ten explosions - more than the old limit of 8. Each starts the same
-        # (150 messages in 5 s, which crosses the bar) and the real reaction
-        # comes 10 s later, after the clip is asked for: only measuring on
-        # past the crossing can tell the big ones from the small.
-        sizes = [60, 300, 120, 220, 90, 260, 150, 70, 110, 80]
-        times = [150 + 130 * i for i in range(len(sizes))]
-        msgs = loop + [m for at, n in zip(times, sizes)
-                       for m in burst(at, 150) + burst(at + 10, n)]
-        self.cfg.update(twitch_cooldown_seconds=100, twitch_keep_best=3)
-        api = FakeTwitch()
-        r = self.run_watch(msgs, api, tick_until=1600)
-        self.assertEqual(r["clips"], len(sizes), "all ten over the bar, not the first few")
-
-        def burst_of(clip_id):
-            at = api.made[int(clip_id[4:]) - 1][0]
-            return max(i for i, b in enumerate(times) if b <= at)
-        ranked = twitch.best_of(self.conn.execute("SELECT * FROM twitch_clips").fetchall(), 3)
-        self.assertEqual(sorted(sizes[burst_of(c["id"])] for c in ranked if c["best"]), [220, 260, 300])
-        state = report.twitch_state(self.conn, self.cfg)
-        self.assertEqual([(st["made"], st["best"]) for st in state["streams"]], [(10, 3)])
-        self.assertEqual(sum(c["best"] for c in state["clips"]), 3)
-        self.assertEqual([c["best"] for c in state["clips"]][:3], [True] * 3, "best first")
-        last = self.conn.execute("SELECT msg FROM events ORDER BY id DESC LIMIT 1").fetchone()[0]
-        self.assertIn("best 3", last)
-
-    def clip_row(self, cid, created, started="2026-09-30T22:40:12Z"):
-        with self.conn:
-            self.conn.execute("INSERT INTO twitch_clips (id, channel, status, chat_rate, chat_usual, "
-                              "stream_started_at, created_at) VALUES (?, 'plaqueboymax', 'made', 9, 3, ?, ?)",
-                              (cid, started, created))
-
-    def test_each_clip_links_to_its_minute_of_the_past_broadcast(self):
-        # 2026-10-01: 7 of the first night's 8 clips were gone by morning. The
-        # moment in the past broadcast is there to clip by hand, and stays.
-        self.clip_row("GrotesqueTallHyena", "2026-10-01 00:06:36")
-        api = FakeTwitch()
-        api.videos = lambda uid: [{"id": "2581", "created_at": "2026-09-30T22:40:20Z"},
-                                  {"id": "2570", "created_at": "2026-09-29T21:00:00Z"}]
-        self.assertEqual(twitch.link_to_broadcast(self.conn, api, "plaqueboymax", "4444", self.cfg), 1)
-        row = self.conn.execute("SELECT * FROM twitch_clips").fetchone()
-        # asked for at 1:26:16 into the broadcast; the watcher's minute began 60 s before
-        self.assertEqual((row["vod_id"], row["vod_offset"]), ("2581", 5116))
-        clip = report.twitch_state(self.conn, self.cfg)["clips"][0]
-        self.assertEqual(clip["vod_link"], "https://www.twitch.tv/videos/2581?t=1h25m16s")
-
-    def test_another_streams_broadcast_is_not_used(self):
-        self.clip_row("Lonely", "2026-10-01 00:06:36")
-        api = FakeTwitch()
-        api.videos = lambda uid: [{"id": "2570", "created_at": "2026-09-29T21:00:00Z"}]
-        self.assertEqual(twitch.link_to_broadcast(self.conn, api, "plaqueboymax", "4444", self.cfg), 0)
-        self.assertIsNone(report.twitch_state(self.conn, self.cfg)["clips"][0]["vod_link"])
-
-    def test_the_watch_links_its_clips_when_the_stream_ends(self):
-        api = FakeTwitch(live_until=320)
-        self.run_watch(CHAT + burst(150, 100), api, tick_until=2000)
-        row = self.conn.execute("SELECT * FROM twitch_clips").fetchone()
-        self.assertEqual(row["vod_id"], "v900")
-        self.assertGreaterEqual(row["vod_offset"], 0)
-
-    def test_moments_links_last_nights_clips_too(self):
-        self.clip_row("FromLastNight", "2026-09-30 20:30:00", started="2026-09-30T20:00:00Z")
-        with contextlib.redirect_stdout(io.StringIO()):
-            twitch.moments(self.conn, self.cfg, api=FakeTwitch(), now=lambda: 1790800000.0)
-        row = self.conn.execute("SELECT * FROM twitch_clips WHERE id = 'FromLastNight'").fetchone()
-        self.assertEqual((row["vod_id"], row["vod_offset"]), ("v900", 30 * 60 - 9 - 60))
-
-    def test_ranked_by_the_jump_not_the_raw_speed(self):
-        # Late in a stream more people watch: 20/s against a usual 10/s is a
-        # smaller moment than 12/s against a usual 3/s.
-        rows = [{"id": "late", "status": "made", "chat_rate": 20.0, "chat_usual": 10.0},
-                {"id": "early", "status": "made", "chat_rate": 12.0, "chat_usual": 3.0},
-                {"id": "never", "status": "failed", "chat_rate": 50.0, "chat_usual": 1.0}]
-        ranked = twitch.best_of(rows, 1)
-        self.assertEqual([(c["id"], c["best"], c["jump"]) for c in ranked],
-                         [("early", True, 4.0), ("late", False, 2.0)])
-
-    def test_a_refusal_is_said_not_swallowed(self):
-        api = FakeTwitch(refuse="The broadcaster has restricted the ability to capture clips to followers")
-        self.run_watch(CHAT + burst(150, 100), api)
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM twitch_clips").fetchone()[0], 0)
-        msg = self.conn.execute("SELECT msg FROM events WHERE level = 'warn'").fetchone()[0]
-        self.assertIn("followers", msg)
-        self.assertIn("follow the channel", msg)
-
-    def test_the_stream_ending_ends_the_watch_and_lists_past_moments(self):
-        api = FakeTwitch(live_until=320)
-        r = self.run_watch(CHAT + burst(150, 100), api, tick_until=2000)
-        self.assertTrue(r["live"])
-        self.assertLess(api.now, 320 + twitch.LIVE_CHECK + 1, "stopped at the next live check")
-        ids = [m["id"] for m in report.twitch_state(self.conn, self.cfg)["moments"]]
-        self.assertEqual(ids, ["Top"], "own clip, same moment twice, and no-broadcast clips left out")
-
-    def test_a_moment_links_to_its_second_of_the_broadcast(self):
-        self.assertEqual(twitch.vod_link("v1", 3723), "https://www.twitch.tv/videos/v1?t=1h02m03s")
-        self.assertEqual(twitch.vod_link("v1", 59), "https://www.twitch.tv/videos/v1?t=0h00m59s")
-
-
-class TwitchSignIn(unittest.TestCase):
-    """Against Twitch's documented device-flow shapes; there was no Twitch
-    app to test with. The first twitch-login is the check."""
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.old = os.environ.get("CLIPPER_HOME")
-        os.environ["CLIPPER_HOME"] = self.tmp.name
-        self.addCleanup(lambda: os.environ.pop("CLIPPER_HOME", None) if self.old is None
-                        else os.environ.__setitem__("CLIPPER_HOME", self.old))
-        self.env = Path(self.tmp.name) / "credentials.env"
-        self.env.write_text("TWITCH_CLIENT_ID=abc123\n")
-
-    def test_the_device_flow_waits_and_keeps_both_tokens(self):
-        replies = iter([(200, {"device_code": "dc", "user_code": "ABCDEFGH", "interval": 5, "expires_in": 1800,
-                               "verification_uri": "https://www.twitch.tv/activate?public=true&device-code=ABCDEFGH"}),
-                        (400, {"status": 400, "message": "authorization_pending"}),
-                        (200, {"access_token": "at1", "refresh_token": "rt1", "expires_in": 14400})])
-        posted, said = [], []
-        twitch.login(post=lambda u, f: (posted.append(f), next(replies))[1], sleep=lambda s: None,
-                     say=said.append, now=lambda: 1000.0)
-        self.assertEqual(posted[0], {"client_id": "abc123", "scopes": "clips:edit"})
-        self.assertNotIn("client_secret", posted[1], "a public app has no secret")
-        c = twitch.creds()
-        self.assertEqual((c["TWITCH_REFRESH_TOKEN"], c["TWITCH_ACCESS_TOKEN"], c["TWITCH_ACCESS_EXPIRES"]),
-                         ("rt1", "at1", "15400"))
-        self.assertEqual(oct(self.env.stat().st_mode & 0o777), "0o600")
-
-    def test_a_fresh_token_is_reused_and_a_stale_one_refreshed_and_rotated(self):
-        # Bug guarded: Twitch's refresh tokens are one-time use. Refreshing
-        # on every call, or keeping the old refresh token after one, signs
-        # Clip out within a day.
-        self.env.write_text("TWITCH_CLIENT_ID=abc123\nTWITCH_REFRESH_TOKEN=rt1\n"
-                            "TWITCH_ACCESS_TOKEN=at1\nTWITCH_ACCESS_EXPIRES=5000\n")
-        calls = []
-        post = lambda u, f: (calls.append(f), (200, {"access_token": "at2", "refresh_token": "rt2",
-                                                     "expires_in": 14400}))[1]
-        self.assertEqual(twitch.access_token(post=post, now=lambda: 1000.0), "at1")
-        self.assertEqual(calls, [], "four minutes left is still a token")
-        self.assertEqual(twitch.access_token(post=post, now=lambda: 4800.0), "at2")
-        self.assertEqual(calls[0]["refresh_token"], "rt1")
-        self.assertEqual(twitch.creds()["TWITCH_REFRESH_TOKEN"], "rt2")
-        self.assertEqual(twitch.access_token(post=post, now=lambda: 4800.0), "at2")
-        self.assertEqual(len(calls), 1)
-
-    def test_a_spent_refresh_token_asks_for_a_new_sign_in(self):
-        self.env.write_text("TWITCH_CLIENT_ID=abc123\nTWITCH_REFRESH_TOKEN=old\n")
-        with self.assertRaisesRegex(twitch.NotSetUp, "twitch-login"):
-            twitch.access_token(post=lambda u, f: (400, {"status": 400, "message": "Invalid refresh token"}))
-
-
-class TwitchChannelOnASource(unittest.TestCase):
-
-    def test_logins_and_links_both_work_and_nonsense_is_refused(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        conn = db.connect(Path(tmp.name) / "c.db")
-        with conn:
-            conn.execute("INSERT INTO sources (name, rights, evidence, created_at) "
-                         "VALUES ('pbm', 'permission', 'x', ?)", (db.now(),))
-        with contextlib.redirect_stdout(io.StringIO()):
-            for given in ("plaqueboymax", "PlaqueBoyMax", "https://www.twitch.tv/plaqueboymax",
-                          "twitch.tv/plaqueboymax/", "@plaqueboymax"):
-                cli.set_pickup(conn, "pbm", given, None)
-                self.assertEqual(twitch.watched(conn)[0]["twitch"], "plaqueboymax", given)
-            with self.assertRaises(ValueError):
-                cli.set_pickup(conn, "pbm", "https://www.youtube.com/@plaqueboymax", None)
-            with self.assertRaisesRegex(ValueError, "folder"):
-                cli.set_pickup(conn, "pbm", None, "https://www.dropbox.com/scl/fi/abc/clip.mp4?dl=0")
-            cli.set_pickup(conn, "pbm", "", None)
-        self.assertEqual(twitch.watched(conn), [])
+from clipper import dropbox  # noqa: E402
 
 
 class TheTimerClipsAVideoAddedByHand(EndToEnd):
@@ -3056,91 +2723,6 @@ class DropboxPickup(EndToEnd):
                          .fetchone()[0], 0)
 
 
-@unittest.skipUnless(shutil.which("openssl"), "needs openssl")
-class ChatReaderOverTls(unittest.TestCase):
-    """irc_messages against a local TLS server replaying the real session:
-    lines split across reads, a PING that must be answered, and Twitch's
-    RECONNECT. The droplet reaches irc.chat.twitch.tv:6697 itself; this
-    session could not, so that one connection is believed, not verified."""
-
-    def setUp(self):
-        import ssl
-        import threading
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        d = Path(self.tmp.name)
-        cert = d / "cert.pem"
-        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-                        "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1",
-                        "-keyout", str(d / "key.pem"), "-out", str(cert)], check=True, capture_output=True)
-        server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        server_ctx.load_cert_chain(cert, d / "key.pem")
-        self.client_ctx = ssl.create_default_context(cafile=str(cert))
-        import socket as _socket
-        self.listener = _socket.create_server(("127.0.0.1", 0))
-        self.addCleanup(self.listener.close)
-        self.port = self.listener.getsockname()[1]
-        self.heard = []          # what the client sent, per connection
-        lines = [l for _, l in CHAT_LINES[:20]]        # the welcome and the first 10 messages
-        more = [l for _, l in CHAT_LINES[20:23]]       # three more, after the reconnect
-
-        def read_until(conn, word):
-            got = b""
-            while word not in got:
-                chunk = conn.recv(4096)
-                if not chunk:
-                    break
-                got += chunk
-            return got.decode()
-
-        def serve():
-            first = self.listener.accept()[0]
-            threading.Thread(target=serve_again, daemon=True).start()
-            with server_ctx.wrap_socket(first, server_side=True) as c:
-                self.heard.append(read_until(c, b"JOIN"))
-                blob = ("\r\n".join(lines) + "\r\n").encode()
-                for i in range(0, len(blob), 37):             # lines split across reads
-                    c.sendall(blob[i:i + 37])
-                c.sendall(b"PING :tmi.twitch.tv\r\n")
-                self.heard.append(read_until(c, b"PONG"))
-                c.sendall(b":tmi.twitch.tv RECONNECT\r\n")
-                import time as _t
-                _t.sleep(3)          # Twitch hangs up soon after; Clip must not wait for it
-
-        def serve_again():
-            with server_ctx.wrap_socket(self.listener.accept()[0], server_side=True) as c:
-                self.heard.append(read_until(c, b"JOIN"))
-                c.sendall(("\r\n".join(more) + "\r\n").encode())
-                import time as _t
-                _t.sleep(3)
-        threading.Thread(target=serve, daemon=True).start()
-
-    def test_messages_ping_and_reconnect(self):
-        import time as _t
-        got, slept, deadline = [], [], _t.time() + 10
-        for t, text in twitch.irc_messages("PlaqueBoyMax", tick=0.2, say=lambda s: None,
-                                           host="127.0.0.1", port=self.port, context=self.client_ctx,
-                                           sleep=slept.append):
-            if text is not None:
-                got.append((_t.time(), text))
-            if len(got) >= 13 or _t.time() > deadline:
-                break
-        self.assertEqual([m for _, m in got], [f"message {n}" for n in range(1, 14)])
-        self.assertLess(got[10][0] - got[9][0], 2, "reconnected when asked, not when hung up on")
-        self.assertIn("PASS SCHMOOPIIE", self.heard[0])
-        self.assertRegex(self.heard[0], r"NICK justinfan\d+\r\nJOIN #plaqueboymax\r\n")
-        self.assertIn("PONG :tmi.twitch.tv", self.heard[1], "an unanswered PING drops the connection")
-        self.assertIn("JOIN #plaqueboymax", self.heard[2], "joined again after RECONNECT")
-        self.assertEqual(slept, [1])
-
-
-def has_webp_encoder():
-    r = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True) \
-        if shutil.which("ffmpeg") else None
-    return bool(r and "libwebp" in r.stdout)
-
-
-@unittest.skipUnless(has_webp_encoder(), "needs ffmpeg with a WebP encoder to make the test files")
 class WatermarkSavedAsWebP(EndToEnd):
     """2026-09-30: the plaqueboymax watermark, held and saved in Safari on
     the iPad, arrived as image.webp - clipping.net serves its images as

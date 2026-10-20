@@ -179,6 +179,12 @@ function register(app) {
     reply(res, await clipper(['reject', req.params.id, '--why', why]));
   });
 
+  // Delete (owner, 2026-10-20): the clip's video goes and it leaves the studio.
+  app.post('/api/clip/delete/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    reply(res, await clipper(['delete', req.params.id]));
+  });
+
   // The owner's own words for a post. Only fields sent are changed.
   app.post('/api/clip/edit/:id', async (req, res) => {
     if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
