@@ -15,7 +15,7 @@ writes four things - work/target.json, work/site/, work/draft.md and
 state/last-run.txt - and this file does the rest.
 
     the owner     init  sender  preflight  status  mark  exclude
-                  teardown  go-live  dry-next  revise  prospects  approve  reject  find
+                  teardown  go-live  dry-next  revise  prospects  approve  reject  build  find
                   remove  places  photo
     the wrapper   should-run  brief  finish        (scripts/paul-cycle.sh)
     Paul itself   seen  check
@@ -1810,6 +1810,11 @@ def run_checks(t, get=http_get, work=None):
     serrs, sinfo = check_site(work / "site", t, page)
     errs += serrs
     info.update(sinfo)
+    ref = own_reference(work)
+    if ref and (work / "site" / "index.html").is_file():
+        rerrs, rnotes = reference_problems(scan_site(work / "site")["text"], t, ref, get)
+        errs += rerrs
+        notes += rnotes
     browser = find_browser()
     if browser and (work / "site" / "index.html").is_file():
         bad = measured_contrast(work / "site", browser, work / "shots" / ".measured.json")
@@ -3112,6 +3117,81 @@ def cmd_approve(a, run=subprocess.run):
     return 0
 
 
+def clean_ref(u):
+    """The owner's reference as a URL Paul can open, or None. Tracking
+    parameters dropped: ?ref=land-book.com is where the owner found it, not
+    part of the site."""
+    u = str(u or "").strip()
+    if not re.match(r"https?://[^\s/]+\.[^\s/]+", u):
+        return None
+    parts = urllib.parse.urlsplit(u)
+    q = [(k, v) for k, v in urllib.parse.parse_qsl(parts.query)
+         if k.lower() not in ("ref", "fbclid", "gclid") and not k.lower().startswith("utm_")]
+    return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(q), fragment=""))
+
+
+def cmd_build(a, run=subprocess.run):
+    """Owner, 2026-10-20: "I want Paul to build Royal Edges barbershop website
+    using this site as a reference". A business the owner names - one Paul
+    already found, or a new one - approved in one step, with the site its
+    build should take after. Paul still reads every fact from a public
+    source; naming it is not vouching for an address or a phone number."""
+    ref = None
+    if a.ref:
+        ref = clean_ref(a.ref)
+        if not ref:
+            print(f'"{a.ref}" is not a web address - give the whole https://... link')
+            return 1
+    rows = load_prospects()
+    # Spaces ignored: "Royal Edges Barbershop" is the "Royal Edges Barber Shop"
+    # Paul found, and a second prospect for one business is a second pitch.
+    n = norm_name(a.name).replace(" ", "")
+    hit = [p for p in rows if n and (n in norm_name(p.get("name")).replace(" ", "")
+                                     or norm_name(p.get("name")).replace(" ", "") in n)]
+    if len(hit) > 1:
+        print(f'"{a.name}" fits more than one: ' + "; ".join(f"{p['id']} {p['name']}" for p in hit))
+        return 1
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if hit:
+        p = hit[0]
+        if p.get("status") == "built":
+            print(f"{p['name']} is already built - send it back with: "
+                  f'python3 scripts/paul.py revise "{p["name"]}" "what to change"')
+            return 1
+        p.update(status="approved", decided=now)
+        said = f"approved: {p['name']} (prospect {p['id']})"
+    else:
+        if seen_row(a.name):
+            print(f"{a.name} is in contacted.csv (contacted or excluded) - Paul will not build it")
+            return 1
+        nxt = max([int(q.get("id") or 0) for q in rows] + [0]) + 1
+        p = {"id": nxt, "name": a.name.strip(), "found": today(), "status": "approved",
+             "decided": now, "source": "owner",
+             "why": "named by the owner" + (f", in {a.where}" if a.where else "")}
+        if a.where:
+            p["where"] = a.where.strip()
+        rows.append(p)
+        said = f"added and approved: {p['name']} (prospect {p['id']})"
+    if ref:
+        p["reference"] = ref
+    save_prospects(rows)
+    record(f"the owner asked for {p['name']}" + (f", after {ref}" if ref else ""))
+    print(said + (f"\nreference: {ref}" if ref else ""))
+    kind, detail = cycle_plan()
+    if kind == "build" and str(detail.get("id")) != str(p["id"]):
+        print(f"{detail['name']} was approved first and is built before it")
+    elif kind == "resume":
+        print("Paul finishes what is in work/ first, then builds this")
+    if a.now:
+        live = bool(read_json(A("state", "live.json")))
+        if not live:
+            mark_dry_next()
+        ok, detail = start_cycle(run)
+        print(("started Paul's cycle now" + ("" if live else " (a dry run - you have not gone live)"))
+              if ok else f"could not start the cycle ({detail}) - it runs at its usual time")
+    return 0
+
+
 def cmd_reject(a):
     rows = load_prospects()
     p, err = find_prospect(rows, a.who)
@@ -3213,6 +3293,62 @@ def references(get=http_get):
     return out
 
 
+REF_RUN = 8          # words in a row shared with the reference = copied, not inspired
+
+
+def own_reference(work=None):
+    """The site the owner asked this build to take after, or None."""
+    return (read_json(Path(work or A("work")) / "prospect.json", {}) or {}).get("reference")
+
+
+def reference_problems(site_text, t, ref, get=http_get):
+    """(errors, notes) for a site built after the owner's reference. The
+    reference is a REAL business (rudysbarbershop.com, 2026-10-20), so its
+    name and its sentences may not travel: take the layout and the feel,
+    write the words. Its own pages say which words are its; nothing about
+    it is restated here."""
+    r = get(ref, timeout=15)
+    if not (r["ok"] and r["status"] == 200):
+        return [], [f"the reference {ref} did not load ({r['error'] or r['status']}) - "
+                    f"not checked for copying"]
+    pr = _Page()
+    try:
+        pr.feed(r["body"])
+    except Exception:
+        return [], [f"the reference {ref} did not parse - not checked for copying"]
+    m = re.search(r"(?is)<title[^>]*>(.*?)</title>", r["body"])
+    title = html.unescape(m.group(1)).strip() if m else ""
+    theirs = re.split(r"\s[|\u2013\u2014-]\s|:\s", title)[0].strip()
+    ours, own_name = norm_name(site_text), set(norm_name(t.get("name")).split())
+    errs = []
+    host = urllib.parse.urlsplit(ref).hostname or ""
+    stem = re.sub(r"^www\.", "", host).split(".")[0]
+    # Their whole name, their web address run together, or a possessive in it
+    # ("Rudy's") - an ordinary word that happens to be in a name is not enough.
+    whole = norm_name(theirs)
+    owners = [norm_name(w) for w in re.findall(r"\b([A-Z]\w+['\u2019]s)\b", theirs)]
+    found = ((whole and len(whole) >= 6 and whole not in norm_name(t.get("name"))
+              and re.search(rf"\b{re.escape(whole)}\b", ours))
+             or (len(stem) >= 6 and stem not in norm_name(t.get("name")).replace(" ", "")
+                 and stem in ours.replace(" ", ""))
+             or any(w not in own_name and re.search(rf"\b{re.escape(w)}\b", ours) for w in owners))
+    if found:
+        errs.append(f'"{theirs or host}" is the reference\'s name, and it is on your site - '
+                    f"that is another business; use none of its name")
+    words = norm_name(" ".join(pr.text)).split()
+    runs = {" ".join(words[i:i + REF_RUN]) for i in range(len(words) - REF_RUN + 1)}
+    mine = ours.split()
+    shared = []
+    for i in range(len(mine) - REF_RUN + 1):
+        run = " ".join(mine[i:i + REF_RUN])
+        if run in runs and not any(run in x for x in shared):
+            shared.append(" ".join(mine[i:i + REF_RUN + 4]))
+    if shared:
+        errs.append(f'"{shared[0]}..." is the reference\'s own wording - take its layout and feel, '
+                    f"write your own words for this business")
+    return errs, []
+
+
 def cmd_brief(a, get=http_get):
     s, _ = load_sender()
     work = A("work")
@@ -3304,6 +3440,19 @@ def cmd_brief(a, get=http_get):
     if kind == "scout":
         key = places_key()
         L += lead_lines(find_leads(key, say=lambda m: print(m, file=sys.stderr)) if key else [])
+    mine = (read_json(A("work", "prospect.json"), {}) or {}) if kind != "scout" else {}
+    if mine.get("source") == "owner":
+        L += [f"named        the owner named {mine.get('name')}"
+              + (f" ({mine['where']})" if mine.get("where") else "") + " - nothing about it is",
+              "             checked yet. Find it yourself as in scouting: its address, phone",
+              "             and hours from its own pages, Google or Facebook, each with the URL.",
+              "             Not sure it is the right business, or it closed? below-bar, say why."]
+    if mine.get("reference"):
+        L += [f"OWNER'S REF  {mine['reference']}",
+              "             The owner picked this site for this build. Open it first (WebFetch)",
+              "             and take after it: its layout, section order, type and feel. It is",
+              "             a REAL business - never its name, words, photos, prices or claims.",
+              "             Code refuses its name and any 8 words in a row from its pages."]
     if lays:
         L.append("last builds  " + lays[-1])
         L += [f"             {x}" for x in lays[-2::-1]]
@@ -3661,6 +3810,11 @@ def main(argv=None):
     p = sub.add_parser("approve", help="approve a prospect for Paul to build")
     p.add_argument("who", help="its number, or part of its name")
     p.add_argument("--build", action="store_true", help="and start the cycle now")
+    p = sub.add_parser("build", help="build a business you name next, optionally after a site you like")
+    p.add_argument("name", help="the business, as it is known")
+    p.add_argument("--ref", help="a site whose layout and feel Paul should take after")
+    p.add_argument("--where", help="its town, if Paul might find the wrong one")
+    p.add_argument("--now", action="store_true", help="and start the cycle now")
     p = sub.add_parser("reject", help="reject a prospect - never proposed again")
     p.add_argument("who", help="its number, or part of its name")
     p.add_argument("why", nargs="*")
@@ -3702,7 +3856,7 @@ def main(argv=None):
             "status": cmd_status, "mark": cmd_mark, "exclude": cmd_exclude,
             "teardown": cmd_teardown, "go-live": cmd_go_live, "dry-next": cmd_dry_next,
             "revise": cmd_revise, "prospects": cmd_prospects, "approve": cmd_approve,
-            "reject": cmd_reject, "find": cmd_find, "remove": cmd_remove,
+            "reject": cmd_reject, "build": cmd_build, "find": cmd_find, "remove": cmd_remove,
             "places": cmd_places, "photo": cmd_photo,
             "focus": cmd_focus, "nearby": cmd_nearby, "leads": cmd_leads, "deck": cmd_deck,
             "should-run": cmd_should_run, "brief": cmd_brief, "finish": cmd_finish,

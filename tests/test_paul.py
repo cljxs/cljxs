@@ -1694,6 +1694,110 @@ class TheOwnerPicksPaulBuilds(PaulCase):
             self.assertIn(word, header)
 
 
+RUDYS = (ROOT / "tests" / "fixtures" / "reference-rudysbarbershop.html").read_text()
+
+
+def with_reference(url, timeout=20, limit=400_000):
+    if (urllib.parse.urlsplit(url).hostname or "") == "rudysbarbershop.com":
+        return page(RUDYS, 200, url)
+    return offline(url)
+
+
+class TheOwnerNamesTheBusinessAndTheLook(PaulCase):
+    """Owner, 2026-10-20: "I want Paul to build royal edges barbershop website
+    using this site as a reference: https://rudysbarbershop.com/?ref=land-book.com".
+    Before, Paul built only what he had scouted, after whichever reference he
+    judged closest, so neither the business nor the look could be asked for."""
+
+    REF = "https://rudysbarbershop.com/?ref=land-book.com"
+
+    def build(self, name="Royal Edges Barbershop", ref=REF, where=None, now=False, run=None):
+        kw = {"run": run} if run else {}
+        return self.run_quiet(paul.cmd_build, self.args(name=name, ref=ref, where=where, now=now), **kw)
+
+    def test_a_named_business_is_added_approved_with_the_reference_cleaned(self):
+        rc, out = self.build(where="Waterloo, IA")
+        self.assertEqual(rc, 0, out)
+        [p] = paul.load_prospects()
+        self.assertEqual((p["name"], p["status"], p["source"], p["where"]),
+                         ("Royal Edges Barbershop", "approved", "owner", "Waterloo, IA"))
+        self.assertEqual(p["reference"], "https://rudysbarbershop.com/",
+                         "?ref=land-book.com is where the owner found it, not part of the site")
+        self.assertEqual(paul.cycle_plan()[0:1], ("build",))
+
+    def test_one_paul_already_found_is_approved_not_listed_twice(self):
+        paul.save_prospects([dict(prospect(name="Royal Edges Barber Shop"), id=4, found="x", status="waiting")])
+        self.build()
+        [p] = paul.load_prospects()
+        self.assertEqual((p["id"], p["status"], p["reference"]), (4, "approved", "https://rudysbarbershop.com/"))
+        self.assertNotIn("source", p, "it keeps the facts Paul found for it")
+
+    def test_contacted_built_and_not_a_link_are_refused(self):
+        paul.append_row(paul.A("state", "contacted.csv"), paul.CONTACTED_FIELDS,
+                        {"slug": "x", "business": "Royal Edges Barbershop", "phone": "", "status": "sent"})
+        self.assertEqual(self.build()[0], 1)
+        self.assertEqual(paul.load_prospects(), [])
+        self.assertEqual(self.build(name="Elsewhere", ref="rudys")[0], 1)
+        paul.save_prospects([dict(prospect(name="Done Cuts"), id=1, found="x", status="built")])
+        rc, out = self.build(name="Done Cuts")
+        self.assertEqual(rc, 1)
+        self.assertIn("revise", out)
+
+    def test_now_starts_the_cycle(self):
+        ran = []
+        self.build(now=True, run=lambda cmd, **kw: ran.append(cmd) or types.SimpleNamespace(returncode=0, stdout="", stderr=""))
+        self.assertEqual(ran, [["systemctl", "start", "--no-block", "paul-cycle.service"]])
+
+    def test_the_brief_hands_paul_the_reference_and_the_research(self):
+        self.build(where="Waterloo, IA")
+        _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
+        self.assertIn("BUILD: the owner approved Royal Edges Barbershop", facts)
+        self.assertIn("OWNER'S REF  https://rudysbarbershop.com/", facts)
+        self.assertIn("named        the owner named Royal Edges Barbershop (Waterloo, IA)", facts)
+        # A prospect Paul scouted, with no reference: neither line.
+        shutil.rmtree(paul.A("work"))
+        paul.save_prospects([dict(prospect(), id=1, found="x", status="approved", decided="x")])
+        _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
+        self.assertNotIn("OWNER'S REF", facts)
+        self.assertNotIn("named ", facts)
+
+    def problems(self, text, name="Royal Edges Barbershop"):
+        return paul.reference_problems(text, {"name": name}, "https://rudysbarbershop.com/", with_reference)
+
+    def test_its_name_and_its_sentences_are_refused_its_ideas_are_not(self):
+        own = ("Royal Edges Barbershop. Fades, tapers and beard work on Main Street. "
+               "Walk-ins welcome, booking is best. Freedom to wear it your way.")
+        self.assertEqual(self.problems(own), ([], []))
+        errs, _ = self.problems(own + " A Rudy's-style shop.")
+        self.assertIn("is the reference's name", errs[0])
+        errs, _ = self.problems(own + " Like Rudys Barbershop.")
+        self.assertIn("is the reference's name", errs[0])
+        errs, _ = self.problems(own + " We'll snip it, chop it, buzz it or trim it anyway you'd like.")
+        self.assertIn("is the reference's own wording", errs[0])
+        self.assertIn("well snip it chop it buzz it", errs[0])
+
+    def test_a_reference_that_does_not_load_is_a_note_not_a_failure(self):
+        errs, notes = paul.reference_problems("anything", {"name": "X"}, "https://gone.test/", offline)
+        self.assertEqual(errs, [])
+        self.assertIn("not checked for copying", notes[0])
+
+    def test_pauls_check_runs_it(self):
+        self.build()
+        self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
+        copied = INDEX.replace("</body>", "<p>We’ll snip it, chop it, buzz it or trim it anyway you’d like.</p></body>")
+        self.work(index=copied)
+        errs, _notes, _info = paul.run_checks(target(), with_reference)
+        self.assertTrue(any("reference's own wording" in e for e in errs), errs)
+        self.work()
+        errs, _notes, _info = paul.run_checks(target(), with_reference)
+        self.assertFalse(any("reference" in e for e in errs), errs)
+
+    def test_the_studio_shows_it_and_the_header_says_it(self):
+        self.assertIn("Your reference", (ROOT / "mission-control-api" / "public" / "paul.html").read_text())
+        header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
+        self.assertIn("**The owner may pick the reference**", header)
+
+
 PLACES = json.loads((ROOT / "tests" / "fixtures" / "google-places-searchtext.json").read_text())
 JPEG = b"\xff\xd8\xff\xe0" + b"0" * 4000
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 4000

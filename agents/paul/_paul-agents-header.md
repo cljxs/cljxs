@@ -131,6 +131,16 @@ again before you build: if it closed, or now has a good site, write
 `"status": "below-bar"` with a `why` in `work/target.json` and stop.
 Otherwise it is your target - sections 2 to 5.
 
+**The owner may name the business** (FACTS `named`): nothing about it is
+checked yet, so find its address, phone and hours yourself, from its own
+pages, Google or Facebook, each with the URL - exactly as in scouting.
+
+**The owner may pick the reference** (FACTS `OWNER'S REF`). Then it comes
+before every other reference: open it first and build in its spirit - the
+layout, the order of the sections, the type, the feel. It is a real
+business's site, so none of its name, words, photos, prices or claims; code
+refuses its name and any 8 words in a row from its pages.
+
 ## RESUME: sent back by the owner
 
 If FACTS `resume` says the owner sent a site back, read `work/REVISE.md`

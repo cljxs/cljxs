@@ -244,6 +244,7 @@ function card(p) {
     url(links.instagram) ? `<a class="chip" href="${esc(url(links.instagram))}" target="_blank" rel="noopener">IG ↗</a>` : '',
     url(links.facebook) ? `<a class="chip" href="${esc(url(links.facebook))}" target="_blank" rel="noopener">FB ↗</a>` : '',
     url(links.maps) ? `<a class="chip" href="${esc(url(links.maps))}" target="_blank" rel="noopener">Maps ↗</a>` : '',
+    url(p.reference) ? `<a class="chip" href="${esc(url(p.reference))}" target="_blank" rel="noopener">Your reference ↗</a>` : '',
   ].join('');
   const state = STATE[p.status];
   const acts = p.status === 'waiting'
