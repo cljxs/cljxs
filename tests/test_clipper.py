@@ -1204,12 +1204,62 @@ class Posting(EndToEnd):
         with mock.patch.object(render, "render", mock.Mock(side_effect=AssertionError("cut whole again"))):
             self.assertEqual(self.cli("recut", str(self.clip["id"]))[0], 0)
 
-    def test_the_copy_goes_once_the_clip_cannot_change(self):
+    # Owner, 2026-10-20: "I want to delete the clips because I'm assuming they
+    # take up unnecessary storage space". A clip's video goes once it is out
+    # everywhere or rejected; its record stays, so it is never posted twice.
+
+    def test_a_rejected_clip_lets_go_of_its_video(self):
         from clipper import render
         self.ready()
-        clean = render.clean_path(self.clip["path"])
+        path = Path(self.clip["path"])
+        clean = render.clean_path(path)
         publish.reject(self.conn, self.clip["id"], "not funny")
-        self.assertFalse(clean.exists(), "a rejected clip's subtitles never change")
+        self.assertFalse(path.exists() or clean.exists(), "a rejected clip's video is not needed again")
+        self.assertTrue(path.with_suffix(".json").is_file(), "its record stays")
+        snap = report.snapshot(self.conn, config.paths(), self.cfg)
+        self.assertFalse(next(c for c in snap["clips"] if c["id"] == self.clip["id"])["has_video"])
+
+    def test_a_clip_out_everywhere_lets_go_of_its_video_and_only_then(self):
+        self.ready()
+        path = Path(self.clip["path"])
+        cfg = dict(self.cfg, platforms=["youtube", "tiktok"])
+        publish.approve(self.conn, cfg, self.clip["id"], upload=self.upload)
+        self.assertTrue(path.is_file(), "TikTok still needs it downloaded and posted by hand")
+        publish.mark_posted(self.conn, self.clip["id"], "tiktok", "https://tiktok.com/@x/video/1")
+        self.assertFalse(path.exists(), "posted everywhere: the video goes")
+        self.assertEqual(self.row()["status"], "posted", "the record stays")
+        with self.assertRaises(ValueError):
+            publish.mark_posted(self.conn, self.clip["id"], "tiktok")
+
+    def test_cleanup_lists_first_and_takes_sources_only_when_asked(self):
+        self.ready()
+        path = Path(self.clip["path"])
+        with self.conn:      # rejected before clips let go of their videos
+            self.conn.execute("UPDATE clips SET status = 'rejected' WHERE id = ?", (self.clip["id"],))
+        src = Path(self.conn.execute("SELECT media_path FROM videos").fetchone()[0])
+        code, said = self.cli("cleanup")
+        self.assertEqual(code, 0, said)
+        self.assertIn(f"would delete clip {self.clip['id']} (rejected)", said)
+        self.assertTrue(path.is_file(), "without --yes it only lists")
+        self.cli("cleanup", "--yes")
+        self.assertFalse(path.exists())
+        self.assertTrue(src.is_file(), "a source goes only with --sources")
+        code, said = self.cli("storage")
+        self.assertIn("source videos with nothing left waiting", said)
+        self.assertEqual(self.cli("cleanup", "--sources", "--yes")[0], 0)
+        self.assertFalse(src.exists())
+        video = self.conn.execute("SELECT * FROM videos").fetchone()
+        c = self.conn.execute("SELECT * FROM candidates WHERE id = ?", (self.clip["candidate_id"],)).fetchone()
+        srow = self.conn.execute("SELECT * FROM sources WHERE id = ?", (video["source_id"],)).fetchone()
+        with self.assertRaises(ValueError) as e:
+            pipeline.cut_clip(self.cfg, video, srow, c, [], path.with_name("99.mp4"), self.conn)
+        self.assertIn("deleted to save space", str(e.exception), "a later cut says why, not an ffmpeg error")
+
+    def test_a_source_with_a_clip_waiting_is_kept(self):
+        self.ready()
+        src = Path(self.conn.execute("SELECT media_path FROM videos").fetchone()[0])
+        self.cli("cleanup", "--sources", "--yes")
+        self.assertTrue(src.is_file() and Path(self.clip["path"]).is_file(), "clip 1 is still waiting for you")
 
     def test_your_edit_is_never_overwritten(self):
         self.ready()

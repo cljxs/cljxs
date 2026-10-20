@@ -25,9 +25,8 @@ import fcntl
 from contextlib import contextmanager
 
 import json
-from pathlib import Path
 
-from clipper import config, db, postcopy, render, youtube
+from clipper import config, db, postcopy, storage, youtube
 
 FINAL = ("posted",)
 
@@ -59,14 +58,10 @@ def reject(conn, clip_id, reason):
     review(conn, clip_id, "reject", reason.strip())
     with conn:
         conn.execute("UPDATE clips SET status = 'rejected' WHERE id = ?", (clip_id,))
-    drop_clean(clip)
+    storage.drop_clip_files(clip)
     db.event(conn, "review", f"clip {clip_id} rejected: {reason.strip()}", clip_id=clip_id)
 
 
-def drop_clean(clip):
-    """The copy without subtitles is for fixing them; a rejected or posted
-    clip's never change again, so it is only taking disk."""
-    Path(render.clean_path(clip["path"])).unlink(missing_ok=True)
 
 
 def approve(conn, cfg, clip_id, note=None, post=True, **kw):
@@ -243,7 +238,8 @@ def _settle(conn, clip_id):
     if not left:
         with conn:
             conn.execute("UPDATE clips SET status = 'posted' WHERE id = ?", (clip_id,))
-        drop_clean(_clip(conn, clip_id))
+        # Out everywhere: its video is not needed again (storage.py).
+        storage.drop_clip_files(_clip(conn, clip_id))
 
 
 def mark_posted(conn, clip_id, platform, url=None):

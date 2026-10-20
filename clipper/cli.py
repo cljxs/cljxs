@@ -18,6 +18,8 @@
     retry VIDEO_ID              put a failed video back where it failed
     refind VIDEO_ID             choose its moments again (a new --hunt); only before any clip exists
     forget VIDEO_ID [--including-posted]   remove a video and all its clips (a test run)
+    storage                     where Clip's disk space is going
+    cleanup [--sources] [--yes] delete finished clips' videos (and finished sources); lists first
 
   A campaign's own clip list (its moments, hooks and captions):
     source rules NAME --cutlist NOTION_URL      import it
@@ -395,6 +397,31 @@ def cmd_forget(a):
     return 0
 
 
+def cmd_storage(a):
+    from clipper import storage
+    cfg, paths, conn = open_all()
+    for what, (n, size) in storage.report(conn, paths).items():
+        print(f"{what:<45} {n:>4}  {storage.mb(size)}")
+    return 0
+
+
+def cmd_cleanup(a):
+    """Finished clips' videos, and with --sources the source videos with
+    nothing left waiting. Lists without --yes; deletes with it."""
+    from clipper import storage
+    cfg, paths, conn = open_all()
+    lines, total = storage.cleanup(conn, sources=a.sources, apply=a.yes)
+    for line in lines:
+        print(("deleted " if a.yes else "would delete ") + line)
+    if not lines:
+        print("nothing to delete")
+    elif a.yes:
+        print(f"freed {storage.mb(total)}")
+    else:
+        print(f"{storage.mb(total)} would be freed - run again with --yes to delete")
+    return 0
+
+
 def cmd_retry(a):
     cfg, paths, conn = open_all()
     v = conn.execute("SELECT * FROM videos WHERE id = ?", (a.video,)).fetchone()
@@ -708,6 +735,13 @@ def main(argv=None):
     t.add_argument("--including-posted", action="store_true",
                    help="even if some of its clips were posted (they stay online)")
     t.set_defaults(fn=cmd_forget)
+    t = sub.add_parser("storage", help="where Clip's disk space is going")
+    t.set_defaults(fn=cmd_storage)
+    t = sub.add_parser("cleanup", help="delete finished clips' videos; --sources also finished source videos")
+    t.add_argument("--sources", action="store_true",
+                   help="also source videos with no clip left waiting (no more clips can be cut from them)")
+    t.add_argument("--yes", action="store_true", help="really delete (without it, only lists)")
+    t.set_defaults(fn=cmd_cleanup)
     t = sub.add_parser("refind", help="choose a video's moments again, e.g. after --hunt")
     t.add_argument("video", type=int)
     t.set_defaults(fn=cmd_refind)

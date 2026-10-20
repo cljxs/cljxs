@@ -5803,6 +5803,12 @@ class ClipHasAStudio(unittest.TestCase):
         self.assertIn("/api/clip/file/${encodeURIComponent(k.video_id)}/${encodeURIComponent(k.rank)}?v=", self.html)
         self.assertIn("k.subtitles_pending ?", self.html, "the card says the fixes are not in the video yet")
 
+    def test_a_clip_whose_video_was_let_go_says_so(self):
+        # 2026-10-20: a posted or rejected clip's video is deleted to save
+        # space; its card must not ask for a still that is no longer there.
+        self.assertIn("${k.has_video === false", self.html)
+        self.assertIn("video deleted to save space", self.html)
+
     def test_approve_answers_before_the_upload(self):
         # 2026-10-07: the route waited for the YouTube upload, Safari gave up
         # first ("Could not reach the API: Load failed") and nothing was recorded.

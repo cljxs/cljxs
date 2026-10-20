@@ -197,6 +197,9 @@ def cut_clip(cfg, video, src, c, words, out, conn):
     subtitles is kept beside it (render.clean_path), so fixing a subtitle
     later redoes the subtitles only."""
     ass, cut, hook = clip_ass(cfg, src, c, words, conn)
+    if not media.is_url(video["media_path"]) and not Path(video["media_path"]).is_file():
+        raise ValueError(f"video {video['id']}'s source was deleted to save space (clipper cleanup "
+                         f"--sources) - add the video again to cut more from it")
     info = render.render(video["media_path"], out, c["start"], c["end"], ass,
                          render.source_cfg(cfg, src), watermark=src["watermark"], clean=True)
     return {"source": src["name"], "rights": src["rights"], "evidence": src["evidence"],

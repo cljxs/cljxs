@@ -6,6 +6,7 @@ rule for "can Clip act on this trending moment?" exists once.
 """
 
 import json
+from pathlib import Path
 
 from clipper import db, inbox, postcopy, trends, twitch, youtube
 
@@ -86,6 +87,8 @@ def snapshot(conn, paths, cfg):
                       "start": c["start"], "end": c["end"], "score": c["score"],
                       "status": c["status"], "reasons": m.get("reasons") or [],
                       "subtitles_pending": bool(m.get("subtitles_pending")),
+                      # Gone once posted everywhere or rejected (storage.py).
+                      "has_video": Path(c["path"]).is_file(),
                       "text": (m.get("text") or "")[:300], "source": m.get("source"),
                       "video_title": m.get("video_title"), "created_at": c["created_at"],
                       "post": post_words(conn, c),

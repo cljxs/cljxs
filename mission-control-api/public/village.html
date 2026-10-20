@@ -357,6 +357,8 @@
   .clipplay{position:relative;display:block;width:100%;aspect-ratio:9/16;padding:0;border:0;
     border-radius:6px;overflow:hidden;background:#000;cursor:pointer}
   .clipplay img{width:100%;height:100%;object-fit:cover;display:block}
+  .clipgone{width:100%;aspect-ratio:9/16;display:flex;align-items:center;justify-content:center;text-align:center;
+    padding:14px;box-sizing:border-box;border:1px dashed var(--line);border-radius:11px;color:var(--mute);font-size:13px}
   .clipplay span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     font-size:34px;color:#fff;text-shadow:0 2px 8px rgba(0,0,0,.7)}
   .clipvideo{width:100%;aspect-ratio:9/16;background:#000;border-radius:6px;display:block}
@@ -3280,9 +3282,11 @@ function drawClip(){
   const clips = c.clips || [];
   $('clipClips').innerHTML = clips.length ? `<div class="clipgrid">` + clips.map(k => `
       <div class="idea">
-        <button class="clipplay" data-play="${k.video_id}/${k.rank}" aria-label="Play clip ${k.rank}">
+        ${k.has_video === false
+          ? `<div class="clipgone">${k.status === 'rejected' ? 'Rejected' : 'Posted'} - video deleted to save space</div>`
+          : `<button class="clipplay" data-play="${k.video_id}/${k.rank}" aria-label="Play clip ${k.rank}">
           <img src="/api/clip/poster/${k.video_id}/${k.rank}" alt="" loading="lazy">
-          <span>▶</span></button>
+          <span>▶</span></button>`}
         <div class="t">CLIP #${k.rank} · ${Math.round(k.score)}/100</div>
         <div class="ktags"><span class="pill">${esc(k.source)}</span>
           <span class="pill">${clock(k.start)}–${clock(k.end)}</span></div>
