@@ -759,8 +759,13 @@ def closed_trades(p):
         rule = next((name for prefix, name in RULE_NAMES if str(t.get("reason", "")).startswith(prefix)),
                     "judgement")
         entry = lots.get(sym) or {}
+        shares = float(t.get("shares") or 0)
         out.append({"symbol": t.get("symbol"), "pnl": pnl, "pct": pnl / cost * 100 if cost else 0.0,
                     "rule": rule, "sold_utc": t.get("utc"), "bought_utc": entry.get("utc"),
+                    # For coach.py's journal: the prices, the size and both reasons.
+                    "shares": shares, "cost": round(cost, 2), "exit_price": t.get("price"),
+                    "entry_price": round(cost / shares, 4) if shares else None,
+                    "exit_reason": t.get("reason") or "", "entry_reason": entry.get("reason") or "",
                     "catalyst_type": catalyst_type(entry.get("reason")), "score": entry.get("score") or None,
                     "regime": entry.get("regime"), "cluster": cluster_of(sym)})
         held[sym] = held.get(sym, 0) - float(t.get("shares") or 0)

@@ -3826,7 +3826,7 @@ function closePanel() { closeLb(); closeMarkets(); openAgent = null; $('panel').
  * polling. Escape inside it, or its close button, posts '<name>-close' here. */
 const FRAMES = { belfort: '/markets?embed=1', ace: '/ace?embed=1', peter: '/peter?embed=1', bolt: '/bolt?embed=1',
                  paul: '/paul?embed=1', shop: '/shop?embed=1', agentroom: '/agentroom?embed=1',
-                 stan: '/stan?embed=1' };
+                 stan: '/stan?embed=1', coach: '/coach?embed=1' };
 function openFrame(agent) {
   closeMarkets();
   openAgent = agent;
@@ -3846,7 +3846,7 @@ function closeMarkets() {
 }
 window.addEventListener('message', e => {
   if (e.origin === location.origin && e.data
-      && ['markets-close', 'ace-close', 'peter-close', 'bolt-close', 'paul-close', 'shop-close', 'agentroom-close', 'stan-close'].includes(e.data.type)) closeMarkets();
+      && ['markets-close', 'ace-close', 'peter-close', 'bolt-close', 'paul-close', 'shop-close', 'agentroom-close', 'stan-close', 'coach-close'].includes(e.data.type)) closeMarkets();
 });
 $('panel').addEventListener('click', e => { if (e.target.id === 'panel') closePanel(); });
 
@@ -3965,7 +3965,7 @@ const STATUS = { active: ['#38e1ff', 'Active'], idle: ['#9b8cff', 'Idle'], stale
   waiting: ['#7f8bb0', 'Waiting'] };
 // The Deck's pages, opened over the village as the houses open them.
 const NAV = [['deck', '🛰', 'Command Deck'], ['ace', '🏀', 'Ace'], ['peter', '📈', 'Peter'],
-  ['belfort', '🏦', 'Markets'], ['bolt', '⚡', 'Bolt'], ['paul', '📐', "Paul's Studio"], ['shop', '🛍', 'Shop'],
+  ['belfort', '🏦', 'Markets'], ['bolt', '⚡', 'Bolt'], ['coach', '📓', 'Trading Coach'], ['paul', '📐', "Paul's Studio"], ['shop', '🛍', 'Shop'],
   ['stan', '💡', 'Stan'], ['agentroom', '🧩', 'Agent Room']];
 // attention.py's tabs and the Deck's stale rule, keyed the way NAV is.
 const ATT_KEY = { shop: 'shop', stan: 'stan', agentroom: 'agentroom', bolt: 'bolt' };

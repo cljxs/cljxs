@@ -181,3 +181,7 @@ agents/stan/data/
 agents/stan/state/
 agents/stan/reports/
 agents/stan/MEMORY.md
+
+# The trading coach's journal and reviews (scripts/coach.py) - runtime, like the books.
+coach/journal/
+coach/weekly/

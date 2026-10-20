@@ -313,7 +313,9 @@ def sell(book, pos, price, now, reason):
     t = {"utc": iso(now), "symbol": pos["symbol"], "side": "sell", "qty": pos["qty"],
          "price": price, "notional": notional, "fee": fee, "reason": reason,
          "entry_price": pos["entry_price"], "opened_utc": pos["opened_utc"],
-         "pnl": pnl, "pnl_pct": pnl / pos["cost"] * 100.0}
+         "pnl": pnl, "pnl_pct": pnl / pos["cost"] * 100.0,
+         # How far up it got - coach.py's "gave back a gain" reads it.
+         "best_pct": round(pos.get("high_water_pct") or 0.0, 2)}
     book["trades"].append(t)
     return t
 

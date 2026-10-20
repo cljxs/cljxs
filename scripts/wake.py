@@ -413,6 +413,11 @@ def cmd_test(a):
             print(f"  {n:<9} not on the plan (tasks/engines.json)")
             continue
         workspace = AGENTS / n
+        if not workspace.is_dir():
+            # The coach (coach.py) has no workspace: it only ever asks one
+            # question through ask(), so there are no instructions to load.
+            print(f"  {n:<9} asks one question at a time (wake.py ask) - nothing to load")
+            continue
         with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
             f.write(system_prompt(n, workspace))
             prompt_file = f.name

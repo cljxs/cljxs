@@ -1,0 +1,13 @@
+[Unit]
+Description=Trading coach: the week's review and proposed rule changes (one question on the Claude plan; applies nothing)
+Documentation=https://github.com/cljxs/cljxs
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+WorkingDirectory=/root/ecosystem
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/coach.py weekly
+TimeoutStartSec=600
+StandardOutput=journal
+StandardError=journal
