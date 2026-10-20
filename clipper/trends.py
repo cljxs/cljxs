@@ -47,7 +47,7 @@ from pathlib import Path
 from clipper import config, db, moments, score
 
 API = "https://www.googleapis.com/youtube/v3/"
-UNITS = {"videos": 1, "channels": 1, "search": 100}
+UNITS = {"videos": 1, "channels": 1, "search": 100, "commentThreads": 1}
 PROVIDER = "youtube-data"
 
 

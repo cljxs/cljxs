@@ -133,6 +133,10 @@ function register(app) {
     if (!title) return res.status(400).json({ ok: false, error: 'paste the title first' });
     const args = ['hooks', title];
     if (SOURCE_RE.test(source)) args.push('--source', source);
+    // The video's YouTube page, for its comments - read through the API by
+    // inbox.py, which checks it is a YouTube link. Nothing is downloaded.
+    const youtube = String(b.youtube || '').trim().slice(0, 300);
+    if (/^https:\/\/(www\.|m\.)?(youtube\.com|youtu\.be)\//.test(youtube)) args.push('--youtube', youtube);
     reply(res, await clipper(args, 90000));
   });
 

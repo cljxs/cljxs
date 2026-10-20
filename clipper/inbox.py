@@ -26,7 +26,7 @@ from clipper import db, ingest, postcopy, score
 
 YOUTUBE = ("youtube.com", "youtu.be")
 MAX_TITLE = 200
-HOOKS_ESTIMATE = 0.003          # the most one hooks draft is expected to cost
+HOOKS_ESTIMATE = 0.005          # the most one hooks draft is expected to cost (comments included)
 HOOK_TOPICS = (2, 8)            # how many topics a usable list has
 TERMS_PER_TOPIC = 6
 # Words a transcript is full of: a topic hunted by these matches everything.
@@ -155,6 +155,101 @@ Source: SOURCE
 Title: TITLE"""
 
 
+# ------------------------------------------------------------------ comments
+#
+# Owner, 2026-10-20: "We need to create better hooks. Can you access comments
+# of the video to see what they are talking about?" A title says what the
+# video promises; its comments say what people actually came for - and they
+# write timestamps ("14:32 when he said...") pointing at the moments they
+# cared about. Read through YouTube's official API with Spotter's key, at one
+# quota unit a hundred comments, counted against the same daily cap. No video
+# is fetched, and nothing anyone wrote is kept: the comments go into the one
+# hooks question and the timestamps are shown to the owner, then both are gone.
+VIDEO_ID_RE = re.compile(r"(?:[?&]v=|youtu\.be/|/shorts/|/live/|/embed/)([A-Za-z0-9_-]{11})")
+COMMENT_PAGES = 2               # 100 comments a page, most relevant first
+COMMENTS_SHOWN = 40             # the most liked of them go into the question
+COMMENT_CHARS = 220
+TIMESTAMP_RE = re.compile(r"(?<![\d:])(?:(\d{1,2}):)?([0-5]?\d):([0-5]\d)(?![\d:])(?!\s*[ap]\.?m\b)", re.I)
+STAMP_GAP = 20                  # s: timestamps this close are one moment
+STAMPS_SHOWN = 8
+
+
+def video_id(url):
+    """The 11-character id from any YouTube link, or ValueError."""
+    m = VIDEO_ID_RE.search(str(url or ""))
+    if not m or not any(_host(url) == h or _host(url).endswith("." + h) for h in YOUTUBE):
+        raise ValueError("that is not a YouTube video link")
+    return m.group(1)
+
+
+def read_comments(conn, cfg, url, yt=None):
+    """[{text, likes}] - the video's top comments, most relevant first."""
+    from clipper import trends
+    vid = video_id(url)
+    yt = yt or trends.YouTube(conn, cfg)
+    out, token = [], None
+    for _ in range(COMMENT_PAGES):
+        params = dict(part="snippet", videoId=vid, order="relevance", maxResults=100, textFormat="plainText")
+        if token:
+            params["pageToken"] = token
+        try:
+            body = yt.get("commentThreads", **params)
+        except trends.ApiError as exc:
+            if exc.reason == "commentsDisabled":
+                raise ValueError("comments are turned off on that video") from None
+            raise
+        for item in body.get("items") or []:
+            sn = (((item.get("snippet") or {}).get("topLevelComment") or {}).get("snippet") or {})
+            text = " ".join(str(sn.get("textOriginal") or sn.get("textDisplay") or "").split())
+            if text:
+                out.append({"text": text, "likes": trends.as_int(sn.get("likeCount")) or 0})
+        token = body.get("nextPageToken")
+        if not token:
+            break
+    return out
+
+
+def clock_of(seconds):
+    h, rest = divmod(int(seconds), 3600)
+    m, s = divmod(rest, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def timestamps(comments):
+    """[(seconds, comments, likes)] - the moments viewers pointed at, the
+    most pointed-at first. A comment counts once per moment."""
+    marks = []
+    for c in comments:
+        seen = set()
+        for h, m, s in TIMESTAMP_RE.findall(c["text"]):
+            t = int(h or 0) * 3600 + int(m) * 60 + int(s)
+            if t not in seen:
+                seen.add(t)
+                marks.append((t, c["likes"]))
+    groups = []
+    for t, likes in sorted(marks):
+        if groups and t - groups[-1][-1][0] <= STAMP_GAP:
+            groups[-1].append((t, likes))
+        else:
+            groups.append([(t, likes)])
+    out = [(g[0][0], len(g), sum(l for _t, l in g)) for g in groups]
+    return sorted(out, key=lambda x: (-x[1], -x[2], x[0]))[:STAMPS_SHOWN]
+
+
+def comments_block(comments):
+    """The comments as the hooks question shows them: the most liked, then
+    the timestamps code counted."""
+    top = sorted(comments, key=lambda c: -c["likes"])[:COMMENTS_SHOWN]
+    lines = ["", "What viewers wrote under the video, most liked first. The people, moments and",
+             "arguments they talk about are the clips to find - weigh them above the title:"]
+    lines += [f"- ({c['likes']} likes) {c['text'][:COMMENT_CHARS]}" for c in top]
+    stamps = timestamps(comments)
+    if stamps:
+        lines += ["", "Moments viewers pointed at (time in the video, comments, likes): "
+                  + "; ".join(f"{clock_of(t)} ({n}, {l})" for t, n, l in stamps)]
+    return "\n".join(lines)
+
+
 def hooks_text(topics):
     """[{name, terms}] -> 'Name: t1, t2; Name2: t3' - what score.parse_hunt reads."""
     return "; ".join(f"{t['name']}: {', '.join(t['terms'])}" for t in topics)
@@ -182,10 +277,13 @@ def check_hooks(doc):
     return out
 
 
-def hooks(conn, cfg, title, source="", call=None, key=None, left=None):
-    """(hunt text, cost) for a video title. Checked against both caps before
-    the call - the shared day (budget.py) and Clip's own - and its real cost
-    recorded in Clip's ledger, the way post copy is."""
+def hooks(conn, cfg, title, source="", call=None, key=None, left=None, youtube=None, yt=None, notes=None):
+    """(hunt text, cost) for a video title - and its YouTube comments, when a
+    link to it is given. Checked against both caps before the call - the
+    shared day (budget.py) and Clip's own - and its real cost recorded in
+    Clip's ledger, the way post copy is. `notes`, a list, gets what the
+    comments said for the owner: how many were read, and the timestamps."""
+    notes = notes if notes is not None else []
     title = (title or "").strip()[:MAX_TITLE]
     if not title:
         raise ValueError("paste the video's title first")
@@ -201,6 +299,19 @@ def hooks(conn, cfg, title, source="", call=None, key=None, left=None):
     if not key:
         raise ValueError("no OpenRouter key")
     prompt = HOOKS_PROMPT.replace("SOURCE", source or "").replace("TITLE", title)
+    if youtube:
+        try:
+            comments = read_comments(conn, cfg, youtube, yt)
+        except Exception as exc:
+            comments = []
+            notes.append(f"comments not read: {str(exc)[:160]} - the hooks come from the title alone")
+        if comments:
+            prompt += "\n" + comments_block(comments)
+            notes.append(f"read {len(comments)} comments")
+            stamps = timestamps(comments)
+            if stamps:
+                notes.append("viewers pointed at " + ", ".join(
+                    f"{clock_of(t)} ({n} comment{'s' if n != 1 else ''})" for t, n, _l in stamps))
     doc, cost = (call or call_hooks)(prompt, key, slug)
     db.record_cost(conn, "openrouter", "hooks", float(cost or 0), note=title[:80])
     return hooks_text(check_hooks(doc)), cost

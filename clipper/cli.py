@@ -265,8 +265,11 @@ def cmd_queue(a):
 
 def cmd_hooks(a):
     cfg, paths, conn = open_all()
-    text, cost = inbox.hooks(conn, cfg, a.title, a.source or "")
+    notes = []
+    text, cost = inbox.hooks(conn, cfg, a.title, a.source or "", youtube=a.youtube, notes=notes)
     print(text)
+    for n in notes:
+        print(n)
     print(f"(cost ${float(cost or 0):.4f})", file=sys.stderr)
     return 0
 
@@ -671,6 +674,7 @@ def main(argv=None):
     h = sub.add_parser("hooks", help="write a hunt list from a video title (one cheap model call)")
     h.add_argument("title")
     h.add_argument("--source")
+    h.add_argument("--youtube", help="the video's YouTube link: its top comments go into the question")
     h.set_defaults(fn=cmd_hooks)
     h = sub.add_parser("hunt", help="set one video's own hunt list (\"\" goes back to its source's)")
     h.add_argument("video", type=int)

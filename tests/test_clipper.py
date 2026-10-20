@@ -3410,6 +3410,102 @@ class HooksFromATitle(unittest.TestCase):
             inbox.hooks(self.conn, self.cfg, "  ", call=lambda *a: self.fail("called"), key="k", left=1.0)
 
 
+class HooksFromTheComments(unittest.TestCase):
+    """Owner, 2026-10-20: "We need to create better hooks. Can you access
+    comments of the video to see what they are talking about?" The video's
+    top comments, read through YouTube's API (one unit a hundred), go into
+    the hooks question; the timestamps viewers wrote are counted by code and
+    shown to the owner. Nothing anyone wrote is kept."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.conn = db.connect(Path(self.tmp.name) / "clipper.db")
+        self.cfg = dict(CFG, copy_model="m", daily_budget_usd=0.25)
+
+    @staticmethod
+    def thread(text, likes):
+        # The shape of a commentThreads item (part=snippet, textFormat=plainText).
+        return {"snippet": {"topLevelComment": {"snippet": {"textOriginal": text, "likeCount": likes}},
+                            "totalReplyCount": 0}}
+
+    PAGES = [{"items": [], "nextPageToken": "p2"}, {"items": []}]
+
+    def yt(self, pages, error=None):
+        asked = []
+
+        def fetch(url):
+            asked.append(url)
+            if error:
+                return {"error": {"code": 403, "message": "disabled", "errors": [{"reason": error}]}}
+            return pages[len(asked) - 1]
+        return trends.YouTube(self.conn, self.cfg, key="k", fetch=fetch), asked
+
+    def test_any_youtube_link_gives_its_id(self):
+        for url in ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=30s", "https://youtu.be/dQw4w9WgXcQ?si=x",
+                    "https://www.youtube.com/shorts/dQw4w9WgXcQ", "https://m.youtube.com/live/dQw4w9WgXcQ"):
+            self.assertEqual(inbox.video_id(url), "dQw4w9WgXcQ", url)
+        with self.assertRaises(ValueError):
+            inbox.video_id("https://www.dropbox.com/scl/fi/a/b.mp4?v=dQw4w9WgXcQ")
+
+    def test_two_pages_most_relevant_first_one_unit_each(self):
+        pages = [{"items": [self.thread("Wemby blocked him at 12:40 lmao", 300)], "nextPageToken": "p2"},
+                 {"items": [self.thread("the Duncan comparison  is crazy", 40)]}]
+        yt, asked = self.yt(pages)
+        got = inbox.read_comments(self.conn, self.cfg, "https://youtu.be/dQw4w9WgXcQ", yt)
+        self.assertEqual(got, [{"text": "Wemby blocked him at 12:40 lmao", "likes": 300},
+                               {"text": "the Duncan comparison is crazy", "likes": 40}])
+        self.assertIn("commentThreads?", asked[0])
+        self.assertIn("order=relevance", asked[0])
+        self.assertIn("pageToken=p2", asked[1])
+        self.assertEqual(trends.units_today(self.conn), 2, "counted against Spotter's daily cap")
+
+    def test_comments_turned_off_is_said_in_words(self):
+        yt, _ = self.yt([], error="commentsDisabled")
+        with self.assertRaises(ValueError) as e:
+            inbox.read_comments(self.conn, self.cfg, "https://youtu.be/dQw4w9WgXcQ", yt)
+        self.assertIn("comments are turned off", str(e.exception))
+
+    def test_the_timestamps_viewers_wrote(self):
+        c = [{"text": "12:40 the block!! and again at 12:40", "likes": 300},
+             {"text": "12:51 that block tho", "likes": 20},
+             {"text": "1:02:15 when he called Shaq out", "likes": 90},
+             {"text": "watching at 3:30 pm on my break", "likes": 500}]
+        got = inbox.timestamps(c)
+        self.assertEqual(got[0], (760, 2, 320), "12:40 and 12:51 are one moment; a comment counts once")
+        self.assertEqual(got[1], (3735, 1, 90))
+        self.assertEqual(len(got), 2, "3:30 pm is a clock, not a moment in the video")
+        self.assertEqual(inbox.clock_of(3735), "1:02:15")
+
+    def test_the_question_carries_them_and_the_owner_sees_the_moments(self):
+        pages = [{"items": [self.thread("12:40 that block on Giannis", 300),
+                            self.thread("12:45 BLOCKED", 80), self.thread("alien behaviour", 5)]}]
+        yt, _ = self.yt(pages)
+        prompts, notes = [], []
+        call = lambda prompt, key, slug: (prompts.append(prompt) or (HooksFromATitle.DRAFT, 0.002))
+        inbox.hooks(self.conn, self.cfg, "WEMBY IS ABOUT TO DOMINATE", call=call, key="k", left=1.0,
+                    youtube="https://youtu.be/dQw4w9WgXcQ", yt=yt, notes=notes)
+        self.assertIn("(300 likes) 12:40 that block on Giannis", prompts[0])
+        self.assertIn("Moments viewers pointed at", prompts[0])
+        self.assertEqual(notes, ["read 3 comments", "viewers pointed at 12:40 (2 comments)"])
+
+    def test_without_comments_the_title_still_works(self):
+        yt, _ = self.yt([], error="commentsDisabled")
+        notes = []
+        call = lambda prompt, key, slug: (HooksFromATitle.DRAFT, 0.001)
+        text, _cost = inbox.hooks(self.conn, self.cfg, "WEMBY", call=call, key="k", left=1.0,
+                                  youtube="https://youtu.be/dQw4w9WgXcQ", yt=yt, notes=notes)
+        self.assertTrue(text.startswith("Embiid"))
+        self.assertIn("comments not read", notes[0])
+
+    def test_the_house_and_the_deck_pass_the_link(self):
+        page = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        self.assertIn('id="caYoutube"', page)
+        self.assertIn("{ title, source: $('caSource').value, youtube }", page)
+        js = (ROOT / "mission-control-api" / "clip.js").read_text()
+        self.assertIn("args.push('--youtube', youtube)", js)
+
+
 @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
 class AVideosOwnHooks(EndToEnd):
     """A video's own list (pasted with its link) is hunted, not its source's -

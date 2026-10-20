@@ -3038,10 +3038,12 @@ function openClipPanel(){
       <input id="caLink" placeholder="https://www.dropbox.com/scl/fi/…" autocapitalize="none" autocorrect="off" spellcheck="false">
       <label for="caTitle">Title</label>
       <input id="caTitle" placeholder="LeBron's 76ers Look Like ELITE… ON PAPER" maxlength="200">
+      <label for="caYoutube">YouTube link, for its comments <span class="muted">(optional - makes better hooks)</span></label>
+      <input id="caYoutube" placeholder="https://www.youtube.com/watch?v=…" autocapitalize="none" autocorrect="off" spellcheck="false">
       <label for="caHunt">Hooks to hunt for <span class="muted">(optional)</span></label>
       <textarea id="caHunt" rows="3" placeholder="Embiid: embiid, joel; LeBron: lebron, bron" autocapitalize="none" autocorrect="off" spellcheck="false"></textarea>
       <div class="acts">
-        <button class="no" id="caHooks">✨ Write hooks from the title</button>
+        <button class="no" id="caHooks">✨ Write hooks</button>
         <button class="yes" id="caQueue">Add to Clip's queue</button>
       </div>
       <div class="muted" id="caSaid">Clip picks it up within 15 minutes, downloads it and cuts the clips - they appear under Clips, waiting for you.</div>
@@ -3190,11 +3192,17 @@ async function clipPost(url, body, ok){
 async function clipHooks(){
   const title = $('caTitle').value.trim();
   if (!title) { $('caSaid').textContent = 'Paste the title first.'; return; }
-  $('caSaid').textContent = 'Writing hooks from the title…';
-  const j = await clipPost('/api/clip/hooks', { title, source: $('caSource').value });
+  const youtube = $('caYoutube').value.trim();
+  $('caSaid').textContent = youtube ? 'Reading the comments and writing hooks…' : 'Writing hooks from the title…';
+  const j = await clipPost('/api/clip/hooks', { title, source: $('caSource').value, youtube });
   if (j && j.ok) {
-    $('caHunt').value = String(j.message || '').trim().split('\n')[0];
-    $('caSaid').textContent = 'Hooks written - check them, change any words, then Add to Clip\'s queue.';
+    const lines = String(j.message || '').trim().split('\n');
+    $('caHunt').value = lines[0];
+    // What the comments said: how many were read, and the moments viewers
+    // pointed at - worth a look in the video before queueing it.
+    const said = lines.slice(1).filter(l => !/^\(cost/.test(l)).join(' · ');
+    $('caSaid').textContent = 'Hooks written - check them, change any words, then Add to Clip\'s queue.'
+      + (said ? ' ' + said : '');
   }
 }
 
@@ -3204,7 +3212,7 @@ async function clipQueue(){
   if (!body.url) { $('caSaid').textContent = 'Paste the Dropbox link first.'; return; }
   const j = await clipPost('/api/clip/queue', body);
   if (j && j.ok) {
-    ['caLink', 'caTitle', 'caHunt'].forEach(id => { $(id).value = ''; });
+    ['caLink', 'caTitle', 'caYoutube', 'caHunt'].forEach(id => { $(id).value = ''; });
     $('caSaid').textContent = String(j.message || '').trim();
   }
 }
