@@ -60,6 +60,34 @@ SECONDS = 10
 MAX_IMAGES = 4          # more photos in ten seconds is a slideshow nobody can read
 FADE = 0.6              # seconds of crossfade between photos
 ZOOM = 1.08             # how far each photo drifts in over its time on screen
+
+# How the slideshow moves (owner, 2026-10-20: "make sure that the videos look a
+# little different from each other so it's not the same recycled content").
+# Each is a camera move on every photo and a transition between them; the
+# first is how every video looked before, and stays the default (Etsy's).
+# tiktok-kit.py rotates through them, kit by kit. Every transition here is in
+# ffmpeg's xfade since 4.3.
+STYLES = {
+    "zoom in, fade":       {"zoom": "in",  "pan": "centre", "transition": "fade"},
+    "zoom out, slide":     {"zoom": "out", "pan": "centre", "transition": "slideleft"},
+    "drift right, wipe":   {"zoom": "in",  "pan": "right",  "transition": "wipeleft"},
+    "drift up, dissolve":  {"zoom": "in",  "pan": "up",     "transition": "dissolve"},
+    "zoom out, circle":    {"zoom": "out", "pan": "centre", "transition": "circleopen"},
+    "drift left, smooth":  {"zoom": "in",  "pan": "left",   "transition": "smoothleft"},
+}
+DEFAULT_STYLE = "zoom in, fade"
+
+
+def motion(style, frames):
+    """(zoom, x, y) zoompan expressions for one style."""
+    s = STYLES.get(style) or STYLES[DEFAULT_STYLE]
+    step = (ZOOM - 1) / max(frames, 1)
+    z = (f"min(zoom+{step:.6f},{ZOOM})" if s["zoom"] == "in"
+         else f"if(eq(on,0),{ZOOM},max(zoom-{step:.6f},1))")
+    span = f"on/{max(frames - 1, 1)}"
+    x = {"right": f"(iw-iw/zoom)*{span}", "left": f"(iw-iw/zoom)*(1-{span})"}.get(s["pan"], "iw/2-(iw/zoom/2)")
+    y = "(ih-ih/zoom)*(1-" + span + ")" if s["pan"] == "up" else "ih/2-(ih/zoom/2)"
+    return z, x, y
 BACKGROUND = "white"    # behind a photo that is not square
 
 
@@ -87,7 +115,7 @@ def plan(n, seconds):
     return round(each, 3), fade, offsets
 
 
-def command(images, out, seconds=SECONDS, size=(SIDE, SIDE), background=BACKGROUND, crf=20):
+def command(images, out, seconds=SECONDS, size=(SIDE, SIDE), background=BACKGROUND, crf=20, style=None):
     """The ffmpeg command line - an argument list, never a shell string.
 
     `size` is (width, height): square for Etsy, 1080x1920 for tiktok-kit.py,
@@ -96,7 +124,8 @@ def command(images, out, seconds=SECONDS, size=(SIDE, SIDE), background=BACKGROU
     W, H = size
     each, fade, offsets = plan(len(images), seconds)
     frames = int(round(each * FPS))
-    step = (ZOOM - 1) / max(frames, 1)
+    z, x, y = motion(style, frames)
+    fx = (STYLES.get(style) or STYLES[DEFAULT_STYLE])["transition"]
     cmd = ["ffmpeg", "-y", "-loglevel", "error"]
     for img in images:
         cmd += ["-i", str(img)]
@@ -108,12 +137,12 @@ def command(images, out, seconds=SECONDS, size=(SIDE, SIDE), background=BACKGROU
         parts.append(
             f"[{i}:v]scale={2 * W}:{2 * H}:force_original_aspect_ratio=decrease,"
             f"pad={2 * W}:{2 * H}:(ow-iw)/2:(oh-ih)/2:color={background},setsar=1,"
-            f"zoompan=z='min(zoom+{step:.6f},{ZOOM})':d={frames}"
-            f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={W}x{H}:fps={FPS},"
+            f"zoompan=z='{z}':d={frames}"
+            f":x='{x}':y='{y}':s={W}x{H}:fps={FPS},"
             f"format=yuv420p[v{i}]")
     last = "v0"
     for k, off in enumerate(offsets, start=1):
-        parts.append(f"[{last}][v{k}]xfade=transition=fade:duration={fade}:offset={off}[x{k}]")
+        parts.append(f"[{last}][v{k}]xfade=transition={fx}:duration={fade}:offset={off}[x{k}]")
         last = f"x{k}"
     cmd += ["-filter_complex", ";".join(parts), "-map", f"[{last}]",
             "-t", str(seconds), "-an", "-c:v", "libx264", "-preset", "medium", "-crf", str(crf),

@@ -1160,6 +1160,99 @@ class EveryKindOfProductHasSevenScenes(unittest.TestCase):
             self.assertEqual(len(prompts), need, thing)
 
 
+class EachKitLooksDifferent(SceneBase):
+    """Owner, 2026-10-20: "Can we make sure that the videos look a little
+    different from each other so it's not the same recycled content over and
+    over again?" Two tote kits in a row shared four of their five places -
+    seven places a product, and a kit took "turn to turn + 4" - drew the same
+    ordinary adult, and every video zoomed in and faded the same way."""
+
+    def test_the_next_kit_of_a_product_gets_places_it_has_not_used(self):
+        sc = self.sc
+        first = sc.scene_order("tote bag", [])
+        made = [sc.paid_prompt("tote bag", n, variant=7 + k) for k, n in enumerate(first[:7])]
+        used = sc.used_places("tote bag", made)
+        self.assertEqual(used, set(first[:7]), "a saved prompt says which place it was, whoever is in it")
+        second = sc.scene_order("tote bag", [used])
+        self.assertTrue(set(second[:7]).isdisjoint(used), "seven fresh places before any repeats")
+        third = sc.scene_order("tote bag", [set(second[:7]), used])
+        never = set(range(len(sc.PAID_SCENES["tote bag"]))) - used - set(second[:7])
+        self.assertTrue(never <= set(third[:4]), "places never used come first")
+        self.assertTrue(set(third[:6]).isdisjoint(second[:7]), "then the longest-unused, not last kit's")
+
+    def test_a_kit_made_before_this_is_recognised(self):
+        old = [self.sc.paid_prompt("tote bag", n) for n in (1, 2)]      # no variant: "an ordinary adult"
+        self.assertEqual(self.sc.used_places("tote bag", old), {1, 2})
+
+    def test_people_and_flat_lays_still_alternate(self):
+        for recent in ([], [{0, 1, 2, 3, 4, 5, 6}], [{8, 9}, {1, 3}]):
+            five = self.sc.scene_order("tote bag", recent)[:5]
+            flat = [self.sc.PAID_SCENES["tote bag"][i].startswith(self.sc.FLAT_LAY) for i in five]
+            self.assertTrue(any(flat) and not all(flat), recent)
+
+    def test_a_different_person_each_time(self):
+        sc = self.sc
+        people = {sc.paid_prompt("tote bag", 0, variant=v) for v in range(len(sc.PEOPLE))}
+        self.assertEqual(len(people), len(sc.PEOPLE))
+        p = sc.paid_prompt("tote bag", 0, variant=1)
+        self.assertIn(sc.PEOPLE[1], p)
+        self.assertIn("not a celebrity", p, "still whole, natural, nobody recognisable")
+        self.assertIn("shown whole from head to at least the knees", p)
+        self.assertNotIn("a woman walking", "".join(sc.PAID_SCENES["tote bag"]), "the place names nobody")
+
+    def test_every_product_has_enough_places_for_two_kits(self):
+        tk = load("tiktok_kit_variety", "tiktok-kit.py")
+        need = 2 * (tk.SCENES_PER_KIT + tk.SPARE_SCENES) - 2
+        for thing in ("tote bag", "mug", "t-shirt"):
+            self.assertGreaterEqual(len(set(self.sc.PAID_SCENES[thing])), need, thing)
+
+    def test_the_kit_uses_the_order_and_each_scene_its_own_person(self):
+        tk = load("tiktok_kit_order", "tiktok-kit.py")
+        asked = []
+
+        def maker(photo, thing, out, n, seed, scratch, spent_today=0.0, how=None):
+            asked.append((n, seed))
+            return {"ok": True, "cost": 0.0}
+        tk.make_scenes({"listing_id": 4412345678}, [self.d / "a.jpg"], "tote bag", 3, self.d, n=3,
+                       maker=maker, how="paid", spare=0, order=[9, 2, 13])
+        self.assertEqual([n for n, _s in asked], [9, 2, 13])
+        self.assertEqual(len({s for _n, s in asked}), 3)
+        src = (SCRIPTS / "scene.py").read_text()
+        self.assertIn("return paid_scene(photo, thing, out, n, scratch, spent_today, variant=seed, **kw)", src)
+        mk = (SCRIPTS / "tiktok-kit.py").read_text()
+        self.assertIn("recent=recent_places(kits, thing_of(row.get(\"title\")))", mk)
+
+    def test_two_kits_in_a_row_never_move_the_same_way(self):
+        tk = load("tiktok_kit_style", "tiktok-kit.py")
+        lv = tk._lv()
+        styles = [tk.style_for(t) for t in range(8)]
+        self.assertTrue(all(a != b for a, b in zip(styles, styles[1:])))
+        self.assertEqual(len(set(styles)), len(lv.STYLES))
+        fade = " ".join(lv.command(["a.jpg", "b.jpg"], "o.mp4", 6, size=(1080, 1920)))
+        self.assertIn("xfade=transition=fade", fade, "Etsy's listing videos are unchanged")
+        self.assertIn("min(zoom+", fade)
+        out = " ".join(lv.command(["a.jpg", "b.jpg"], "o.mp4", 6, size=(1080, 1920), style="zoom out, slide"))
+        self.assertIn("xfade=transition=slideleft", out)
+        self.assertIn("max(zoom-", out)
+
+    def test_a_rebuilt_video_keeps_the_kits_style(self):
+        tk = load("tiktok_kit_repack", "tiktok-kit.py")
+        (self.d / "slides").mkdir()
+        (self.d / "slides" / "01.jpg").write_bytes(b"\xff\xd8x")
+        (self.d / "kit.json").write_text(json.dumps({"video_style": "drift up, dissolve"}))
+        seen = {}
+
+        def command(slides, out, seconds, size, background, crf, style=None):
+            seen["style"] = style
+            raise RuntimeError("stop here")
+        lv = tk._lv()
+        lv.command = command
+        tk._lv = lambda: lv
+        with self.assertRaises(RuntimeError):
+            tk.package(self.d, "k")
+        self.assertEqual(seen["style"], "drift up, dissolve")
+
+
 # ====================================================================== board
 
 class BoardBase(unittest.TestCase):

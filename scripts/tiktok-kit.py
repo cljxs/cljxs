@@ -499,7 +499,7 @@ def kit_id(day, listing_id):
 
 
 def make_scenes(row, photos, thing, turn, folder, n=SCENES_PER_KIT, maker=None, wait=time.sleep,
-                spent_today=0.0, how=None, spare=SPARE_SCENES):
+                spent_today=0.0, how=None, spare=SPARE_SCENES, order=None):
     """Up to n AI scenes for the kit, in `folder`, from at most n + spare
     tries - each a different scene. Returns (used, dropped, cost): used is
     [(path, report)] that passed scene.py's checks, dropped the reason for
@@ -512,6 +512,7 @@ def make_scenes(row, photos, thing, turn, folder, n=SCENES_PER_KIT, maker=None, 
     how = how or sc.mode()
     maker = maker or sc.make_scene
     used, dropped, cost = [], [], 0.0
+    places = list(order or [])
     order = list(photos)
     for k in range(n + spare if n else 0):
         if len(used) >= n:
@@ -524,7 +525,10 @@ def make_scenes(row, photos, thing, turn, folder, n=SCENES_PER_KIT, maker=None, 
             scratch = Path(folder) / f"work-{k}"
             scratch.mkdir(exist_ok=True)
             try:
-                rep = maker(order[0], thing, out, turn + k, int(row["listing_id"]) % 100000 + 97 * turn + k,
+                # The places scene.scene_order() chose - this product's least
+                # recently used first - or, without one, the old rotation.
+                place = places[k % len(places)] if places else turn + k
+                rep = maker(order[0], thing, out, place, int(row["listing_id"]) % 100000 + 97 * turn + k,
                             scratch, spent_today=spent_today + cost, how=how)
             except sc.SpendError as exc:
                 dropped.append(str(exc))
@@ -617,15 +621,21 @@ def spent_today(kits, day):
     return round(sum(float(k.get("scene_cost") or 0) for k in kits if k.get("day") == day), 4)
 
 
-def package(folder, kid):
+def package(folder, kid, style=None):
     """The video and the zip, from whatever is in folder/slides. Run when a
     kit is made and again when the owner drops a slide, so the two can never
-    disagree about what the kit holds. Returns (slides, seconds)."""
+    disagree about what the kit holds. Returns (slides, seconds). A rebuild
+    keeps the style the kit was made with (kit.json's video_style)."""
     folder = Path(folder)
+    if style is None:
+        try:
+            style = json.loads((folder / "kit.json").read_text()).get("video_style")
+        except (OSError, ValueError):
+            style = None
     slides = sorted(p for p in (folder / "slides").iterdir() if SLIDE_RE.match(p.name))
     seconds = video_seconds(len(slides))
     tmp = folder / "video.part.mp4"
-    cmd = _lv().command(slides, tmp, seconds, size=(W, H), background="black", crf=23)
+    cmd = _lv().command(slides, tmp, seconds, size=(W, H), background="black", crf=23, style=style)
     cmd[0] = shutil.which("ffmpeg") or "ffmpeg"
     run(cmd, timeout=600)
     bad = video_problems(tmp, seconds)
@@ -646,8 +656,23 @@ def package(folder, kid):
     return slides, seconds
 
 
+def recent_places(kits, thing):
+    """One set of place indexes per earlier kit of this product, newest
+    first - what scene.scene_order() steers away from."""
+    sc = _scene()
+    return [sc.used_places(thing, [s.get("prompt") for s in k.get("scenes") or []])
+            for k in kits if k.get("thing") == thing]
+
+
+def style_for(turn):
+    """The kit's video style: the next in listing-video.py's list, so two kits
+    in a row never move the same way."""
+    names = list(_lv().STYLES)
+    return names[turn % len(names)]
+
+
 def build_kit(row, photos, day, shop_line, turn, scenes=SCENES_PER_KIT, maker=None, wait=time.sleep,
-              spent=0.0, how=None):
+              spent=0.0, how=None, recent=None):
     """Make a whole kit from a listing row and its downloaded photos. Returns
     the kit dict. Raises on anything that would leave a kit half-made, and
     leaves nothing behind when it does. A scene that fails is not a failed
@@ -674,7 +699,7 @@ def build_kit(row, photos, day, shop_line, turn, scenes=SCENES_PER_KIT, maker=No
     try:
         with tempfile.TemporaryDirectory() as scratch:
             made, dropped, cost = (make_scenes(row, photos, thing, turn, scratch, scenes, maker, wait,
-                                               spent, how)
+                                               spent, how, order=_scene().scene_order(thing, recent))
                                    if scenes else ([], [], 0.0))
             used, shown, left_out = choose(made, photos)
             if not used and not shown:
@@ -697,8 +722,9 @@ def build_kit(row, photos, day, shop_line, turn, scenes=SCENES_PER_KIT, maker=No
         (part / "caption.txt").write_text(caption_for(row, hook, shop_line) + "\n")
         (part / "video-caption.txt").write_text(video_caption_for(row, hook, shop_line) + "\n")
         (part / "audio.txt").write_text(audio_for(thing, bool(ai_slides)))
-        slides, seconds = package(part, kid)
-        kit = {"day": day, "listing_id": int(row["listing_id"]),
+        style = style_for(turn)
+        slides, seconds = package(part, kid, style)
+        kit = {"day": day, "listing_id": int(row["listing_id"]), "video_style": style,
                "title": row.get("title") or "", "url": row.get("url"),
                "hook": hook, "thing": thing, "slides": len(slides),
                "slide_names": [p.name for p in slides], "left_out": left_out,
@@ -921,7 +947,8 @@ def _make(a):
             how = _scene().mode()
             kit = build_kit(row, photos, day, store.SHOP_LINE, len(kits),
                             scenes=0 if a.no_scenes or how == "off" else SCENES_PER_KIT,
-                            spent=spent_today(kits, day), how=how)
+                            spent=spent_today(kits, day), how=how,
+                            recent=recent_places(kits, thing_of(row.get("title"))))
         except Exception as exc:
             print(f"FAILED  {row['listing_id']}  {str(exc)[:300]}", file=sys.stderr)
             return 1

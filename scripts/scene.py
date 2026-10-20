@@ -574,8 +574,22 @@ LIMITS_DEFAULTS = {"tiktok_daily_ai": 0.30, "tiktok_leave_for_emily": 0.50}
 # an ordinary adult, never anyone recognisable (WHO, below); the design
 # check refuses a missing or cut-off head and strange hands (person_ok).
 # Kits with AI scenes already say "AI-generated content" for TikTok.
-WHO = ("an ordinary adult with a natural, friendly face (not a celebrity or anyone recognisable), "
-       "shown whole from head to at least the knees")
+WHO_TAIL = ("with a natural, friendly face (not a celebrity or anyone recognisable), "
+            "shown whole from head to at least the knees")
+WHO = "an ordinary adult " + WHO_TAIL
+# WHO, made a different person from kit to kit (owner, 2026-10-20: "make sure
+# that the videos look a little different from each other"). Every kit had
+# the same "ordinary adult", and the image model drew much the same one.
+PEOPLE = ("a woman in her twenties with curly hair", "a man in his thirties with a short beard",
+          "a woman in her fifties with silver hair", "a college student in a denim jacket",
+          "a man in his sixties in a flannel shirt", "a woman in her thirties with box braids",
+          "a young dad in a baseball cap", "a woman in her forties in a linen dress",
+          "a man in his twenties with glasses", "a woman in her sixties with a warm smile")
+
+
+def who_for(variant):
+    """WHO as one particular person - the same text WHO is, person first."""
+    return f"{PEOPLE[int(variant) % len(PEOPLE)]}, an ordinary person {WHO_TAIL}"
 # Seven each: a kit asks for five and tries two more when the design check
 # refuses one (tiktok-kit.py), and a place asked for twice is a duplicate.
 #
@@ -595,34 +609,68 @@ FLAT_LAY = "flat:"
 # go to the same place, so every carrying scene says which one.
 ON_SHOULDER = "with both of its straps together over one shoulder"
 IN_HAND = "with both of its straps gathered together in one hand, the bag hanging at their side"
+# MORE PLACES, CHOSEN FRESHEST FIRST (owner, 2026-10-20: "so it's not the same
+# recycled content over and over again"). Seven places a product and a kit
+# taking "turn to turn + 4" meant two tote kits in a row shared four of their
+# five scenes. Now each list is long, and scene_order() hands a kit the places
+# its product has not used lately. The tote's still alternate people and
+# flat-lays, so any five in a row hold both.
 PAID_SCENES = {
-    "tote bag": [f"carried by {WHO}, a woman walking down a sunny autumn street, smiling, {ON_SHOULDER}",
+    "tote bag": [f"carried by {WHO}, walking down a sunny autumn street, smiling, {ON_SHOULDER}",
                  f"{FLAT_LAY} a rustic wooden table beside a latte and an open book",
                  f"carried by {WHO}, browsing flowers at a farmers market stall, {IN_HAND}",
                  f"{FLAT_LAY} a red and white picnic blanket on grass beside a basket of strawberries",
                  f"carried by {WHO}, reaching for a book in a cozy bookshop, seen from the side, {ON_SHOULDER}",
                  f"{FLAT_LAY} light oak floorboards with a few autumn leaves around it",
-                 f"carried by {WHO}, waiting at a cafe counter with a coffee in hand, {ON_SHOULDER}"],
+                 f"carried by {WHO}, waiting at a cafe counter with a coffee in hand, {ON_SHOULDER}",
+                 f"{FLAT_LAY} a white marble kitchen counter beside a bunch of fresh tulips",
+                 f"carried by {WHO}, crossing a city street on a bright morning, {ON_SHOULDER}",
+                 f"{FLAT_LAY} a striped beach towel on warm sand beside sunglasses and a paperback",
+                 f"carried by {WHO}, choosing apples at a small corner grocery, {IN_HAND}",
+                 f"{FLAT_LAY} a chunky knit blanket on a bed beside a mug of tea",
+                 f"carried by {WHO}, waiting on a sunny train platform, {ON_SHOULDER}",
+                 f"{FLAT_LAY} a weathered park bench in dappled sunlight",
+                 f"carried by {WHO}, walking a dog along a leafy park path, {ON_SHOULDER}",
+                 f"{FLAT_LAY} a linen tablecloth at an outdoor brunch beside croissants"],
     "mug": [f"held in two hands by {WHO}, in a cozy sweater, sitting by a rainy window",
             "on a kitchen counter beside a coffee pot in soft morning light",
             "on a desk next to an open notebook and a laptop, warm lamp light",
             "on a bedside table beside a stack of books and a small lamp",
             "on a sunny balcony table among potted plants",
             "on a wooden tray with cookies on a cozy knit blanket",
-            "on a cafe windowsill with a pastry on a plate beside it"],
+            "on a cafe windowsill with a pastry on a plate beside it",
+            "on a camp table beside a tent at sunrise",
+            f"held by {WHO}, wrapped in a blanket on a porch swing",
+            "on a stack of vintage books beside a pair of reading glasses",
+            f"held in one hand by {WHO}, at a home office desk",
+            "on a snowy cabin windowsill with warm string lights",
+            "on a garden table beside pots of fresh herbs",
+            f"held by {WHO}, at a cafe table by a big window"],
     "sticker": ["stuck on the lid of a laptop on a cafe table", "stuck on a water bottle beside a hiking trail",
                 "stuck on the cover of a travel journal on a wooden desk",
                 "stuck on a skateboard deck leaning against a brick wall",
                 "stuck on a phone case lying on a cafe table",
                 "stuck on a notebook beside a cup of coloured pencils",
-                "stuck on a guitar case in a sunny room"],
+                "stuck on a guitar case in a sunny room",
+                "stuck on a cooler on a sunny beach",
+                "stuck on a coffee tumbler on a tidy desk",
+                "stuck on a bike frame parked against a fence",
+                "stuck on a planner open on a cafe table",
+                "stuck on a car's back window in a parking lot"],
     "t-shirt": [f"worn by {WHO}, standing in a sunny park",
                 "folded neatly on a wooden bench beside a pair of sneakers",
                 f"worn by {WHO}, sitting at a cafe table",
                 "laid flat on a bed beside a denim jacket and sunglasses",
                 "hanging on a wooden hanger against a white brick wall",
                 f"worn by {WHO}, walking down a city street",
-                "folded on a shelf in a bright little boutique"],
+                "folded on a shelf in a bright little boutique",
+                f"worn by {WHO}, at a backyard barbecue",
+                f"worn by {WHO}, flipping through records in a record store",
+                "hanging on a clothing rack in a sunny vintage shop",
+                "folded in an open gift box with tissue paper",
+                f"worn by {WHO}, laughing with a coffee on a front porch",
+                "laid flat on a wooden floor beside sneakers and a cap",
+                f"worn by {WHO}, at a scenic hiking overlook"],
 }
 PAID_SCENES["bag"] = PAID_SCENES["tote bag"]
 for _k in ("shirt", "sweatshirt", "hoodie"):
@@ -731,9 +779,54 @@ def allowance(spent_today, about_to, budget_read, caps):
     return True, None
 
 
-def paid_prompt(thing, n):
-    places = PAID_SCENES.get(thing) or PAID_DEFAULT
+def places_for(thing):
+    return PAID_SCENES.get(thing) or PAID_DEFAULT
+
+
+def place_key(place):
+    """The words of a place that are in its prompt whoever is drawn in it -
+    the longest piece once WHO is taken out. Recognises a place in an old
+    kit's saved prompt, whichever person that kit drew."""
+    text = place[len(FLAT_LAY):] if place.startswith(FLAT_LAY) else place
+    return max((p.strip(" ,") for p in text.split(WHO)), key=len)[:48]
+
+
+def used_places(thing, prompts):
+    """Which of thing's places these prompts were made from (indexes)."""
+    keys = [place_key(p) for p in places_for(thing)]
+    return {i for i, k in enumerate(keys) for pr in prompts if k and k in str(pr or "")}
+
+
+def scene_order(thing, recent):
+    """Indexes of thing's places for the next kit: never used first, then the
+    longest since used. `recent` is one set of indexes per earlier kit of
+    this product, newest first. People and flat-lays still alternate, so the
+    first five hold both."""
+    places = places_for(thing)
+    last = {}
+    for age, used in enumerate(recent or []):
+        for i in used:
+            last.setdefault(i, age)
+    fresh = sorted(range(len(places)), key=lambda i: (-last.get(i, len(recent or []) + 1), i))
+    flat = [i for i in fresh if places[i].startswith(FLAT_LAY)]
+    rest = [i for i in fresh if not places[i].startswith(FLAT_LAY)]
+    if not flat or not rest:
+        return fresh
+    out = []
+    while flat or rest:
+        for q in (rest, flat):
+            if q:
+                out.append(q.pop(0))
+    return out
+
+
+def paid_prompt(thing, n, variant=None):
+    """The image model's instructions for place n. `variant` (a number) puts
+    a particular person in it - who_for() - instead of "an ordinary adult"."""
+    places = places_for(thing)
     place = places[n % len(places)]
+    if variant is not None:
+        place = place.replace(WHO, who_for(variant))
     if place.startswith(FLAT_LAY):
         return FLAT_ASK.format(thing=thing, scene=place[len(FLAT_LAY):].strip())
     ask = PAID_ASK.format(thing=thing, scene=place)
@@ -799,7 +892,7 @@ def design_check(reference, picture, key, post=None):
 
 
 def paid_scene(photo, thing, out, n, scratch, spent_today=0.0, key=None, generate=None,
-               check_design=None, budget_read=None, caps=None):
+               check_design=None, budget_read=None, caps=None, variant=None):
     """One PAID scene at `out` (1080x1920 jpg): the product drawn into a
     scene by the image model, then compared with its real photo. Returns
     {ok, why, checks, prompt, source, cost}. Raises SpendError when today's
@@ -820,7 +913,7 @@ def paid_scene(photo, thing, out, n, scratch, spent_today=0.0, key=None, generat
 
     ref = scratch / "reference.jpg"
     ffmpeg("-i", photo, "-vf", f"scale='min({REF_SIDE},iw)':-2", "-frames:v", "1", "-q:v", "3", ref)
-    prompt = paid_prompt(thing, n)
+    prompt = paid_prompt(thing, n, variant)
     spent, last = 0.0, None
     for attempt in range(PAID_TRIES):
         ok, why = allowance(spent_today + spent, IMAGE_GUESS + CHECK_GUESS, budget_read, caps)
@@ -865,7 +958,7 @@ def make_scene(photo, thing, out, n, seed, scratch, spent_today=0.0, how=None, *
     if how == "free":
         return free_scene(photo, thing, out, n, seed, scratch, **kw)
     if how == "paid":
-        return paid_scene(photo, thing, out, n, scratch, spent_today, **kw)
+        return paid_scene(photo, thing, out, n, scratch, spent_today, variant=seed, **kw)
     raise SceneError("scenes are switched off (TIKTOK_SCENES=off)")
 
 
