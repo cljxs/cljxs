@@ -28,6 +28,7 @@ function deck() {
 }
 
 const ID_RE = /^\d{1,6}$/;
+const REF_RE = /^https?:\/\/[^\s"'<>]{3,300}$/i;
 // paul.py's own names for a saved photo (01.jpg) and where it came from.
 const PHOTO_RE = /^\d{2}\.(jpg|png)$/;
 const FROM = ['facebook', 'instagram', 'google', 'website', 'owner'];
@@ -42,9 +43,13 @@ function paul(args, timeout = 60000) {
 
 function register(app) {
   // A prospect's number only - never a name, never anything a shell could read.
+  // The reference box: one web address, handed to paul.py as an argument (no
+  // shell), which decides whether it is one.
   app.post('/api/paul/prospects/:id/approve', async (req, res) => {
     if (!ID_RE.test(req.params.id)) return res.status(400).json({ error: 'bad id' });
-    const r = await paul(['approve', req.params.id, '--build']);
+    const ref = String((req.body && req.body.ref) || '').trim();
+    if (ref && !REF_RE.test(ref)) return res.status(400).json({ error: 'the reference must be a whole https:// link' });
+    const r = await paul(['approve', req.params.id, '--build', ...(ref ? ['--ref', ref] : [])]);
     res.status(r.ok ? 200 : 409).json(r);
   });
   app.post('/api/paul/prospects/:id/reject', async (req, res) => {

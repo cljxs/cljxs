@@ -1792,8 +1792,58 @@ class TheOwnerNamesTheBusinessAndTheLook(PaulCase):
         errs, _notes, _info = paul.run_checks(target(), with_reference)
         self.assertFalse(any("reference" in e for e in errs), errs)
 
+    def test_approve_and_build_takes_the_studios_reference(self):
+        # Owner, 2026-10-20, on Royal Edge, a prospect Paul found: "I just want
+        # him to reference that site when I press the approve + build button".
+        paul.save_prospects([dict(prospect(name="Royal Edge"), id=7, found="x", status="waiting")])
+        nothing = lambda cmd, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        rc, out = self.run_quiet(paul.cmd_approve, self.args(who="7", build=True, ref="https:// nope"), run=nothing)
+        self.assertEqual((rc, paul.load_prospects()[0]["status"]), (1, "waiting"), out)
+        rc, out = self.run_quiet(paul.cmd_approve, self.args(who="7", build=True, ref=self.REF), run=nothing)
+        self.assertEqual(rc, 0, out)
+        [p] = paul.load_prospects()
+        self.assertEqual((p["status"], p["reference"]), ("approved", "https://rudysbarbershop.com/"))
+        self.assertEqual(p["address"], prospect()["address"], "the facts Paul found stay")
+        _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
+        self.assertIn("OWNER'S REF  https://rudysbarbershop.com/", facts)
+        self.assertNotIn("named ", facts, "Paul found this one; its facts are checked")
+
+    def test_the_approve_route_passes_the_reference_and_only_a_link(self):
+        node = shutil.which("node")
+        api = ROOT / "mission-control-api"
+        if not (node and (api / "node_modules" / "express").is_dir()):
+            self.skipTest("node or the Deck's node_modules are not installed")
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "scripts").symlink_to(ROOT / "scripts")
+            (root / "agents" / "paul" / "state").mkdir(parents=True)
+            (root / "agents" / "paul" / "state" / "prospects.json").write_text(json.dumps(
+                {"prospects": [dict(prospect(name="Royal Edge"), id=3, status="waiting")]}))
+            js = (
+                f"const express=require({json.dumps(str(api / 'node_modules' / 'express'))});"
+                f"const paul=require({json.dumps(str(api / 'paul.js'))});"
+                "const http=require('http');const app=express();app.use(express.json());paul.register(app);"
+                "const srv=app.listen(0,'127.0.0.1',async()=>{const port=srv.address().port;"
+                "const go=(p,b)=>new Promise(ok=>{const q=http.request({host:'127.0.0.1',port,path:p,method:'POST',"
+                "headers:{'Content-Type':'application/json'}},r=>{let s='';r.on('data',c=>s+=c);r.on('end',()=>"
+                "ok([r.statusCode,s]));});q.end(JSON.stringify(b));});"
+                "const out={bad:await go('/api/paul/prospects/3/approve',{ref:'--anyway; rm -rf /'}),"
+                f"ok:await go('/api/paul/prospects/3/approve',{{ref:{json.dumps(self.REF)}}})}};"
+                "process.stdout.write(JSON.stringify(out));srv.close();});")
+            r = subprocess.run([node, "-e", js], capture_output=True, text=True, timeout=120,
+                               env=dict(os.environ, ECOSYSTEM_ROOT=d))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            out = json.loads(r.stdout)
+            self.assertEqual(out["bad"][0], 400, out["bad"])
+            self.assertEqual(out["ok"][0], 200, out["ok"])
+            [p] = json.loads((root / "agents" / "paul" / "state" / "prospects.json").read_text())["prospects"]
+            self.assertEqual((p["status"], p["reference"]), ("approved", "https://rudysbarbershop.com/"))
+
     def test_the_studio_shows_it_and_the_header_says_it(self):
-        self.assertIn("Your reference", (ROOT / "mission-control-api" / "public" / "paul.html").read_text())
+        studio = (ROOT / "mission-control-api" / "public" / "paul.html").read_text()
+        self.assertIn("Your reference", studio)
+        self.assertIn('data-ref="${esc(p.id)}"', studio, "a reference box on each prospect")
+        self.assertIn("{ ref: refs[a.dataset.approve].trim() }", studio, "Approve + build sends it")
         header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
         self.assertIn("**The owner may pick the reference**", header)
 

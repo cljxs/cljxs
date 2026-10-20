@@ -5650,7 +5650,8 @@ class PaulHasAWorkshop(unittest.TestCase):
         self.assertIn("'paul.py'), 'deck']", self.js)
         self.assertNotIn(".exec(", self.js)
         self.assertIn("const ID_RE = /^\\d{1,6}$/;", self.js)
-        self.assertIn("paul(['approve', req.params.id, '--build'])", self.js)
+        # 2026-10-20: and the reference box's link, as one argument (no shell).
+        self.assertIn("paul(['approve', req.params.id, '--build', ...(ref ? ['--ref', ref] : [])])", self.js)
         self.assertIn("paul(['reject', req.params.id])", self.js)
         self.assertIn("paul(['find'])", self.js)
         # 2026-10-15: and Add photos and Check Google - still nothing that sends or marks.

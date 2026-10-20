@@ -3102,10 +3102,19 @@ def cmd_approve(a, run=subprocess.run):
     if p.get("status") not in ("waiting", "rejected"):
         print(f"{p['name']} is already {p['status']}")
         return 1
+    # The Studio's reference box (owner, 2026-10-20): "I just want him to
+    # reference that site when I press the approve + build button".
+    given = getattr(a, "ref", None)
+    ref = clean_ref(given) if given else None
+    if given and not ref:
+        print(f'"{given}" is not a web address - give the whole https://... link')
+        return 1
     p.update(status="approved", decided=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    if ref:
+        p["reference"] = ref
     save_prospects(rows)
-    record(f"approved by the owner: {p['name']}")
-    print(f"approved: {p['name']} - the next cycle builds it")
+    record(f"approved by the owner: {p['name']}" + (f", after {ref}" if ref else ""))
+    print(f"approved: {p['name']} - the next cycle builds it" + (f", after {ref}" if ref else ""))
     if a.build:
         # Not live yet: the build is a dry one - built here, nothing published.
         live = bool(read_json(A("state", "live.json")))
@@ -3810,6 +3819,7 @@ def main(argv=None):
     p = sub.add_parser("approve", help="approve a prospect for Paul to build")
     p.add_argument("who", help="its number, or part of its name")
     p.add_argument("--build", action="store_true", help="and start the cycle now")
+    p.add_argument("--ref", help="a site whose layout and feel Paul should take after")
     p = sub.add_parser("build", help="build a business you name next, optionally after a site you like")
     p.add_argument("name", help="the business, as it is known")
     p.add_argument("--ref", help="a site whose layout and feel Paul should take after")

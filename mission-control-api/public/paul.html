@@ -97,6 +97,9 @@
   .addrow select{font:600 13px var(--sans);color:var(--ink);background:var(--card);border:1px solid var(--line);
     border-radius:8px;padding:8px 10px}
   label.btn input{display:none}
+  .refbox{display:block;width:100%;box-sizing:border-box;margin-top:6px;font:14px var(--sans);color:var(--ink);background:transparent;border:1px solid var(--line);border-radius:8px;padding:9px 12px}
+  .refbox:focus{outline:none;border-color:var(--mute)}
+  .refl{display:block;margin-top:14px;font-size:12.5px;color:var(--mute)}
   .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#0f172a;border:1px solid var(--line);
     color:var(--ink);padding:10px 16px;border-radius:10px;font-size:13.5px;max-width:90vw;display:none;z-index:9}
   @media (max-width:760px){ body{padding:6px} .grid{grid-template-columns:1fr} .head,.body{padding-left:14px;padding-right:14px}
@@ -142,6 +145,8 @@ if (EMBED) {
 }
 
 let P = null, tab = 'prospects', busy = false;
+// What the owner typed in each reference box, kept across the 30-second redraws.
+const refs = {};
 // Where a saved photo came from (paul.py's PHOTO_FROM), as the picker says it.
 const FROM = [['facebook', 'Facebook'], ['instagram', 'Instagram'], ['google', 'Google'],
               ['website', 'Their website'], ['owner', 'They sent it']];
@@ -248,7 +253,9 @@ function card(p) {
   ].join('');
   const state = STATE[p.status];
   const acts = p.status === 'waiting'
-    ? `<div class="acts"><button class="btn go" data-approve="${esc(p.id)}" ${busy ? 'disabled' : ''}>✓ Approve + build</button>
+    ? `<label class="refl" for="ref-${esc(p.id)}">Reference site for the look (optional)</label>
+       <input class="refbox" id="ref-${esc(p.id)}" data-ref="${esc(p.id)}" type="url" inputmode="url" autocapitalize="off" autocorrect="off" placeholder="https://a-site-you-like.com" value="${esc(refs[p.id] || '')}">
+       <div class="acts"><button class="btn go" data-approve="${esc(p.id)}" ${busy ? 'disabled' : ''}>✓ Approve + build</button>
          <button class="btn" data-reject="${esc(p.id)}" ${busy ? 'disabled' : ''}>Reject</button></div>`
     : p.status === 'built' ? `<div class="said">Built ${esc(p.built || '')} - see Work${p.slug ? ` · <a href="/paul/site/${encodeURIComponent(p.slug)}/" target="_blank" rel="noopener">open the site</a>` : ''}</div>`
     : p.status === 'not built' ? `<div class="said">Not built: ${esc(p.note || '')}</div>`
@@ -355,11 +362,12 @@ function draft(b) {
     <div class="said">Send it yourself, then: python3 scripts/paul.py mark ${esc(b.slug)} sent</div></div>`;
 }
 
-async function act(path, label) {
+async function act(path, label, body) {
   if (busy) return;
   busy = true; draw();
   try {
-    const r = await fetch(path, { method: 'POST' });
+    const r = await fetch(path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+                                     : { method: 'POST' });
     const j = await r.json();
     toast((j.out || j.error || label).split('\n').slice(0, 3).join(' · '));
   } catch (e) { toast('The Deck could not be reached'); }
@@ -368,6 +376,7 @@ async function act(path, label) {
 }
 
 $('tabs').onclick = e => { const b = e.target.closest('[data-t]'); if (b) { tab = b.dataset.t; draw(); } };
+$('body').oninput = e => { const r = e.target.closest('[data-ref]'); if (r) refs[r.dataset.ref] = r.value; };
 $('body').onchange = e => {
   const f = e.target.closest('[data-upload]');
   if (f && f.files && f.files.length) upload(f.dataset.upload, Array.from(f.files));
@@ -385,11 +394,13 @@ $('body').onclick = e => {
     })();
   }
   if (e.target.id === 'find') return act('/api/paul/find', 'started');
-  if (a) return act(`/api/paul/prospects/${a.dataset.approve}/approve`, 'approved');
+  if (a) return act(`/api/paul/prospects/${a.dataset.approve}/approve`, 'approved',
+                    (refs[a.dataset.approve] || '').trim() ? { ref: refs[a.dataset.approve].trim() } : null);
   if (r) return act(`/api/paul/prospects/${r.dataset.reject}/reject`, 'rejected');
 };
 load();
-setInterval(() => { if (!busy) load(); }, 30000);
+// Not while a box is being typed in: a redraw would close the keyboard.
+setInterval(() => { if (!busy && !(document.activeElement && document.activeElement.matches('[data-ref]'))) load(); }, 30000);
 </script>
 </body>
 </html>
