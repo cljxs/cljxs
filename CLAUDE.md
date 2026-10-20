@@ -7,6 +7,13 @@ script rather than by what it says it did.
 `BACKBONE.md` covers the task queue and API. This file is about how to change
 things here without breaking them.
 
+**Start from the routing table** (imported below): it says which files, anchors
+and tests each request touches. Open only those, grep for the anchor, and do
+not read the big files whole. Keep it current - `tests/test_routing.py` fails
+when a path in it is gone or a new script, module, page or unit is missing.
+
+@ROUTING.md
+
 ## Layout
 
     agents/<name>/       workspace: AGENTS.md, MEMORY.md, state/, reports/, data/
