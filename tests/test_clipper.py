@@ -313,13 +313,21 @@ class FramingOnRealFaces(unittest.TestCase):
         cls.video = Path(cls.tmp.name) / "shots.mp4"
         P = [cv2.imread(str(cls.FACES / f"person{i}.jpg")) for i in (1, 2, 3, 4)]
 
-        def frame(bg, people):
+        def frame(bg, people, n=0):
+            # Each person sways a few pixels and the light on them flickers,
+            # frame by frame: a real person moves, and since 2026-10-20 a shot
+            # whose faces never change is read as a wall of pictures.
             img = np.full((1080, 1920, 3), bg, np.uint8)
             cv2.rectangle(img, (0, 700), (1920, 1080), tuple(int(c * 0.5) for c in bg), -1)
             for p, cx, k in people:
                 q = cv2.resize(p, None, fx=k, fy=k)
+                # Faces are looked at every 6th frame (30 fps, SAMPLE_FPS 10,
+                # DETECT_EVERY 2), so the movement changes on that beat.
+                beat = n // 6
+                q = np.clip(q.astype(np.int16) + (14 if beat % 2 else -14), 0, 255).astype(np.uint8)
                 h, w = q.shape[:2]
-                img[1080 - h - 60:1020, int(cx - w / 2):int(cx - w / 2) + w] = q
+                x = int(cx - w / 2) + (beat % 3 - 1) * 4
+                img[1080 - h - 60:1020, x:x + w] = q
             return img
         shots = [((40, 20, 60), [(P[0], 170, 1.0), (P[1], 1750, 1.0)]),
                  ((20, 60, 40), [(P[2], 1250, 2.4)]),
@@ -331,7 +339,8 @@ class FramingOnRealFaces(unittest.TestCase):
                               "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", str(cls.video)],
                              stdin=subprocess.PIPE)
         for bg, people in shots:
-            w.stdin.write(frame(bg, people).tobytes() * 60)
+            for n in range(60):
+                w.stdin.write(frame(bg, people, n).tobytes())
         w.stdin.close()
         w.wait()
         cls.info = media.probe(cls.video)
@@ -358,6 +367,49 @@ class FramingOnRealFaces(unittest.TestCase):
         self.assertEqual((info["width"], info["height"]), (1080, 1920))
         self.assertAlmostEqual(info["duration"], 8.0, delta=0.2)
         self.assertEqual(info["framing"], "4 shot(s): split 0-2s, crop 2-4s, full 4-6s, crop 6-8s")
+
+
+class AWallOfFacesIsNotTheShow(unittest.TestCase):
+    """Owner, 2026-10-20: the clip cropped onto the set's wall of printed
+    players' faces while the show played game footage."""
+
+    def test_many_faces_in_one_strip_is_shown_whole(self):
+        wall = [(1500 + 40 * i, 300 + 90 * i, 70, 90) for i in range(framing.MANY_FACES)]
+        got = framing.layout(wall, 1920, 1080)
+        self.assertEqual(got["layout"], "full")
+        self.assertIn("wall of faces", got["why"])
+
+    def test_the_hosts_are_still_cropped(self):
+        two = [(860, 800, 110, 140), (1060, 800, 110, 140)]
+        self.assertEqual(framing.layout(two, 1920, 1080)["layout"], "crop")
+
+    @unittest.skipUnless(HAVE_CV2 and shutil.which("ffmpeg"), "needs OpenCV and ffmpeg")
+    def test_on_footage_a_screen_beside_a_wall_of_portraits_is_shown_whole(self):
+        # The shot from the owner's screenshot, made from the public-domain
+        # portraits: game footage on a "screen" at the left (moving colour),
+        # a wall of printed faces at the right, nobody real in the shot.
+        import numpy as np
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        out = Path(tmp.name) / "wall.mp4"
+        faces = Path(__file__).parent / "fixtures" / "faces"
+        P = [cv2.resize(cv2.imread(str(faces / f"person{i}.jpg")), None, fx=0.45, fy=0.45) for i in (1, 2, 3, 4)]
+        w = subprocess.Popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24",
+                              "-s", "1920x1080", "-r", "30", "-i", "-", "-c:v", "libx264", "-preset",
+                              "ultrafast", "-pix_fmt", "yuv420p", str(out)], stdin=subprocess.PIPE)
+        for n in range(90):
+            img = np.full((1080, 1920, 3), 25, np.uint8)
+            img[120:640, 80:1180] = ((n * 7) % 255, 120, 200 - (n * 5) % 150)       # the game on the screen
+            for k in range(6):
+                p = P[k % 4]
+                h, wd = p.shape[:2]
+                y, x = 60 + (k // 2) * (h + 20), 1350 + (k % 2) * (wd + 20)
+                img[y:y + h, x:x + wd] = p
+            w.stdin.write(img.tobytes())
+        w.stdin.close()
+        w.wait()
+        plan = framing.plan(out, 0.0, 3.0, media.probe(out))
+        self.assertEqual([s["layout"] for s in plan], ["full"], plan)
 
 
 class APictureOfAFaceIsNotAPerson(unittest.TestCase):
@@ -403,9 +455,22 @@ class APictureOfAFaceIsNotAPerson(unittest.TestCase):
         self.assertEqual(len(got), 2)
 
     @unittest.skipUnless(HAVE_CV2, "needs numpy")
-    def test_a_shot_of_only_still_faces_keeps_them_all(self):
-        # A photo on screen, a frozen frame: nothing to tell real faces by.
-        got = framing.people(self.samples((300, 0.0), (1400, 1.0)), 1920)   # 1.0: under LIVE_MIN
+    def test_a_shot_of_only_still_faces_has_nobody_in_it(self):
+        # Owner, 2026-10-20: "Whenever they play a video the framing is off by
+        # a lot" - the camera on the set's screen beside a wall of printed
+        # faces, nobody real in the shot, and the strip cropped onto the wall.
+        # These were all kept ("nothing to tell real faces by"); now the shot
+        # is shown whole.
+        detail = []
+        got = framing.people(self.samples((300, 0.0), (1400, 1.0)), 1920, detail=detail)
+        self.assertEqual(got, [])
+        self.assertTrue(all("pictures, nobody real" in f["why"] for f in detail))
+        self.assertEqual(framing.layout(got, 1920, 1080)["layout"], "full")
+
+    @unittest.skipUnless(HAVE_CV2, "needs numpy")
+    def test_two_quiet_people_are_still_people(self):
+        # Both under LIVE_MIN but over STILL_MAX: a calm two-shot, kept.
+        got = framing.people(self.samples((300, 2.0), (1400, 2.5)), 1920)
         self.assertEqual(len(got), 2)
 
     @unittest.skipUnless(HAVE_CV2 and shutil.which("ffmpeg"), "needs OpenCV and ffmpeg")

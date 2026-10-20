@@ -60,8 +60,8 @@ THUMB = 24                  # px: each sighting keeps a grey thumbnail of the fa
 # a host and the mural (owner, 2026-10-09). A real face blinks, talks and
 # moves. When a shot has a face that changes at least LIVE_MIN (mean grey
 # levels between sightings), a face changing less than STILL_SHARE of it is
-# dropped. A shot whose faces are ALL still - a photo on screen, a frozen
-# frame - is left alone: there is nothing to tell the real ones by.
+# dropped. A shot whose faces ALL change under STILL_MAX has no person in it
+# at all - every face goes and the shot is shown whole (below).
 # Measured 2026-10-09 on a public-domain interview (archive.org, "News Now -
 # Evelyn Gomez") with a still portrait pasted beside her: the portrait 0.0,
 # people talking 5.8-8.9, a quiet listener 3.4 (44% of the speaker beside him).
@@ -72,6 +72,20 @@ THUMB = 24                  # px: each sighting keeps a grey thumbnail of the fa
 LIVE_MIN = 3.0
 STILL_SHARE = 0.3
 STILL_MAX = 1.5
+# A WALL OF FACES (owner, 2026-10-20: "Whenever they play a video the framing
+# is off by a lot"). When a show plays game footage, the camera shows the
+# set's screen beside a wall printed with dozens of players' faces - nobody
+# real in the shot - and the strip was cropped onto the wall. Two rules:
+# a shot whose every face is still is pictures only (STILL_MAX, above) - this
+# used to keep them all, "nothing to tell the real ones by"; and MANY_FACES
+# or more in one shot is a crowd or a wall, not the people talking - a show
+# seats at most four or five, and five spread across the frame were already
+# shown whole. Either way the shot is shown whole: the layout that is never
+# wrong, only smaller. MANY_FACES is counted IN ONE FRAME (crowd()): people()
+# groups faces by how far across the frame they are, so a wall's column of
+# portraits stacked one above another came out as one "person" - and one
+# whose thumbnail kept changing, so it even looked alive.
+MANY_FACES = 5
 
 
 class FramingUnavailable(Exception):
@@ -209,6 +223,11 @@ def people(samples, sw, report=None, detail=None):
     live = max(moves) if moves else None
     if report is not None:
         report.extend(m for _p, m in kept)
+    if live is not None and live < STILL_MAX and len(moves) == len(kept):
+        for f in found:
+            if f["kept"]:
+                f.update(kept=False, why=f"every face in the shot changes under {STILL_MAX} - pictures, nobody real")
+        kept = []
     if live is not None and LIVE_MIN is not None and live >= LIVE_MIN:
         bar = min(STILL_SHARE * live, STILL_MAX)
         for f in found:
@@ -220,6 +239,23 @@ def people(samples, sw, report=None, detail=None):
     return [p for p, _m in kept]
 
 
+def crowd(samples):
+    """The most faces seen in any one sample of a shot."""
+    return max((len(boxes) for _t, boxes in samples), default=0)
+
+
+def shot_layout(samples, sw, sh, detail=None):
+    """One shot's layout from its samples - the one decision plan() renders
+    and explain() prints."""
+    n = crowd(samples)
+    if n >= MANY_FACES:
+        if detail is not None:
+            detail.append({"box": (sw / 2, sh / 2, 0, 0), "seen": 1.0, "motion": None, "kept": False,
+                           "why": f"{n} faces in one frame - a crowd or a wall of faces"})
+        return {"layout": "full", "why": f"{n} faces in one frame - a crowd or a wall of faces, not the people talking"}
+    return layout(people(samples, sw, detail=detail), sw, sh)
+
+
 def clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
@@ -229,6 +265,8 @@ def layout(folk, sw, sh):
     cw = even(sh * 9 / 16)
     if not folk:
         return {"layout": "full", "why": "no face found"}
+    if len(folk) >= MANY_FACES:
+        return {"layout": "full", "why": f"{len(folk)} faces - a crowd or a wall of faces, not the people talking"}
     left = min(c - w / 2 for c, _, w, _ in folk)
     right = max(c + w / 2 for c, _, w, _ in folk)
     if right - left <= SHARE * cw:
@@ -257,7 +295,7 @@ def plan(src, start, end, info):
     cuts, faces = look(src, start, end, info)
     out = []
     for t0, t1 in shots(cuts, duration):
-        seg = dict(layout(people([f for f in faces if t0 <= f[0] < t1], sw), sw, sh), t0=t0, t1=t1)
+        seg = dict(shot_layout([f for f in faces if t0 <= f[0] < t1], sw, sh), t0=t0, t1=t1)
         if out and {k: v for k, v in out[-1].items() if k not in ("t0", "t1", "why")} == \
                 {k: v for k, v in seg.items() if k not in ("t0", "t1", "why")}:
             out[-1]["t1"] = t1
@@ -275,8 +313,8 @@ def explain(src, start, end, info):
     out = []
     for t0, t1 in shots(cuts, end - start):
         detail = []
-        folk = people([f for f in faces if t0 <= f[0] < t1], sw, detail=detail)
-        out.append(dict(layout(folk, sw, sh), t0=t0, t1=t1, faces=detail))
+        out.append(dict(shot_layout([f for f in faces if t0 <= f[0] < t1], sw, sh, detail), t0=t0, t1=t1,
+                        faces=detail))
     return out
 
 

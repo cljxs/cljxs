@@ -608,7 +608,8 @@ def cmd_framing(a):
             print("   no face found")
     print(f"\nA face is dropped as a picture when it changes under {framing.STILL_SHARE:.0%} of the "
           f"liveliest face, and under {framing.STILL_MAX} - only in a shot whose liveliest face "
-          f"changes {framing.LIVE_MIN} or more.")
+          f"changes {framing.LIVE_MIN} or more. A shot whose faces all change under "
+          f"{framing.STILL_MAX}, or with {framing.MANY_FACES}+ faces, is shown whole.")
     return 0
 
 
