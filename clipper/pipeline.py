@@ -178,19 +178,27 @@ def stage_find(conn, paths, cfg, video):
     return "found"
 
 
-def cut_clip(cfg, video, src, c, words, out, conn):
-    """Render one chosen moment to `out` and return its meta - the one way a
-    clip is cut, for the first render and for recut() alike."""
+def clip_ass(cfg, src, c, words, conn):
+    """(subtitle file text, cutlist row, hook) for one moment - the one way a clip's
+    subtitles are written, for a full cut and for new subtitles alone."""
     cut = conn.execute("SELECT * FROM cutlist WHERE id = ?", (c["cut_id"],)).fetchone() if c["cut_id"] else None
     scfg = render.source_cfg(cfg, src)
     hook = cut["hook"] if cut and cut["hook"] else None
     top = render.hook_top(render.check_watermark(src["watermark"], scfg) if src["watermark"] else None) \
         if hook else captions.HOOK_TOP
-    ass = captions.build(words, c["start"], c["end"], cfg["caption_style"],
-                         cfg["caption_uppercase"], cfg["caption_max_words"],
-                         cfg["caption_max_chars"], hook=hook, hook_top=top)
+    return captions.build(words, c["start"], c["end"], cfg["caption_style"],
+                          cfg["caption_uppercase"], cfg["caption_max_words"],
+                          cfg["caption_max_chars"], hook=hook, hook_top=top), cut, hook
+
+
+def cut_clip(cfg, video, src, c, words, out, conn):
+    """Render one chosen moment to `out` and return its meta - the one way a
+    clip is cut, for the first render and for recut() alike. A copy without
+    subtitles is kept beside it (render.clean_path), so fixing a subtitle
+    later redoes the subtitles only."""
+    ass, cut, hook = clip_ass(cfg, src, c, words, conn)
     info = render.render(video["media_path"], out, c["start"], c["end"], ass,
-                         scfg, watermark=src["watermark"])
+                         render.source_cfg(cfg, src), watermark=src["watermark"], clean=True)
     return {"source": src["name"], "rights": src["rights"], "evidence": src["evidence"],
             "watermark": Path(src["watermark"]).name if src["watermark"] else None,
             "hook": hook, "campaign_key": cut["key"] if cut else None,
@@ -248,12 +256,15 @@ SUBTITLE_LINES_MAX = 400
 SUBTITLE_LINE_CHARS = 120
 
 
-def set_subtitles(conn, paths, cfg, clip_id, texts=None, reset=False):
+def set_subtitles(conn, paths, cfg, clip_id, texts=None, reset=False, remake=True):
     """The owner's corrected captions, one text per line subtitle_lines() gave,
     in order; an empty one removes that caption. Saved on the clip and the
     clip cut again with them. reset=True goes back to the transcript. Owner,
     2026-10-12: "a text box of all the subtitles... fix them manually...
-    remake video"."""
+    remake video". remake=False saves them and leaves the video as it is
+    (owner, 2026-10-20: "make the changes be save able without having to
+    remake the entire video"); the clip cannot be approved until it is
+    remade, or it would post without them."""
     clip, video, c = _clip_parts(conn, clip_id)
     _postable(conn, clip)
     if reset:
@@ -274,6 +285,12 @@ def set_subtitles(conn, paths, cfg, clip_id, texts=None, reset=False):
             own += spread(text, c["start"] + line["start"], c["start"] + line["end"])
         with conn:
             conn.execute("UPDATE clips SET subtitles = ? WHERE id = ?", (json.dumps(own), clip_id))
+        if not remake:
+            meta = dict(json.loads(clip["meta"]), subtitles_pending=True)
+            with conn:
+                conn.execute("UPDATE clips SET meta = ? WHERE id = ?", (db.as_json(meta), clip_id))
+    if not remake:
+        return None
     return recut(conn, paths, cfg, clip_id)
 
 
@@ -293,19 +310,36 @@ def recut(conn, paths, cfg, clip_id):
     _postable(conn, clip)
     src = conn.execute("SELECT * FROM sources WHERE id = ?", (video["source_id"],)).fetchone()
     out = Path(clip["path"])
-    tmp = out.with_name(out.stem + ".recut" + out.suffix)
     # The owner's corrected subtitles when there are any (set_subtitles).
-    meta = cut_clip(cfg, video, src, c, clip_words(conn, paths, video, clip), tmp, conn)
+    words = clip_words(conn, paths, video, clip)
+    clean = render.clean_path(out)
+    if clean.is_file():
+        # Only the subtitles change, so only they are redone - onto the copy
+        # kept without them. Everything else in meta is still true.
+        ass, _cut, _hook = clip_ass(cfg, src, c, words, conn)
+        info = render.burn(clean, out, ass, render.source_cfg(cfg, src))
+        meta = json.loads(clip["meta"])
+        meta.pop("subtitles_pending", None)
+        meta.update(width=info["width"], height=info["height"], duration=info["duration"])
+        how = "subtitles only"
+    else:
+        # A clip made before copies were kept: cut whole, which keeps one now.
+        tmp = out.with_name(out.stem + ".recut" + out.suffix)
+        meta = cut_clip(cfg, video, src, c, words, tmp, conn)
+        tmp_clean = render.clean_path(tmp)
+        if tmp_clean.is_file():
+            tmp_clean.replace(clean)
+        # Everything the render wrote beside the video - the subtitle file too -
+        # takes the clip's own name, or the old subtitles stay on disk as the
+        # clip's and a stray 05.recut.ass is left behind (found by the test).
+        for f in list(out.parent.glob(tmp.stem + ".*")):
+            f.replace(out.with_suffix(f.suffix))
+        how = "whole"
     meta["text"] = transcribe.respell_text(c["text"], spellings_of(conn, video))
-    # Everything the render wrote beside the video - the subtitle file too -
-    # takes the clip's own name, or the old subtitles stay on disk as the
-    # clip's and a stray 05.recut.ass is left behind (found by the test).
-    for f in list(out.parent.glob(tmp.stem + ".*")):
-        f.replace(out.with_suffix(f.suffix))
     out.with_suffix(".json").write_text(json.dumps(meta, indent=1))
     with conn:
         conn.execute("UPDATE clips SET meta = ? WHERE id = ?", (db.as_json(meta), clip_id))
-    db.event(conn, "render", f"clip {clip['rank']} recut with "
+    db.event(conn, "render", f"clip {clip['rank']} recut ({how}) with "
              + ("your corrected subtitles" if clip["subtitles"] else "the current spellings"),
              video_id=video["id"], clip_id=clip_id)
     return meta

@@ -580,13 +580,19 @@ def cmd_subtitles(a):
             texts = json.loads(a.set_json)
             if not isinstance(texts, list):
                 raise ValueError("--set-json takes a JSON list of caption lines")
-        pipeline.set_subtitles(conn, paths, cfg, a.clip, texts, reset=a.reset)
-        print(f"clip {a.clip} cut again with "
+        pipeline.set_subtitles(conn, paths, cfg, a.clip, texts, reset=a.reset, remake=not a.save_only)
+        if a.save_only and not a.reset:
+            print(f"clip {a.clip}: your subtitles are saved. The video still has the old ones - "
+                  f"press Update video when you are done, before approving it.")
+            return 0
+        print(f"clip {a.clip} updated with "
               + ("the transcript's subtitles" if a.reset else "your subtitles")
               + " - reload Clip's studio to see it.")
         return 0
     lines, edited = pipeline.subtitle_lines(conn, paths, cfg, a.clip)
-    print(json.dumps({"clip": a.clip, "edited": edited, "lines": lines}))
+    clip = pipeline._clip_parts(conn, a.clip)[0]
+    pending = bool(json.loads(clip["meta"]).get("subtitles_pending"))
+    print(json.dumps({"clip": a.clip, "edited": edited, "pending": pending, "lines": lines}))
     return 0
 
 
@@ -749,10 +755,13 @@ def main(argv=None):
     x.add_argument("clip", type=int)
     x.set_defaults(fn=cmd_recut)
     x = sub.add_parser("subtitles", help="a clip's captions as JSON; --set-json saves your fixed "
-                                         "lines and cuts it again; --reset goes back to the transcript")
+                                         "lines and puts them in the video (--save-only: not yet); "
+                                         "--reset goes back to the transcript")
     x.add_argument("clip", type=int)
     x.add_argument("--set-json", dest="set_json", default=None)
     x.add_argument("--reset", action="store_true")
+    x.add_argument("--save-only", dest="save_only", action="store_true",
+                   help="with --set-json: save the lines, leave the video until you update it")
     x.set_defaults(fn=cmd_subtitles)
     x = sub.add_parser("framing", help="why a clip is framed the way it is: every face in every shot")
     x.add_argument("clip", type=int)

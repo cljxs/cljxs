@@ -223,6 +223,10 @@ function register(app) {
     if (!Array.isArray(lines) || lines.some(l => typeof l !== 'string')) {
       return res.status(400).json({ ok: false, error: 'lines must be a list of caption lines' });
     }
+    // Save keeps the lines and leaves the video; Update video burns them in.
+    if (b.save_only === true) {
+      return reply(res, await clipper(['subtitles', req.params.id, '--set-json', JSON.stringify(lines), '--save-only']));
+    }
     reply(res, await clipper(['subtitles', req.params.id, '--set-json', JSON.stringify(lines)],
                              REMAKE_TIMEOUT_MS));
   });

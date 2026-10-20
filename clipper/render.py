@@ -97,7 +97,16 @@ def framed(plan):
     return ";".join(parts) + ";" + "".join(f"[s{k}]" for k in range(n)) + f"concat=n={n}:v=1:a=0"
 
 
-def video_filter(mode, src_w, src_h, ass_name, fps, wm=None, plan=None):
+def clean_path(out_path):
+    """Where a clip's copy without subtitles is kept: 05.mp4 -> 05.clean.mp4.
+    Everything the clip shows but its subtitles - framing, watermark, the
+    evened-out sound - so fixing a subtitle burns new ones onto it (burn())
+    instead of cutting the whole clip again (owner, 2026-10-20)."""
+    out_path = Path(out_path)
+    return out_path.with_name(out_path.stem + ".clean.mp4")
+
+
+def video_filter(mode, src_w, src_h, ass_name, fps, wm=None, plan=None, clean=False):
     if plan:
         chain = framed(plan)
     elif mode == "center":
@@ -117,23 +126,54 @@ def video_filter(mode, src_w, src_h, ass_name, fps, wm=None, plan=None):
         w, h, x, y = wm
         chain = (f"{chain}[base];[1:v]scale={w}:{h}:flags=lanczos,format=rgba[wm];"
                  f"[base][wm]overlay={x}:{y}:eof_action=repeat")
+    if clean:
+        # One decode and one framing for both: the copy without subtitles is
+        # split off just before they are drawn.
+        return f"{chain},fps={fps},split=2[c][b];[b]ass={ass_name}[v]"
     return f"{chain},fps={fps},ass={ass_name}[v]"
 
 
-def command(src, out_name, start, end, info, ass_name, cfg, wm=None, plan=None):
+CLEAN_CRF_BETTER = 3     # the copy is encoded once more later, so it starts sharper
+
+
+def command(src, out_name, start, end, info, ass_name, cfg, wm=None, plan=None, clean_name=None):
     """wm: (path, (w, h, x, y)) or None. The watermark's -i comes before -t,
     so -t stays an output option (the clip's length) and is not read as
-    the length of the image."""
+    the length of the image. clean_name: also write the copy without
+    subtitles there, from the same pass."""
     af = f"loudnorm=I={cfg['loudness_lufs']}:TP=-1.5:LRA=11,aresample=48000"
     extra = ["-i", str(wm[0])] if wm else []
-    return ["ffmpeg", "-nostdin", "-y", "-v", "error",
-            "-ss", f"{start:.3f}", *media.input_args(src), *extra, "-t", f"{end - start:.3f}",
-            "-filter_complex", video_filter(cfg["crop_mode"], info["width"], info["height"],
-                                            ass_name, cfg["fps"], wm[1] if wm else None, plan),
-            "-map", "[v]", "-map", "0:a:0?",
-            "-c:v", "libx264", "-preset", cfg["x264_preset"], "-crf", str(cfg["x264_crf"]),
-            "-pix_fmt", "yuv420p", "-af", af, "-c:a", "aac", "-b:a", "128k",
-            "-movflags", "+faststart", out_name]
+    out = ["-c:v", "libx264", "-preset", cfg["x264_preset"], "-crf", str(cfg["x264_crf"]),
+           "-pix_fmt", "yuv420p", "-af", af, "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"]
+    cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error",
+           "-ss", f"{start:.3f}", *media.input_args(src), *extra, "-t", f"{end - start:.3f}",
+           "-filter_complex", video_filter(cfg["crop_mode"], info["width"], info["height"],
+                                           ass_name, cfg["fps"], wm[1] if wm else None, plan,
+                                           clean=bool(clean_name)),
+           "-map", "[v]", "-map", "0:a:0?", *out, out_name]
+    if clean_name:
+        sharper = out[:]
+        sharper[sharper.index("-crf") + 1] = str(max(cfg["x264_crf"] - CLEAN_CRF_BETTER, 10))
+        cmd += ["-map", "[c]", "-map", "0:a:0?", *sharper, clean_name]
+    return cmd
+
+
+def burn(clean, out_path, ass_text, cfg):
+    """New subtitles on a clip's copy without them (clean_path) - the only
+    thing a subtitle fix changes, so nothing else is redone: no framing, no
+    second loudness pass (the sound is copied as it is). Writes <out>.ass
+    beside <out>.mp4, as render() does."""
+    clean, out_path = Path(clean).resolve(), Path(out_path)
+    ass_name = out_path.with_suffix(".ass").name
+    (out_path.parent / ass_name).write_text(ass_text)
+    tmp = out_path.with_name(out_path.stem + ".part.mp4")
+    media.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(clean), "-vf", f"ass={ass_name}",
+               "-map", "0:v:0", "-map", "0:a:0?",
+               "-c:v", "libx264", "-preset", cfg["x264_preset"], "-crf", str(cfg["x264_crf"]),
+               "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart", tmp.name],
+              cwd=out_path.parent)
+    tmp.replace(out_path)
+    return media.probe(out_path)
 
 
 def has_transparency(path):
@@ -191,7 +231,7 @@ def check_watermark(path, cfg):
                          cfg["watermark_max_width"])
 
 
-def render(src, out_path, start, end, ass_text, cfg, watermark=None):
+def render(src, out_path, start, end, ass_text, cfg, watermark=None, clean=False):
     """Writes <out>.ass beside <out>.mp4 and renders. ffmpeg runs in the output
     folder so the subtitle filter gets a bare filename: a full path would need
     its colons and backslashes escaped inside the filter graph. The watermark
@@ -215,7 +255,12 @@ def render(src, out_path, start, end, ass_text, cfg, watermark=None):
         except framing.FramingUnavailable as exc:
             framing_note = f"centre crop - {exc}"
     tmp = out_path.with_name(out_path.stem + ".part.mp4")
-    media.run(command(src, tmp.name, start, end, info, ass_name, cfg, wm, plan),
+    keep = clean_path(out_path) if clean else None
+    ctmp = keep.with_name(keep.stem + ".part.mp4") if keep else None
+    media.run(command(src, tmp.name, start, end, info, ass_name, cfg, wm, plan,
+                      clean_name=ctmp.name if ctmp else None),
               cwd=out_path.parent)
     tmp.replace(out_path)
+    if ctmp:
+        ctmp.replace(keep)
     return dict(media.probe(out_path), framing=framing_note)

@@ -1141,6 +1141,76 @@ class Posting(EndToEnd):
         self.assertNotEqual(code, 0)
         self.assertIn("already posted", said, "nor its subtitles changed")
 
+    # Owner, 2026-10-20: "make the changes be save able without having to
+    # remake the entire video". Save keeps the lines and leaves the video;
+    # Update video burns new subtitles onto the copy kept without them.
+
+    def row(self):
+        return self.conn.execute("SELECT * FROM clips WHERE id = ?", (self.clip["id"],)).fetchone()
+
+    def test_save_leaves_the_video_and_approval_waits_for_the_update(self):
+        from clipper import render
+        self.ready()
+        path = Path(self.clip["path"])
+        clean = render.clean_path(path)
+        self.assertTrue(clean.is_file(), "the first render keeps a copy without subtitles")
+        lines = [l["text"] for l in self.listing()["lines"]]
+        before = path.stat().st_mtime_ns
+        self.subs("--set-json", json.dumps(["Zebra fish", ""] + lines[2:]), "--save-only")
+        self.assertEqual(path.stat().st_mtime_ns, before, "Save does not touch the video")
+        got = self.listing()
+        self.assertTrue(got["pending"] and got["edited"])
+        self.assertEqual(got["lines"][0]["text"], "Zebra fish")
+        snap = report.snapshot(self.conn, config.paths(), self.cfg)
+        self.assertTrue(next(c for c in snap["clips"] if c["id"] == self.clip["id"])["subtitles_pending"])
+        with self.assertRaises(ValueError) as e:
+            publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
+        self.assertIn("not in the video yet", str(e.exception))
+        self.assertEqual(self.sent, [], "nothing posted with the old subtitles")
+
+    def test_update_video_redoes_the_subtitles_only(self):
+        from unittest import mock
+        from clipper import framing, render
+        self.ready()
+        path = Path(self.clip["path"])
+        clean = render.clean_path(path)
+        kept = clean.stat().st_mtime_ns
+        lines = [l["text"] for l in self.listing()["lines"]]
+        self.subs("--set-json", json.dumps(["Zebra fish"] + lines[1:]), "--save-only")
+        whole = mock.Mock(side_effect=AssertionError("the whole clip was cut again"))
+        with mock.patch.object(render, "render", whole), mock.patch.object(framing, "plan", whole):
+            self.subs("--set-json", json.dumps([l["text"] for l in self.listing()["lines"]]))
+        self.assertIn("ZEBRA FISH", " ".join(re.sub(r"\{[^}]*\}", "", d) for d in self.dialogue()))
+        self.assertFalse(self.listing()["pending"])
+        self.assertEqual(clean.stat().st_mtime_ns, kept, "the copy without subtitles is left as it was")
+        info = media.probe(path)
+        self.assertEqual((info["width"], info["height"]), (1080, 1920))
+        self.assertTrue(info["has_audio"], "the sound is carried over")
+        self.assertAlmostEqual(info["duration"], json.loads(self.row()["meta"])["duration"], places=1)
+        publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
+
+    def test_a_clip_made_before_copies_were_kept_is_cut_whole_once(self):
+        from unittest import mock
+        from clipper import render
+        self.ready()
+        path = Path(self.clip["path"])
+        clean = render.clean_path(path)
+        clean.unlink()
+        code, said = self.cli("recut", str(self.clip["id"]))
+        self.assertEqual(code, 0, said)
+        self.assertTrue(clean.is_file(), "cut whole, and the copy is kept from now on")
+        self.assertFalse(list(path.parent.glob("*.recut*")), "nothing half-named left behind")
+        self.assertTrue(path.is_file() and path.stat().st_size > 0)
+        with mock.patch.object(render, "render", mock.Mock(side_effect=AssertionError("cut whole again"))):
+            self.assertEqual(self.cli("recut", str(self.clip["id"]))[0], 0)
+
+    def test_the_copy_goes_once_the_clip_cannot_change(self):
+        from clipper import render
+        self.ready()
+        clean = render.clean_path(self.clip["path"])
+        publish.reject(self.conn, self.clip["id"], "not funny")
+        self.assertFalse(clean.exists(), "a rejected clip's subtitles never change")
+
     def test_your_edit_is_never_overwritten(self):
         self.ready()
         postcopy.edit(self.conn, self.clip["id"], title="My title", hashtags="#mine")

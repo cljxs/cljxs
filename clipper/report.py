@@ -85,6 +85,7 @@ def snapshot(conn, paths, cfg):
         clips.append({"id": c["id"], "video_id": c["video_id"], "rank": c["rank"],
                       "start": c["start"], "end": c["end"], "score": c["score"],
                       "status": c["status"], "reasons": m.get("reasons") or [],
+                      "subtitles_pending": bool(m.get("subtitles_pending")),
                       "text": (m.get("text") or "")[:300], "source": m.get("source"),
                       "video_title": m.get("video_title"), "created_at": c["created_at"],
                       "post": post_words(conn, c),

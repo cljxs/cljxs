@@ -210,9 +210,28 @@
     text-transform:uppercase}
   #edbox .edn,#sedbox .edn{float:right;text-transform:none;letter-spacing:0}
   #sedbox .edn.bad{color:var(--down)}
-  /* Fix subtitles: one caption a line, numbered, tall enough to read the
-     whole clip's captions without scrolling inside the box on an iPad. */
-  #sedText{min-height:52vh;font-family:ui-monospace,Menlo,monospace!important;font-size:17px!important}
+  /* Fix subtitles (owner, 2026-10-20: "listen to the video while editing"):
+     the clip beside its captions on an iPad, above them on a phone. Each
+     caption is its own box with a button that plays just that moment. */
+  #sedbox{width:min(1040px,100%)}
+  #sedbox h2 .edn{float:none;font-size:13px;font-weight:500;color:var(--mute);margin-left:6px;white-space:nowrap}
+  .sedwrap{display:grid;grid-template-columns:minmax(220px,300px) 1fr;gap:16px;margin-top:12px;align-items:start}
+  #sedVideo{width:100%;max-height:68vh;border-radius:11px;background:#000;position:sticky;top:0}
+  #sedLines{max-height:68vh;overflow-y:auto;padding-right:4px}
+  .sl{display:flex;gap:8px;align-items:center;margin-bottom:7px;border-radius:10px}
+  .sl.now{background:rgba(52,211,153,.10);outline:1px solid rgba(52,211,153,.45)}
+  .sl .slt{flex:0 0 auto;min-width:74px;padding:10px 8px;border-radius:9px;border:1px solid var(--line);
+    background:rgba(255,255,255,.06);color:var(--ink);font:600 14px ui-monospace,Menlo,monospace}
+  .sl .sli{flex:1;min-width:0;font-size:17px;color:inherit;background:rgba(255,255,255,.05);
+    border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+  .sl .sli:focus{outline:2px solid rgba(52,211,153,.6);outline-offset:1px}
+  .sl .sli.changed{border-color:rgba(251,191,36,.7)}
+  #sedSaid{min-height:20px;margin-top:10px}
+  @media (max-width:700px){
+    .sedwrap{grid-template-columns:1fr}
+    #sedVideo{max-height:34vh;z-index:1}
+    #sedLines{max-height:none}
+  }
   #edbox input,#edbox textarea,#sedbox textarea{width:100%;box-sizing:border-box;font-family:inherit;font-size:17px;
     line-height:1.45;color:inherit;
     background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:10px;padding:12px 14px;
@@ -411,13 +430,18 @@
 
 <div id="sed">
   <div id="sedbox">
-    <h2>Fix the subtitles</h2>
-    <div class="muted">One line per caption, in the order they appear. Fix the words and keep the
-      lines - each line stays at its moment in the clip. An empty line removes that caption.</div>
-    <label for="sedText">Subtitles <span class="edn" id="sedN"></span></label>
-    <textarea id="sedText" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
-    <div class="edacts"><button id="sedCancel">Cancel</button><button id="sedReset">Back to transcript</button>
-      <button id="sedSave" class="yes">Remake video</button></div>
+    <h2>Fix the subtitles <span class="edn" id="sedN"></span></h2>
+    <div class="muted">Tap a time to hear that caption. Each box stays at its moment in the clip;
+      an empty box removes that caption. <b>Save</b> keeps your fixes without touching the video;
+      <b>Update video</b> puts them in it (subtitles only - the rest is not cut again).</div>
+    <div class="sedwrap">
+      <video id="sedVideo" controls playsinline preload="auto"></video>
+      <div id="sedLines"></div>
+    </div>
+    <div class="muted" id="sedSaid"></div>
+    <div class="edacts"><button id="sedCancel">Close</button><button id="sedReset">Back to transcript</button>
+      <button id="sedKeep">Save</button>
+      <button id="sedSave" class="yes">Update video</button></div>
   </div>
 </div>
 
@@ -3407,6 +3431,7 @@ function drawPost(k){
         <button data-clip="redraft" data-id="${k.id}">New draft</button>
         <button class="no" data-clip="reject" data-id="${k.id}">Reject</button>
         <button data-clip="recut" data-id="${k.id}">Fix subtitles</button></div>
+      ${k.subtitles_pending ? '<div class="muted" style="color:var(--warn,#fbbf24)">Subtitle fixes saved, not in the video yet - Fix subtitles → Update video before approving.</div>' : ''}
       <div class="muted">${dl}</div>`;
   }
   const pubs = (k.publications || []).map(u => {
@@ -3472,42 +3497,102 @@ function editPost(post){
 }
 
 // Fix subtitles (owner, 2026-10-12): every caption burned into the clip, one
-// per line, to correct by hand; Remake video saves them and cuts it again.
-// Resolves with {lines} or {reset: true}, or null when cancelled.
-function editSubtitles(sub){
+// per box, to correct by hand. 2026-10-20: "I need to be able to listen to
+// the video while editing subtitles, also make the changes be save able
+// without having to remake the entire video" - so the clip plays beside the
+// boxes, each caption's time plays just that caption, Save keeps the fixes
+// without touching the video, and Update video redoes the subtitles only.
+// Resolves with {lines} or {reset: true} to update the video, or null.
+const clockOf = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+
+function editSubtitles(id, first, src){
   return new Promise(resolve => {
-    const box = $('sedText'), want = sub.lines.length;
-    box.value = sub.lines.map(l => l.text).join('\n');
-    const read = () => {
-      const got = box.value.split('\n');
-      // A trailing newline is not a caption; an emptied last caption is.
-      while (got.length > want && got[got.length - 1].trim() === '') got.pop();
-      return got;
+    // stopAt: where a one-caption play pauses; pinned: that caption, kept lit
+    // through its last moment and after, rather than the next one.
+    let sub = first, stopAt = null, pinned = null;
+    const video = $('sedVideo'), list = $('sedLines');
+    video.src = src;
+    const boxes = () => Array.from(list.querySelectorAll('.sli'));
+    const read = () => boxes().map(b => b.value);
+    const dirty = () => boxes().some((b, i) => b.value !== sub.lines[i].text);
+    const say = t => { $('sedSaid').textContent = t; };
+    const draw = () => {
+      list.innerHTML = sub.lines.map((l, i) => `<div class="sl" data-i="${i}">
+          <button class="slt" data-seek="${i}" title="Play this caption">▶ ${clockOf(l.start)}</button>
+          <input class="sli" value="${esc(l.text)}" autocapitalize="off" autocorrect="off" spellcheck="false"
+            maxlength="120" aria-label="Caption at ${clockOf(l.start)}"></div>`).join('');
+      $('sedN').textContent = `· ${sub.lines.length} captions${sub.edited ? ' · your edits' : ''}`;
+      say(sub.pending ? 'Your saved fixes are not in the video yet - press Update video before approving it.' : '');
     };
-    const count = () => {
-      const n = read().length;
-      $('sedN').textContent = n === want ? `${want} captions${sub.edited ? ' · your edits' : ''}`
-                                         : `${n} lines - should be ${want}`;
-      $('sedN').classList.toggle('bad', n !== want);
+    // Plays one caption, from a moment before it to its end, then pauses.
+    // Watched every frame: timeupdate comes only four times a second, which
+    // ran a quarter-second into the next caption.
+    const watch = () => {
+      if (stopAt === null) return;
+      if (video.currentTime >= stopAt) { video.pause(); stopAt = null; return; }
+      requestAnimationFrame(watch);
     };
-    box.oninput = count;
-    const done = v => { $('sed').classList.remove('on'); resolve(v); };
-    $('sedCancel').onclick = () => done(null);
-    $('sedReset').onclick = () => {
-      if (confirm('Throw away your edits and use the transcript again?')) done({ reset: true });
+    const playLine = i => {
+      const l = sub.lines[i];
+      video.currentTime = Math.max(0, l.start - 0.25);
+      stopAt = l.end + 0.15;
+      pinned = i;
+      video.play().then(() => requestAnimationFrame(watch)).catch(() => {});
     };
-    $('sedSave').onclick = () => {
-      const lines = read();
-      if (lines.length !== want) {
-        alert(`This clip has ${want} captions and the box has ${lines.length} lines. Keep one line per `
-            + 'caption - leave a line empty to remove that caption.');
-        return;
+    list.onclick = e => { const b = e.target.closest('[data-seek]'); if (b) playLine(+b.dataset.seek); };
+    // Putting the cursor in a box moves the video there, so play starts at it.
+    list.onfocusin = e => {
+      const row = e.target.closest('.sl');
+      if (row && video.paused) video.currentTime = Math.max(0, sub.lines[+row.dataset.i].start - 0.25);
+    };
+    list.oninput = e => {
+      const row = e.target.closest('.sl');
+      if (row) e.target.classList.toggle('changed', e.target.value !== sub.lines[+row.dataset.i].text);
+    };
+    video.ontimeupdate = () => {
+      const t = video.currentTime;
+      if (stopAt !== null && t >= stopAt) { video.pause(); stopAt = null; }
+      const i = pinned !== null ? pinned
+        : sub.lines.findIndex((l, n) => t >= l.start && t < (n + 1 < sub.lines.length ? sub.lines[n + 1].start : l.end + 1));
+      list.querySelectorAll('.sl.now').forEach(r => { if (+r.dataset.i !== i) r.classList.remove('now'); });
+      const row = i >= 0 ? list.querySelector(`.sl[data-i="${i}"]`) : null;
+      if (row && !row.classList.contains('now')) {
+        row.classList.add('now');
+        // Followed while it plays, but never pulled away from a box being typed in.
+        if (!list.contains(document.activeElement)) row.scrollIntoView({ block: 'nearest' });
       }
-      done({ lines });
     };
+    video.onpause = () => { stopAt = null; video.ontimeupdate(); };
+    // Played with the video's own controls: the lit caption follows it again.
+    video.onplay = () => { if (stopAt === null) pinned = null; };
+    video.onseeking = () => { if (stopAt === null) pinned = null; };
+    const done = v => { video.pause(); video.removeAttribute('src'); video.load(); $('sed').classList.remove('on'); resolve(v); };
+    $('sedCancel').onclick = () => {
+      if (dirty() && !confirm('Close without saving your changes?')) return;
+      done(null);
+    };
+    $('sedReset').onclick = () => {
+      if (confirm('Throw away your edits and use the transcript again? The video is updated.')) done({ reset: true });
+    };
+    $('sedKeep').onclick = async () => {
+      if (!dirty()) { say('Nothing changed since the last save.'); return; }
+      say('Saving…');
+      try {
+        const r = await fetch(`/api/clip/subtitles/${encodeURIComponent(id)}`, { method: 'POST',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lines: read(), save_only: true }) });
+        const j = await r.json();
+        if (!r.ok) { say(String(j.message || j.error || 'Not saved.').slice(0, 300)); return; }
+        // Read back: an emptied caption is gone and the rest keep their times.
+        const g = await fetch(`/api/clip/subtitles/${encodeURIComponent(id)}`, { cache: 'no-store' });
+        sub = await g.json();
+        draw();
+        say('Saved. The video still has the old subtitles - press Update video when you are done.');
+        loadClip();
+      } catch (e) { say('Could not reach the API: ' + e.message); }
+    };
+    $('sedSave').onclick = () => done({ lines: read() });
+    draw();
     $('sed').classList.add('on');
-    count();
-    box.focus();
   });
 }
 
@@ -3518,7 +3603,9 @@ async function fixSubtitles(id){
     sub = await r.json();
     if (!r.ok) throw new Error(sub.error || r.status);
   } catch (e) { alert('Could not read the subtitles: ' + e.message); return; }
-  const body = await editSubtitles(sub);
+  const k = ((CLIP && CLIP.clips) || []).find(c => String(c.id) === String(id));
+  const src = k ? `/api/clip/file/${encodeURIComponent(k.video_id)}/${encodeURIComponent(k.rank)}?v=${Date.now()}` : '';
+  const body = await editSubtitles(id, sub, src);
   if (!body) return;
   clipBusy = true;
   document.querySelectorAll('#clipClips button').forEach(b => b.disabled = true);

@@ -5778,14 +5778,30 @@ class ClipHasAStudio(unittest.TestCase):
         # argument, never through a shell.
         self.assertIn("if (kind === 'recut') return fixSubtitles(id);", self.html)
         body = self.html.split("function editSubtitles(", 1)[1].split("\nasync function clipCard(", 1)[0]
-        self.assertIn("lines.length !== want", body, "a lost or added line is caught before sending")
-        self.assertIn('id="sedText" autocapitalize="off" autocorrect="off"', self.html,
+        # 2026-10-20: one box per caption, so a line can no longer be lost or
+        # added by a stray return - the count is the captions'.
+        self.assertIn("sub.lines.map((l, i) =>", body)
+        self.assertIn('class="sli" value="${esc(l.text)}" autocapitalize="off" autocorrect="off"', body,
                       "iOS must not 'correct' a name back")
         js = (ROOT / "mission-control-api" / "clip.js").read_text()
         self.assertIn("app.get('/api/clip/subtitles/:id'", js)
         route = js.split("app.post('/api/clip/subtitles/:id'", 1)[1].split("app.post(", 1)[0]
         self.assertIn("['subtitles', req.params.id, '--set-json', JSON.stringify(lines)]", route)
+        self.assertIn("['subtitles', req.params.id, '--set-json', JSON.stringify(lines), '--save-only']", route)
         self.assertIn("['subtitles', req.params.id, '--reset']", route)
+
+    def test_the_subtitle_editor_plays_the_clip_and_saves_without_remaking(self):
+        # Owner, 2026-10-20: "I need to be able to listen to the video while
+        # editing subtitles, also make the changes be save able without having
+        # to remake the entire video".
+        self.assertIn('<video id="sedVideo" controls playsinline', self.html)
+        body = self.html.split("function editSubtitles(", 1)[1].split("\nasync function clipCard(", 1)[0]
+        self.assertIn("video.currentTime = Math.max(0, l.start - 0.25);", body, "a caption's time plays it")
+        self.assertIn("stopAt = l.end + 0.15;", body, "and stops at its end")
+        self.assertIn("JSON.stringify({ lines: read(), save_only: true })", body, "Save keeps the video")
+        self.assertIn('<button id="sedKeep">Save</button>', self.html)
+        self.assertIn("/api/clip/file/${encodeURIComponent(k.video_id)}/${encodeURIComponent(k.rank)}?v=", self.html)
+        self.assertIn("k.subtitles_pending ?", self.html, "the card says the fixes are not in the video yet")
 
     def test_approve_answers_before_the_upload(self):
         # 2026-10-07: the route waited for the YouTube upload, Safari gave up
