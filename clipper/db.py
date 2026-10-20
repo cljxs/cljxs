@@ -295,6 +295,14 @@ MIGRATIONS = [
         updated_at TEXT NOT NULL
     );
     """,
+    # 14 - the moments viewers pointed at (owner, 2026-10-20: "Yes add that").
+    # inbox.youtube is the video's YouTube page, for its comments; videos.pins
+    # is what code counted from them - [[seconds, comments, likes], ...] -
+    # never the comments themselves. The scorer favours a window holding one.
+    """
+    ALTER TABLE inbox ADD COLUMN youtube TEXT;
+    ALTER TABLE videos ADD COLUMN pins TEXT;
+    """,
 ]
 
 

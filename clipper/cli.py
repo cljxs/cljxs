@@ -255,7 +255,7 @@ def cmd_pickup(a):
 
 def cmd_queue(a):
     cfg, paths, conn = open_all()
-    row = inbox.queue(conn, a.source, a.link, a.title, a.hunt)
+    row = inbox.queue(conn, a.source, a.link, a.title, a.hunt, a.youtube)
     hunt = json.loads(row["hunt"]) if row["hunt"] else []
     print(f"inbox #{row['id']} queued for {row['source']}"
           + (f" with {len(hunt)} hook topic(s)" if hunt else " - no hooks: it uses the source's list")
@@ -670,6 +670,7 @@ def main(argv=None):
     q.add_argument("link")
     q.add_argument("--title")
     q.add_argument("--hunt", help="this video's hooks: \"Topic: term, term; Topic2: term\"")
+    q.add_argument("--youtube", help="its YouTube page: the moments viewers point at in the comments are favoured")
     q.set_defaults(fn=cmd_queue)
     h = sub.add_parser("hooks", help="write a hunt list from a video title (one cheap model call)")
     h.add_argument("title")

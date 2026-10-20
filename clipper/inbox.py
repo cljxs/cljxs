@@ -58,9 +58,13 @@ def check_link(url):
     return url
 
 
-def queue(conn, source, url, title=None, hunt=None):
-    """Save a link for the next pickup. Returns the inbox row."""
+def queue(conn, source, url, title=None, hunt=None, youtube=None):
+    """Save a link for the next pickup. Returns the inbox row. `youtube`, the
+    video's YouTube page, is read for its comments when the video is picked
+    up: the moments viewers pointed at are favoured when clips are chosen."""
     url = check_link(url)
+    if youtube:
+        video_id(youtube)                       # a bad link is refused now, not at pickup
     src = conn.execute("SELECT * FROM sources WHERE name = ? AND active = 1", (source,)).fetchone()
     if not src:
         raise ValueError(f"no active source named {source!r} - a video has to belong to a source "
@@ -73,10 +77,10 @@ def queue(conn, source, url, title=None, hunt=None):
     topics = score.parse_hunt(hunt) if hunt else []
     with conn:
         cur = conn.execute(
-            "INSERT INTO inbox (source, url, link_key, title, hunt, state, added_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)",
+            "INSERT INTO inbox (source, url, link_key, title, hunt, youtube, state, added_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
             (source, url, key, (title or "").strip()[:MAX_TITLE] or None,
-             json.dumps(topics) if topics else None, db.now(), db.now()))
+             json.dumps(topics) if topics else None, (youtube or "").strip() or None, db.now(), db.now()))
     return conn.execute("SELECT * FROM inbox WHERE id = ?", (cur.lastrowid,)).fetchone()
 
 
@@ -86,7 +90,20 @@ def _set(conn, item_id, **cols):
         conn.execute(f"UPDATE inbox SET {sets} WHERE id = ?", (*cols.values(), db.now(), item_id))
 
 
-def drain_one(conn, paths, cfg, ingester=None):
+def save_pins(conn, cfg, video_id_, url, yt=None):
+    """The moments viewers pointed at, read now and kept on the video as
+    numbers only. A failure is a note - the video is clipped either way."""
+    try:
+        pins = [list(p) for p in timestamps(read_comments(conn, cfg, url, yt))]
+    except Exception as exc:
+        return f"comments not read ({str(exc)[:120]}) - clipped without them"
+    with conn:
+        conn.execute("UPDATE videos SET pins = ? WHERE id = ?", (json.dumps(pins) if pins else None, video_id_))
+    return (f"viewers pointed at {', '.join(clock_of(t) for t, _n, _l in pins)}" if pins
+            else "no timestamps in the comments")
+
+
+def drain_one(conn, paths, cfg, ingester=None, yt=None):
     """Ingest the oldest queued link. Returns the inbox row afterwards, or
     None when nothing is queued. A link that will not ingest is marked
     failed with the reason, and the next tick moves on."""
@@ -109,6 +126,8 @@ def drain_one(conn, paths, cfg, ingester=None):
             with conn:
                 conn.execute("UPDATE videos SET hunt = ? WHERE id = ?", (item["hunt"], row["id"]))
         note = None if new else f"already had it: video {row['id']}"
+        if item["youtube"]:
+            note = "; ".join(x for x in (note, save_pins(conn, cfg, row["id"], item["youtube"], yt)) if x)
         _set(conn, item["id"], state="done", video_id=row["id"], note=note)
         db.event(conn, "inbox", f"inbox #{item['id']} -> video {row['id']}"
                                 + ("" if new else " (already had it)"), video_id=row["id"])

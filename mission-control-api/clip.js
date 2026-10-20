@@ -121,6 +121,8 @@ function register(app) {
     const args = ['queue', source, url];
     if (title) args.push('--title', title);
     if (hunt) args.push('--hunt', hunt);
+    const youtube = String(b.youtube || '').trim().slice(0, 300);
+    if (/^https:\/\/(www\.|m\.)?(youtube\.com|youtu\.be)\//.test(youtube)) args.push('--youtube', youtube);
     reply(res, await clipper(args));
   });
 

@@ -3498,6 +3498,51 @@ class HooksFromTheComments(unittest.TestCase):
         self.assertTrue(text.startswith("Embiid"))
         self.assertIn("comments not read", notes[0])
 
+    def test_a_window_holding_a_moment_viewers_pointed_at_scores_higher(self):
+        # Owner, 2026-10-20: "Yes add that and well see how well it works".
+        sents = moments.sentences(WORDS, 0.8)
+        wins = moments.windows(sents, 20, 60)
+        plain = score.score_windows(sents, wins, WORDS, [], CFG)
+        t = sents[5]["start"] + 1.0
+        pinned = score.score_windows(sents, wins, WORDS, [], CFG, pins=[[t, 9, 340]])
+        for a, b in zip(plain, pinned):
+            inside = a["start"] - score.PIN_LEAD <= t <= a["end"]
+            self.assertEqual(b["score"], min(100.0, round(a["score"] + score.PIN_BONUS, 1)) if inside else a["score"])
+            if inside:
+                self.assertIn("(9 comments)", b["reasons"][0])
+        self.assertLess(score.PIN_BONUS, score.TOPIC_BONUS, "a timestamp says when, not what")
+
+    def test_pickup_keeps_the_moments_as_numbers_and_clips_either_way(self):
+        ingest.add_source(self.conn, CFG, "mike", "permission", "campaign brief")
+        with self.assertRaises(ValueError):
+            inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/1.mp4?rlkey=k",
+                        youtube="https://example.com/watch?v=dQw4w9WgXcQ")
+        inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/1.mp4?rlkey=k", "Wemby",
+                    youtube="https://youtu.be/dQw4w9WgXcQ")
+
+        def ingester(conn, paths, source, url, title, remote=False):
+            src = conn.execute("SELECT id FROM sources WHERE name = ?", (source,)).fetchone()
+            with conn:
+                cur = conn.execute("INSERT INTO videos (source_id, title, origin, sha256, media_path, duration, "
+                                   "created_at, updated_at) VALUES (?, ?, ?, ?, '', 60, ?, ?)",
+                                   (src["id"], title, url, url, db.now(), db.now()))
+            return conn.execute("SELECT * FROM videos WHERE id = ?", (cur.lastrowid,)).fetchone(), True
+        yt, _ = self.yt([{"items": [self.thread("12:40 the block", 300), self.thread("12:44 BLOCKED", 5)]}])
+        got = inbox.drain_one(self.conn, {}, self.cfg, ingester, yt=yt)
+        self.assertEqual(got["state"], "done")
+        self.assertIn("viewers pointed at 12:40", got["note"])
+        pins = self.conn.execute("SELECT pins FROM videos WHERE id = ?", (got["video_id"],)).fetchone()["pins"]
+        self.assertEqual(json.loads(pins), [[760, 2, 305]], "numbers only - no comment is kept")
+        inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/2.mp4?rlkey=k", "Two",
+                    youtube="https://youtu.be/dQw4w9WgXcQ")
+        yt, _ = self.yt([], error="commentsDisabled")
+        got = inbox.drain_one(self.conn, {}, self.cfg, ingester, yt=yt)
+        self.assertEqual(got["state"], "done", "no comments, still clipped")
+        self.assertIn("comments not read", got["note"])
+        src = (ROOT / "clipper" / "pipeline.py").read_text()
+        self.assertIn("score_windows(sents, wins, words, loud, cfg, hunt, avoid, frames, pins)", src,
+                      "the moments reach the scorer when clips are chosen")
+
     def test_the_house_and_the_deck_pass_the_link(self):
         page = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
         self.assertIn('id="caYoutube"', page)

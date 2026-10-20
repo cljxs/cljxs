@@ -122,11 +122,13 @@ def stage_find(conn, paths, cfg, video):
     own = video["hunt"] if "hunt" in video.keys() else None
     hunt = json.loads(own) if own else (json.loads(src["hunt"]) if src["hunt"] else [])
     avoid = json.loads(src["avoid"]) if src["avoid"] else []
+    # The moments viewers pointed at in the video's comments (inbox.save_pins).
+    pins = json.loads(video["pins"]) if "pins" in video.keys() and video["pins"] else []
     sents = moments.sentences(words, cfg["sentence_pause_seconds"])
     wins = moments.windows(sents, cfg["min_clip_seconds"], cfg["max_clip_seconds"])
     funny = int(cfg["funny_clips_per_video"])
     frames = frames_of(paths, video) if funny > 0 else None
-    scored = score.score_windows(sents, wins, words, loud, cfg, hunt, avoid, frames)
+    scored = score.score_windows(sents, wins, words, loud, cfg, hunt, avoid, frames, pins)
     # At least one clip per topic on the campaign's list: the list is the
     # moments it says to make, so a smaller cap would silently drop some.
     chosen = moments.choose(scored, max(cfg["max_clips_per_video"], len(hunt)), cfg["min_score"],

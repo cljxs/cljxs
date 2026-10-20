@@ -144,6 +144,13 @@ TOPIC_BONUS = 25.0
 # one-piece and the chunked transcript; at 0.5 both keep the chant.
 TOPIC_BY = 0.5
 
+# Points added to a window holding a moment viewers pointed at in the
+# video's comments ("12:40 that block!!" - inbox.timestamps, owner
+# 2026-10-20). A little under TOPIC_BONUS: a timestamp says when, not what.
+# PIN_LEAD: a viewer's time often lands a few seconds after the start.
+PIN_BONUS = 20.0
+PIN_LEAD = 5.0
+
 
 def parse_hunt(text):
     """'Knicks: knicks, chant; Pat Beverley: beverley, beverly; dunk' ->
@@ -259,7 +266,12 @@ def clock(t):
     return f"{t // 60}:{t % 60:02d}"
 
 
-def score_windows(sents, wins, words, loud, cfg, hunt=None, avoid=(), frames=None):
+def pinned(start, end, pins):
+    """The viewer moments [(seconds, comments, likes)] inside a window."""
+    return [p for p in pins or [] if start - PIN_LEAD <= p[0] <= end]
+
+
+def score_windows(sents, wins, words, loud, cfg, hunt=None, avoid=(), frames=None, pins=None):
     median = statistics.median([v for v in loud if v > -70]) if any(v > -70 for v in loud) else -30.0
     laughed = laughs(words, frames)
     out = []
@@ -274,6 +286,11 @@ def score_windows(sents, wins, words, loud, cfg, hunt=None, avoid=(), frames=Non
         if on_list:
             score = min(100.0, round(score + TOPIC_BONUS, 1))
             why = [f"on the campaign's list: {', '.join(on_list)}"] + why
+        held = pinned(sents[i]["start"], sents[j]["end"], pins)
+        if held:
+            score = min(100.0, round(score + PIN_BONUS, 1))
+            why = ["viewers pointed at " + ", ".join(
+                f"{clock(p[0])} ({p[1]} comment{'s' if p[1] != 1 else ''})" for p in held)] + why
         # Anywhere in the window, not only its first half: a clip that ends
         # on "use code GIL" is an ad as much as one that starts on it. Kept
         # as a candidate at 0, with the reason, so the studio can say why.

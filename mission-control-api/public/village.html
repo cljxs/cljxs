@@ -3208,7 +3208,8 @@ async function clipHooks(){
 
 async function clipQueue(){
   const body = { source: $('caSource').value, url: $('caLink').value.trim(),
-                 title: $('caTitle').value.trim(), hunt: $('caHunt').value.trim() };
+                 title: $('caTitle').value.trim(), hunt: $('caHunt').value.trim(),
+                 youtube: $('caYoutube').value.trim() };
   if (!body.url) { $('caSaid').textContent = 'Paste the Dropbox link first.'; return; }
   const j = await clipPost('/api/clip/queue', body);
   if (j && j.ok) {
