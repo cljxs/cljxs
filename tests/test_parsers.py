@@ -18605,6 +18605,96 @@ class AStickerIsKissCut(unittest.TestCase):
         self.assertEqual(cm.exception.keys, ["kisscut", "kisscut2"])
 
 
+class WhiteArtPrintsBlankOnAWhiteSticker(unittest.TestCase):
+    """2026-10-21, "Paw-Print Pup Window Decal": the art was a window-decal
+    look - a white paw and white lettering with pale grey lines - and went onto
+    a kiss-cut sticker, printed on white vinyl, where white is not ink. Every
+    mockup showed a blank white shape. The owner: "It doesn't print properly."
+    The drawing step now redraws such art and the draft refuses it."""
+
+    CAT = {"sticker": {"blueprint_id": 400, "blueprint_title": "Kiss-Cut Stickers"},
+           "decal": {"blueprint_id": 2, "blueprint_title": "Kiss-Cut Vinyl Decals"},
+           "tshirt": {"blueprint_id": 3, "blueprint_title": "Unisex Jersey Short Sleeve Tee",
+                      "variant_titles": ["S / White"]},
+           "mug": {"blueprint_id": 4, "blueprint_title": "Ceramic Mug 11oz"}}
+
+    def setUp(self):
+        self.ep = load("emily_printify_pale", "emily-printify.py")
+        self.k = load("knockout_pale", "knockout.py")
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def art(self, name, bg, fill, line, words=None, size=200):
+        """A paw-like disc filled `fill` with a 3px `line` outline on `bg`,
+        and an optional bar of lettering in `words` below it."""
+        px = bytearray()
+        for y in range(size):
+            for x in range(size):
+                d = ((x - 100) ** 2 + (y - 80) ** 2) ** .5
+                c = line if 47 <= d <= 50 else fill if d < 47 else bg
+                if words and 140 <= y <= 165 and 30 <= x <= 170:
+                    c = words
+                px += bytes(c) + b"\xff"
+        path = self.tmp / f"{name}.png"
+        self.k.encode(path, size, size, px)
+        return path
+
+    WHITE, NAVY, PALE, BLACK, RED = (255, 255, 255), (20, 30, 70), (200, 200, 200), (20, 20, 20), (200, 30, 40)
+
+    def test_the_paw_decal_is_refused_on_a_sticker(self):
+        # white fill, pale grey lines, white words: drawn on navy, or on white
+        for bg in (self.NAVY, self.WHITE):
+            f = self.art(f"paw{bg[0]}", bg, self.WHITE, self.PALE, words=self.WHITE)
+            self.assertLess(self.ep.shows_on_white(f), self.ep.SHOWS_MIN, bg)
+            self.assertIn("white sticker", self.ep.pale_problem(f, self.CAT["sticker"]))
+            self.assertTrue(self.ep.pale_problem(f, self.CAT["decal"]), "a decal is white vinyl too")
+
+    def test_dark_art_and_a_white_badge_with_dark_words_pass(self):
+        dark = self.art("dark", self.WHITE, self.RED, self.BLACK, words=self.BLACK)
+        badge = self.art("badge", self.WHITE, self.WHITE, self.BLACK, words=self.BLACK)
+        for f in (dark, badge):
+            self.assertIsNone(self.ep.pale_problem(f, self.CAT["sticker"]), f.name)
+
+    def test_the_soft_edge_off_a_dark_background_is_not_ink(self):
+        # White line art cut off navy keeps a one-pixel half-navy edge on each
+        # side of every stroke - a third of a 4px stroke, and dark enough to
+        # count as ink. Only pixels with visible art all round count.
+        size, px = 120, bytearray()
+        edge = tuple((a + b) // 2 for a, b in zip(self.NAVY, self.WHITE))
+        for y in range(size):
+            r = y % 12
+            c = self.WHITE if 4 <= r <= 7 else edge if r in (3, 8) else self.NAVY
+            for x in range(size):
+                px += bytes(c if 10 <= x < 110 else self.NAVY) + b"\xff"
+        f = self.tmp / "strokes.png"
+        self.k.encode(f, size, size, px)
+        self.assertIsNotNone(self.ep.shows_on_white(f))
+        self.assertLess(self.ep.shows_on_white(f), self.ep.SHOWS_MIN)
+
+    def test_only_white_vinyl_is_checked(self):
+        f = self.art("paw", self.NAVY, self.WHITE, self.PALE, words=self.WHITE)
+        for key in ("tshirt", "mug"):
+            self.assertIsNone(self.ep.pale_problem(f, self.CAT[key]), key)
+
+    def test_the_draft_and_the_drawing_both_ask(self):
+        body = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_draft(", 1)[1].split("\ndef cmd_", 1)[0]
+        self.assertIn("pale = pale_problem(upload_from, cat)", body)
+        self.assertLess(body.index("pale_problem(upload_from"), body.index('"/uploads/images.json"'),
+                        "refused before anything is uploaded")
+        ea = (SCRIPTS / "emily-assets.py").read_text()
+        loop = ea.split("def main(", 1)[1]
+        self.assertLess(loop.index("pale_problem(a.out, a.product)"), loop.index("proof(a.out"),
+                        "measured before the proofreader is paid")
+        self.assertIn("return mod.pale_problem(path, entry)", ea, "one check, imported")
+
+    def test_the_prompt_asks_a_sticker_for_dark_ink(self):
+        ea = load("emily_assets_pale", "emily-assets.py")
+        ea._catalogue_entry = lambda product: (self.ep, self.CAT.get(product))
+        self.assertIn("WHITE vinyl", ea.ink_direction("sticker"))
+        self.assertIn("even if the idea says window decal", ea.ink_direction("decal"))
+        self.assertEqual(ea.ink_direction("mug"), "")
+
+
 class LettersAndColoursOnAGarment(unittest.TestCase):
     """2026-10-05, "Trailside Girls Hiking Tee": (1) the holes inside the
     letters printed as background-coloured blobs - knockout floods from the

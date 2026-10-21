@@ -23,6 +23,7 @@ Subcommands:
   refresh                       fill in blueprint titles, so the garment's own
                                 name resolves without an alias
   draft builds/my-slug          build folder -> UNPUBLISHED product, no judgement
+  ink                           how much of each build's art shows on white vinyl
 
 Standard library only.
 """
@@ -1013,6 +1014,70 @@ def readable(variant_ids, titles, hex_by_colour, ink):
         bad.discard(min(share, key=share.get))
     keep = [v for v in variant_ids if colour_of(titles.get(v)) not in bad]
     return keep, {c: round(share[c], 2) for c in sorted(bad)}
+
+
+# WHITE IS NOT INK ON A STICKER. "Paw-Print Pup Window Decal" (2026-10-21):
+# the model drew a window-decal look - a white paw and white lettering with
+# pale grey lines - and it went onto a kiss-cut sticker, which is printed on
+# white vinyl. White prints as nothing, so every mockup showed a blank white
+# shape with faint lines; on the plain mockup there was nothing at all. The
+# owner: "It doesn't print properly."
+#
+# So on white vinyl, a design must carry enough ink that shows: pixels with
+# at least SHOWS_CONTRAST against white (WCAG's large-text minimum). Only
+# pixels whose four neighbours are visible art count, so the soft edge a
+# white shape keeps from a dark background is not mistaken for ink. A badge
+# that is white inside a dark outline with dark words passes; white line art
+# does not. SHOWS_MIN is believed, to be tuned on real files (`ink <build>`).
+SHOWS_CONTRAST = 3.0
+SHOWS_MIN = 0.10
+STICKER_WORDS = ("sticker", "decal")
+
+
+def prints_on_white(entry):
+    """Is this printed on white vinyl - a sticker or a decal, not worn, not AOP?"""
+    if not entry or is_garment(entry) or is_all_over(entry):
+        return False
+    title = str(entry.get("blueprint_title") or "")
+    return any(title_answers_to(title, w) for w in STICKER_WORDS)
+
+
+def shows_on_white(path, step=2):
+    """The share of the visible art that shows on white vinyl, or None.
+
+    Measured on the cut-out when the file has one; an opaque drawing has its
+    background flooded off first, the way the draft will cut it."""
+    try:
+        k = _knockout()
+        w, h, px = k.decode(path)
+    except Exception:
+        return None
+    if all(px[i] == 255 for i in range(3, len(px), 4)):
+        k.knockout(w, h, px)
+    white = luminance((255, 255, 255))
+    seen = shows = 0
+    for y in range(1, h - 1, step):
+        for x in range(1, w - 1, step):
+            i = y * w + x
+            if not all(px[j * 4 + 3] > 127 for j in (i, i - 1, i + 1, i - w, i + w)):
+                continue
+            seen += 1
+            if contrast(luminance((px[i * 4], px[i * 4 + 1], px[i * 4 + 2])), white) >= SHOWS_CONTRAST:
+                shows += 1
+    return shows / seen if seen else None
+
+
+def pale_problem(path, entry):
+    """Why this art would print as a blank on white vinyl, or None."""
+    if not prints_on_white(entry):
+        return None
+    share = shows_on_white(path)
+    if share is None or share >= SHOWS_MIN:
+        return None
+    return (f"only {share:.0%} of the design is dark enough to show on a white sticker - "
+            f"white and pale colours are not printed on white vinyl, so it comes out "
+            f"blank. Draw it in dark, saturated colours with bold dark outlines, "
+            f"no white or pale artwork")
 
 
 def is_garment(entry):
@@ -2111,6 +2176,13 @@ def cmd_draft(a):
             sys.exit(1)
         upload_from = cut
 
+    # On white vinyl, white is not ink: white line art prints as a blank shape.
+    pale = pale_problem(upload_from, cat)
+    if pale:
+        print(f"\nnot drafting: {pale}.\n  Redraw it: Revise on the Shop board "
+              f"(without keeping the art).", file=sys.stderr)
+        sys.exit(1)
+
     print(f"uploading {upload_from.name} "
           f"({upload_from.stat().st_size // 1024} KB) ...")
     up = call("/uploads/images.json", {
@@ -2285,6 +2357,32 @@ def _live_state(shop_id, pid):
         "price_low": (prices[0] / 100) if prices else None,
         "price_high": (prices[-1] / 100) if prices else None,
     }
+
+
+def cmd_ink(a):
+    """emily-printify.py ink - how much of each build's art shows on white vinyl.
+
+    The measurement the sticker check makes, for every build, so SHOWS_MIN can
+    be tuned on real art rather than on a guess. Reads files only."""
+    cat = read_catalog()
+    for f in sorted(_builds_root().glob("*/build.json")):
+        d = f.parent
+        art = next((d / n for n in ("design-cutout.png", "design.png") if (d / n).is_file()), None)
+        if not art:
+            continue
+        try:
+            product = json.loads((d / "listing.json").read_text()).get("product_type") or ""
+        except (OSError, ValueError, AttributeError):
+            product = ""
+        try:
+            entry = resolve(cat, product)[1] if product else None
+        except Exception:
+            entry = None
+        share = shows_on_white(art)
+        flag = ("BLANK ON WHITE" if prints_on_white(entry) and share is not None and share < SHOWS_MIN
+                else "sticker ok" if prints_on_white(entry) else "")
+        print(f"{'?' if share is None else f'{share:4.0%}':>5}  {product[:14]:<14} {d.name}  {flag}")
+    return 0
 
 
 def cmd_options(a):
@@ -2503,6 +2601,7 @@ def main():
     p.set_defaults(fn=cmd_costs)
 
     p = sub.add_parser("options"); p.add_argument("build_dir"); p.set_defaults(fn=cmd_options)
+    sub.add_parser("ink", help="how much of each build's art shows on white vinyl").set_defaults(fn=cmd_ink)
     p = sub.add_parser("status"); p.add_argument("build_dir", nargs="?")
     p.set_defaults(fn=cmd_status)
 
