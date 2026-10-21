@@ -5631,6 +5631,17 @@ class PaulHasAWorkshop(unittest.TestCase):
         self.js = (ROOT / "mission-control-api" / "paul.js").read_text()
         self.page = (ROOT / "mission-control-api" / "public" / "paul.html").read_text()
 
+    def test_the_deck_has_a_paul_tab_a_phone_can_reach(self):
+        # Owner, 2026-10-21: "I need a menu tab for Paul in the command center
+        # so I can access it with my phone." And on a phone the tab bar was
+        # 572px wide on a 390px screen - the right-hand tabs were off it.
+        deck = (ROOT / "mission-control-api" / "public" / "dashboard.html").read_text()
+        nav = deck.split('<nav class="tabsnav">', 1)[1].split("</nav>", 1)[0]
+        self.assertIn('<a class="tabnav" href="/paul">Paul</a>', nav)
+        self.assertRegex(deck, r"@media\(max-width:760px\)\{\s*\.tabsnav\{flex-wrap:wrap")
+        self.assertIn('href="/dashboard">← Deck</a>', (ROOT / "mission-control-api" / "public" / "paul.html").read_text(),
+                      "and back again")
+
     def test_his_house_opens_the_studio_before_the_agent_lookup(self):
         body = self.html.split("function openPanel(name) {", 1)[1]
         before = body.split("(DATA.agents || []).find", 1)[0]
