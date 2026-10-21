@@ -7,7 +7,8 @@
 // same code `paul.py status` uses. Three buttons write, each by running the
 // paul.py command that does it (owner, 2026-10-13): Approve + build, Reject,
 // and Find prospects; since 2026-10-15 also Add/remove photos and Check
-// Google. Nothing here sends, deploys or marks a pitch.
+// Google; since 2026-10-21 I sent it (the owner marks a pitch they sent)
+// and Take down older previews. Nothing here sends or deploys.
 
 const { execFile } = require('child_process');
 const express = require('express');
@@ -120,6 +121,22 @@ function register(app) {
     const { slug } = req.params;
     if (!SLUG_RE.test(slug)) return res.status(400).json({ error: 'bad name' });
     const r = await paul(['remove', slug, '--yes'], 120000);
+    res.status(r.ok ? 200 : 409).json(r);
+  });
+  // I sent it (owner, 2026-10-21): the owner sent the pitch themselves and
+  // says so - paul.py mark <slug> sent records it. Nothing is sent from here.
+  app.post('/api/paul/sent/:slug', async (req, res) => {
+    const { slug } = req.params;
+    if (!SLUG_RE.test(slug)) return res.status(400).json({ error: 'bad name' });
+    const r = await paul(['mark', slug, 'sent']);
+    res.status(r.ok ? 200 : 409).json(r);
+  });
+  // Take down the older previews (owner, 2026-10-21): paul.py retire keeps
+  // the business's newest preview and takes the others off Vercel.
+  app.post('/api/paul/retire/:slug', async (req, res) => {
+    const { slug } = req.params;
+    if (!SLUG_RE.test(slug)) return res.status(400).json({ error: 'bad name' });
+    const r = await paul(['retire', slug], 120000);
     res.status(r.ok ? 200 : 409).json(r);
   });
   app.post('/api/paul/find', async (req, res) => {

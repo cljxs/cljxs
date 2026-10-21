@@ -3075,3 +3075,87 @@ class APitchIsWrittenOnceAndCopiedOnAPhone(PaulCase):
         self.assertIn('data-part="message">Copy message', studio)
         self.assertIn("document.execCommand('copy')", studio, "plain http has no navigator.clipboard")
         self.assertIn("pre{white-space:pre-wrap;overflow-wrap:anywhere;", studio, "a long link wraps on a phone")
+
+
+class IsentItAndTheOlderPreviewsComeDown(PaulCase):
+    """Owner, 2026-10-21: an "I sent it" button instead of typing paul.py
+    mark, and a button to take down Royal Edge's older previews - four were
+    up, one per revision, and only the newest is in its pitch."""
+
+    SLUGS = ("royal-edge-concept-y8ehkl", "royal-edge-concept-pvgrms", "royal-edge-concept-wys8bh")
+
+    def setUp(self):
+        super().setUp()
+        for n, slug in enumerate(self.SLUGS):
+            TheOwnerSendsASiteBack.built(self, name="Royal Edge", slug=slug)
+            paul.log_build({"day": f"2026-10-2{n}", "mode": "live", "outcome": "built", "slug": slug,
+                            "name": "Royal Edge"})
+            paul.append_row(paul.A("state", "deployments.csv"), paul.DEPLOY_FIELDS,
+                            {"slug": slug, "preview_url": f"https://{slug}.vercel.app", "business": "Royal Edge",
+                             "deployed": "2026-10-21", "teardown": "2026-11-20", "status": "live"})
+        # One row per business: a revision's link replaces the old one.
+        paul.append_row(paul.A("state", "contacted.csv"), paul.CONTACTED_FIELDS,
+                        {"slug": self.SLUGS[-1], "business": "Royal Edge", "status": "drafted"})
+
+    def live(self):
+        return [d["slug"] for d in paul.deployments() if d["status"] == "live"]
+
+    def test_the_older_ones_come_down_and_the_newest_stays(self):
+        api = FakeVercel()
+        rc, out = self.run_quiet(paul.cmd_retire, self.args(who=self.SLUGS[-1]), api=api)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.live(), [self.SLUGS[-1]])
+        self.assertEqual(sorted(c.path for c in api.calls if c.method == "DELETE"),
+                         sorted(f"/v9/projects/{s}" for s in self.SLUGS[:2]))
+        rc, out = self.run_quiet(paul.cmd_retire, self.args(who="Royal Edge"), api=FakeVercel())
+        self.assertIn("no older preview up", out)
+
+    def test_not_once_the_pitch_has_gone_out(self):
+        self.run_quiet(paul.cmd_mark, self.args(who=self.SLUGS[-1], status="sent"))
+        api = FakeVercel()
+        rc, out = self.run_quiet(paul.cmd_retire, self.args(who="Royal Edge"), api=api)
+        self.assertEqual(rc, 1)
+        self.assertIn("may be an older one", out)
+        self.assertEqual(len(self.live()), 3)
+        self.assertFalse([c for c in api.calls if c.method == "DELETE"])
+
+    def test_the_studio_shows_it(self):
+        self.run_quiet(paul.cmd_retire, self.args(who="Royal Edge"), api=FakeVercel())
+        paul.append_row(paul.A("state", "deployments.csv"), paul.DEPLOY_FIELDS,
+                        {"slug": "x", "preview_url": "https://x.vercel.app", "business": "Royal Edge", "status": "live"})
+        _rc, out = self.run_quiet(paul.cmd_deck, self.args())
+        cards = {b["slug"]: b for b in json.loads(out)["builds"]}
+        newest, oldest = cards[self.SLUGS[-1]], cards[self.SLUGS[0]]
+        self.assertEqual((newest["current"], newest["older_live"]), (True, 1))
+        self.assertEqual((oldest["current"], oldest["older_live"], oldest["preview_url"]), (False, 0, None),
+                         "a preview taken down has no link")
+        self.assertEqual(newest["preview_url"], f"https://{self.SLUGS[-1]}.vercel.app")
+        studio = (ROOT / "mission-control-api" / "public" / "paul.html").read_text()
+        for s in ('data-retire="${esc(b.slug)}"', 'data-sent="${esc(b.slug)}"', "OLDER VERSION"):
+            self.assertIn(s, studio)
+
+    def test_the_buttons_through_the_deck(self):
+        node = shutil.which("node")
+        api = ROOT / "mission-control-api"
+        if not (node and (api / "node_modules" / "express").is_dir()):
+            self.skipTest("node or the Deck's node_modules are not installed")
+        js = (f"const express=require({json.dumps(str(api / 'node_modules' / 'express'))});"
+              f"const paul=require({json.dumps(str(api / 'paul.js'))});"
+              "const http=require('http');const app=express();app.use(express.json());paul.register(app);"
+              "const srv=app.listen(0,'127.0.0.1',async()=>{const port=srv.address().port;"
+              "const go=p=>new Promise(ok=>{const q=http.request({host:'127.0.0.1',port,path:p,method:'POST'},"
+              "r=>{let s='';r.on('data',c=>s+=c);r.on('end',()=>ok([r.statusCode,s]));});q.end();});"
+              f"const out={{bad:await go('/api/paul/sent/..%2Fx'),retire:await go('/api/paul/retire/{self.SLUGS[-1]}'),"
+              f"sent:await go('/api/paul/sent/{self.SLUGS[-1]}')}};"
+              "process.stdout.write(JSON.stringify(out));srv.close();});")
+        root = self.root
+        (root / "scripts").symlink_to(ROOT / "scripts")
+        # No VERCEL_TOKEN here: retire answers, and takes nothing down.
+        r = subprocess.run([node, "-e", js], capture_output=True, text=True, timeout=120,
+                           env=dict(os.environ, ECOSYSTEM_ROOT=str(root)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["bad"][0], 400)
+        self.assertIn("no VERCEL_TOKEN", out["retire"][1])
+        self.assertEqual(out["sent"][0], 200, out["sent"])
+        self.assertEqual([r["status"] for r in paul.contacted()], ["sent"])

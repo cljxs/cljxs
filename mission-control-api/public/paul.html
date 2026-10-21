@@ -360,13 +360,15 @@ function work(b) {
     : `<div class="said">no ${n} screenshot</div>`;
   return `<div class="card"><div class="ctop"><div><div class="cname">${esc(b.name)}</div>
       <div class="cmeta">${esc(b.day || '')} · ${b.mode === 'live' ? 'live' : 'dry run'}${b.kind ? ' · ' + esc(b.kind) : ''}</div></div>
-      <div class="tags">${b.from_note ? '<span class="tag t-green">UPDATED FROM YOUR NOTE</span>' : ''}
+      <div class="tags">${b.current ? '' : '<span class="tag t-gray">OLDER VERSION</span>'}
+        ${b.from_note ? '<span class="tag t-green">UPDATED FROM YOUR NOTE</span>' : ''}
         ${b.status ? `<span class="tag t-gray">${esc(String(b.status).toUpperCase())}</span>` : ''}</div></div>
     ${b.from_note ? `<div class="said">Made ${esc(b.day || '')} from your note: “${esc(b.from_note.notes || '')}”</div>` : ''}
     ${revision(b)}
     <div class="shots">${shot('mobile')}${shot('desktop')}</div>
     <div class="acts"><a class="btn" href="/paul/site/${encodeURIComponent(b.slug)}/" target="_blank" rel="noopener">Open the site</a>
       ${b.preview_url ? `<a class="btn go" href="${esc(b.preview_url)}" target="_blank" rel="noopener">Live preview</a>` : ''}</div>
+    ${b.older_live ? `<div class="acts"><button class="btn del" data-retire="${esc(b.slug)}" data-name="${esc(b.name)}" data-n="${b.older_live}" ${busy ? 'disabled' : ''}>Take down ${b.older_live} older preview${b.older_live > 1 ? 's' : ''}</button></div>` : ''}
     ${b.notes ? `<div class="why"><b>Paul's notes:</b> ${esc(b.notes)}</div>` : ''}
     ${b.teardown ? `<div class="said">preview comes down ${esc(b.teardown)}</div>` : ''}
     <label class="refl" for="fix-${esc(b.slug)}">Something to fix before you pitch it? Tell Paul</label>
@@ -409,7 +411,8 @@ function draft(b) {
       ${p.to ? `<button class="btn" data-copy="${esc(b.slug)}" data-part="to">Copy ${to}</button>` : ''}
       ${p.subject ? `<button class="btn" data-copy="${esc(b.slug)}" data-part="subject">Copy subject</button>` : ''}</div>
     <pre>${esc(b.draft)}</pre>
-    <div class="said">Send it yourself, then: python3 scripts/paul.py mark ${esc(b.slug)} sent</div></div>`;
+    <div class="said">Send it yourself, then tap I sent it.</div>
+    <div class="acts"><button class="btn go" data-sent="${esc(b.slug)}" data-name="${esc(b.name)}" ${busy ? 'disabled' : ''}>I sent it</button></div></div>`;
 }
 
 // Copy on a phone (owner, 2026-10-21). The Deck is plain http over
@@ -458,6 +461,16 @@ $('body').onclick = e => {
   if (del) {
     if (!confirm(`Delete every ${del.dataset.name} site? Any live preview is taken down, its drafts go, and Paul never picks ${del.dataset.name} again.`)) return;
     return act(`/api/paul/remove/${encodeURIComponent(del.dataset.remove)}`, 'deleted');
+  }
+  const sent = e.target.closest('[data-sent]');
+  if (sent) {
+    if (!confirm(`Mark the ${sent.dataset.name} pitch as sent? It leaves Drafts, and Paul never pitches ${sent.dataset.name} again.`)) return;
+    return act(`/api/paul/sent/${encodeURIComponent(sent.dataset.sent)}`, 'marked sent');
+  }
+  const old = e.target.closest('[data-retire]');
+  if (old) {
+    if (!confirm(`Take down ${old.dataset.n} older ${old.dataset.name} preview(s)? The newest - the one in its pitch - stays up.`)) return;
+    return act(`/api/paul/retire/${encodeURIComponent(old.dataset.retire)}`, 'taken down');
   }
   const c = e.target.closest('[data-copy]');
   if (c) {

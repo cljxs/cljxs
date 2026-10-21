@@ -2574,7 +2574,12 @@ def cmd_deck(a):
             "slug": slug, "name": b.get("name"), "kind": b.get("kind"), "layout": b.get("layout"),
             "site": built,
             "shots": [n for n, _w, _h in SHOTS if slug and (box / f"{n}.png").is_file()],
-            "preview_url": (deps.get(slug) or {}).get("preview_url") or None,
+            # A preview taken down has no link to open.
+            "preview_url": (deps.get(slug) or {}).get("preview_url")
+            if (deps.get(slug) or {}).get("status") == "live" else None,
+            # On a business's newest card: its older previews still up.
+            "older_live": sum(1 for d in deps.values() if d.get("status") == "live" and d["slug"] != slug
+                              and norm_name(d.get("business")) == norm_name(b.get("name"))) if current else 0,
             "teardown": (deps.get(slug) or {}).get("teardown") or None,
             "status": (rows.get(slug) or {}).get("status") or None,
             "identity": [{"detail": r.get("detail"), "source": r.get("source")}
@@ -2750,6 +2755,12 @@ def teardown(only=None, list_only=False, day=None, api=None):
             print(f"  due: {d['preview_url']} ({d['business']}) - {why}")
         print(f"{len(due)} preview(s) due to come down")
         return 0
+    return take_down(deps, due, day, api)
+
+
+def take_down(deps, due, day, api=None):
+    """Remove each (row, why) in due from Vercel and record it in
+    deployments.csv (deps is the whole file, rows in it). 0, or 1 if any failed."""
     if not due:
         return 0
     token = vercel_token()
@@ -2767,6 +2778,43 @@ def teardown(only=None, list_only=False, day=None, api=None):
             print(f"   !! could not take down {d['preview_url']}: {detail}")
     write_rows(A("state", "deployments.csv"), DEPLOY_FIELDS, deps)
     return 1 if failed else 0
+
+
+def older_previews(who):
+    """(name, the newest site's slug, [live deployment rows of its older
+    sites], deps) for a business, by name or slug. Its newest site is the
+    one its pitch links to; each revision put up a preview of its own."""
+    log = [b for b in builds() if b.get("outcome") == "built" and b.get("slug")
+           and (A("sites", b["slug"]) / "index.html").is_file()]
+    hit = [b for b in log if b["slug"] == who] or [b for b in log if norm_name(b.get("name")) == norm_name(who)]
+    if not hit:
+        return None, None, [], []
+    name = hit[0].get("name")
+    newest = [b for b in log if norm_name(b.get("name")) == norm_name(name)][-1]["slug"]
+    deps = deployments()
+    old = [d for d in deps if d.get("status") == "live" and d.get("slug") != newest
+           and norm_name(d.get("business")) == norm_name(name)]
+    return name, newest, old, deps
+
+
+def cmd_retire(a, api=None):
+    """Take down a business's older previews and keep its newest (owner,
+    2026-10-21: Royal Edge had four up, one per revision). Not once a pitch
+    has gone out: the link they were sent may be an older one."""
+    name, newest, old, deps = older_previews(a.who)
+    if not name:
+        print(f'no built site matches "{a.who}"')
+        return 1
+    row = next((r for r in contacted() if norm_name(r["business"]) == norm_name(name)), None)
+    if row and row.get("status") not in ("", "drafted"):
+        print(f"{name} is marked {row['status']} - the link they were sent may be an older one, "
+              f"so its previews stay up until their usual day")
+        return 1
+    if not old:
+        print(f"{name} has no older preview up - only the newest, {newest}")
+        return 0
+    print(f"{name}: keeping {newest}, taking down {len(old)} older preview(s)")
+    return take_down(deps, [(d, "an older version - the newest stays up") for d in old], today(), api)
 
 
 def due_reason(d, contact_status, day):
@@ -4349,6 +4397,8 @@ def main(argv=None):
     p = sub.add_parser("mark", help="after you send one: sent/replied/won/declined/do-not-contact")
     p.add_argument("who", help="the slug, or the business name")
     p.add_argument("status", choices=STATUSES)
+    p = sub.add_parser("retire", help="take down a business's older previews; its newest stays up")
+    p.add_argument("who", help="the slug, or the business name")
     p = sub.add_parser("exclude", help="a business Paul must never pick")
     p.add_argument("business")
     p.add_argument("phone", nargs="?")
@@ -4412,7 +4462,7 @@ def main(argv=None):
 
     a = ap.parse_args(argv)
     return {"init": cmd_init, "sender": cmd_sender, "preflight": cmd_preflight,
-            "status": cmd_status, "mark": cmd_mark, "exclude": cmd_exclude,
+            "status": cmd_status, "mark": cmd_mark, "retire": cmd_retire, "exclude": cmd_exclude,
             "teardown": cmd_teardown, "go-live": cmd_go_live, "dry-next": cmd_dry_next,
             "revise": cmd_revise, "measure": cmd_measure, "prospects": cmd_prospects, "approve": cmd_approve,
             "reject": cmd_reject, "build": cmd_build, "find": cmd_find, "remove": cmd_remove,
