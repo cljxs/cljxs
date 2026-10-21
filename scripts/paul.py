@@ -1644,6 +1644,11 @@ def seo_problems(site, t):
     return errs
 
 
+# Every probe scrolls with behavior:'instant'. The template's
+# html{scroll-behavior:smooth} turned scrollIntoView into a glide still under
+# way when the probe looked: below the first screen, contrast was skipped
+# unsaid and Royal Edge's Sample labels read as behind their photos
+# (2026-10-21).
 # Measured in the browser, because a colour in CSS is not the colour on the
 # screen: Milkbox's "Call us" (2026-10-05) was brown text on a brown button,
 # inherited from a{color}, and Paul read the screenshot and missed it. For
@@ -1669,7 +1674,7 @@ for(var n=0;n<all.length&&seen<400;n++){var el=all[n];if(/^(SCRIPT|STYLE|NOSCRIP
  var own='';for(var c=el.firstChild;c;c=c.nextSibling)if(c.nodeType===3)own+=c.nodeValue;own=own.replace(/\s+/g,' ').trim();if(!own)continue;
  var s=getComputedStyle(el);if(s.visibility!=='visible'||s.display==='none'||el.getClientRects().length===0)continue;
  var fill=rgba(s.webkitTextFillColor||s.color);if(fill[3]===0)continue;seen++;
- el.scrollIntoView({block:'center'});var bg=behind(el);if(!bg)continue;
+ el.scrollIntoView({block:'center',behavior:'instant'});var bg=behind(el);if(!bg)continue;
  var fg=over(rgba(s.color),bg);var L1=lum(fg),L2=lum(bg);var ratio=(Math.max(L1,L2)+0.05)/(Math.min(L1,L2)+0.05);
  var px=parseFloat(s.fontSize),w=parseInt(s.fontWeight)||400;var need=(px>=24||(px>=18.66&&w>=700))?3:4.5;
  if(ratio<need)out.push({text:own.slice(0,60),ratio:Math.round(ratio*100)/100,need:need});}
@@ -1694,7 +1699,7 @@ var a=sig(),sh=[].slice.call(document.styleSheets);sh.forEach(function(x){x.disa
 var n=0;for(var i=0;i<a.length;i++)if(a[i]!==b[i])n++;return a.length?Math.round(n/a.length*100)/100:1;}"""
 # Bump when a probe learns something new, so a site measured before is
 # measured again rather than passed from memory.
-PROBE_V = 3
+PROBE_V = 4
 # Why a sample photo's label was not found on it, as Paul is told.
 SAMPLE_WHY = {
     "none": "no element saying Sample has its middle inside the photo - a ::before/::after "
@@ -1758,7 +1763,7 @@ function settled(then){var n=0;(function end(){(document.getAnimations?document.
  var e=a.effect&&a.effect.getTiming?a.effect.getTiming():{};if(e.iterations!==Infinity){try{a.finish();}catch(x){}}});
  if(n++<2)return setTimeout(end,50);then();})();}
 document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a[href]');if(a)e.preventDefault();},true);
-function reach(e){e.scrollIntoView({block:'center',inline:'center'});var r=e.getBoundingClientRect();if(r.width<2||r.height<2)return false;
+function reach(e){e.scrollIntoView({block:'center',inline:'center',behavior:'instant'});var r=e.getBoundingClientRect();if(r.width<2||r.height<2)return false;
  var x=r.left+r.width/2,y=r.top+r.height/2;if(x<0||y<0||x>innerWidth||y>innerHeight)return false;
  var h=document.elementFromPoint(x,y);return !!h&&(h===e||e.contains(h));}
 // textContent, not innerText: a link inside a closed drop-down has no
@@ -1869,7 +1874,7 @@ def measured_contrast(site, browser, memo, run=subprocess.run):
     command to the background - and the next Gemini cycle spent 70 tool
     calls running and polling commands. An unchanged site is not measured
     twice."""
-    fp = site_fingerprint(site)
+    fp = f"{site_fingerprint(site)}|{PROBE_V}"
     memo = Path(memo)
     seen = read_json(memo, {}) or {}
     # A list is an answer; None (the browser said nothing) is asked again.
@@ -1949,7 +1954,7 @@ function done(){var out=[];imgs.forEach(function(i){
  var bare=[];imgs.forEach(function(i){var u=decodeURI(i.src||'');
   if(!SAMPLES.some(function(r){return u.slice(-(r.length+1))==='/'+r;}))return;
   var s=getComputedStyle(i);if(s.display==='none'||s.visibility!=='visible')return;
-  i.scrollIntoView({block:'center'});var r=i.getBoundingClientRect();if(r.width<40||r.height<40)return;
+  i.scrollIntoView({block:'center',behavior:'instant'});var r=i.getBoundingClientRect();if(r.width<40||r.height<40)return;
   var why='none';
   var on=tags.some(function(t){var q=t.getBoundingClientRect(),ts=getComputedStyle(t);
    var x=q.left+q.width/2,y=q.top+q.height/2;if(x<r.left||x>r.right||y<r.top||y>r.bottom)return false;

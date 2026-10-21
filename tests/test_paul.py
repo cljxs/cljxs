@@ -996,6 +996,17 @@ def _a_browser():
 
 @unittest.skipUnless(_a_browser(), "needs a headless Chrome")
 class TextAVisitorCanRead(unittest.TestCase):
+    def test_text_below_the_first_screen_is_measured_on_a_smooth_scrolling_page(self):
+        # The template has html{scroll-behavior:smooth}; until 2026-10-21 the
+        # probe looked before the scroll arrived and skipped this text unsaid.
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "index.html").write_text(
+                '<!doctype html><html><head><style>html{scroll-behavior:smooth}body{margin:0;background:#fff}'
+                '</style></head><body><p>Top</p><div style="height:3000px"></div>'
+                '<p style="color:#ddd">Hard to read below the fold</p><div style="height:3000px"></div></body></html>')
+            got = paul.contrast_problems(d, _a_browser())
+        self.assertEqual([(t, need) for _p, t, _r, need in got], [("Hard to read below the fold", 4.5)])
+
     """Milkbox's "Call us" (2026-10-05): brown text on a brown button,
     inherited from a{color}, in both screenshots - Paul read them and missed
     it. Measured in a real browser. White text on a photo must NOT be
@@ -2796,6 +2807,24 @@ class SamplePhotosSaySample(unittest.TestCase):
         # elementsFromPoint, which the probe read as no label at all.
         self.assertEqual(self.bare('<div class="card"><img src="img/s.png" alt="a">'
                                    '<span class="tag" style="pointer-events:none">Sample</span></div>'), [])
+
+    def test_royal_edges_own_products_pass_on_a_smooth_scrolling_page(self):
+        # Paul's rules, read off work/site/style.css on the droplet
+        # (2026-10-21), refused three times as "behind the photo": the
+        # template's scroll-behavior:smooth made scrollIntoView a glide, and
+        # the probe looked before it arrived.
+        css = (":root{--gold:#c9a24a}html{scroll-behavior:smooth}.prods{display:grid;gap:18px}"
+               ".prods figure{position:relative;margin:0;aspect-ratio:1/1;overflow:hidden;border-radius:6px}"
+               ".prods img{width:100%;height:100%;object-fit:cover;object-position:center 70%}"
+               ".sample-tag{position:absolute;left:12px;top:12px;background:#0d0d0d;color:var(--gold);"
+               "border:1px solid var(--gold);padding:4px 12px;border-radius:4px;font-weight:600;"
+               "letter-spacing:.08em;text-transform:uppercase;font-size:.85rem}"
+               "@media (min-width:760px){.prods{grid-template-columns:repeat(3,1fr)}}.prods .sample-tag{z-index:5}")
+        with tempfile.TemporaryDirectory() as d:
+            _page(d, STYLE + css, '<div style="height:1500px"></div><section class="prods">'
+                  + '<figure><img src="img/s.png" alt="a"><span class="sample-tag">Sample</span></figure>' * 3
+                  + '</section><div style="height:1500px"></div>')
+            self.assertEqual(paul.image_problems(d, _a_browser(), samples=["img/s.png"]), [])
 
     def test_paul_is_told_why(self):
         with tempfile.TemporaryDirectory() as d:
