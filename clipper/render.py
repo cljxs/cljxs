@@ -154,7 +154,11 @@ def command(src, out_name, start, end, info, ass_name, cfg, wm=None, plan=None, 
     if clean_name:
         sharper = out[:]
         sharper[sharper.index("-crf") + 1] = str(max(cfg["x264_crf"] - CLEAN_CRF_BETTER, 10))
-        cmd += ["-map", "[c]", "-map", "0:a:0?", *sharper, clean_name]
+        # Its own -t: an output option belongs to the one output after it.
+        # Without this the copy ran on to the end of the episode, and the
+        # frames the finished clip no longer took piled up in memory until
+        # the server killed ffmpeg - the Teague episode, 2026-10-21, at 1.7 GB.
+        cmd += ["-map", "[c]", "-map", "0:a:0?", "-t", f"{end - start:.3f}", *sharper, clean_name]
     return cmd
 
 
