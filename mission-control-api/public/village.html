@@ -3106,7 +3106,7 @@ function openClipPanel(){
   $('caQueue').onclick = clipQueue;
   $('caInbox').onclick = e => {
     const b = e.target.closest('[data-retry]');
-    if (b) clipPost(`/api/clip/inbox/${encodeURIComponent(b.dataset.retry)}/retry`, {}, 'Queued again.');
+    if (b) addFormPost(`/api/clip/inbox/${encodeURIComponent(b.dataset.retry)}/retry`, {}, 'Queued again.');
   };
   loadClip();
 }
@@ -3193,7 +3193,11 @@ function drawClipAdd(c){
       </div>`).join('');
 }
 
-async function clipPost(url, body, ok){
+// The Add a video form's calls: the answer goes under the form. Named apart
+// from clipPost (the cards' calls, answered in an alert): with one name for
+// both, the later function won and Write hooks put its hooks in an alert
+// instead of the box (2026-10-20).
+async function addFormPost(url, body, ok){
   if (clipBusy) return null;
   clipBusy = true;
   ['caHooks', 'caQueue'].forEach(id => { const b = $(id); if (b) b.disabled = true; });
@@ -3220,7 +3224,7 @@ async function clipHooks(){
   if (!title) { $('caSaid').textContent = 'Paste the title first.'; return; }
   const youtube = $('caYoutube').value.trim();
   $('caSaid').textContent = youtube ? 'Reading the comments and writing hooks…' : 'Writing hooks from the title…';
-  const j = await clipPost('/api/clip/hooks', { title, source: $('caSource').value, youtube });
+  const j = await addFormPost('/api/clip/hooks', { title, source: $('caSource').value, youtube });
   if (j && j.ok) {
     const lines = String(j.message || '').trim().split('\n');
     $('caHunt').value = lines[0];
@@ -3237,7 +3241,7 @@ async function clipQueue(){
                  title: $('caTitle').value.trim(), hunt: $('caHunt').value.trim(),
                  youtube: $('caYoutube').value.trim() };
   if (!body.url) { $('caSaid').textContent = 'Paste the Dropbox link first.'; return; }
-  const j = await clipPost('/api/clip/queue', body);
+  const j = await addFormPost('/api/clip/queue', body);
   if (j && j.ok) {
     ['caLink', 'caTitle', 'caYoutube', 'caHunt'].forEach(id => { $(id).value = ''; });
     $('caSaid').textContent = String(j.message || '').trim();

@@ -5803,6 +5803,18 @@ class ClipHasAStudio(unittest.TestCase):
         self.assertIn("/api/clip/file/${encodeURIComponent(k.video_id)}/${encodeURIComponent(k.rank)}?v=", self.html)
         self.assertIn("k.subtitles_pending ?", self.html, "the card says the fixes are not in the video yet")
 
+    def test_no_two_functions_share_a_name(self):
+        # 2026-10-20: "The create hooks didn't work". The page had two
+        # clipPost functions - the Add a video form's and the cards' - and
+        # the later one won, so Write hooks put its hooks in an alert and
+        # never in the box. A name used twice is a function nobody runs.
+        names = re.findall(r"^(?:async )?function (\w+)\(", self.html, re.M)
+        twice = sorted({n for n in names if names.count(n) > 1})
+        self.assertEqual(twice, [])
+        hooks = self.html.split("async function clipHooks(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("await addFormPost('/api/clip/hooks'", hooks)
+        self.assertIn("$('caHunt').value = lines[0];", hooks)
+
     def test_every_clip_has_a_delete_button(self):
         # Owner, 2026-10-20: "a delete option by the videos".
         self.assertIn('<button class="no" data-clip="delete" data-id="${k.id}">Delete</button>', self.html)
