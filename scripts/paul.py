@@ -1320,7 +1320,7 @@ def check_site(site, t, old_page=None):
     for rel, size in sorted(sc["images"].items()):
         if size > MAX_IMAGE_BYTES:
             errs.append(f"{rel} is {size // 1024} KB - download a smaller size "
-                        f"(Unsplash/Pexels: add ?w=1600&q=80 to the URL)")
+                        f"(Unsplash/Pexels: add ?w=2000&q=75 to the URL)")
     if sc["bytes"] > MAX_SITE_BYTES:
         errs.append(f"the site is {sc['bytes'] // 1024} KB - keep it under "
                     f"{MAX_SITE_BYTES // 1024} KB so it is fast on a phone")
@@ -1697,9 +1697,12 @@ var els=[document.body].concat([].slice.call(document.body.querySelectorAll('*')
 function sig(){return els.map(function(e){var s=getComputedStyle(e);return P.map(function(k){return s[k];}).join('|');});}
 var a=sig(),sh=[].slice.call(document.styleSheets);sh.forEach(function(x){x.disabled=true;});var b=sig();sh.forEach(function(x){x.disabled=false;});
 var n=0;for(var i=0;i<a.length;i++)if(a[i]!==b[i])n++;return a.length?Math.round(n/a.length*100)/100:1;}"""
+# An element as Paul would find it in his own markup: <nav class="menu main">.
+DESC_JS = r"""function desc(e){var c=(e.getAttribute('class')||'').trim().split(/\s+/).slice(0,2).join(' ');
+ return '<'+e.tagName.toLowerCase()+(e.id?' id="'+e.id+'"':'')+(c?' class="'+c+'"':'')+'>';}"""
 # Bump when a probe learns something new, so a site measured before is
 # measured again rather than passed from memory.
-PROBE_V = 4
+PROBE_V = 5
 # Why a sample photo's label was not found on it, as Paul is told.
 SAMPLE_WHY = {
     "none": "no element saying Sample has its middle inside the photo - a ::before/::after "
@@ -1748,8 +1751,6 @@ var wide=document.documentElement.scrollWidth>window.innerWidth+1;
 // What sticks out (Royal Edge, 2026-10-21: "the phone layout scrolls
 // sideways" twice, and Paul could not find what): the outermost elements
 // past the right edge, leaving out what a clipping box or a fixed one hides.
-function desc(e){var c=(e.getAttribute('class')||'').trim().split(/\s+/).slice(0,2).join('.');
- return '<'+e.tagName.toLowerCase()+(e.id?' id="'+e.id+'"':'')+(c?' class="'+c.replace(/\./g,' ')+'"':'')+'>';}
 var over=[];if(wide){var W=window.innerWidth;
  var past=[].slice.call(document.body.querySelectorAll('*')).filter(function(e){var r=e.getBoundingClientRect();if(!(r.right>W+1&&r.width>0))return false;
   for(var a=e;a&&a!==document.body;a=a.parentElement){var s=getComputedStyle(a);if(s.position==='fixed')return false;
@@ -1785,7 +1786,7 @@ function finish(){var hidden=[];for(var k in names)if(!got[k])hidden.push(names[
 function step(){sweep();var ts=toggles().filter(function(t){return tapped.indexOf(t)<0&&reach(t);});
  if(!ts.length||tapped.length>=12)return finish();tapped.push(ts[0]);ts[0].click();setTimeout(function(){settled(step);},50);}
 settled(step);
-})();""".replace("(function(){", "(function(){" + STYLED_JS, 1)
+})();""".replace("(function(){", "(function(){" + STYLED_JS + DESC_JS, 1)
 
 
 def phone_problems(site, browser, run=subprocess.run):
@@ -1929,8 +1930,20 @@ def contrast_problems(site, browser, run=subprocess.run, width=1280, height=900)
 # than the file is - which is what looks soft and stretched. Headless Chrome
 # loads lazy images below the fold anyway (measured 2026-10-21, 9000px down);
 # they are made eager too, in case a later Chrome stops doing that.
-IMAGE_ENLARGED = 1.25      # shown this much larger than the file: visibly soft
+# Sharp screens (owner, 2026-10-21, Royal Edge's About photos on the iPad:
+# "all over stretched and look bad"). Phones and iPads draw two or three
+# dots per CSS pixel, so a photo that only matched its file at 1x - which
+# passed - is soft on every screen the owner and the businesses use. A file
+# needs IMAGE_SHARP pixels for each pixel it is shown at. Measured at a
+# computer's width and an upright iPad's, where single-column layouts show
+# photos widest.
+IMAGE_SHARP = 1.5
 IMAGE_SKEW = 0.05          # proportions changed by more than this: stretched
+IMAGE_SCREENS = ((1280, 900, "a computer"), (820, 1180, "an iPad"))
+# A photo column running on past the text beside it (the same About: two
+# tall photos beside two paragraphs - "a bunch of blank space"), in
+# screen heights.
+GAP_SCREENS = 0.75
 IMAGE_JS = r"""(function(){
 var imgs=[].slice.call(document.images);imgs.forEach(function(i){i.loading='eager';});
 var t0=Date.now();
@@ -1942,8 +1955,22 @@ function done(){var out=[];imgs.forEach(function(i){
  var fit=s.objectFit,sx=r.width/nw,sy=r.height/nh,scale;
  if(fit==='fill'){var d=Math.abs(sx/sy-1);if(d>SKEW)out.push({src:src,kind:'stretched',by:Math.round(d*100)});scale=Math.max(sx,sy);}
  else if(fit==='contain'||fit==='scale-down'){scale=Math.min(sx,sy);}else if(fit==='none'){scale=1;}else{scale=Math.max(sx,sy);}
- if(scale>ENLARGED)out.push({src:src,kind:'enlarged',scale:Math.round(scale*100)/100,
-   natural:nw+'x'+nh,shown:Math.round(r.width)+'x'+Math.round(r.height)});});
+ if(scale*SHARP>1)out.push({src:src,kind:'enlarged',scale:Math.round(scale*100)/100,
+   natural:nw+'x'+nh,shown:Math.round(r.width)+'x'+Math.round(r.height),most:Math.floor(r.width/(scale*SHARP))});});
+ // Side by side, one ending far above the other: what each holds, not its
+ // box - a grid stretches the short column's box to the tall one's height.
+ // An empty element (a dotted price leader) holds nothing: its own box.
+ function ends(e){var g=document.createRange();g.selectNodeContents(e);var r=g.getBoundingClientRect();
+  return (r.width||r.height)?r.bottom:e.getBoundingClientRect().bottom;}
+ function sticky(e){if(getComputedStyle(e).position==='sticky')return true;
+  for(var c=e.firstElementChild;c;c=c.nextElementSibling)if(getComputedStyle(c).position==='sticky')return true;return false;}
+ var gaps=[];[].slice.call(document.body.querySelectorAll('*')).forEach(function(p){
+  var kids=[].slice.call(p.children).filter(function(c){var s=getComputedStyle(c);
+   return s.display!=='none'&&s.position!=='absolute'&&s.position!=='fixed'&&c.getBoundingClientRect().height>0;});
+  for(var k=0;k+1<kids.length;k++){var a=kids[k].getBoundingClientRect(),b=kids[k+1].getBoundingClientRect();
+   if(a.right>b.left+1&&b.right>a.left+1)continue;if(Math.min(a.bottom,b.bottom)<=Math.max(a.top,b.top))continue;
+   var ea=ends(kids[k]),eb=ends(kids[k+1]),lo=ea<eb?kids[k]:kids[k+1],hi=lo===kids[k]?kids[k+1]:kids[k];
+   var gap=Math.abs(ea-eb);if(gap>GAP*innerHeight&&!sticky(lo)&&gaps.length<3)gaps.push({short:desc(lo),tall:desc(hi),gap:Math.round(gap)});}});
  var SAMPLES=__SAMPLES__;
  function own(e){var t='';for(var c=e.firstChild;c;c=c.nextSibling)if(c.nodeType===3)t+=c.nodeValue;return t;}
  var tags=[].slice.call(document.body.querySelectorAll('*')).filter(function(e){return /\bsample\b/i.test(own(e));});
@@ -1964,18 +1991,21 @@ function done(){var out=[];imgs.forEach(function(i){
    if(b>=0&&(a<0||b<a))return true;why='behind';return false;});
   if(!on)bare.push({src:i.getAttribute('src')||'',why:why});});
  pe.remove();
- var pre=document.createElement('pre');pre.id='paul-images';pre.textContent=JSON.stringify({images:out,bare:bare,styled:paulStyled()});document.body.appendChild(pre);}
+ var pre=document.createElement('pre');pre.id='paul-images';pre.textContent=JSON.stringify({images:out,bare:bare,gaps:gaps,styled:paulStyled()});document.body.appendChild(pre);}
 (function wait(){if(imgs.every(function(i){return i.complete;})||Date.now()-t0>3000)done();else setTimeout(wait,50);})();
-})();""".replace("SKEW", str(IMAGE_SKEW)).replace("ENLARGED", str(IMAGE_ENLARGED)).replace(
-    "(function(){", "(function(){" + STYLED_JS, 1)
+})();""".replace("SKEW", str(IMAGE_SKEW)).replace("SHARP", str(IMAGE_SHARP)).replace(
+    "GAP*", f"{GAP_SCREENS}*").replace("(function(){", "(function(){" + STYLED_JS + DESC_JS, 1)
 
 
-def image_problems(site, browser, run=subprocess.run, width=1280, height=900, samples=()):
-    """[(page, src, kind, detail)] for photos stretched or blown up, sample
-    photos with no "Sample" on them (kind "unlabelled"), and a page whose
-    CSS does not apply at this width (kind "unstyled", src ""), or None when
-    the browser gave no answer. Run on a hidden copy of each page, as
-    contrast is; the copy is always removed."""
+def image_problems(site, browser, run=subprocess.run, width=1280, height=900, samples=(),
+                   screen="a computer"):
+    """[(page, src, kind, detail)] for photos stretched or shown bigger than
+    a sharp screen can show them (kind "enlarged"), sample photos with no
+    "Sample" on them ("unlabelled"), a column ending far above the one
+    beside it ("gap", src the taller one), and a page whose CSS does not
+    apply at this width ("unstyled", src ""), or None when the browser gave
+    no answer. Run on a hidden copy of each page, as contrast is; the copy
+    is always removed."""
     site = Path(site)
     bad, answered = [], False
     for page in sorted(site.rglob("*.html"))[:6]:
@@ -2005,15 +2035,20 @@ def image_problems(site, browser, run=subprocess.run, width=1280, height=900, sa
             continue
         answered = True
         rel = page.relative_to(site).as_posix()
+        at = f"on {screen} ({width}px)"
         for f in d.get("images") or []:
             detail = (f"{f.get('by')}%" if f.get("kind") == "stretched"
-                      else f"shown at {f.get('shown')} from a {f.get('natural')} photo, {f.get('scale')}x")
+                      else f"{at} it is shown at {f.get('shown')} from a {f.get('natural')} photo; a "
+                           f"phone or iPad screen needs {IMAGE_SHARP}x that, so at most {f.get('most')}px wide")
             bad.append((rel, f.get("src", ""), f.get("kind"), detail))
+        for g in d.get("gaps") or []:
+            bad.append((rel, g.get("tall", ""), "gap", f"{at} {g.get('short')} ends {g.get('gap')}px "
+                                                       f"above {g.get('tall')} beside it"))
         for b in d.get("bare") or []:
             b = b if isinstance(b, dict) else {"src": b}
             bad.append((rel, b.get("src", ""), "unlabelled", SAMPLE_WHY.get(b.get("why"), SAMPLE_WHY["none"])))
         if isinstance(d.get("styled"), (int, float)) and d["styled"] < STYLED_MIN:
-            bad.append((rel, "", "unstyled", f"{round(d['styled'] * 100)}% of the page changes "
+            bad.append((rel, "", "unstyled", f"{at}: {round(d['styled'] * 100)}% of the page changes "
                                              f"with its stylesheets switched off"))
     return bad if answered else None
 
@@ -2025,7 +2060,16 @@ def measured_images(site, browser, memo, run=subprocess.run, samples=()):
     seen = read_json(memo, {}) or {}
     if seen.get("images_site") == fp and isinstance(seen.get("images"), list):
         return [tuple(x) for x in seen["images"]]
-    bad = image_problems(site, browser, run=run, samples=samples)
+    bad, seen_once = None, set()
+    for w, h, screen in IMAGE_SCREENS:
+        got = image_problems(site, browser, run=run, width=w, height=h, samples=samples, screen=screen)
+        if got is None:
+            continue
+        bad = bad or []
+        for x in got:                    # once per photo and kind, at the first screen
+            if (x[0], x[1], x[2]) not in seen_once:
+                seen_once.add((x[0], x[1], x[2]))
+                bad.append(x)
     if bad is not None:
         memo.parent.mkdir(parents=True, exist_ok=True)
         write_json(memo, {**(read_json(memo, {}) or {}), "images_site": fp, "images": bad})
@@ -2083,11 +2127,13 @@ def browser_problems(t, work, browser):
                     f'{src} on {rel} is a sample photo with no "Sample" on it ({detail}) - put the '
                     f'word over the picture in an element of its own, e.g. <span class="sample-tag">'
                     f"Sample</span> inside the photo's box" if kind == "unlabelled" else
-                    f"on a computer (1280px) {rel} shows unstyled ({detail}) - its CSS does not "
+                    f"{rel} shows unstyled ({detail}) - its CSS does not "
                     f"apply. Link the stylesheet by a relative path (style.css, not /style.css) "
                     f"and close every @media block" if kind == "unstyled" else
-                    f"{src} on {rel} is blown up ({detail}) so it looks soft and stretched - use a "
-                    f"larger version of the photo, or show it smaller")
+                    f"{rel}: {detail} - a big empty space. Put the photos in a row above or below "
+                    f"the text, or make them smaller, so the two sides end together" if kind == "gap" else
+                    f"{src} on {rel} is blown up - {detail}, so it looks soft and stretched. Show it "
+                    f"smaller (a max-width, or a smaller box in a row), or use a larger photo")
     phone = measured_phone(work / "site", browser, work / "shots" / ".measured.json")
     if phone is None:
         notes.append("the phone layout was not measured - the browser gave no answer")

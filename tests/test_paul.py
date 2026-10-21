@@ -1414,15 +1414,27 @@ class PhotosAsAVisitorSeesThem(unittest.TestCase):
             got = paul.image_problems(d, _a_browser())
             self.assertEqual(sorted(os.listdir(d)), ["img", "index.html"], "the probe was left behind")
         self.assertEqual([(src, kind) for _p, src, kind, _d in got],
-                         [("img/small.png", "enlarged"), ("img/wide.png", "stretched"), ("img/small.png", "enlarged")],
+                         [("img/small.png", "enlarged"), ("img/wide.png", "stretched"), ("img/wide.png", "enlarged"),
+                          ("img/small.png", "enlarged")],
                          "below the fold, lazy, is measured too")
-        self.assertIn("shown at 400x600 from a 200x300 photo, 2x", got[0][3])
+        self.assertIn("shown at 400x600 from a 200x300 photo; a phone or iPad screen needs 1.5x that, "
+                      "so at most 133px wide", got[0][3])
 
-    def test_a_photo_shown_at_its_size_passes(self):
+    def test_a_photo_with_the_detail_for_a_sharp_screen_passes(self):
         with tempfile.TemporaryDirectory() as d:
-            self.site(d, '<img src="img/big.png" style="width:100%;max-width:800px;height:auto" alt="a">'
-                         '<img src="img/wide.png" style="width:400px;height:400px;object-fit:cover" alt="b">')
+            self.site(d, '<img src="img/big.png" style="width:100%;max-width:533px;height:auto" alt="a">'
+                         '<img src="img/wide.png" style="width:260px;height:260px;object-fit:cover" alt="b">')
             self.assertEqual(paul.image_problems(d, _a_browser()), [])
+
+    def test_shown_at_its_own_size_is_soft_on_a_sharp_screen(self):
+        # Royal Edge's About photos (owner, 2026-10-21, on the iPad: "all
+        # over stretched and look bad") passed at 1x: shown about as wide as
+        # the file. An iPad draws two dots per pixel.
+        with tempfile.TemporaryDirectory() as d:
+            self.site(d, '<img src="img/big.png" style="width:100%;max-width:800px;height:auto" alt="a">')
+            [(_p, src, kind, detail)] = paul.image_problems(d, _a_browser())
+        self.assertEqual((src, kind), ("img/big.png", "enlarged"))
+        self.assertIn("at most 533px wide", detail)
 
 
 class APhoneSeesWhatAPhoneSees(unittest.TestCase):
@@ -2719,7 +2731,7 @@ class APageStyledAtEveryWidth(unittest.TestCase):
                 errs, _n, _i = paul.run_checks(target(), offline, work=w)
             finally:
                 paul.find_browser = saved
-        self.assertTrue(any("on a computer (1280px) index.html shows unstyled" in e for e in errs), errs)
+        self.assertTrue(any("index.html shows unstyled (on a computer (1280px)" in e for e in errs), errs)
 
 
 @unittest.skipUnless(_a_browser(), "needs a headless Chrome")
@@ -2824,6 +2836,7 @@ class SamplePhotosSaySample(unittest.TestCase):
             _page(d, STYLE + css, '<div style="height:1500px"></div><section class="prods">'
                   + '<figure><img src="img/s.png" alt="a"><span class="sample-tag">Sample</span></figure>' * 3
                   + '</section><div style="height:1500px"></div>')
+            (Path(d) / "img" / "s.png").write_bytes(_png(1000, 1000))   # a Pexels download, ?w=1000
             self.assertEqual(paul.image_problems(d, _a_browser(), samples=["img/s.png"]), [])
 
     def test_paul_is_told_why(self):
@@ -2937,3 +2950,68 @@ class ASiteSentBackWithANewLook(PaulCase):
         self.assertIn("ref ? { notes, ref } : { notes }", studio)
         deck = (ROOT / "mission-control-api" / "paul.js").read_text()
         self.assertIn("['revise', slug, ...(ref ? ['--ref', ref] : []), '--', notes]", deck)
+
+
+@unittest.skipUnless(_a_browser(), "needs a headless Chrome")
+class PhotosThatFitBesideTheText(unittest.TestCase):
+    """Royal Edge's About (owner, 2026-10-21, on the iPad): two tall phone
+    photos stacked beside two paragraphs - "all over stretched and look
+    bad. They also create a bunch of blank space". The owner chose a row of
+    photos under the text."""
+
+    TEXT = ('<div class="about-text"><h2>Royal Edge on Sycamore Street</h2><p>A barbershop at 621 Sycamore St '
+            'in Waterloo, Iowa.</p><p>Skin fades, beard trims, kids cuts and designs.</p></div>')
+    BASE = "body{margin:0;font:18px/1.6 sans-serif}.wrap{max-width:1100px;margin:0 auto;padding:0 20px}"
+
+    def measure(self, css, body, size=(590, 1280)):
+        with tempfile.TemporaryDirectory() as d:
+            site = Path(d) / "site"
+            (site / "img").mkdir(parents=True)
+            for n in (1, 2, 3):
+                (site / "img" / f"yours-0{n}.png").write_bytes(_png(*size))
+            (site / "style.css").write_text(self.BASE + css)
+            (site / "index.html").write_text('<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                                             '<link rel="stylesheet" href="style.css"></head><body>' + body + "</body></html>")
+            return paul.measured_images(site, _a_browser(), Path(d) / "memo.json")
+
+    def test_the_about_as_it_was_is_caught(self):
+        got = self.measure(".about{display:grid;grid-template-columns:1fr 1fr;gap:40px}"
+                           ".about-photos img{width:100%;display:block;margin-bottom:20px}",
+                           '<section class="wrap about">' + self.TEXT + '<div class="about-photos">'
+                           '<img src="img/yours-01.png" alt="a"><img src="img/yours-02.png" alt="b"></div></section>')
+        self.assertEqual(sorted({k for _p, _s, k, _d in got}), ["enlarged", "gap"])
+        [gap] = [d for _p, _s, k, d in got if k == "gap"]
+        self.assertIn('<div class="about-text"> ends', gap)
+        self.assertIn('above <div class="about-photos"> beside it', gap)
+
+    def test_a_row_under_the_text_passes(self):
+        self.assertEqual(self.measure(
+            ".row{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.row img{width:100%;aspect-ratio:1/1;"
+            "object-fit:cover;display:block}@media(max-width:700px){.row{grid-template-columns:1fr}}",
+            '<section class="wrap">' + self.TEXT + '<div class="row"><img src="img/yours-01.png" alt="a">'
+            '<img src="img/yours-02.png" alt="b"><img src="img/yours-03.png" alt="c"></div></section>'), [])
+
+    def test_text_that_stays_beside_the_photos_is_not_a_gap(self):
+        got = self.measure(".about{display:grid;grid-template-columns:1fr 1fr;gap:40px}.about-text{position:sticky;top:0}"
+                           ".about-photos img{width:300px;display:block;margin-bottom:20px}",
+                           '<section class="wrap about">' + self.TEXT + '<div class="about-photos">'
+                           '<img src="img/yours-01.png" alt="a"><img src="img/yours-02.png" alt="b"></div></section>',
+                           size=(600, 1300))
+        self.assertEqual(got, [])
+
+    def test_a_photo_too_wide_on_an_upright_ipad_is_caught_there(self):
+        # One column under 900px, as Royal Edge's CSS has: at 1280 the photo
+        # is 300px, on an upright iPad the whole width.
+        got = self.measure(".pic{width:300px}@media(max-width:899px){.pic{width:100%}}.pic{display:block}",
+                           '<section class="wrap"><img class="pic" src="img/yours-01.png" alt="a"></section>',
+                           size=(700, 700))
+        [(_p, src, kind, detail)] = got
+        self.assertEqual((src, kind), ("img/yours-01.png", "enlarged"))
+        self.assertIn("on an iPad (820px)", detail)
+
+    def test_the_quality_bar_has_no_gap(self):
+        # Its dotted price leader is an empty span: read by its content, it
+        # "ended" at the top of the page, 1671px above the price beside it.
+        with tempfile.TemporaryDirectory() as d:
+            shutil.copytree(ROOT / "agents" / "paul" / "templates" / "local", Path(d) / "s")
+            self.assertEqual(paul.measured_images(Path(d) / "s", _a_browser(), Path(d) / "m.json"), [])
