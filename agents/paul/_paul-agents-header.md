@@ -160,7 +160,7 @@ finish as below.
      "contact": "the email, profile URL or number",
      "sources": {"name": "url", "address": "url", "phone": "url",
                  "hours": "url", "contact": "url"},
-     "photos": [{"file": "img/hero.jpg", "source": "url", "kind": "business|stock"}],
+     "photos": [{"file": "img/hero.jpg", "source": "url", "kind": "business|stock|sample"}],
      "claims": [{"text": "Iowa's oldest barbershop, est. 1911", "source": "url"}],
      "identity": [{"detail": "what is only true of them",
                    "source": "their Facebook post, page or a news story - url",
@@ -226,11 +226,26 @@ think they paid for this.
   or place. Download every image into `work/site/img/` (`curl -sL -o`), never
   hotlink, and list each in `photos`. If their current site has photos,
   yours must too.
+- **Sample photos** (kind "sample"): when the owner asks for something the
+  business has but there is no picture of - Royal Edge's products - use a
+  stock photo from Unsplash or Pexels with no brand, label or price on it,
+  and write "Sample" over the picture in an element of its own (e.g.
+  `<span class="sample-tag">Sample</span>` inside the photo's box). No
+  product names, brands or prices under it - that would be a claim. Code
+  checks the word is on the picture, and the pitch says in one line that
+  those photos are samples.
+- **No video or sound.** The owner saves photos only, so a video would be a
+  stock clip passing as theirs - code refuses one. A reference site with a
+  video hero gets a photo hero.
 - **Every caption says what is in that photo.** Open it with view_image
   first: a customer in the chair is not "the front windows" (Royal Edge,
   2026-10-21). Unsure what it shows - no caption. **Show a photo no bigger
   than the file** and in its own shape (`object-fit: cover` in a box):
   code measures every photo and refuses one blown up or stretched.
+- **About us** without their story: write it from what you sourced - where
+  they are, what they do, how to book - in a warm voice. Never invent a
+  founder, a founding year, years of experience or an award; code refuses
+  claim words with no source.
 - **Copy:** specific, human, short. Their real full address and hours. No
   copy about the site itself ("real photo", "our new site"). **Every claim
   needs a source** - "local ingredients", "family-owned", "award-winning"
@@ -258,7 +273,11 @@ think they paid for this.
   usual cause. Every `<img>` needs alt text describing it. Buttons say what
   they do ("Call (319) 260-2068", "Get directions"). Button text never
   wraps onto two lines - on a phone the header button just says "Call";
-  the full number goes in the big button below. A favicon is required:
+  the full number goes in the big button below. **A drop-down menu opens
+  on a tap** - `<details><summary>Services</summary>...</details>` or a
+  `<button>` that toggles it, never hover alone (the owner works on an
+  iPad); code taps through the menu at phone width and refuses a link that
+  never shows. Every `#link` needs its `id` on the page. A favicon is required:
   a simple mark that fits the business - never a padlock, a generic shape
   or a letter in a circle.
 - **Nothing that collects data.** No forms, no iframes or embeds (a Maps
@@ -270,7 +289,9 @@ think they paid for this.
 - Fast and mobile-first (`<meta name="viewport" ...>` on every page), with
   one clear call to action: a `tel:` link to their number, plus booking or
   directions if it fits. Subtle motion only. Plain HTML, CSS and JS - no
-  build step.
+  build step. Link the stylesheet by a relative path (`style.css`) and
+  close every `@media` block: code checks the page is styled at phone and
+  at computer width (Royal Edge's revision showed bare on a computer).
 - **Found on Google and in AI search** (the owner, 2026-10-16). The preview
   is kept out of search on purpose; the site it becomes must be found, so
   build it findable now. Code checks every point:

@@ -95,3 +95,10 @@ fresh-news bettor matches Ace, the model adds nothing.
   stops are unchanged. Gate 2 now measures the blind estimates' edge over the
   close; the fresh-news baseline stays in the comparison, so it still shows
   whether news alone would have done as well.
+* 2026-10-21 — a bug fix, not a rule change: NBA (and baseball) games are read
+  from ESPN's scoreboard by Eastern date, today and tomorrow. The undated board
+  Ace was reading still showed Tuesday's finished games at 09:41 ET on
+  Wednesday, so opening week's NBA games never reached the blind sheet or the
+  bets - the 2026-10-20 night sheet held one college game. Gate 1 says every
+  game in the next 30 hours; this makes the sheet match it. Every number in
+  the table above is unchanged.

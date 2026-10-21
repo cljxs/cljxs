@@ -2105,17 +2105,21 @@ class TheOwnerNamesTheBusinessAndTheLook(PaulCase):
                 "ok([r.statusCode,s]));});q.end(JSON.stringify(b));});"
                 f"const out={{empty:await go('/api/paul/revise/{slug}',{{notes:' '}}),"
                 "badslug:await go('/api/paul/revise/..%2Fx',{notes:'fix it'}),"
-                f"ok:await go('/api/paul/revise/{slug}',{{notes:{json.dumps(note)}}})}};"
+                f"badref:await go('/api/paul/revise/{slug}',{{notes:'fix it',ref:'mancave'}}),"
+                f"ok:await go('/api/paul/revise/{slug}',{{notes:{json.dumps(note)},ref:'https://mancaveformen.com'}})}};"
                 "process.stdout.write(JSON.stringify(out));srv.close();});")
             r = subprocess.run([node, "-e", js], capture_output=True, text=True, timeout=120,
                                env=dict(os.environ, ECOSYSTEM_ROOT=d))
             self.assertEqual(r.returncode, 0, r.stderr)
             out = json.loads(r.stdout)
-            self.assertEqual((out["empty"][0], out["badslug"][0]), (400, 400))
+            self.assertEqual((out["empty"][0], out["badslug"][0], out["badref"][0]), (400, 400, 400))
             self.assertEqual(out["ok"][0], 200, out["ok"])
             revise = (root / "agents" / "paul" / "work" / "REVISE.md").read_text()
             self.assertIn(note, revise, "Paul reads the owner's words")
             self.assertTrue((root / "agents" / "paul" / "work" / "site" / "index.html").is_file())
+            # The new reference box (2026-10-21), as approve's is.
+            self.assertEqual(json.loads((root / "agents" / "paul" / "work" / "prospect.json").read_text())["reference"],
+                             "https://mancaveformen.com")
         studio = (ROOT / "mission-control-api" / "public" / "paul.html").read_text()
         self.assertIn('data-revise="${esc(b.slug)}"', studio)
         header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
@@ -2641,3 +2645,214 @@ class PaulIsHandedLeads(PaulCase):
         self.assertIn("stopping at six is giving up early", head)
         for code in paul.PROBLEMS:
             self.assertIn(f"    {code}", head, f"every problem code is explained ({code})")
+
+
+# Royal Edge after mancaveformen.com (owner, 2026-10-21): "Get rid of the
+# video since I don't have one... use the pictures I have... sample pictures
+# and put 'sample' on the picture. Include a drop down menu for services and
+# an about us." And in the same screenshot, the revision's computer picture
+# was a bare page - black serif text on white - while its phone one looked
+# right.
+STYLE = ("body{margin:0;background:#111;color:#eee;font-family:Arial}header{display:flex;gap:10px;"
+         "padding:12px}a{color:#fc0}h1{font-size:40px;text-transform:uppercase}p{line-height:1.6;padding:4px 16px}")
+
+
+def _page(d, css, body):
+    d = Path(d)
+    (d / "img").mkdir(exist_ok=True)
+    (d / "img" / "s.png").write_bytes(_png(600, 400))
+    (d / "style.css").write_text(css)
+    (d / "index.html").write_text('<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                                  '<link rel="stylesheet" href="style.css"></head><body>' + body + "</body></html>")
+
+
+BODY = '<header><a href="#top">Royal Edge</a><a href="#about">About</a></header><h1>Fades in Waterloo</h1><p id="about">x</p>'
+
+
+@unittest.skipUnless(_a_browser(), "needs a headless Chrome")
+class APageStyledAtEveryWidth(unittest.TestCase):
+    """The bare computer screenshot: CSS that applies at one width only - an
+    @media block never closed - passed every check, because black on white
+    has fine contrast and an unstyled photo is shown at its own size."""
+
+    def both(self, css):
+        with tempfile.TemporaryDirectory() as d:
+            _page(d, css, BODY)
+            return paul.phone_problems(d, _a_browser())["styled"], paul.image_problems(d, _a_browser())
+
+    def test_a_styled_page_passes(self):
+        phone, desk = self.both(STYLE)
+        self.assertGreaterEqual(phone, paul.STYLED_MIN)
+        self.assertEqual(desk, [])
+
+    def test_css_that_only_applies_on_a_phone_is_caught_on_a_computer(self):
+        phone, desk = self.both("@media (max-width:700px){" + STYLE)
+        self.assertGreaterEqual(phone, paul.STYLED_MIN, "the phone looked right - as in the Studio")
+        self.assertEqual([k for _p, _s, k, _d in desk], ["unstyled"])
+
+    def test_a_stylesheet_that_does_not_load_is_caught_at_both(self):
+        with tempfile.TemporaryDirectory() as d:
+            _page(d, STYLE, BODY)
+            (Path(d) / "index.html").write_text((Path(d) / "index.html").read_text().replace(
+                'href="style.css"', 'href="/style.css"'))
+            self.assertLess(paul.phone_problems(d, _a_browser())["styled"], paul.STYLED_MIN)
+            self.assertEqual([k for _p, _s, k, _d in paul.image_problems(d, _a_browser())], ["unstyled"])
+
+    def test_check_refuses_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            w = Path(d)
+            _page(w / "site" if (w / "site").mkdir() is None else None, "@media (max-width:700px){" + STYLE, BODY)
+            saved = paul.find_browser
+            paul.find_browser = _a_browser
+            try:
+                errs, _n, _i = paul.run_checks(target(), offline, work=w)
+            finally:
+                paul.find_browser = saved
+        self.assertTrue(any("on a computer (1280px) index.html shows unstyled" in e for e in errs), errs)
+
+
+@unittest.skipUnless(_a_browser(), "needs a headless Chrome")
+class AMenuOpensOnATap(unittest.TestCase):
+    """The Services drop-down. One that opens on hover alone cannot be opened
+    on a phone or the owner's iPad; the probe taps every menu button at phone
+    width and names any menu link that never shows."""
+
+    def hidden(self, css, body):
+        with tempfile.TemporaryDirectory() as d:
+            _page(d, STYLE + css, body)
+            got = paul.phone_problems(d, _a_browser())
+            self.assertEqual(sorted(os.listdir(d)), ["img", "index.html", "style.css"])
+            return got["hidden"]
+
+    def test_a_hover_only_drop_down_is_caught(self):
+        self.assertEqual(self.hidden(".dd ul{display:none}.dd:hover ul{display:block}",
+                                     '<header><nav><a href="#top">Home</a><div class="dd"><span>Services</span>'
+                                     '<ul><li><a href="#fades">Fades</a></li></ul></div></nav></header><p id="fades">x</p>'),
+                         ["Fades"])
+
+    def test_details_and_a_menu_button_pass(self):
+        self.assertEqual(self.hidden("", '<header><nav><a href="#top">Home</a><details><summary>Services</summary>'
+                                         '<a href="#fades">Fades</a></details></nav></header><p id="fades">x</p>'), [])
+        # The usual phone header: the computer's links hidden, a Menu button,
+        # and inside it a Services drop-down that slides open.
+        self.assertEqual(self.hidden(
+            ".wide{display:none}.menu{max-height:0;overflow:hidden;transition:max-height .4s}.menu.open{max-height:400px}",
+            '<header><nav class="wide"><a href="#fades">Fades</a></nav>'
+            '<button onclick="document.querySelector(\'.menu\').classList.toggle(\'open\')">Menu</button>'
+            '<nav class="menu"><details><summary>Services</summary><a href="#fades">Fades</a><a href="#beards">Beards</a>'
+            '</details><a href="#about">About us</a></nav></header><p id="fades">x</p><p id="beards">y</p><p id="about">z</p>'), [])
+
+    def test_a_link_hidden_on_a_phone_but_tappable_elsewhere_passes(self):
+        self.assertEqual(self.hidden(".book{display:none}.bar{position:fixed;bottom:0}",
+                                     '<header><a href="#top">Royal Edge</a><a class="book" href="https://booksy.com/x">Book</a>'
+                                     '</header><p>x</p><div class="bar"><a href="https://booksy.com/x">Book now</a></div>'), [])
+
+    def test_an_intro_that_covers_the_page_is_waited_out(self):
+        # The quality bar's own header, under its logo intro: switching
+        # animations off (the first version of the probe) left the intro over
+        # every link, and read the whole menu as hidden.
+        with tempfile.TemporaryDirectory() as d:
+            shutil.copytree(ROOT / "agents" / "paul" / "templates" / "local", Path(d) / "s")
+            self.assertEqual(paul.phone_problems(Path(d) / "s", _a_browser())["hidden"], [])
+
+
+@unittest.skipUnless(_a_browser(), "needs a headless Chrome")
+class SamplePhotosSaySample(unittest.TestCase):
+    """"I don't have any product samples... so maybe just use sample pictures
+    and put 'sample' on the picture." On the picture, measured: a caption
+    under it is not on it."""
+
+    CARD = (".card{position:relative;width:300px}.card img{width:300px;height:200px;object-fit:cover;display:block}"
+            ".tag{position:absolute;top:8px;left:8px;background:#000;color:#fff;font-size:13px;padding:2px 6px}")
+
+    def bare(self, body, samples=("img/s.png",)):
+        with tempfile.TemporaryDirectory() as d:
+            _page(d, STYLE + self.CARD, body)
+            return [(s, k) for _p, s, k, _d in paul.image_problems(d, _a_browser(), samples=samples)]
+
+    def test_the_word_over_the_picture_passes(self):
+        self.assertEqual(self.bare('<div class="card"><img src="img/s.png" alt="a"><span class="tag">Sample</span></div>'), [])
+
+    def test_none_or_beside_it_is_caught(self):
+        for body in ('<div class="card"><img src="img/s.png" alt="a"></div>',
+                     '<div class="card"><img src="img/s.png" alt="a"><p>Sample</p></div>'):
+            self.assertEqual(self.bare(body), [("img/s.png", "unlabelled")], body)
+
+    def test_only_sample_photos_need_it(self):
+        self.assertEqual(self.bare('<div class="card"><img src="img/s.png" alt="a"></div>', samples=()), [])
+
+
+class RoyalEdgeAfterManCave(SiteRules):
+    """The rules a reader can check without a browser."""
+
+    def test_a_sample_is_stock_and_the_pitch_says_so(self):
+        t = target(photos=[{"file": "img/hero.jpg", "source": "https://images.pexels.com/p/1", "kind": "sample"}])
+        self.assertEqual(self.errors(t), [])
+        t["photos"][0]["source"] = "https://www.amazon.com/pomade.jpg"
+        self.assertTrue(any("Unsplash or Pexels only" in e for e in self.errors(t)))
+        t["photos"][0].update(source="https://images.pexels.com/p/1")
+        self.assertTrue(any("product photos are samples" in e for e in paul.check_draft(DRAFT, t)[0]))
+        said = DRAFT.replace("The photos are placeholders", "The product photos are samples and the rest placeholders")
+        self.assertFalse([e for e in paul.check_draft(said, t)[0] if "sample" in e])
+
+    def test_a_video_is_refused(self):
+        errs = self.errors(index=INDEX.replace("<main>", '<main><video src="img/hero.jpg" autoplay muted></video>'))
+        self.assertTrue(any("no video or sound" in e for e in errs), errs)
+
+    def test_a_menu_link_needs_its_section(self):
+        index = INDEX.replace("<main>", '<main><nav><a href="#fades">Fades</a><a href="#top">Top</a>'
+                                        '<a href="#beards">Beards</a></nav><p id="beards">Beard trims</p>')
+        errs = self.errors(index=index)
+        self.assertEqual([e for e in errs if "goes nowhere" in e],
+                         ['index.html links to "#fades" but nothing on that page has id="fades" - the link goes nowhere'])
+        self.assertEqual(self.errors(index=index.replace('<p id="beards">', '<p id="fades"></p><p id="beards">')), [])
+
+
+class ASiteSentBackWithANewLook(PaulCase):
+    """"I have a new sample site for Paul to use to make Royal Edge's website."
+    Send back took only notes, and lost the prospect on the way: no saved
+    photos were placed in the revision, and the reference was gone."""
+
+    def setUp(self):
+        super().setUp()
+        TheOwnerPicksPaulBuilds.seed(self, dict(prospect(name="Royal Edge"), status="built",
+                                                slug="royal-edge-concept-abc123", source="owner",
+                                                reference="https://rudysbarbershop.com/"))
+        TheOwnerSendsASiteBack.built(self, name="Royal Edge", slug="royal-edge-concept-abc123")
+        paul.add_photo(1, JPEG, "facebook")
+
+    def test_the_new_reference_and_the_photos_reach_the_cycle(self):
+        rc, out = self.run_quiet(paul.cmd_revise, self.args(who="royal-edge-concept-abc123", notes=["no", "video"],
+                                                            ref="https://mancaveformen.com/?utm_source=x"))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("built after https://mancaveformen.com/", out)
+        self.assertEqual(paul.read_json(paul.A("work", "prospect.json"))["reference"], "https://mancaveformen.com/")
+        self.assertEqual(paul.load_prospects()[0]["reference"], "https://mancaveformen.com/")
+        self.assertIn("new reference site for the look: https://mancaveformen.com/", paul.A("work", "REVISE.md").read_text())
+        _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
+        self.assertIn("OWNER'S REF  https://mancaveformen.com/", facts)
+        self.assertIn("1 of THEIR OWN photos", facts)
+        self.assertTrue(paul.A("work", "site", "img", "yours-01.jpg").is_file())
+        self.assertNotIn("nothing about it is", facts, "a business being revised was checked when it was built")
+
+    def test_without_one_the_old_reference_still_applies(self):
+        self.run_quiet(paul.cmd_revise, self.args(who="Royal Edge", notes=["fix", "it"], ref=None))
+        self.assertEqual(paul.own_reference(), "https://rudysbarbershop.com/")
+
+    def test_not_a_link_is_refused(self):
+        rc, out = self.run_quiet(paul.cmd_revise, self.args(who="Royal Edge", notes=["x"], ref="mancave"))
+        self.assertEqual(rc, 1)
+        self.assertFalse(paul.A("work", "REVISE.md").exists())
+
+    def test_a_revision_that_does_not_ship_leaves_the_site_built(self):
+        paul.close_prospect(1, {"outcome": "below-bar", "day": "2026-10-22", "why": "x"})
+        self.assertEqual(paul.load_prospects()[0]["status"], "built")
+        paul.close_prospect(1, {"outcome": "built", "day": "2026-10-22", "slug": "royal-edge-concept-new123", "mode": "live"})
+        self.assertEqual(paul.load_prospects()[0]["slug"], "royal-edge-concept-new123")
+
+    def test_the_studio_has_the_box(self):
+        studio = (ROOT / "mission-control-api" / "public" / "paul.html").read_text()
+        self.assertIn('data-ref="s:${esc(b.slug)}"', studio)
+        self.assertIn("ref ? { notes, ref } : { notes }", studio)
+        deck = (ROOT / "mission-control-api" / "paul.js").read_text()
+        self.assertIn("['revise', slug, ...(ref ? ['--ref', ref] : []), '--', notes]", deck)

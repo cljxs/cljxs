@@ -3605,8 +3605,9 @@ class TheWholeBoardNotAThirdOfIt(unittest.TestCase):
             self.assertEqual(self.m.SPORTS[sport].get("query", ""), "")
 
     def test_the_query_is_actually_used_in_the_call(self):
-        src = (SCRIPTS / "ace-fetch.py").read_text()
-        self.assertIn("SPORTS[sport].get('query', '')", src)
+        asked = []
+        self.m.board_events("cfb", fetch=lambda url: asked.append(url) or {"events": []})
+        self.assertEqual(asked, [f"{self.m.BASE}/football/college-football/scoreboard?groups=80&limit=300"])
 
     def test_the_ranking_is_actually_used_when_fetching(self):
         # Ranking correctly and then fetching in ESPN's order anyway is a
@@ -16441,8 +16442,8 @@ class AceMoneyIsKeptByCode(unittest.TestCase):
             f.settle_bets([("nfl", self.NFL)])
         bank = json.loads((root / "agents/ace/state/bankroll.json").read_text())
         self.assertEqual((bank["bankroll"], bank["settled_bets"][0]["result"]), (10150.0, "won"))
-        self.assertIn('boards.append((sport, get(f"{BASE}/{path}/scoreboard?dates={yesterday}")',
-                      (SCRIPTS / "ace-fetch.py").read_text(), "late finals: yesterday's board for daily sports")
+        self.assertIn("boards.append((sport, graded))", (SCRIPTS / "ace-fetch.py").read_text(),
+                      "the fetcher grades from every board board_events read, yesterday's included")
 
     def test_help_touches_nothing(self):
         # preflight runs `<script> --help` to read the subcommands. ace-book.py
@@ -16463,6 +16464,73 @@ class AceMoneyIsKeptByCode(unittest.TestCase):
         self.assertIn("python3 ../../scripts/ace-book.py show", head)
         self.assertIn("**kept by `ace-book.py`; never edit it**", head)
         self.assertNotIn("compute win/loss, update `bankroll`", head)
+
+
+class AceReadsTheDailyBoardsByDate(unittest.TestCase):
+    """ESPN's undated NBA scoreboard was still Tuesday's three finished games
+    at 09:41 ET on Wednesday 2026-10-21, with eleven games that night. Ace
+    read the undated board, so from the 23:30 wake until ESPN turned the page
+    there was no NBA game to estimate or bet - opening week reached him as one
+    college game. Daily sports are read by Eastern date, today and tomorrow.
+    Fixtures are the real boards captured that morning."""
+
+    NOW_MORNING = datetime(2026, 10, 21, 13, 41, tzinfo=timezone.utc)   # 09:41 ET Wed
+    NOW_NIGHT = datetime(2026, 10, 22, 3, 30, tzinfo=timezone.utc)      # 23:30 ET Wed
+
+    def setUp(self):
+        self.f = load("ace_fetch_dated", "ace-fetch.py")
+        board = lambda name: json.loads((FIXTURES / f"espn-nba-scoreboard-{name}.json").read_text())
+        self.boards = {"20261020": board("undated-2026-10-21-0941et"),   # the undated board WAS Tuesday's
+                       "20261021": board("2026-10-21"), "20261022": board("2026-10-22")}
+        self.asked = []
+
+    def fetch(self, url):
+        self.asked.append(url)
+        if "?dates=" not in url:
+            return self.boards["20261020"]
+        day = url.split("?dates=")[1]
+        if day not in self.boards:
+            raise OSError("no such board in this test")
+        return self.boards[day]
+
+    def run_at(self, now, sport="nba"):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return self.f.board_events(sport, now, fetch=self.fetch)
+
+    @staticmethod
+    def scheduled(events):
+        return [e["shortName"] for e in events
+                if e["competitions"][0]["status"]["type"]["name"] == "STATUS_SCHEDULED"]
+
+    def test_the_undated_board_really_was_yesterdays(self):
+        # The bug, on the real capture: nothing on it could be estimated.
+        self.assertEqual(self.scheduled(self.boards["20261020"]["events"]), [])
+
+    def test_the_morning_fetch_sees_all_eleven_games_tonight(self):
+        events, _ = self.run_at(self.NOW_MORNING)
+        self.assertEqual(len(self.scheduled(events)), 11)
+        self.assertIn("GS @ LAL", self.scheduled(events))
+        self.assertFalse(any("?dates=" not in u for u in self.asked), "the undated board is never read")
+
+    def test_tomorrows_games_join_only_inside_the_blind_window(self):
+        events, _ = self.run_at(self.NOW_MORNING)       # Thursday's 19:00 ET game is 33 h away
+        self.assertNotIn("CLE @ PHI", [e["shortName"] for e in events])
+        events, _ = self.run_at(self.NOW_NIGHT)         # at the 23:30 wake it is 19.5 h away
+        self.assertIn("CLE @ PHI", [e["shortName"] for e in events])
+        self.assertEqual(len(events), len({e["id"] for e in events}))
+
+    def test_late_finals_still_come_from_yesterdays_board(self):
+        _, graded = self.run_at(self.NOW_MORNING)
+        self.assertIn("OKC @ SA", [e["shortName"] for e in graded])
+
+    def test_a_missing_side_board_does_not_cost_tonights_slate(self):
+        del self.boards["20261022"], self.boards["20261020"]
+        events, _ = self.run_at(self.NOW_MORNING)
+        self.assertEqual(len(self.scheduled(events)), 11)
+
+    def test_a_weekly_sport_is_still_one_undated_call(self):
+        self.run_at(self.NOW_MORNING, sport="cfb")
+        self.assertEqual(self.asked, [f"{self.f.BASE}/football/college-football/scoreboard?groups=80&limit=300"])
 
 
 class AcePricesBeforeAndAtTheClose(unittest.TestCase):
@@ -18603,6 +18671,96 @@ class AStickerIsKissCut(unittest.TestCase):
         with self.assertRaises(self.ep.Ambiguous) as cm:
             self.ep.resolve(cat, "sticker")
         self.assertEqual(cm.exception.keys, ["kisscut", "kisscut2"])
+
+
+class WhiteArtPrintsBlankOnAWhiteSticker(unittest.TestCase):
+    """2026-10-21, "Paw-Print Pup Window Decal": the art was a window-decal
+    look - a white paw and white lettering with pale grey lines - and went onto
+    a kiss-cut sticker, printed on white vinyl, where white is not ink. Every
+    mockup showed a blank white shape. The owner: "It doesn't print properly."
+    The drawing step now redraws such art and the draft refuses it."""
+
+    CAT = {"sticker": {"blueprint_id": 400, "blueprint_title": "Kiss-Cut Stickers"},
+           "decal": {"blueprint_id": 2, "blueprint_title": "Kiss-Cut Vinyl Decals"},
+           "tshirt": {"blueprint_id": 3, "blueprint_title": "Unisex Jersey Short Sleeve Tee",
+                      "variant_titles": ["S / White"]},
+           "mug": {"blueprint_id": 4, "blueprint_title": "Ceramic Mug 11oz"}}
+
+    def setUp(self):
+        self.ep = load("emily_printify_pale", "emily-printify.py")
+        self.k = load("knockout_pale", "knockout.py")
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def art(self, name, bg, fill, line, words=None, size=200):
+        """A paw-like disc filled `fill` with a 3px `line` outline on `bg`,
+        and an optional bar of lettering in `words` below it."""
+        px = bytearray()
+        for y in range(size):
+            for x in range(size):
+                d = ((x - 100) ** 2 + (y - 80) ** 2) ** .5
+                c = line if 47 <= d <= 50 else fill if d < 47 else bg
+                if words and 140 <= y <= 165 and 30 <= x <= 170:
+                    c = words
+                px += bytes(c) + b"\xff"
+        path = self.tmp / f"{name}.png"
+        self.k.encode(path, size, size, px)
+        return path
+
+    WHITE, NAVY, PALE, BLACK, RED = (255, 255, 255), (20, 30, 70), (200, 200, 200), (20, 20, 20), (200, 30, 40)
+
+    def test_the_paw_decal_is_refused_on_a_sticker(self):
+        # white fill, pale grey lines, white words: drawn on navy, or on white
+        for bg in (self.NAVY, self.WHITE):
+            f = self.art(f"paw{bg[0]}", bg, self.WHITE, self.PALE, words=self.WHITE)
+            self.assertLess(self.ep.shows_on_white(f), self.ep.SHOWS_MIN, bg)
+            self.assertIn("white sticker", self.ep.pale_problem(f, self.CAT["sticker"]))
+            self.assertTrue(self.ep.pale_problem(f, self.CAT["decal"]), "a decal is white vinyl too")
+
+    def test_dark_art_and_a_white_badge_with_dark_words_pass(self):
+        dark = self.art("dark", self.WHITE, self.RED, self.BLACK, words=self.BLACK)
+        badge = self.art("badge", self.WHITE, self.WHITE, self.BLACK, words=self.BLACK)
+        for f in (dark, badge):
+            self.assertIsNone(self.ep.pale_problem(f, self.CAT["sticker"]), f.name)
+
+    def test_the_soft_edge_off_a_dark_background_is_not_ink(self):
+        # White line art cut off navy keeps a one-pixel half-navy edge on each
+        # side of every stroke - a third of a 4px stroke, and dark enough to
+        # count as ink. Only pixels with visible art all round count.
+        size, px = 120, bytearray()
+        edge = tuple((a + b) // 2 for a, b in zip(self.NAVY, self.WHITE))
+        for y in range(size):
+            r = y % 12
+            c = self.WHITE if 4 <= r <= 7 else edge if r in (3, 8) else self.NAVY
+            for x in range(size):
+                px += bytes(c if 10 <= x < 110 else self.NAVY) + b"\xff"
+        f = self.tmp / "strokes.png"
+        self.k.encode(f, size, size, px)
+        self.assertIsNotNone(self.ep.shows_on_white(f))
+        self.assertLess(self.ep.shows_on_white(f), self.ep.SHOWS_MIN)
+
+    def test_only_white_vinyl_is_checked(self):
+        f = self.art("paw", self.NAVY, self.WHITE, self.PALE, words=self.WHITE)
+        for key in ("tshirt", "mug"):
+            self.assertIsNone(self.ep.pale_problem(f, self.CAT[key]), key)
+
+    def test_the_draft_and_the_drawing_both_ask(self):
+        body = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_draft(", 1)[1].split("\ndef cmd_", 1)[0]
+        self.assertIn("pale = pale_problem(upload_from, cat)", body)
+        self.assertLess(body.index("pale_problem(upload_from"), body.index('"/uploads/images.json"'),
+                        "refused before anything is uploaded")
+        ea = (SCRIPTS / "emily-assets.py").read_text()
+        loop = ea.split("def main(", 1)[1]
+        self.assertLess(loop.index("pale_problem(a.out, a.product)"), loop.index("proof(a.out"),
+                        "measured before the proofreader is paid")
+        self.assertIn("return mod.pale_problem(path, entry)", ea, "one check, imported")
+
+    def test_the_prompt_asks_a_sticker_for_dark_ink(self):
+        ea = load("emily_assets_pale", "emily-assets.py")
+        ea._catalogue_entry = lambda product: (self.ep, self.CAT.get(product))
+        self.assertIn("WHITE vinyl", ea.ink_direction("sticker"))
+        self.assertIn("even if the idea says window decal", ea.ink_direction("decal"))
+        self.assertEqual(ea.ink_direction("mug"), "")
 
 
 class LettersAndColoursOnAGarment(unittest.TestCase):

@@ -429,6 +429,21 @@ def _size_of(path):
         return None
 
 
+# A sticker or decal is printed on WHITE vinyl, and white is not ink. "Paw-Print
+# Pup Window Decal" (2026-10-21) was drawn the way a window decal looks - white
+# line art - and printed as a blank white shape. emily-printify decides which
+# products print on white (prints_on_white) and measures the result
+# (pale_problem); this asks for art that passes it.
+STICKER_INK = (
+    "This is printed on WHITE vinyl, and white is not printed: anything white or "
+    "pale comes out as bare white vinyl, invisible. Draw every element - above "
+    "all any words - in dark, saturated colours with bold dark outlines and "
+    "strong contrast against white, on a plain white background. No white or "
+    "pale artwork, no white line art, no white 'vinyl decal' look, even if the "
+    "idea says window decal."
+)
+
+
 def ink_direction(product):
     """The garment colours this design goes on, and what that asks of it.
 
@@ -442,6 +457,8 @@ def ink_direction(product):
     mid-tone colours that stand out on both, which is also what the draft's
     colour check keeps. Empty for anything that is not worn."""
     mod, entry = _catalogue_entry(product)
+    if entry and mod.prints_on_white(entry):
+        return STICKER_INK
     if not entry or not mod.is_garment(entry):
         return ""
     colours = []
@@ -467,6 +484,18 @@ def ink_direction(product):
     return (head + f"Every element - above all any words - must be clearly readable on every "
             f"one of them: use dark, saturated {ink} with strong contrast. No white, cream, "
             f"beige or pale lettering.")
+
+
+def pale_problem(path, product):
+    """Why this drawing would print blank on white vinyl, or None - asked of
+    emily-printify, which makes the same check before drafting."""
+    mod, entry = _catalogue_entry(product)
+    if not entry:
+        return None
+    try:
+        return mod.pale_problem(path, entry)
+    except Exception:
+        return None
 
 
 def directed(prompt, product=""):
@@ -812,6 +841,13 @@ def main():
                     note = f"out of time after {attempt - 1} drawing(s): " + "; ".join(problems)
                     break
                 n, usage = generate(a.out, prompt, key, model, a.product)
+                # White art on a sticker prints blank - measured free, before
+                # the proofreader is paid to read it.
+                pale = pale_problem(a.out, a.product)
+                if pale:
+                    problems = [pale]
+                    prompt = f"{a.prompt}\n\nThe last attempt was wrong: {pale}."
+                    continue
                 try:
                     problems, lines = proof(a.out, key, name=a.name or None)
                 except Exception as exc:

@@ -634,6 +634,52 @@ def ace_book():
 DAILY_BOARDS = ("mlb", "nba")
 
 
+def board_events(sport, now=None, fetch=None):
+    """(events to judge, events to grade from) for one sport.
+
+    A daily sport is read BY DATE - today and tomorrow, Eastern - never from
+    the undated board. ESPN's undated NBA board was still Tuesday's three
+    finished games at 09:41 ET on Wednesday 2026-10-21, with eleven games that
+    night, so every fetch from the 23:30 wake until ESPN turned the page saw
+    no NBA game to estimate or bet: opening week reached Ace as one college
+    game. Tomorrow's games join only inside the blind window, the only place
+    they can be used. Yesterday's board is read for late finals, as before.
+
+    The weekly boards (NFL, college) are already the whole week undated."""
+    fetch = fetch or get
+    spec = SPORTS[sport]
+    url = f"{BASE}/{spec['path']}/scoreboard"
+    if sport not in DAILY_BOARDS:
+        events = fetch(url + spec.get("query", "")).get("events", [])
+        return events, events
+    now = now or datetime.now(timezone.utc)
+    today = et_time.to_eastern(now)
+    on = lambda d: (today + timedelta(days=d)).strftime("%Y%m%d")
+
+    def soon(e):
+        try:
+            start = datetime.strptime(e.get("date", ""), "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return False
+        return 0 < (start - now).total_seconds() / 3600 <= ESTIMATE_WINDOW_HOURS
+
+    events = list(fetch(f"{url}?dates={on(0)}").get("events", []))
+    graded = list(events)
+    for d, why in ((1, "tomorrow's games wait for the next run"),
+                   (-1, "late finals wait for the next run")):
+        try:
+            extra = fetch(f"{url}?dates={on(d)}").get("events", [])
+        except Exception as e:
+            log(f"{sport}: board for {on(d)} FAILED - {e} ({why})")
+            continue
+        graded += extra
+        if d == 1:
+            events += [e for e in extra if soon(e)]
+    seen = set()
+    events = [e for e in events if not (e["id"] in seen or seen.add(e["id"]))]
+    return events, graded
+
+
 def settle_bets(boards, now=None):
     """Results off the scoreboards already fetched, then every open bet that
     has finished is graded by ace-book.py. Never fatal: a failure here must
@@ -741,20 +787,13 @@ def main():
     for sport in season:
         path = SPORTS[sport]["path"]
         try:
-            board = get(f"{BASE}/{path}/scoreboard{SPORTS[sport].get('query', '')}")
+            events, graded = board_events(sport, started)
         except Exception as e:
             failures.append({"sport": sport, "error": str(e)[:140]})
             log(f"{sport}: scoreboard FAILED — {e}")
             continue
 
-        events = board.get("events", [])
-        boards.append((sport, events))
-        if sport in DAILY_BOARDS:
-            yesterday = (et_time.eastern_now() - timedelta(days=1)).strftime("%Y%m%d")
-            try:
-                boards.append((sport, get(f"{BASE}/{path}/scoreboard?dates={yesterday}").get("events", [])))
-            except Exception as e:
-                log(f"{sport}: yesterday's board FAILED - {e} (late finals wait for the next run)")
+        boards.append((sport, graded))
         scheduled = [e for e in events
                      if e["competitions"][0]["status"]["type"]["name"] == "STATUS_SCHEDULED"]
         finals = [e for e in events
