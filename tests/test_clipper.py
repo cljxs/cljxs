@@ -3079,10 +3079,36 @@ class HooksFromATitle(unittest.TestCase):
     def test_generic_words_and_empty_topics_go(self):
         got = inbox.check_hooks(self.DRAFT)
         self.assertEqual(got, [{"name": "Embiid", "terms": ["embiid", "joel", "the process"]},
-                               {"name": "LeBron  the king", "terms": ["lebron", "bron"]}])
+                               {"name": "LeBron the king", "terms": ["lebron", "bron"]}])
         # What the owner sees is exactly what the hunt parser reads back.
         self.assertEqual(score.parse_hunt(inbox.hooks_text(got)),
                          [{"name": n["name"], "terms": n["terms"]} for n in got])
+
+    # Club 520, 2026-10-20 - the owner: "The hooks were gibberish, they didn't
+    # make any sense". The draft as the model wrote it, read off the Deck:
+    # commenters' wording as terms, reactions and slashes in the names.
+    CLUB_520 = {"topics": [
+        {"name": "b-hen mucinex", "terms": ["b-hen", "mucinex", "evan turner"]},
+        {"name": "bandwagoneer / band wagon", "terms": ["bandwagoneer", "band wagon", "uggh he a bandwagoneer"]},
+        {"name": "theme song / volume", "terms": ["turn my volume up", "theme song", "full blast"]},
+        {"name": "sixers / eagles sacrifice", "terms": ["sixers", "eagles sacrificed their season", "jeff hate the sixers"]},
+        # "anthony black what" is the draft's own label, as a term: three
+        # words, so only the reaction rule stops it.
+        {"name": "anthony black WHAT", "terms": ["anthony black", "what in anthony black", "anthony black what"]},
+        {"name": "bayou barbie", "terms": ["bayou barbie", "shoutout bayou barbie"]},
+        {"name": "no limit tank", "terms": ["no limit tank", "dj hilarious"]}]}
+
+    def test_a_viewers_words_are_not_a_speakers(self):
+        got = {t["name"]: t["terms"] for t in inbox.check_hooks(self.CLUB_520)}
+        self.assertEqual(got["Bandwagoneer"], ["bandwagoneer", "band wagon"], "a reaction is not a term")
+        self.assertEqual(got["Theme Song"], ["theme song", "full blast"], "four words is a sentence, not a term")
+        self.assertEqual(got["Sixers"], ["sixers"])
+        self.assertEqual(got["Anthony Black"], ["anthony black"], "WHAT is not part of his name")
+        self.assertEqual(got["Bayou Barbie"], ["bayou barbie", "shoutout bayou barbie"])
+
+    def test_the_question_says_whose_words(self):
+        self.assertIn("never a viewer's wording", inbox.HOOKS_PROMPT)
+        self.assertIn("Never copy their words", inbox.comments_block([{"text": "lol", "likes": 3}]))
 
     def test_too_few_topics_is_a_failure_not_a_guess(self):
         with self.assertRaises(ValueError):

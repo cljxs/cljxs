@@ -35,6 +35,14 @@ GENERIC = {"the", "and", "game", "games", "good", "great", "like", "really", "gu
            "year", "years", "time", "man", "know", "think", "right", "yeah", "basketball",
            "football", "video", "show", "episode", "podcast"}
 TERM_RE = re.compile(r"^[a-z0-9][a-z0-9 '\-.]{1,30}$")
+# A commenter's reaction, never a speaker's words. Club 520's first draft
+# (2026-10-20) hunted "uggh he a bandwagoneer" and "anthony black what" -
+# the comments' wording, which the transcript will not hold. A term with one
+# of these in it goes; so does one longer than a speaker's short phrase.
+REACTIONS = {"lol", "lmao", "lmfao", "rofl", "haha", "hahaha", "omg", "wtf", "bruh", "bro", "uggh",
+             "ugh", "ayo", "sheesh", "nah", "fr", "deadass", "smh", "what", "yo", "w", "l", "💀"}
+TERM_WORDS = 3
+NAME_WORDS = 4
 
 
 def _host(url):
@@ -157,11 +165,16 @@ HOOKS_PROMPT = """A long video is about to be cut into short clips. From its tit
 the moments a viewer would most want clipped, in order of priority - the
 people, teams, claims, arguments and funny bits the title promises.
 
-For each moment give the WORDS SPEAKERS WILL ACTUALLY SAY when it comes up:
-names as they are spoken (surnames, nicknames, common mishearings), and
-distinctive words. The list is matched against the transcript word for word,
-so generic words (game, good, team, season, really) are useless - never use
-them. 2 to 8 moments, 2 to 6 words or short phrases each, lower case.
+For each moment give the WORDS THE SPEAKERS ON THE VIDEO WILL SAY when it
+comes up: names as they are spoken (surname, first name, nickname, team,
+city), and the plain nouns of the subject. The list is matched against a
+transcript of their speech word for word, so:
+- never a viewer's wording, reaction or joke (lol, what, uggh, bro) - viewers
+  are not on the video;
+- each term 1 to 3 words; never generic words (game, good, team, season);
+- the name is a plain label a reader understands, 1 to 4 words, e.g.
+  "Sixers Season", "Anthony Black", "Theme Song".
+2 to 8 moments, 2 to 6 terms each, terms lower case.
 
 Reply with JSON only:
 {"topics": [{"name": "short label", "terms": ["word", "two words"]}]}
@@ -259,8 +272,10 @@ def comments_block(comments):
     """The comments as the hooks question shows them: the most liked, then
     the timestamps code counted."""
     top = sorted(comments, key=lambda c: -c["likes"])[:COMMENTS_SHOWN]
-    lines = ["", "What viewers wrote under the video, most liked first. The people, moments and",
-             "arguments they talk about are the clips to find - weigh them above the title:"]
+    lines = ["", "What viewers wrote under the video, most liked first. Use it to decide WHICH",
+             "moments to list - the people, arguments and funny bits they react to matter more",
+             "than the title. Never copy their words as terms or names: give the words the",
+             "speakers will say about those moments."]
     lines += [f"- ({c['likes']} likes) {c['text'][:COMMENT_CHARS]}" for c in top]
     stamps = timestamps(comments)
     if stamps:
@@ -282,11 +297,19 @@ def check_hooks(doc):
     for t in (doc or {}).get("topics") or []:
         if not isinstance(t, dict):
             continue
-        name = re.sub(r"[;:,]", " ", str(t.get("name") or "")).strip()[:40]
+        # The label is read by a person: "theme song / volume" is two labels,
+        # "anthony black WHAT" a reaction stuck to a name.
+        name = re.sub(r"[;:,]", " ", str(t.get("name") or "").split("/")[0])
+        name = " ".join(w for w in name.split() if w.lower() not in REACTIONS)[:40]
+        name = " ".join(name.split()[:NAME_WORDS])
+        if name == name.lower():
+            name = name.title()
         terms = []
         for term in t.get("terms") or []:
             term = re.sub(r"\s+", " ", str(term).lower().replace(";", " ").replace(",", " ")).strip()
-            if TERM_RE.match(term) and term not in GENERIC and term not in terms:
+            words = term.split()
+            if (TERM_RE.match(term) and term not in GENERIC and term not in terms
+                    and len(words) <= TERM_WORDS and not REACTIONS & set(words)):
                 terms.append(term)
         if name and terms:
             out.append({"name": name, "terms": terms[:TERMS_PER_TOPIC]})
