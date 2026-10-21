@@ -2980,6 +2980,19 @@ class TheFunnyPickKeepsItsLaugh(EndToEnd):
 from clipper import inbox, ingest  # noqa: E402
 
 
+class AKilledFfmpegSaysWhy(unittest.TestCase):
+    """2026-10-21: "ffmpeg failed (-9):" and nothing else - the server had
+    stopped it, which ffmpeg cannot say on stderr."""
+
+    def test_killed_and_stopped_are_named(self):
+        with self.assertRaisesRegex(media.MediaError, r"\(-9\): it was killed .* out of memory"):
+            media.run(["sh", "-c", "kill -9 $$"])
+        with self.assertRaisesRegex(media.MediaError, r"\(-15\): it was stopped"):
+            media.run(["sh", "-c", "kill -15 $$"])
+        with self.assertRaisesRegex(media.MediaError, r"failed \(3\): boom$"):
+            media.run(["sh", "-c", "echo boom >&2; exit 3"])
+
+
 class InboxLinks(unittest.TestCase):
     """2026-10-14: a box in Clip's house for a video's Dropbox link. What
     cannot work is refused when it is pasted, not fifteen minutes later."""
