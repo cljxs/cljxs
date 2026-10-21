@@ -226,6 +226,11 @@ think they paid for this.
   or place. Download every image into `work/site/img/` (`curl -sL -o`), never
   hotlink, and list each in `photos`. If their current site has photos,
   yours must too.
+- **Every caption says what is in that photo.** Open it with view_image
+  first: a customer in the chair is not "the front windows" (Royal Edge,
+  2026-10-21). Unsure what it shows - no caption. **Show a photo no bigger
+  than the file** and in its own shape (`object-fit: cover` in a box):
+  code measures every photo and refuses one blown up or stretched.
 - **Copy:** specific, human, short. Their real full address and hours. No
   copy about the site itself ("real photo", "our new site"). **Every claim
   needs a source** - "local ingredients", "family-owned", "award-winning"

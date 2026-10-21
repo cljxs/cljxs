@@ -5656,9 +5656,10 @@ class PaulHasAWorkshop(unittest.TestCase):
         self.assertIn("paul(['find'])", self.js)
         # 2026-10-15: and Add photos and Check Google - still nothing that sends or marks.
         posts = re.findall(r"app\.post\('([^']+)'", self.js)
+        # 2026-10-21: and Send back to Paul (paul.py revise) - it rebuilds, it sends nothing.
         self.assertEqual(sorted(posts), ["/api/paul/find", "/api/paul/prospects/:id/approve",
                                          "/api/paul/prospects/:id/google", "/api/paul/prospects/:id/photos",
-                                         "/api/paul/prospects/:id/reject"])
+                                         "/api/paul/prospects/:id/reject", "/api/paul/revise/:slug"])
         self.assertEqual(re.findall(r"app\.delete\('([^']+)'", self.js), ["/api/paul/prospects/:id/photos/:file"])
         self.assertIn("const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,80}$/;", self.js)
         self.assertIn("dotfiles: 'deny'", self.js)

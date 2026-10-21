@@ -96,6 +96,19 @@ function register(app) {
     const r = await paul(['places', req.params.id]);
     res.status(r.ok ? 200 : 409).json(r);
   });
+  // Send back (owner, 2026-10-21, Royal Edge: the wrong photo, stretched):
+  // a finished site goes back to Paul with the owner's words, and his cycle
+  // starts. The words are one argument to paul.py, never a shell string.
+  app.post('/api/paul/revise/:slug', async (req, res) => {
+    const { slug } = req.params;
+    const notes = String((req.body && req.body.notes) || '').replace(/\s+/g, ' ').trim();
+    if (!SLUG_RE.test(slug)) return res.status(400).json({ error: 'bad name' });
+    if (notes.length < 3 || notes.length > 2000) return res.status(400).json({ error: 'say what to fix (up to 2000 characters)' });
+    const r = await paul(['revise', slug, notes]);
+    if (!r.ok) return res.status(409).json(r);
+    const go = await paul(['find']);
+    res.json({ ok: true, out: r.out.split('\n')[0] + (go.ok ? ' Paul has started on it.' : ' It is fixed at his next cycle.') });
+  });
   app.post('/api/paul/find', async (req, res) => {
     const r = await paul(['find']);
     res.status(r.ok ? 200 : 409).json(r);

@@ -1367,6 +1367,53 @@ background:#222;color:#fff}</style></head><body><header><div class="name">Colleg
 
 
 @unittest.skipUnless(_a_browser(), "needs a headless Chrome")
+def _png(w, h):
+    """A plain w x h PNG, written byte by byte - no image library needed."""
+    import struct
+    import zlib
+    raw = b"".join(b"\x00" + bytes([120, 90, 60]) * w for _ in range(h))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+@unittest.skipUnless(_a_browser(), "needs a headless Chrome")
+class PhotosAsAVisitorSeesThem(unittest.TestCase):
+    """Royal Edge (2026-10-21), the owner: "it overstretched the image". A
+    photo blown up past the file, or pulled out of its shape, passed every
+    check. Measured now in the page itself, below the fold too."""
+
+    def site(self, d, body):
+        d = Path(d)
+        (d / "img").mkdir()
+        (d / "img" / "big.png").write_bytes(_png(800, 800))
+        (d / "img" / "small.png").write_bytes(_png(200, 300))
+        (d / "img" / "wide.png").write_bytes(_png(800, 400))
+        (d / "index.html").write_text('<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                                      '<style>body{margin:0}img{display:block}</style></head><body>' + body
+                                      + '</body></html>')
+
+    def test_blown_up_and_stretched_are_caught_and_a_fitting_photo_is_not(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.site(d, '<img src="img/big.png" style="width:400px;height:400px;object-fit:cover" alt="a">'
+                         '<img src="img/small.png" style="width:400px;height:600px;object-fit:cover" alt="b">'
+                         '<img src="img/wide.png" style="width:400px;height:400px" alt="c">'
+                         '<div style="height:9000px"></div>'
+                         '<img loading="lazy" src="img/small.png" style="width:500px;height:750px;object-fit:cover" alt="d">')
+            got = paul.image_problems(d, _a_browser())
+            self.assertEqual(sorted(os.listdir(d)), ["img", "index.html"], "the probe was left behind")
+        self.assertEqual([(src, kind) for _p, src, kind, _d in got],
+                         [("img/small.png", "enlarged"), ("img/wide.png", "stretched"), ("img/small.png", "enlarged")],
+                         "below the fold, lazy, is measured too")
+        self.assertIn("shown at 400x600 from a 200x300 photo, 2x", got[0][3])
+
+    def test_a_photo_shown_at_its_size_passes(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.site(d, '<img src="img/big.png" style="width:100%;max-width:800px;height:auto" alt="a">'
+                         '<img src="img/wide.png" style="width:400px;height:400px;object-fit:cover" alt="b">')
+            self.assertEqual(paul.image_problems(d, _a_browser()), [])
+
+
 class APhoneSeesWhatAPhoneSees(unittest.TestCase):
     """College Hill Barbers (2026-10-06): on a phone the header's "CALL (319)
     277-9972" broke onto two lines, in the screenshot Paul read, and passed.
@@ -1916,6 +1963,59 @@ class TheOwnerNamesTheBusinessAndTheLook(PaulCase):
             self.assertEqual(out["ok"][0], 200, out["ok"])
             [p] = json.loads((root / "agents" / "paul" / "state" / "prospects.json").read_text())["prospects"]
             self.assertEqual((p["status"], p["reference"]), ("approved", "https://rudysbarbershop.com/"))
+
+    def test_the_check_refuses_a_blown_up_photo(self):
+        self.work()
+        saved = (paul.find_browser, paul.measured_contrast, paul.measured_phone, paul.measured_images)
+        self.addCleanup(lambda: setattr(paul, "find_browser", saved[0]) or setattr(paul, "measured_contrast", saved[1])
+                        or setattr(paul, "measured_phone", saved[2]) or setattr(paul, "measured_images", saved[3]))
+        paul.find_browser = lambda: "chrome"
+        paul.measured_contrast = lambda *a, **k: []
+        paul.measured_phone = lambda *a, **k: {"wraps": [], "wide": False}
+        paul.measured_images = lambda *a, **k: [("index.html", "img/shop.jpg", "enlarged",
+                                                 "shown at 768x1150 from a 300x450 photo, 2.56x")]
+        errs, _notes, _info = paul.run_checks(target(), offline)
+        self.assertTrue(any("img/shop.jpg on index.html is blown up" in e for e in errs), errs)
+
+    def test_the_studio_can_send_a_site_back(self):
+        node = shutil.which("node")
+        api = ROOT / "mission-control-api"
+        if not (node and (api / "node_modules" / "express").is_dir()):
+            self.skipTest("node or the Deck's node_modules are not installed")
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "scripts").symlink_to(ROOT / "scripts")
+            slug = "royal-edge-concept-y8ehkl"
+            (root / "agents" / "paul" / "sites" / slug).mkdir(parents=True)
+            (root / "agents" / "paul" / "sites" / slug / "index.html").write_text("<h1>Royal Edge</h1>")
+            (root / "agents" / "paul" / "outbox" / slug).mkdir(parents=True)
+            (root / "agents" / "paul" / "outbox" / slug / "target.json").write_text(json.dumps(target(name="Royal Edge")))
+            note = "The photo under THE SHOP is a customer, not the front windows"
+            js = (
+                f"const express=require({json.dumps(str(api / 'node_modules' / 'express'))});"
+                f"const paul=require({json.dumps(str(api / 'paul.js'))});"
+                "const http=require('http');const app=express();app.use(express.json());paul.register(app);"
+                "const srv=app.listen(0,'127.0.0.1',async()=>{const port=srv.address().port;"
+                "const go=(p,b)=>new Promise(ok=>{const q=http.request({host:'127.0.0.1',port,path:p,method:'POST',"
+                "headers:{'Content-Type':'application/json'}},r=>{let s='';r.on('data',c=>s+=c);r.on('end',()=>"
+                "ok([r.statusCode,s]));});q.end(JSON.stringify(b));});"
+                f"const out={{empty:await go('/api/paul/revise/{slug}',{{notes:' '}}),"
+                "badslug:await go('/api/paul/revise/..%2Fx',{notes:'fix it'}),"
+                f"ok:await go('/api/paul/revise/{slug}',{{notes:{json.dumps(note)}}})}};"
+                "process.stdout.write(JSON.stringify(out));srv.close();});")
+            r = subprocess.run([node, "-e", js], capture_output=True, text=True, timeout=120,
+                               env=dict(os.environ, ECOSYSTEM_ROOT=d))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            out = json.loads(r.stdout)
+            self.assertEqual((out["empty"][0], out["badslug"][0]), (400, 400))
+            self.assertEqual(out["ok"][0], 200, out["ok"])
+            revise = (root / "agents" / "paul" / "work" / "REVISE.md").read_text()
+            self.assertIn(note, revise, "Paul reads the owner's words")
+            self.assertTrue((root / "agents" / "paul" / "work" / "site" / "index.html").is_file())
+        studio = (ROOT / "mission-control-api" / "public" / "paul.html").read_text()
+        self.assertIn('data-revise="${esc(b.slug)}"', studio)
+        header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
+        self.assertIn("**Every caption says what is in that photo.**", header)
 
     def test_the_studio_shows_it_and_the_header_says_it(self):
         studio = (ROOT / "mission-control-api" / "public" / "paul.html").read_text()

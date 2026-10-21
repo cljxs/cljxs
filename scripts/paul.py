@@ -1778,6 +1778,86 @@ def contrast_problems(site, browser, run=subprocess.run, width=1280, height=900)
     return bad if answered else None
 
 
+# Photos as a visitor sees them (owner, 2026-10-21: Royal Edge's shop photo
+# was "overstretched"). Measured in the page at desktop width, where photos
+# are largest: a photo pulled out of its own shape, or shown much bigger
+# than the file is - which is what looks soft and stretched. Headless Chrome
+# loads lazy images below the fold anyway (measured 2026-10-21, 9000px down);
+# they are made eager too, in case a later Chrome stops doing that.
+IMAGE_ENLARGED = 1.25      # shown this much larger than the file: visibly soft
+IMAGE_SKEW = 0.05          # proportions changed by more than this: stretched
+IMAGE_JS = r"""(function(){
+var imgs=[].slice.call(document.images);imgs.forEach(function(i){i.loading='eager';});
+var t0=Date.now();
+function done(){var out=[];imgs.forEach(function(i){
+ var r=i.getBoundingClientRect();if(r.width<40||r.height<40)return;
+ var s=getComputedStyle(i);if(s.display==='none'||s.visibility!=='visible')return;
+ var nw=i.naturalWidth,nh=i.naturalHeight,src=i.getAttribute('src')||'';
+ if(!nw||!nh||/\.svg(\?|#|$)/i.test(src))return;
+ var fit=s.objectFit,sx=r.width/nw,sy=r.height/nh,scale;
+ if(fit==='fill'){var d=Math.abs(sx/sy-1);if(d>SKEW)out.push({src:src,kind:'stretched',by:Math.round(d*100)});scale=Math.max(sx,sy);}
+ else if(fit==='contain'||fit==='scale-down'){scale=Math.min(sx,sy);}else if(fit==='none'){scale=1;}else{scale=Math.max(sx,sy);}
+ if(scale>ENLARGED)out.push({src:src,kind:'enlarged',scale:Math.round(scale*100)/100,
+   natural:nw+'x'+nh,shown:Math.round(r.width)+'x'+Math.round(r.height)});});
+ var pre=document.createElement('pre');pre.id='paul-images';pre.textContent=JSON.stringify({images:out});document.body.appendChild(pre);}
+(function wait(){if(imgs.every(function(i){return i.complete;})||Date.now()-t0>3000)done();else setTimeout(wait,50);})();
+})();""".replace("SKEW", str(IMAGE_SKEW)).replace("ENLARGED", str(IMAGE_ENLARGED))
+
+
+def image_problems(site, browser, run=subprocess.run, width=1280, height=900):
+    """[(page, src, kind, detail)] for photos stretched or blown up, or None
+    when the browser gave no answer. Run on a hidden copy of each page, as
+    contrast is; the copy is always removed."""
+    site = Path(site)
+    bad, answered = [], False
+    for page in sorted(site.rglob("*.html"))[:6]:
+        if page.name.startswith("."):
+            continue
+        probe = page.with_name(f".{CONTRAST_ID}-img-{page.name}")
+        markup = page.read_text(errors="replace")
+        tag = f"<script>{IMAGE_JS}</script>"
+        probe.write_text(re.sub(r"(?i)</body>", lambda _m: tag + "</body>", markup, count=1)
+                         if re.search(r"(?i)</body>", markup) else markup + tag)
+        try:
+            r = run([browser, "--headless=new", "--no-sandbox", "--disable-gpu",
+                     "--no-first-run", "--disable-dev-shm-usage", "--allow-file-access-from-files",
+                     f"--window-size={width},{height}", "--virtual-time-budget=5000",
+                     "--dump-dom", probe.as_uri()], capture_output=True, text=True, timeout=90)
+            out = r.stdout or ""
+        except Exception:
+            out = ""
+        finally:
+            probe.unlink(missing_ok=True)
+        m = re.search(r'<pre id="paul-images">(.*?)</pre>', out, re.S)
+        if not m:
+            continue
+        try:
+            d = json.loads(html.unescape(m.group(1)))
+        except ValueError:
+            continue
+        answered = True
+        rel = page.relative_to(site).as_posix()
+        for f in d.get("images") or []:
+            detail = (f"{f.get('by')}%" if f.get("kind") == "stretched"
+                      else f"shown at {f.get('shown')} from a {f.get('natural')} photo, {f.get('scale')}x")
+            bad.append((rel, f.get("src", ""), f.get("kind"), detail))
+    return bad if answered else None
+
+
+def measured_images(site, browser, memo, run=subprocess.run):
+    """image_problems, remembered against the site's fingerprint, as contrast is."""
+    fp = site_fingerprint(site)
+    memo = Path(memo)
+    seen = read_json(memo, {}) or {}
+    if seen.get("images_site") == fp and isinstance(seen.get("images"), list):
+        return [tuple(x) for x in seen["images"]]
+    bad = image_problems(site, browser, run=run)
+    if bad is not None:
+        memo.parent.mkdir(parents=True, exist_ok=True)
+        write_json(memo, {**(read_json(memo, {}) or {}), "images_site": fp, "images": bad})
+    return bad
+
+
 def mail_verdict(address, get=http_get):
     """("none" | "yes" | "unknown", detail) for an email address's domain,
     from Google's DNS-over-HTTPS. Milkbox (2026-10-05): the pitch went to an
@@ -1841,6 +1921,14 @@ def run_checks(t, get=http_get, work=None):
         for rel, text, ratio, need in (bad or [])[:6]:
             errs.append(f'"{text}" on {rel} is hard to read: contrast {ratio}:1, needs '
                         f"{need}:1 - change the text colour or what is behind it")
+        pics = measured_images(work / "site", browser, work / "shots" / ".measured.json")
+        if pics is None:
+            notes.append("photo sizes not measured - the browser gave no answer")
+        for rel, src, kind, detail in (pics or [])[:6]:
+            errs.append(f"{src} on {rel} is stretched out of its own shape ({detail}) - give it "
+                        f"object-fit:cover, or a box with the photo's proportions" if kind == "stretched" else
+                        f"{src} on {rel} is blown up ({detail}) so it looks soft and stretched - use a "
+                        f"larger version of the photo, or show it smaller")
         phone = measured_phone(work / "site", browser, work / "shots" / ".measured.json")
         if phone is None:
             notes.append("the phone layout was not measured - the browser gave no answer")

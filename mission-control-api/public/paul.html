@@ -147,6 +147,8 @@ if (EMBED) {
 let P = null, tab = 'prospects', busy = false;
 // What the owner typed in each reference box, kept across the 30-second redraws.
 const refs = {};
+// And in each Send back box.
+const fixes = {};
 // Where a saved photo came from (paul.py's PHOTO_FROM), as the picker says it.
 const FROM = [['facebook', 'Facebook'], ['instagram', 'Instagram'], ['google', 'Google'],
               ['website', 'Their website'], ['owner', 'They sent it']];
@@ -354,7 +356,11 @@ function work(b) {
     <div class="acts"><a class="btn" href="/paul/site/${encodeURIComponent(b.slug)}/" target="_blank" rel="noopener">Open the site</a>
       ${b.preview_url ? `<a class="btn go" href="${esc(b.preview_url)}" target="_blank" rel="noopener">Live preview</a>` : ''}</div>
     ${b.notes ? `<div class="why"><b>Paul's notes:</b> ${esc(b.notes)}</div>` : ''}
-    ${b.teardown ? `<div class="said">preview comes down ${esc(b.teardown)}</div>` : ''}</div>`;
+    ${b.teardown ? `<div class="said">preview comes down ${esc(b.teardown)}</div>` : ''}
+    <label class="refl" for="fix-${esc(b.slug)}">Something to fix before you pitch it? Tell Paul</label>
+    <textarea class="refbox fixbox" id="fix-${esc(b.slug)}" data-notes="${esc(b.slug)}" rows="3"
+      placeholder="e.g. The photo under THE SHOP is a customer, not the front windows - use a storefront photo">${esc(fixes[b.slug] || '')}</textarea>
+    <div class="acts"><button class="btn go" data-revise="${esc(b.slug)}" ${busy ? 'disabled' : ''}>Send back to Paul</button></div></div>`;
 }
 
 function draft(b) {
@@ -377,7 +383,10 @@ async function act(path, label, body) {
 }
 
 $('tabs').onclick = e => { const b = e.target.closest('[data-t]'); if (b) { tab = b.dataset.t; draw(); } };
-$('body').oninput = e => { const r = e.target.closest('[data-ref]'); if (r) refs[r.dataset.ref] = r.value; };
+$('body').oninput = e => {
+  const r = e.target.closest('[data-ref]'); if (r) refs[r.dataset.ref] = r.value;
+  const f = e.target.closest('[data-notes]'); if (f) fixes[f.dataset.notes] = f.value;
+};
 $('body').onchange = e => {
   const f = e.target.closest('[data-upload]');
   if (f && f.files && f.files.length) upload(f.dataset.upload, Array.from(f.files));
@@ -386,6 +395,13 @@ $('body').onclick = e => {
   const a = e.target.closest('[data-approve]'), r = e.target.closest('[data-reject]');
   const g = e.target.closest('[data-google]'), x = e.target.closest('[data-unphoto]');
   if (g) return act(`/api/paul/prospects/${g.dataset.google}/google`, 'checked');
+  const v = e.target.closest('[data-revise]');
+  if (v) {
+    const notes = (fixes[v.dataset.revise] || '').trim();
+    if (!notes) return toast('Write what to fix first');
+    return act(`/api/paul/revise/${encodeURIComponent(v.dataset.revise)}`, 'sent back', { notes })
+      .then(() => { delete fixes[v.dataset.revise]; });
+  }
   if (x) {
     if (!confirm('Remove this photo?')) return;
     return (async () => {
@@ -401,7 +417,7 @@ $('body').onclick = e => {
 };
 load();
 // Not while a box is being typed in: a redraw would close the keyboard.
-setInterval(() => { if (!busy && !(document.activeElement && document.activeElement.matches('[data-ref]'))) load(); }, 30000);
+setInterval(() => { if (!busy && !(document.activeElement && document.activeElement.matches('[data-ref],[data-notes]'))) load(); }, 30000);
 </script>
 </body>
 </html>
