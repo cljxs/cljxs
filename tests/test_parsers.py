@@ -3605,8 +3605,9 @@ class TheWholeBoardNotAThirdOfIt(unittest.TestCase):
             self.assertEqual(self.m.SPORTS[sport].get("query", ""), "")
 
     def test_the_query_is_actually_used_in_the_call(self):
-        src = (SCRIPTS / "ace-fetch.py").read_text()
-        self.assertIn("SPORTS[sport].get('query', '')", src)
+        asked = []
+        self.m.board_events("cfb", fetch=lambda url: asked.append(url) or {"events": []})
+        self.assertEqual(asked, [f"{self.m.BASE}/football/college-football/scoreboard?groups=80&limit=300"])
 
     def test_the_ranking_is_actually_used_when_fetching(self):
         # Ranking correctly and then fetching in ESPN's order anyway is a
@@ -16441,8 +16442,8 @@ class AceMoneyIsKeptByCode(unittest.TestCase):
             f.settle_bets([("nfl", self.NFL)])
         bank = json.loads((root / "agents/ace/state/bankroll.json").read_text())
         self.assertEqual((bank["bankroll"], bank["settled_bets"][0]["result"]), (10150.0, "won"))
-        self.assertIn('boards.append((sport, get(f"{BASE}/{path}/scoreboard?dates={yesterday}")',
-                      (SCRIPTS / "ace-fetch.py").read_text(), "late finals: yesterday's board for daily sports")
+        self.assertIn("boards.append((sport, graded))", (SCRIPTS / "ace-fetch.py").read_text(),
+                      "the fetcher grades from every board board_events read, yesterday's included")
 
     def test_help_touches_nothing(self):
         # preflight runs `<script> --help` to read the subcommands. ace-book.py
@@ -16463,6 +16464,73 @@ class AceMoneyIsKeptByCode(unittest.TestCase):
         self.assertIn("python3 ../../scripts/ace-book.py show", head)
         self.assertIn("**kept by `ace-book.py`; never edit it**", head)
         self.assertNotIn("compute win/loss, update `bankroll`", head)
+
+
+class AceReadsTheDailyBoardsByDate(unittest.TestCase):
+    """ESPN's undated NBA scoreboard was still Tuesday's three finished games
+    at 09:41 ET on Wednesday 2026-10-21, with eleven games that night. Ace
+    read the undated board, so from the 23:30 wake until ESPN turned the page
+    there was no NBA game to estimate or bet - opening week reached him as one
+    college game. Daily sports are read by Eastern date, today and tomorrow.
+    Fixtures are the real boards captured that morning."""
+
+    NOW_MORNING = datetime(2026, 10, 21, 13, 41, tzinfo=timezone.utc)   # 09:41 ET Wed
+    NOW_NIGHT = datetime(2026, 10, 22, 3, 30, tzinfo=timezone.utc)      # 23:30 ET Wed
+
+    def setUp(self):
+        self.f = load("ace_fetch_dated", "ace-fetch.py")
+        board = lambda name: json.loads((FIXTURES / f"espn-nba-scoreboard-{name}.json").read_text())
+        self.boards = {"20261020": board("undated-2026-10-21-0941et"),   # the undated board WAS Tuesday's
+                       "20261021": board("2026-10-21"), "20261022": board("2026-10-22")}
+        self.asked = []
+
+    def fetch(self, url):
+        self.asked.append(url)
+        if "?dates=" not in url:
+            return self.boards["20261020"]
+        day = url.split("?dates=")[1]
+        if day not in self.boards:
+            raise OSError("no such board in this test")
+        return self.boards[day]
+
+    def run_at(self, now, sport="nba"):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return self.f.board_events(sport, now, fetch=self.fetch)
+
+    @staticmethod
+    def scheduled(events):
+        return [e["shortName"] for e in events
+                if e["competitions"][0]["status"]["type"]["name"] == "STATUS_SCHEDULED"]
+
+    def test_the_undated_board_really_was_yesterdays(self):
+        # The bug, on the real capture: nothing on it could be estimated.
+        self.assertEqual(self.scheduled(self.boards["20261020"]["events"]), [])
+
+    def test_the_morning_fetch_sees_all_eleven_games_tonight(self):
+        events, _ = self.run_at(self.NOW_MORNING)
+        self.assertEqual(len(self.scheduled(events)), 11)
+        self.assertIn("GS @ LAL", self.scheduled(events))
+        self.assertFalse(any("?dates=" not in u for u in self.asked), "the undated board is never read")
+
+    def test_tomorrows_games_join_only_inside_the_blind_window(self):
+        events, _ = self.run_at(self.NOW_MORNING)       # Thursday's 19:00 ET game is 33 h away
+        self.assertNotIn("CLE @ PHI", [e["shortName"] for e in events])
+        events, _ = self.run_at(self.NOW_NIGHT)         # at the 23:30 wake it is 19.5 h away
+        self.assertIn("CLE @ PHI", [e["shortName"] for e in events])
+        self.assertEqual(len(events), len({e["id"] for e in events}))
+
+    def test_late_finals_still_come_from_yesterdays_board(self):
+        _, graded = self.run_at(self.NOW_MORNING)
+        self.assertIn("OKC @ SA", [e["shortName"] for e in graded])
+
+    def test_a_missing_side_board_does_not_cost_tonights_slate(self):
+        del self.boards["20261022"], self.boards["20261020"]
+        events, _ = self.run_at(self.NOW_MORNING)
+        self.assertEqual(len(self.scheduled(events)), 11)
+
+    def test_a_weekly_sport_is_still_one_undated_call(self):
+        self.run_at(self.NOW_MORNING, sport="cfb")
+        self.assertEqual(self.asked, [f"{self.f.BASE}/football/college-football/scoreboard?groups=80&limit=300"])
 
 
 class AcePricesBeforeAndAtTheClose(unittest.TestCase):

@@ -17,11 +17,20 @@ class MediaError(RuntimeError):
     pass
 
 
+# A process stopped from outside says nothing on stderr, so the code is all
+# there is. 2026-10-21: the Teague episode failed three times with
+# "ffmpeg failed (-9):" and nothing after it.
+KILLED = {-9: "was killed by the server - almost always because it ran out of memory",
+          -15: "was stopped (a timeout or a restart)"}
+
+
 def run(cmd, cwd=None, timeout=None):
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, timeout=timeout)
     if r.returncode != 0:
         tail = "\n".join((r.stderr or "").strip().splitlines()[-6:])
-        raise MediaError(f"{Path(cmd[0]).name} failed ({r.returncode}): {tail}")
+        why = KILLED.get(r.returncode)
+        raise MediaError(f"{Path(cmd[0]).name} failed ({r.returncode})"
+                         + (f": it {why}" if why else "") + (f": {tail}" if tail else ""))
     return r
 
 
