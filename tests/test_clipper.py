@@ -2980,6 +2980,31 @@ class TheFunnyPickKeepsItsLaugh(EndToEnd):
 from clipper import inbox, ingest  # noqa: E402
 
 
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class TheCleanCopyStopsWithTheClip(unittest.TestCase):
+    """2026-10-21: the copy without subtitles had no -t of its own (an output
+    option belongs to the output after it), so it ran on to the end of the
+    source. On the hour-long Teague episode ffmpeg held the frames the
+    finished clip no longer took until the server killed it, three times."""
+
+    def test_both_files_are_the_clip_long(self):
+        from clipper import render
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        src = tmp / "src.mp4"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30",
+                        "-f", "lavfi", "-i", "sine=f=300:sample_rate=48000", "-t", "40",
+                        "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", str(src)], check=True)
+        cfg = dict(config.DEFAULTS, crop_mode="center", x264_preset="ultrafast")
+        out = tmp / "01.mp4"
+        render.render(src, out, 2.0, 6.0, captions.build([], 2.0, 6.0), cfg, clean=True)
+        for f in (out, render.clean_path(out)):
+            self.assertAlmostEqual(media.probe(f)["duration"], 4.0, delta=0.3, msg=f.name)
+        # And in the command: each output has its own -t.
+        cmd = render.command(src, "o.mp4", 2.0, 6.0, media.probe(src), "c.ass", cfg, clean_name="c.mp4")
+        self.assertIn("-t", cmd[cmd.index("o.mp4"):cmd.index("c.mp4")])
+
+
 class AKilledFfmpegSaysWhy(unittest.TestCase):
     """2026-10-21: "ffmpeg failed (-9):" and nothing else - the server had
     stopped it, which ffmpeg cannot say on stderr."""
