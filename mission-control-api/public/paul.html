@@ -370,6 +370,8 @@ function work(b) {
     <label class="refl" for="fix-${esc(b.slug)}">Something to fix before you pitch it? Tell Paul</label>
     <textarea class="refbox fixbox" id="fix-${esc(b.slug)}" data-notes="${esc(b.slug)}" rows="3"
       placeholder="e.g. The photo under THE SHOP is a customer, not the front windows - use a storefront photo">${esc(fixes[b.slug] || '')}</textarea>
+    <label class="refl" for="ref-s-${esc(b.slug)}">New reference site for the look (optional - empty keeps the one it was built from)</label>
+    <input class="refbox" id="ref-s-${esc(b.slug)}" data-ref="s:${esc(b.slug)}" type="url" inputmode="url" autocapitalize="off" autocorrect="off" placeholder="https://a-site-you-like.com" value="${esc(refs['s:' + b.slug] || '')}">
     <div class="acts"><button class="btn go" data-revise="${esc(b.slug)}" ${busy ? 'disabled' : ''}>Send back to Paul</button>
       <button class="btn del" data-remove="${esc(b.slug)}" data-name="${esc(b.name)}" ${busy ? 'disabled' : ''}>Delete</button></div></div>`;
 }
@@ -436,10 +438,10 @@ $('body').onclick = e => {
   }
   const v = e.target.closest('[data-revise]');
   if (v) {
-    const notes = (fixes[v.dataset.revise] || '').trim();
+    const notes = (fixes[v.dataset.revise] || '').trim(), ref = (refs['s:' + v.dataset.revise] || '').trim();
     if (!notes) return toast('Write what to fix first');
-    return act(`/api/paul/revise/${encodeURIComponent(v.dataset.revise)}`, 'sent back', { notes })
-      .then(() => { delete fixes[v.dataset.revise]; });
+    return act(`/api/paul/revise/${encodeURIComponent(v.dataset.revise)}`, 'sent back', ref ? { notes, ref } : { notes })
+      .then(() => { delete fixes[v.dataset.revise]; delete refs['s:' + v.dataset.revise]; });
   }
   if (x) {
     if (!confirm('Remove this photo?')) return;

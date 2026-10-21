@@ -229,6 +229,11 @@ PARKED_MARKERS = ("domain is for sale", "buy this domain", "this domain may be f
                   "domain has expired", "renew this domain", "is for sale!")
 
 STOCK_HOSTS = ("unsplash.com", "pexels.com")
+# "sample": a stock photo standing in for something the business has and the
+# owner has no picture of - Royal Edge's products (owner, 2026-10-21: "just
+# use sample pictures and put 'sample' on the picture"). Code measures the
+# word on the picture (IMAGE_JS) and the pitch says so.
+PHOTO_KINDS = ("business", "stock", "sample")
 RASTER = (".jpg", ".jpeg", ".png", ".webp", ".avif", ".gif")
 FONTS = (".woff", ".woff2", ".ttf", ".otf", ".eot")
 
@@ -794,6 +799,7 @@ class _Page(HTMLParser):
         self.viewport, self.robots = False, []
         self.no_alt, self.embeds, self.scripts, self.styles = [], [], [], []
         self.icon, self.forms = False, 0
+        self.ids, self.hashes, self.media = set(), [], []
         self._skip = 0
         self._style = False
 
@@ -809,6 +815,11 @@ class _Page(HTMLParser):
             if name == "robots":
                 self.robots.append(a.get("content", ""))
         rel = a.get("rel", "").lower()
+        for k in ("id", "name") if tag == "a" else ("id",):
+            if a.get(k):
+                self.ids.add(a[k])
+        if tag in ("video", "audio"):
+            self.media.append(a.get("src") or tag)
         if tag == "img" and a.get("src"):
             self.refs.append(("image", a["src"]))
             if not a.get("alt", "").strip():
@@ -841,6 +852,8 @@ class _Page(HTMLParser):
         if tag == "a" and a.get("href"):
             if a["href"].lower().startswith("tel:"):
                 self.tel.append(a["href"])
+            elif len(a["href"]) > 1 and a["href"].startswith("#"):
+                self.hashes.append(a["href"])
             else:
                 self.refs.append(("link", a["href"]))
         if a.get("style"):
@@ -882,7 +895,7 @@ def scan_site(site):
     out = {"pages": [], "errors": [], "text": "", "tel": [], "images": {},
            "external_images": [], "bytes": 0, "viewport": True, "local_refs": [],
            "no_alt": [], "embeds": [], "scripts": [], "styles": [], "forms": 0,
-           "icon": False, "css": []}
+           "icon": False, "css": [], "media": []}
     pages = sorted(site.rglob("*.html"))
     out["pages"] = [p.relative_to(site).as_posix() for p in pages]
     texts = []
@@ -903,8 +916,16 @@ def scan_site(site):
             out["viewport"] = False
         if page.name == "index.html" and page.parent == site:
             out["icon"] = pr.icon
-        for k in ("no_alt", "embeds", "scripts", "styles"):
+        for k in ("no_alt", "embeds", "scripts", "styles", "media"):
             out[k] += getattr(pr, k)
+        # A menu item that goes nowhere: the Services drop-down's links are
+        # #fades, #beards... and each needs its section on the page
+        # (owner, 2026-10-21). "#top" is the top of any page.
+        gone = sorted({h for h in pr.hashes
+                       if urllib.parse.unquote(h[1:]) not in pr.ids and h.lower() != "#top"})
+        for h in gone[:4]:
+            out["errors"].append(f'{page.relative_to(site).as_posix()} links to "{h}" but nothing on '
+                                 f'that page has id="{h[1:]}" - the link goes nowhere')
         out["forms"] += pr.forms
         out["css"] += pr.css
         texts.append(" ".join(pr.text))
@@ -1263,6 +1284,9 @@ def check_draft(text, t):
     # preview is the usual case (College Hill Barbers, Milkbox). Fine for a
     # concept - but the pitch says so, rather than let stock pass as theirs.
     photos = [p for p in (t or {}).get("photos") or [] if isinstance(p, dict)]
+    if any(p.get("kind") == "sample" for p in photos) and "sample" not in body.lower():
+        errs.append('some photos are samples - say so in one line, e.g. "the product photos are '
+                    'samples until you send me pictures of what you carry"')
     if photos and all(p.get("kind") == "stock" for p in photos) and "placeholder" not in body.lower():
         errs.append('every photo is stock - say so in one line, e.g. "the photos are placeholders '
                     'until you send me yours"')
@@ -1302,6 +1326,12 @@ def check_site(site, t, old_page=None):
                     f"{MAX_SITE_BYTES // 1024} KB so it is fast on a phone")
     if any(site.glob("sitemap*.xml")):
         errs.append("remove sitemap.xml - a preview must not be offered to search engines")
+    # Royal Edge after mancaveformen.com (owner, 2026-10-21): "get rid of the
+    # video since I don't have one". The owner saves photos only, so a video
+    # on one of Paul's sites is a stock clip passing as the business.
+    for u in sc["media"][:2]:
+        errs.append(f"{u}: no video or sound - the business has none to use; show their "
+                    f"photos instead")
 
     text = sc["text"].lower()
     name = str(t.get("name") or "")
@@ -1355,9 +1385,10 @@ def check_site(site, t, old_page=None):
             continue
         if not re.match(r"^https?://", src):
             errs.append(f"{rel}: its source must be the URL you downloaded it from")
-        if p.get("kind") not in ("business", "stock"):
-            errs.append(f'{rel}: kind must be "business" (their own posted photo) or "stock"')
-        elif p.get("kind") == "stock":
+        if p.get("kind") not in PHOTO_KINDS:
+            errs.append(f'{rel}: kind must be "business" (their own posted photo), "stock", or '
+                        f'"sample" (stock standing in for what they sell, labelled Sample)')
+        elif p.get("kind") in ("stock", "sample"):
             host = urllib.parse.urlsplit(src).hostname or ""
             if not any(host == h or host.endswith("." + h) for h in STOCK_HOSTS):
                 errs.append(f"{rel}: stock photos come from Unsplash or Pexels only, not {host}")
@@ -1646,6 +1677,26 @@ var pre=document.createElement('pre');pre.id='paul-contrast';pre.textContent=JSO
 })();"""
 
 
+# IS THE PAGE STYLED AT THIS WIDTH. Royal Edge's revision (2026-10-21): in
+# the Studio its computer screenshot was a bare page - black serif text on
+# white, the photo at full size - while its phone screenshot looked right.
+# No check looked: contrast passes black on white, and an unstyled photo is
+# shown at its own size. CSS that applies at one width only (an @media
+# block never closed) or not at all (a stylesheet that does not load) looks
+# the same from here: switching the page's stylesheets off changes almost
+# nothing. Measured as the share of elements whose computed style changes.
+STYLED_MIN = 0.2
+STYLED_JS = r"""function paulStyled(){
+var P=['color','backgroundColor','fontFamily','fontSize','fontWeight','marginTop','paddingTop','paddingLeft','display','textTransform','borderTopWidth','lineHeight'];
+var els=[document.body].concat([].slice.call(document.body.querySelectorAll('*')).filter(function(e){return !/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|PRE)$/.test(e.tagName);}).slice(0,300));
+function sig(){return els.map(function(e){var s=getComputedStyle(e);return P.map(function(k){return s[k];}).join('|');});}
+var a=sig(),sh=[].slice.call(document.styleSheets);sh.forEach(function(x){x.disabled=true;});var b=sig();sh.forEach(function(x){x.disabled=false;});
+var n=0;for(var i=0;i<a.length;i++)if(a[i]!==b[i])n++;return a.length?Math.round(n/a.length*100)/100:1;}"""
+# Bump when a probe learns something new, so a site measured before is
+# measured again rather than passed from memory.
+PROBE_V = 2
+
+
 # THE PHONE PROBE. College Hill Barbers (2026-10-06): on a phone the header's
 # "CALL (319) 277-9972" button broke onto two lines and squeezed the name
 # beside it - in the phone screenshot Paul read, and passed. A button is a
@@ -1681,8 +1732,36 @@ for(var n=0;n<els.length;n++){var el=els[n];var t=(el.innerText||'').replace(/\s
  var most=0;for(var i=0;i<runs.length;i++){most=Math.max(most,lines(runs[i]));}
  if(most>1)out.push({text:t,lines:most});}
 var wide=document.documentElement.scrollWidth>window.innerWidth+1;
-var pre=document.createElement('pre');pre.id='paul-phone';pre.textContent=JSON.stringify({wraps:out,wide:wide,width:window.innerWidth});document.body.appendChild(pre);
-})();"""
+// Every finite animation and transition jumped to its end - an intro over
+// the page, a menu sliding open - as a visitor sees it a moment later.
+// Waiting for them does not work: headless Chrome may never play them.
+function settled(then){var n=0;(function end(){(document.getAnimations?document.getAnimations():[]).forEach(function(a){
+ var e=a.effect&&a.effect.getTiming?a.effect.getTiming():{};if(e.iterations!==Infinity){try{a.finish();}catch(x){}}});
+ if(n++<2)return setTimeout(end,50);then();})();}
+document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a[href]');if(a)e.preventDefault();},true);
+function reach(e){e.scrollIntoView({block:'center',inline:'center'});var r=e.getBoundingClientRect();if(r.width<2||r.height<2)return false;
+ var x=r.left+r.width/2,y=r.top+r.height/2;if(x<0||y<0||x>innerWidth||y>innerHeight)return false;
+ var h=document.elementFromPoint(x,y);return !!h&&(h===e||e.contains(h));}
+// textContent, not innerText: a link inside a closed drop-down has no
+// innerText at all, and was dropped from the list it is checked against.
+function label(l){return (l.textContent||l.getAttribute('aria-label')||'').replace(/\s+/g,' ').trim();}
+var links=[].slice.call(document.querySelectorAll('header a[href],nav a[href]')).filter(function(l){
+ var t=label(l);return t&&!/^skip/i.test(t);});
+var names={},got={};links.forEach(function(l){names[l.getAttribute('href')]=label(l);});
+// Reached when any link to the same place can be tapped: a header "Book"
+// hidden on a phone because a bar at the bottom has the same link is fine.
+var every=[].slice.call(document.querySelectorAll('a[href]'));
+function sweep(){for(var k in names){if(!got[k]&&every.some(function(l){return l.getAttribute('href')===k&&reach(l);}))got[k]=1;}}
+function toggles(){return [].slice.call(document.querySelectorAll('header summary,nav summary,header button,nav button,header [aria-expanded],nav [aria-expanded],header [aria-controls],nav [aria-controls]'));}
+var tapped=[];
+function finish(){var hidden=[];for(var k in names)if(!got[k])hidden.push(names[k]);window.scrollTo(0,0);
+ var pre=document.createElement('pre');pre.id='paul-phone';pre.textContent=JSON.stringify({wraps:out,wide:wide,width:window.innerWidth,hidden:hidden,styled:paulStyled()});document.body.appendChild(pre);}
+// What a visitor can tap, once the page's intro has played: every menu
+// button tapped in turn, each given time to open.
+function step(){sweep();var ts=toggles().filter(function(t){return tapped.indexOf(t)<0&&reach(t);});
+ if(!ts.length||tapped.length>=12)return finish();tapped.push(ts[0]);ts[0].click();setTimeout(function(){settled(step);},50);}
+settled(step);
+})();""".replace("(function(){", "(function(){" + STYLED_JS, 1)
 
 
 def phone_problems(site, browser, run=subprocess.run):
@@ -1699,17 +1778,20 @@ def phone_problems(site, browser, run=subprocess.run):
                      if re.search(r"(?i)</body>", markup) else markup + tag)
     # The probe runs in a 390px iframe (CHROME_MIN_W); the frame copies its
     # answer out, because --dump-dom prints only the outer page.
+    # The probe answers after tapping through the menu, so the frame waits
+    # for the answer rather than a fixed moment after load.
     lift = ("<script>var f=document.querySelector('iframe');f.addEventListener('load',function(){"
-            "setTimeout(function(){var d=null;try{d=f.contentDocument}catch(e){}"
-            "var p=d&&d.getElementById('paul-phone');var o=document.createElement('pre');"
-            "o.id='paul-phone';o.textContent=p?p.textContent:'';document.body.appendChild(o);},100);"
+            "var n=0;(function look(){var d=null;try{d=f.contentDocument}catch(e){}"
+            "var p=d&&d.getElementById('paul-phone');if(!p&&n++<80)return setTimeout(look,100);"
+            "var o=document.createElement('pre');"
+            "o.id='paul-phone';o.textContent=p?p.textContent:'';document.body.appendChild(o);})();"
             "});</script>")
     frame.write_text(phone_frame(probe.name, PHONE_W, PHONE_H, lift))
     try:
         r = run([browser, "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
                  "--no-first-run", "--disable-dev-shm-usage", "--allow-file-access-from-files",
                  f"--window-size={CHROME_MIN_W},{PHONE_H}",
-                 "--virtual-time-budget=4000", "--dump-dom", frame.as_uri()],
+                 "--virtual-time-budget=10000", "--dump-dom", frame.as_uri()],
                 capture_output=True, text=True, timeout=90)
         out = r.stdout or ""
     except Exception:
@@ -1725,17 +1807,19 @@ def phone_problems(site, browser, run=subprocess.run):
     except ValueError:
         return None
     return {"wraps": [(w.get("text", ""), w.get("lines")) for w in d.get("wraps") or []],
-            "wide": bool(d.get("wide"))}
+            "wide": bool(d.get("wide")), "hidden": [str(x) for x in d.get("hidden") or []],
+            "styled": d.get("styled")}
 
 
 def measured_phone(site, browser, memo, run=subprocess.run):
     """phone_problems, remembered against the site's fingerprint, as contrast is."""
-    fp = site_fingerprint(site)
+    fp = f"{site_fingerprint(site)}|{PROBE_V}"
     memo = Path(memo)
     seen = read_json(memo, {}) or {}
     if seen.get("phone_site") == fp and isinstance(seen.get("phone"), dict):
         got = seen["phone"]
-        return {"wraps": [tuple(w) for w in got.get("wraps") or []], "wide": bool(got.get("wide"))}
+        return {"wraps": [tuple(w) for w in got.get("wraps") or []], "wide": bool(got.get("wide")),
+                "hidden": list(got.get("hidden") or []), "styled": got.get("styled")}
     got = phone_problems(site, browser, run=run)
     if got is not None:
         memo.parent.mkdir(parents=True, exist_ok=True)
@@ -1834,14 +1918,31 @@ function done(){var out=[];imgs.forEach(function(i){
  else if(fit==='contain'||fit==='scale-down'){scale=Math.min(sx,sy);}else if(fit==='none'){scale=1;}else{scale=Math.max(sx,sy);}
  if(scale>ENLARGED)out.push({src:src,kind:'enlarged',scale:Math.round(scale*100)/100,
    natural:nw+'x'+nh,shown:Math.round(r.width)+'x'+Math.round(r.height)});});
- var pre=document.createElement('pre');pre.id='paul-images';pre.textContent=JSON.stringify({images:out});document.body.appendChild(pre);}
+ var SAMPLES=__SAMPLES__;
+ function own(e){var t='';for(var c=e.firstChild;c;c=c.nextSibling)if(c.nodeType===3)t+=c.nodeValue;return t;}
+ var tags=[].slice.call(document.body.querySelectorAll('*')).filter(function(e){return /\bsample\b/i.test(own(e));});
+ var bare=[];imgs.forEach(function(i){var u=decodeURI(i.src||'');
+  if(!SAMPLES.some(function(r){return u.slice(-(r.length+1))==='/'+r;}))return;
+  var s=getComputedStyle(i);if(s.display==='none'||s.visibility!=='visible')return;
+  i.scrollIntoView({block:'center'});var r=i.getBoundingClientRect();if(r.width<40||r.height<40)return;
+  var on=tags.some(function(t){var q=t.getBoundingClientRect(),ts=getComputedStyle(t);
+   if(q.width<2||q.height<2||ts.visibility!=='visible'||parseFloat(ts.fontSize)<10)return false;
+   var x=q.left+q.width/2,y=q.top+q.height/2;if(x<r.left||x>r.right||y<r.top||y>r.bottom)return false;
+   var st=document.elementsFromPoint(x,y),a=st.indexOf(i),b=-1;
+   for(var k=0;k<st.length;k++){if(st[k]===t||t.contains(st[k])){b=k;break;}}
+   return b>=0&&(a<0||b<a);});
+  if(!on)bare.push(i.getAttribute('src')||'');});
+ var pre=document.createElement('pre');pre.id='paul-images';pre.textContent=JSON.stringify({images:out,bare:bare,styled:paulStyled()});document.body.appendChild(pre);}
 (function wait(){if(imgs.every(function(i){return i.complete;})||Date.now()-t0>3000)done();else setTimeout(wait,50);})();
-})();""".replace("SKEW", str(IMAGE_SKEW)).replace("ENLARGED", str(IMAGE_ENLARGED))
+})();""".replace("SKEW", str(IMAGE_SKEW)).replace("ENLARGED", str(IMAGE_ENLARGED)).replace(
+    "(function(){", "(function(){" + STYLED_JS, 1)
 
 
-def image_problems(site, browser, run=subprocess.run, width=1280, height=900):
-    """[(page, src, kind, detail)] for photos stretched or blown up, or None
-    when the browser gave no answer. Run on a hidden copy of each page, as
+def image_problems(site, browser, run=subprocess.run, width=1280, height=900, samples=()):
+    """[(page, src, kind, detail)] for photos stretched or blown up, sample
+    photos with no "Sample" on them (kind "unlabelled"), and a page whose
+    CSS does not apply at this width (kind "unstyled", src ""), or None when
+    the browser gave no answer. Run on a hidden copy of each page, as
     contrast is; the copy is always removed."""
     site = Path(site)
     bad, answered = [], False
@@ -1850,7 +1951,7 @@ def image_problems(site, browser, run=subprocess.run, width=1280, height=900):
             continue
         probe = page.with_name(f".{CONTRAST_ID}-img-{page.name}")
         markup = page.read_text(errors="replace")
-        tag = f"<script>{IMAGE_JS}</script>"
+        tag = f"<script>{IMAGE_JS.replace('__SAMPLES__', json.dumps(sorted(samples)))}</script>"
         probe.write_text(re.sub(r"(?i)</body>", lambda _m: tag + "</body>", markup, count=1)
                          if re.search(r"(?i)</body>", markup) else markup + tag)
         try:
@@ -1876,17 +1977,22 @@ def image_problems(site, browser, run=subprocess.run, width=1280, height=900):
             detail = (f"{f.get('by')}%" if f.get("kind") == "stretched"
                       else f"shown at {f.get('shown')} from a {f.get('natural')} photo, {f.get('scale')}x")
             bad.append((rel, f.get("src", ""), f.get("kind"), detail))
+        for src in d.get("bare") or []:
+            bad.append((rel, src, "unlabelled", "no Sample label on it"))
+        if isinstance(d.get("styled"), (int, float)) and d["styled"] < STYLED_MIN:
+            bad.append((rel, "", "unstyled", f"{round(d['styled'] * 100)}% of the page changes "
+                                             f"with its stylesheets switched off"))
     return bad if answered else None
 
 
-def measured_images(site, browser, memo, run=subprocess.run):
+def measured_images(site, browser, memo, run=subprocess.run, samples=()):
     """image_problems, remembered against the site's fingerprint, as contrast is."""
-    fp = site_fingerprint(site)
+    fp = f"{site_fingerprint(site)}|{PROBE_V}|{','.join(sorted(samples))}"
     memo = Path(memo)
     seen = read_json(memo, {}) or {}
     if seen.get("images_site") == fp and isinstance(seen.get("images"), list):
         return [tuple(x) for x in seen["images"]]
-    bad = image_problems(site, browser, run=run)
+    bad = image_problems(site, browser, run=run, samples=samples)
     if bad is not None:
         memo.parent.mkdir(parents=True, exist_ok=True)
         write_json(memo, {**(read_json(memo, {}) or {}), "images_site": fp, "images": bad})
@@ -1956,12 +2062,20 @@ def run_checks(t, get=http_get, work=None):
         for rel, text, ratio, need in (bad or [])[:6]:
             errs.append(f'"{text}" on {rel} is hard to read: contrast {ratio}:1, needs '
                         f"{need}:1 - change the text colour or what is behind it")
-        pics = measured_images(work / "site", browser, work / "shots" / ".measured.json")
+        samples = sorted(str(p.get("file") or "").lstrip("./").removeprefix("site/")
+                         for p in t.get("photos") or [] if isinstance(p, dict) and p.get("kind") == "sample")
+        pics = measured_images(work / "site", browser, work / "shots" / ".measured.json", samples=samples)
         if pics is None:
             notes.append("photo sizes not measured - the browser gave no answer")
         for rel, src, kind, detail in (pics or [])[:6]:
             errs.append(f"{src} on {rel} is stretched out of its own shape ({detail}) - give it "
                         f"object-fit:cover, or a box with the photo's proportions" if kind == "stretched" else
+                        f'{src} on {rel} is a sample photo with no "Sample" on it - put the word over '
+                        f'the picture in an element of its own, e.g. <span class="sample-tag">Sample</span> '
+                        f"inside the photo's box" if kind == "unlabelled" else
+                        f"on a computer (1280px) {rel} shows unstyled ({detail}) - its CSS does not "
+                        f"apply. Link the stylesheet by a relative path (style.css, not /style.css) "
+                        f"and close every @media block" if kind == "unstyled" else
                         f"{src} on {rel} is blown up ({detail}) so it looks soft and stretched - use a "
                         f"larger version of the photo, or show it smaller")
         phone = measured_phone(work / "site", browser, work / "shots" / ".measured.json")
@@ -1975,6 +2089,17 @@ def run_checks(t, get=http_get, work=None):
             if phone["wide"]:
                 errs.append(f"on a phone ({PHONE_W}px) the page scrolls sideways - something is "
                             f"wider than the screen")
+            # A drop-down that opens on hover only cannot be opened on a phone
+            # or the owner's iPad (owner, 2026-10-21: a Services drop-down).
+            for text in (phone.get("hidden") or [])[:4]:
+                errs.append(f'on a phone ({PHONE_W}px) the menu item "{text}" never shows, even after '
+                            f"tapping every menu button - a menu must open on a tap (<details><summary>, "
+                            f"or a <button> that toggles it), not on hover alone")
+            st = phone.get("styled")
+            if isinstance(st, (int, float)) and st < STYLED_MIN:
+                errs.append(f"on a phone ({PHONE_W}px) index.html shows unstyled ({round(st * 100)}% of "
+                            f"the page changes with its stylesheets switched off) - its CSS does not "
+                            f"apply. Link the stylesheet by a relative path and close every @media block")
 
     dp = work / "draft.md"
     if not dp.is_file():
@@ -2613,6 +2738,11 @@ def cmd_revise(a):
     if not notes:
         print("say what to fix - those words are what Paul reads")
         return 2
+    given = getattr(a, "ref", None)
+    ref = clean_ref(given) if given else None
+    if given and not ref:
+        print(f'"{given}" is not a web address - give the whole https://... link')
+        return 1
     # A revision of this site that did not ship is newer work than the site:
     # Royal Edge's fixed photo was set aside by a refusal that was the
     # check's fault (2026-10-21). Sending it back again resumes that work.
@@ -2638,6 +2768,21 @@ def cmd_revise(a):
         if old.is_file():
             (work / "previous-draft.md").write_text(old.read_text(errors="replace"))
     write_json(work / "revise.json", {"slug": slug})
+    # The prospect rides along, as in a build: its id is where the owner's
+    # saved photos are (Royal Edge's revision had none placed, 2026-10-21),
+    # and its reference is the look - a new one when the owner gives it
+    # ("I have a new sample site for Paul to use", 2026-10-21).
+    rows = load_prospects()
+    n = norm_name(t.get("name")).replace(" ", "")
+    mine = [p for p in rows if p.get("slug") == slug] or [
+        p for p in rows if n and (n in norm_name(p.get("name")).replace(" ", "")
+                                  or norm_name(p.get("name")).replace(" ", "") in n)]
+    p = max(mine, key=lambda p: p.get("status") == "built") if mine else {"name": t.get("name")}
+    if ref:
+        p["reference"] = ref
+        if mine:
+            save_prospects(rows)
+    write_json(work / "prospect.json", p)
     earlier = re.search(r"## What the owner wants fixed\n\n(.*?)\n\n", before, re.S)
     (work / "REVISE.md").write_text(
         f"# Sent back by the owner - {today()}\n\n"
@@ -2646,11 +2791,16 @@ def cmd_revise(a):
         + (f"You already worked on this once; your work is in work/site/. The owner asked "
            f"then: {earlier.group(1).strip()}\n\n" if earlier else "")
         + f"## What the owner wants fixed\n\n{notes}\n\n"
-        f"Write a new work/draft.md (your last one is work/previous-draft.md) and update "
+        + (f"The owner picked a new reference site for the look: {ref} (FACTS: OWNER'S REF). "
+           f"Rebuild the layout after it; keep this business's facts, photos and claims.\n\n"
+           if ref else "")
+        + f"Write a new work/draft.md (your last one is work/previous-draft.md) and update "
         f"work/target.json if the photos or claims change.\n")
     set_revision(slug, state="sent", notes=notes, name=t.get("name"))
-    record(f"sent back by the owner: {t.get('name')} - {notes}"[:300])
-    print(f"{t.get('name')} is back in work/ with your notes; the next cycle fixes it.")
+    record((f"sent back by the owner: {t.get('name')} - {notes}"
+            + (f" (after {ref})" if ref else ""))[:300])
+    print(f"{t.get('name')} is back in work/ with your notes"
+          + (f", built after {ref}" if ref else "") + "; the next cycle fixes it.")
     print("  a dry cycle now:  python3 scripts/paul.py dry-next && systemctl start --no-block paul-cycle.service")
     return 0
 
@@ -3241,6 +3391,9 @@ def close_prospect(pid, b):
         if str(p.get("id")) == str(pid):
             if b.get("outcome") == "built":
                 p.update(status="built", slug=b.get("slug"), built=b.get("day"), mode=b.get("mode"))
+            elif p.get("status") == "built":
+                # A revision that did not ship: the site that is up stays up.
+                continue
             else:
                 p.update(status="not built", built=b.get("day"),
                          note=str(b.get("why") or b.get("outcome") or "")[:300])
@@ -3666,7 +3819,7 @@ def cmd_brief(a, get=http_get):
         key = places_key()
         L += lead_lines(find_leads(key, say=lambda m: print(m, file=sys.stderr)) if key else [])
     mine = (read_json(A("work", "prospect.json"), {}) or {}) if kind != "scout" else {}
-    if mine.get("source") == "owner":
+    if mine.get("source") == "owner" and not A("work", "REVISE.md").is_file():
         L += [f"named        the owner named {mine.get('name')}"
               + (f" ({mine['where']})" if mine.get("where") else "") + " - nothing about it is",
               "             checked yet. Find it yourself as in scouting: its address, phone",
@@ -4046,6 +4199,7 @@ def main(argv=None):
     p = sub.add_parser("revise", help="send a finished site back to Paul with what to fix")
     p.add_argument("who", help="the slug, or (part of) the business name")
     p.add_argument("notes", nargs="+", help="what to fix, in your words")
+    p.add_argument("--ref", help="a new site whose layout and feel Paul should take after")
     sub.add_parser("prospects", help="the businesses Paul found, and what the next cycle does")
     p = sub.add_parser("approve", help="approve a prospect for Paul to build")
     p.add_argument("who", help="its number, or part of its name")
