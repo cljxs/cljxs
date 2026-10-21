@@ -1555,7 +1555,8 @@ class TheOwnerSendsASiteBack(PaulCase):
         self.assertNotIn(paul.CONCEPT_ID, page, "code adds the notice again at finish")
         self.assertNotIn('name="robots"', page)
         self.assertFalse((w / "site" / "robots.txt").exists())
-        self.assertIn("Hello.", (w / "previous-draft.md").read_text())
+        self.assertEqual((w / "draft.md").read_text(), "Channel: email\nTo: x@y.test\n\nHello.\n",
+                         "the pitch rides along, without the dry-run line")
         self.assertTrue((paul.A("sites", slug) / "index.html").is_file(), "the old build stays")
         _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
         self.assertIn('"College Hill Barbers", sent back by the owner', facts)
@@ -3015,3 +3016,62 @@ class PhotosThatFitBesideTheText(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             shutil.copytree(ROOT / "agents" / "paul" / "templates" / "local", Path(d) / "s")
             self.assertEqual(paul.measured_images(Path(d) / "s", _a_browser(), Path(d) / "m.json"), [])
+
+
+class APitchIsWrittenOnceAndCopiedOnAPhone(PaulCase):
+    """Owner, 2026-10-21, with four Royal Edge pitches in Drafts: "Paul
+    doesn't need to draft a pitch every time we send something back if the
+    pitch isn't changing... I need to be able to copy and paste the pitch
+    when I'm on my phone." """
+
+    URL = "https://royal-edge-concept-wys8bh.vercel.app"
+
+    def composed(self, dry=False):
+        head, body = paul.parse_draft(DRAFT)
+        return paul.compose_draft(head, body, SENDER, dry).replace(paul.PREVIEW_URL, self.URL)
+
+    def test_a_sent_pitch_comes_back_as_paul_wrote_it(self):
+        for dry in (False, True):
+            back = paul.reusable_draft(self.composed(dry))
+            self.assertIn(paul.PREVIEW_URL, back)
+            self.assertNotIn(self.URL, back)
+            self.assertNotIn(paul.OPT_OUT, back, "code adds the opt-out line again")
+            self.assertNotIn(SENDER["name"], back.split("\n\n", 1)[1], "and the signature")
+            self.assertEqual(paul.check_draft(back, target())[0], [], "Paul's check passes it as it is")
+            head, body = paul.parse_draft(back)
+            self.assertEqual(paul.compose_draft(head, body, SENDER, False).replace(paul.PREVIEW_URL, self.URL),
+                             self.composed(False), "finishing it again gives the same pitch")
+
+    def test_a_phone_script_keeps_every_line(self):
+        text = "Channel: phone\nTo: (319) 427-5796\n\nHi, it is here: " + self.URL + ". " + paul.OPT_OUT + "\n"
+        self.assertEqual(paul.reusable_draft(text),
+                         "Channel: phone\nTo: (319) 427-5796\n\nHi, it is here: [PREVIEW URL]. " + paul.OPT_OUT + "\n")
+
+    def test_sending_back_carries_it_and_says_so(self):
+        TheOwnerSendsASiteBack.built(self, name="Royal Edge", slug="royal-edge-concept-wys8bh")
+        paul.A("outbox", "royal-edge-concept-wys8bh", "draft.md").write_text(self.composed())
+        self.run_quiet(paul.cmd_revise, self.args(who="Royal Edge", notes=["photos", "in", "a", "row"], ref=None))
+        self.assertIn(paul.PREVIEW_URL, paul.A("work", "draft.md").read_text())
+        self.assertIn("Leave it as it is unless", paul.A("work", "REVISE.md").read_text())
+        header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
+        self.assertIn("Your pitch is carried", header)
+
+    def test_drafts_shows_one_per_business_with_what_to_copy(self):
+        for slug, day in (("royal-edge-concept-y8ehkl", "2026-10-20"), ("royal-edge-concept-wys8bh", "2026-10-21")):
+            TheOwnerSendsASiteBack.built(self, name="Royal Edge", slug=slug)
+            paul.A("outbox", slug, "draft.md").write_text(self.composed().replace(self.URL, f"https://{slug}.vercel.app"))
+            paul.log_build({"day": day, "mode": "live", "outcome": "built", "slug": slug, "name": "Royal Edge"})
+        _rc, out = self.run_quiet(paul.cmd_deck, self.args())
+        builds = json.loads(out)["builds"]
+        self.assertEqual([(b["slug"], b["current"]) for b in builds],
+                         [("royal-edge-concept-wys8bh", True), ("royal-edge-concept-y8ehkl", False)])
+        pitch = builds[0]["pitch"]
+        self.assertEqual((pitch["to"], pitch["subject"]), ("rosa@rosas.test", "A website for Rosa's Tailoring"))
+        self.assertTrue(pitch["message"].startswith("Hi Rosa,"))
+        self.assertIn("https://royal-edge-concept-wys8bh.vercel.app", pitch["message"])
+        self.assertIn(paul.OPT_OUT, pitch["message"], "what is sent is what code composed")
+        studio = (ROOT / "mission-control-api" / "public" / "paul.html").read_text()
+        self.assertIn("built.filter(b => b.current && b.draft", studio)
+        self.assertIn('data-part="message">Copy message', studio)
+        self.assertIn("document.execCommand('copy')", studio, "plain http has no navigator.clipboard")
+        self.assertIn("pre{white-space:pre-wrap;overflow-wrap:anywhere;", studio, "a long link wraps on a phone")

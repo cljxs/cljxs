@@ -2283,6 +2283,28 @@ def compose_draft(head, body, sender, dry):
     return "\n".join(lines) + "\n"
 
 
+def reusable_draft(text):
+    """A pitch code composed (outbox/<slug>/draft.md), back as Paul wrote it:
+    the link a placeholder again, without the dry-run line, the opt-out line
+    and the signature code adds. Owner, 2026-10-21: "Paul doesn't need to
+    draft a pitch every time we send something back if the pitch isn't
+    changing" - Royal Edge had four, one per revision."""
+    lines = str(text or "").splitlines()
+    if lines and lines[0].startswith("DRY RUN"):
+        lines = lines[1:]
+    head, body = parse_draft("\n".join(lines).strip())
+    body = re.sub(r"https?://[a-z0-9-]+-concept-[a-z0-9]{6}\.vercel\.app/?", PREVIEW_URL, body)
+    if (head.get("channel") or "") != "phone":
+        rows = body.splitlines()
+        cut = max((i for i, ln in enumerate(rows) if ln.strip() == OPT_OUT), default=None)
+        if cut is not None:
+            body = "\n".join(rows[:cut]).rstrip()
+    top = [f"Channel: {head.get('channel', '')}", f"To: {head.get('to', '')}"]
+    if head.get("subject"):
+        top.append(f"Subject: {head['subject']}")
+    return "\n".join(top) + "\n\n" + body.strip() + "\n"
+
+
 def live_checks(url, site, business, get=http_get):
     """[(ok, line)] for a deployed preview. Every local file the pages use is
     fetched, because "the page loads" says nothing about its images."""
@@ -2533,16 +2555,24 @@ def cmd_deck(a):
     revs = revisions()
     made_from = {r.get("new_slug"): dict(r, slug=old) for old, r in revs.items() if r.get("new_slug")}
     deps = {d["slug"]: d for d in deployments() if d.get("slug")}
-    out = []
+    out, newest = [], set()
     for b in reversed(builds()):
         slug = str(b.get("slug") or "")
         site, box = A("sites", slug), A("outbox", slug)
         t = read_json(box / "target.json", {}) if slug else {}
         draft = box / "draft.md"
+        text = draft.read_text(errors="replace") if draft.is_file() else None
+        # One pitch per business: its newest site's (Royal Edge had four
+        # in Drafts, one per revision, 2026-10-21).
+        built = bool(slug) and (site / "index.html").is_file()
+        current = built and norm_name(b.get("name")) not in newest
+        if built:
+            newest.add(norm_name(b.get("name")))
+        head, message = parse_draft(re.sub(r"\ADRY RUN[^\n]*\n+", "", text or ""))
         out.append({
             "day": b.get("day"), "mode": b.get("mode"), "outcome": b.get("outcome"),
             "slug": slug, "name": b.get("name"), "kind": b.get("kind"), "layout": b.get("layout"),
-            "site": bool(slug) and (site / "index.html").is_file(),
+            "site": built,
             "shots": [n for n, _w, _h in SHOTS if slug and (box / f"{n}.png").is_file()],
             "preview_url": (deps.get(slug) or {}).get("preview_url") or None,
             "teardown": (deps.get(slug) or {}).get("teardown") or None,
@@ -2550,7 +2580,10 @@ def cmd_deck(a):
             "identity": [{"detail": r.get("detail"), "source": r.get("source")}
                          for r in (t or {}).get("identity") or [] if isinstance(r, dict)],
             "notes": (t or {}).get("notes") or None,
-            "draft": draft.read_text(errors="replace") if draft.is_file() else None,
+            "draft": text, "current": current,
+            # What the Studio's Copy buttons copy: what to send, and where.
+            "pitch": {"to": head.get("to"), "subject": head.get("subject"),
+                      "message": message} if text else None,
             # Sent back: how far it got. Made from a note: which note.
             "revision": revs.get(slug),
             "from_note": made_from.get(slug),
@@ -2860,7 +2893,8 @@ def cmd_revise(a):
         write_json(work / "target.json", t)
         old = A("outbox", slug, "draft.md")
         if old.is_file():
-            (work / "previous-draft.md").write_text(old.read_text(errors="replace"))
+            # The pitch rides along as it is; code puts the new link in.
+            (work / "draft.md").write_text(reusable_draft(old.read_text(errors="replace")))
     write_json(work / "revise.json", {"slug": slug})
     # The prospect rides along, as in a build: its id is where the owner's
     # saved photos are (Royal Edge's revision had none placed, 2026-10-21),
@@ -2888,8 +2922,9 @@ def cmd_revise(a):
         + (f"The owner picked a new reference site for the look: {ref} (FACTS: OWNER'S REF). "
            f"Rebuild the layout after it; keep this business's facts, photos and claims.\n\n"
            if ref else "")
-        + f"Write a new work/draft.md (your last one is work/previous-draft.md) and update "
-        f"work/target.json if the photos or claims change.\n")
+        + f"Your pitch is carried over in work/draft.md, with {PREVIEW_URL} where code puts the "
+        f"new link. Leave it as it is unless what you change makes it wrong - then change only "
+        f"that. Update work/target.json if the photos or claims change.\n")
     set_revision(slug, state="sent", notes=notes, name=t.get("name"))
     record((f"sent back by the owner: {t.get('name')} - {notes}"
             + (f" (after {ref})" if ref else ""))[:300])

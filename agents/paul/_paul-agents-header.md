@@ -145,9 +145,9 @@ refuses its name and any 8 words in a row from its pages.
 
 If FACTS `resume` says the owner sent a site back, read `work/REVISE.md`
 and fix every point in it in `work/site/`, keeping what works. Update
-`work/target.json` if the photos or claims change, write a new
-`work/draft.md` (`work/previous-draft.md` is your last one), then check and
-finish as below.
+`work/target.json` if the photos or claims change. Your pitch is carried
+over in `work/draft.md`: leave it as it is unless your fix makes it wrong,
+then change only that. Check and finish as below.
 
 ## 2. work/target.json
 
