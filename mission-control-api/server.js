@@ -325,6 +325,12 @@ app.get('/bolt', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'bolt.html'));
 });
 
+// Emily's Studio: her house as a full page - every design, Try again,
+// Request revision, Kill (owner, 2026-10-21).
+app.get('/emily', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'emily.html'));
+});
+
 // The Shop: today's TikTok kit and the listing board (owner, 2026-10-13).
 // Opened from Emily's house; the Deck links to it as its own tab.
 app.get('/shop', (req, res) => {

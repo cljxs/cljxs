@@ -6511,7 +6511,7 @@ class TheApiSaysWhichFileIsBroken(unittest.TestCase):
     def test_both_galleries_draw_it(self):
         # Recorded and not shown is the same as not recorded. Asserted on the
         # call inside the card template, not on the function's definition.
-        for page in ("dashboard.html", "village.html"):
+        for page in ("dashboard.html", "emily.html"):
             html = (ROOT / "mission-control-api" / "public" / page).read_text()
             self.assertIn("blockedReason(b) ? `<div class=\"bwhy\">", html, page)
             self.assertIn(".bwhy{", html.replace(".build .bwhy{", ".bwhy{"), page)
@@ -6520,7 +6520,7 @@ class TheApiSaysWhichFileIsBroken(unittest.TestCase):
         # The title, the product type and the price all come from that file,
         # so when it will not parse the card goes blank in three places at
         # once and the pill is what explains all three.
-        for page in ("dashboard.html", "village.html"):
+        for page in ("dashboard.html", "emily.html"):
             html = (ROOT / "mission-control-api" / "public" / page).read_text()
             pills = html.split("function buildPills(", 1)[1].split("\n}", 1)[0]
             self.assertIn("b.listing_error", pills, page)
@@ -13287,7 +13287,7 @@ class ABuildThatStoppedDoesNotSayBuilding(unittest.TestCase):
     def test_both_pages_print_the_apis_words_not_their_own(self):
         # The Deck kept its own copy of the labels after the village was fixed,
         # and went on saying "building..." about a failed run.
-        for page in ("village.html", "dashboard.html"):
+        for page in ("emily.html", "dashboard.html"):
             src = (ROOT / "mission-control-api" / "public" / page).read_text()
             pills = src.split("function buildPills(", 1)[1].split("\nfunction ", 1)[0]
             self.assertIn("b.status_words", pills, page)
@@ -13300,10 +13300,13 @@ class ABuildThatStoppedDoesNotSayBuilding(unittest.TestCase):
         self.assertIn("?v=${Math.round(st.mtimeMs)}", js)
         route = js.split("app.get('/api/emily/builds/:slug/file/:name'", 1)[1].split("app.", 1)[0]
         self.assertIn("req.query.v ? 'max-age=31536000, immutable' : 'no-cache'", route)
-        for page in ("village.html", "dashboard.html"):
-            src = (ROOT / "mission-control-api" / "public" / page).read_text()
-            self.assertIn("cover.url ||", src, page)
-            self.assertIn("lbFiles[i].url ||", src, page)
+        src = (ROOT / "mission-control-api" / "public" / "dashboard.html").read_text()
+        self.assertIn("cover.url ||", src)
+        self.assertIn("lbFiles[i].url ||", src)
+        # Emily's page draws only from the versioned url the API hands it.
+        src = (ROOT / "mission-control-api" / "public" / "emily.html").read_text()
+        self.assertIn('src="${cover.url}"', src)
+        self.assertIn("$('lbimg').src = lbFiles[i].url;", src)
 
     def test_the_server_hands_emily_the_queue(self):
         src = (ROOT / "mission-control-api" / "server.js").read_text()

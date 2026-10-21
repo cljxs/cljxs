@@ -1538,7 +1538,9 @@ class TheShopIsWiredIn(unittest.TestCase):
         village = (API / "public" / "village.html").read_text()
         self.assertIn("shop: '/shop?embed=1'", village)
         self.assertIn("'shop-close'", village)
-        self.assertIn("openFrame('shop')", village)
+        # From the frame's navigation, and from Emily's page in the same frame.
+        self.assertIn("['shop',", village.split("const NAV = [", 1)[1].split("];", 1)[0])
+        self.assertIn("$('shop').href = '/shop?embed=1';", (API / "public" / "emily.html").read_text())
         self.assertIn('href="/shop"', (API / "public" / "dashboard.html").read_text())
         server = (API / "server.js").read_text()
         self.assertIn("app.get('/shop'", server)
@@ -1724,12 +1726,96 @@ class AnApprovalThatNeverFinished(unittest.TestCase):
         self.assertIn("Try again draws the art if it is missing and sends it to her", js)
 
     def test_the_gallery_offers_it_and_the_api_runs_it(self):
-        html = (API / "public" / "village.html").read_text()
-        self.assertIn("retryBox(b)", html.split("async function loadEmilyBuilds", 1)[1])
+        html = (API / "public" / "emily.html").read_text()
+        self.assertIn("${needsRetry(b) ? `<button class=\"btn go\" data-retry=", html)
+        self.assertIn("post(`/api/emily/builds/${enc(d.retry)}/retry`)", html)
         js = (API / "emily.js").read_text()
         route = js.split("'/api/emily/builds/:slug/retry'", 1)[1].split("app.post(", 1)[0]
         self.assertIn("'--retry', slug", route)
         self.assertIn("SLUG_RE.test", route)
+
+
+class EmilysStudio(unittest.TestCase):
+    """2026-10-21, the owner, looking at the paw decal in Emily's house: "I
+    don't see a revise option. Also can we turn Emily's interface to a full
+    sized page like almost every other agent has". Request revision was only
+    on the Shop board; her house was a panel of 130px thumbnails. Her house
+    now opens /emily, which has it on every card."""
+
+    PAGE = (API / "public" / "emily.html").read_text()
+    VILLAGE = (API / "public" / "village.html").read_text()
+
+    def test_her_house_opens_the_page(self):
+        self.assertIn("app.get('/emily'", (API / "server.js").read_text())
+        self.assertIn("emily: '/emily?embed=1'", self.VILLAGE)
+        self.assertIn("if (name === 'emily') return openFrame('emily');", self.VILLAGE)
+        self.assertIn("'emily-close'", self.VILLAGE.split("window.addEventListener('message'", 1)[1][:400])
+        self.assertIn("type: 'emily-close'", self.PAGE)
+        self.assertIn("['emily',", self.VILLAGE.split("const NAV = [", 1)[1].split("];", 1)[0])
+
+    def test_the_gallery_lives_in_one_place(self):
+        # Two galleries for one set of builds drift; the panel's copy is gone.
+        for gone in ("loadEmilyBuilds", "retryBuild", "id=\"emilyBuilds\"", "closeLb"):
+            self.assertNotIn(gone, self.VILLAGE, gone)
+
+    def test_every_unpublished_card_can_be_sent_back(self):
+        acts = self.PAGE.split("function acts(b) {", 1)[1].split("\nfunction ", 1)[0]
+        tail = acts.split("if (b.published)", 1)[1].split("return `<div class=\"acts\">", 2)[2]
+        self.assertIn('data-revise="${esc(b.slug)}"', tail, "not only on cards needing a retry")
+        # The Shop board's own revise, not a second one.
+        self.assertIn("post(`/api/shop/board/${enc(slug)}/revise`, { note, keep_art: !!d.redraft })", self.PAGE)
+        self.assertIn("'store-board.py', args", (API / "shop.js").read_text())
+
+    def test_the_api_says_where_a_revision_got_to(self):
+        js = (API / "emily.js").read_text()
+        body = js.split("return {\n    slug,", 1)[1].split("\n}", 1)[0]
+        self.assertIn("revision:", body)
+        self.assertIn("printify_url:", body)
+        self.assertIn("v && !v.finished_utc", self.PAGE)
+
+    def test_nothing_on_it_publishes(self):
+        self.assertNotIn("publish`", self.PAGE)
+        self.assertNotIn("/publish", self.PAGE)
+
+
+class TryAgainRedrawsArtThatPrintsBlank(unittest.TestCase):
+    """2026-10-21: a draft refused as blank on white vinyl (white line art on a
+    sticker) is not fixed by drafting the same art again - Try again draws it
+    again instead of spending a click on the same refusal."""
+
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("emily_finish_pale", SCRIPTS / "emily-finish.py")
+        self.m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.m)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.d = Path(self.tmp.name) / "paw-print-pup-window-decal"
+        self.d.mkdir()
+        (self.d / "order.json").write_text(json.dumps({"product": "sticker", "name": "paw"}))
+        (self.d / "listing.json").write_text(json.dumps({"title": "Paw", "product_type": "sticker"}))
+        (self.d / "build.json").write_text(json.dumps({"status": "ready_local", "art_mode": "generated"}))
+        (self.d / "design.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 3000)
+        self.m.find_build = lambda raw: self.d
+        self.redone = []
+        self.m.redo = lambda raw, product=None, keep_art=False: self.redone.append(keep_art) or 0
+
+    def retry(self, pale):
+        real = self.m._module
+        asked = []
+        ea = types.SimpleNamespace(pale_problem=lambda path, product: asked.append(product) or pale,
+                                   is_placeholder=lambda path: False)
+        self.m._module = lambda name, file: ea if file == "emily-assets.py" else real(name, file)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.m.retry(self.d.name), 0)
+        self.assertEqual(asked, ["sticker"])
+
+    def test_blank_art_is_drawn_again(self):
+        self.retry("only 2% of the design is dark enough to show on a white sticker")
+        self.assertEqual(self.redone, [False])
+
+    def test_good_art_is_only_drafted_again_for_free(self):
+        self.retry(None)
+        self.assertEqual(self.redone, [True])
 
 
 class RoundStickerDraftsMoveToKissCut(unittest.TestCase):

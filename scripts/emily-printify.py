@@ -2179,8 +2179,8 @@ def cmd_draft(a):
     # On white vinyl, white is not ink: white line art prints as a blank shape.
     pale = pale_problem(upload_from, cat)
     if pale:
-        print(f"\nnot drafting: {pale}.\n  Redraw it: Revise on the Shop board "
-              f"(without keeping the art).", file=sys.stderr)
+        print(f"\nnot drafting: {pale}.\n  Try again draws it again, or Request revision "
+              f"> Redraw on Emily's page.", file=sys.stderr)
         sys.exit(1)
 
     print(f"uploading {upload_from.name} "

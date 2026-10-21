@@ -209,6 +209,10 @@ function describe(slug) {
     // showing READY FOR REVIEW for something a customer could buy.
     published: build.published === true,
     etsy_url: build.etsy_url || null,
+    printify_url: build.printify_url || null,
+    // A revision asked for from Emily's page or the Shop board, as
+    // store-board.py records it: running until finished_utc is set.
+    revision: (build.revision && typeof build.revision === 'object') ? build.revision : null,
     // Why there is no Printify draft, in the drafter's own words, recorded by
     // emily-finish.py. A card that says LOCAL ONLY and nothing else sends the
     // owner to the dispatcher log to find out, which is where this used to

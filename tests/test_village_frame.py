@@ -41,7 +41,7 @@ class TheFrameLeavesTheVillageAlone(unittest.TestCase):
                       "redrawn from each dashboard pull")
         # Navigation opens what the houses open.
         self.assertIn("if (FRAMES[key]) return openFrame(key);", PAGE)
-        for key in ("belfort", "ace", "peter", "bolt", "paul", "shop", "agentroom", "stan"):
+        for key in ("belfort", "ace", "peter", "bolt", "paul", "shop", "agentroom", "stan", "emily"):
             self.assertIn(f"['{key}',", PAGE.split("const NAV = [", 1)[1].split("];", 1)[0])
 
     def test_quick_actions_are_the_existing_buttons_and_ask_first(self):

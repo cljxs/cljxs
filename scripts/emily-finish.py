@@ -192,6 +192,14 @@ def retry(raw):
         print(f"emily-finish: {d.name} has no real art - drawing it again, then drafting")
         return redo(raw)
     if not _json(d / "build.json").get("printify_product_id"):
+        # Art the draft refuses as blank on white vinyl is not fixed by drafting
+        # it again - it is drawn again (the paw decal, 2026-10-21).
+        order, listing = _json(d / "order.json"), _json(d / "listing.json")
+        product = order.get("product") or listing.get("product_type") or ""
+        pale = _module("emily_assets_pale", "emily-assets.py").pale_problem(d / "design.png", product)
+        if pale:
+            print(f"emily-finish: {d.name}'s art would print blank ({pale}) - drawing it again")
+            return redo(raw)
         print(f"emily-finish: {d.name} has its art and no Printify draft - drafting it")
         return redo(raw, keep_art=True)
     print(f"emily-finish: {d.name} has real art and a Printify draft - nothing to try again")
