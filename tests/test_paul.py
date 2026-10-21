@@ -1386,6 +1386,36 @@ class APhoneSeesWhatAPhoneSees(unittest.TestCase):
             (Path(d) / "index.html").write_text(fixed)
             self.assertEqual(paul.phone_problems(d, _a_browser())["wraps"], [])
 
+    # Royal Edge (2026-10-21): "not built - the phone-width check reported
+    # "Royal Edge" breaking onto 2 lines even after nowrap". It was one line;
+    # every rect at its own height counted as a line - a crown beside the
+    # name, the two words in two sizes. The real wraps must still be caught.
+    LOGO = ('<!doctype html><html><head><meta name="viewport" content="width=device-width"><style>'
+            'body{margin:0;font-family:Georgia,serif}a{white-space:nowrap}</style></head><body>%s</body></html>')
+
+    def phone(self, markup):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "index.html").write_text(self.LOGO % markup)
+            return paul.phone_problems(d, _a_browser())["wraps"]
+
+    def test_a_one_line_logo_is_one_line(self):
+        for markup in (
+                '<a href="#"><svg width="28" height="28" viewBox="0 0 10 10"><path d="M0 8L2 2 5 6 8 2 10 8Z"/></svg> Royal Edge</a>',
+                '<a href="#"><span style="font-size:30px">Royal</span> <span style="font-size:14px">EDGE</span></a>',
+                '<a href="#" style="display:flex;align-items:center;gap:8px"><span style="font-size:26px">&#9819;</span>'
+                '<span style="font-size:20px">Royal Edge</span></a>',
+                '<a href="#"><span style="display:block;font-size:26px">Royal Edge</span>'
+                '<span style="display:block;font-size:11px">BARBERSHOP</span></a>'):
+            self.assertEqual(self.phone(markup), [], markup)
+
+    def test_a_real_wrap_is_still_caught(self):
+        for markup in (
+                '<a class="btn" href="#" style="display:inline-block;white-space:normal;width:120px;font-size:22px">'
+                '<span>Call</span> <b>(319) 427-5796</b></a>',
+                '<a class="btn" href="#" style="display:inline-block;white-space:normal;width:120px;font-size:22px;'
+                'line-height:.85">Call (319) 427-5796</a>'):
+            self.assertEqual(self.phone(markup), [("Call (319) 427-5796", 2)], markup)
+
     def test_a_page_wider_than_a_phone_is_caught(self):
         # 450px fits Chrome's 500px floor: only a true 390px layout sees it.
         with tempfile.TemporaryDirectory() as d:
@@ -1640,6 +1670,54 @@ class TheOwnerPicksPaulBuilds(PaulCase):
         self.scouted([prospect()])
         self.run_quiet(paul.cmd_finish, self.args(dry=True), get=offline)
         self.assertEqual(len(paul.load_prospects()), 1, "never proposed again")
+
+    # Royal Edge (2026-10-21): not built after its check failed - and the
+    # check was wrong. Try again brings its last build back to finish it,
+    # rather than paying for a new one.
+
+    def set_aside(self, pid, name, age=0):
+        d = paul.A("sites", "_below-bar", f"2026-10-20-{name}-{1000 + age}")
+        (d / "site").mkdir(parents=True)
+        (d / "site" / "index.html").write_text(f"<h1>{name}</h1>")
+        (d / "draft.md").write_text("to: phone\n\nhi")
+        paul.write_json(d / "prospect.json", {"id": pid, "name": name})
+        os.utime(d, (time.time() - age, time.time() - age))
+        return d
+
+    def test_try_again_brings_the_last_build_back_to_finish(self):
+        self.seed(dict(prospect(name="Royal Edge"), status="not built",
+                       note="the phone-width check reported \"Royal Edge\" breaking onto 2 lines",
+                       reference="https://rudysbarbershop.com/"))
+        old = self.set_aside(1, "royal-edge", age=86400)
+        last = self.set_aside(1, "royal-edge", age=0)
+        other = self.set_aside(2, "someone-else", age=0)
+        rc, out = self.run_quiet(paul.cmd_approve, self.args(who="1", build=False))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(paul.load_prospects()[0]["status"], "approved")
+        self.assertIn("back in work/", out)
+        self.assertEqual(paul.A("work", "site", "index.html").read_text(), "<h1>royal-edge</h1>")
+        self.assertFalse(last.exists(), "the newest of its builds came back")
+        self.assertTrue(old.exists() and other.exists(), "an older one, and another business's, stay")
+        revise = paul.A("work", "REVISE.md").read_text()
+        self.assertIn("breaking onto 2 lines", revise, "Paul is told why it stopped")
+        self.assertIn("Run check first", revise)
+        self.assertEqual(paul.read_json(paul.A("work", "prospect.json"))["reference"], "https://rudysbarbershop.com/")
+        self.assertEqual(paul.cycle_plan()[0], "resume")
+        _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
+        self.assertIn("read work/REVISE.md first", facts)
+        self.assertEqual(paul.load_cycle()["prospect"], 1, "the finish closes this prospect")
+
+    def test_try_again_with_nothing_set_aside_builds_afresh(self):
+        self.seed(dict(prospect(), status="not built", note="x"))
+        rc, out = self.run_quiet(paul.cmd_approve, self.args(who="1", build=False))
+        self.assertEqual((rc, paul.load_prospects()[0]["status"]), (0, "approved"))
+        self.assertFalse(paul.A("work").exists())
+        self.assertEqual(paul.cycle_plan()[0], "build")
+
+    def test_the_studio_offers_try_again(self):
+        studio = (ROOT / "mission-control-api" / "public" / "paul.html").read_text()
+        self.assertIn("p.status === 'waiting' || p.status === 'not built'", studio)
+        self.assertIn("'↻ Try again'", studio)
 
     def test_a_built_one_cannot_be_rejected_after_the_fact(self):
         self.seed(dict(prospect(), status="built", slug="rosas-tailoring-concept-abc123"))

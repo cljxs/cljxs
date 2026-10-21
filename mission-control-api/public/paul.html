@@ -252,15 +252,16 @@ function card(p) {
     url(p.reference) ? `<a class="chip" href="${esc(url(p.reference))}" target="_blank" rel="noopener">Your reference ↗</a>` : '',
   ].join('');
   const state = STATE[p.status];
-  const acts = p.status === 'waiting'
-    ? `<label class="refl" for="ref-${esc(p.id)}">Reference site for the look (optional)</label>
+  const acts = p.status === 'waiting' || p.status === 'not built'
+    ? (p.status === 'not built' ? `<div class="said">Not built: ${esc(p.note || '')}</div>` : '')
+    + `<label class="refl" for="ref-${esc(p.id)}">Reference site for the look (optional${p.reference ? ' - empty keeps yours' : ''})</label>
        <input class="refbox" id="ref-${esc(p.id)}" data-ref="${esc(p.id)}" type="url" inputmode="url" autocapitalize="off" autocorrect="off" placeholder="https://a-site-you-like.com" value="${esc(refs[p.id] || '')}">
-       <div class="acts"><button class="btn go" data-approve="${esc(p.id)}" ${busy ? 'disabled' : ''}>✓ Approve + build</button>
+       <div class="acts"><button class="btn go" data-approve="${esc(p.id)}" ${busy ? 'disabled' : ''}>${p.status === 'not built' ? '↻ Try again' : '✓ Approve + build'}</button>
          <button class="btn" data-reject="${esc(p.id)}" ${busy ? 'disabled' : ''}>Reject</button></div>`
     : p.status === 'built' ? `<div class="said">Built ${esc(p.built || '')} - see Work${p.slug ? ` · <a href="/paul/site/${encodeURIComponent(p.slug)}/" target="_blank" rel="noopener">open the site</a>` : ''}</div>`
-    : p.status === 'not built' ? `<div class="said">Not built: ${esc(p.note || '')}</div>`
     : p.status === 'rejected' ? `<div class="said">Rejected - never proposed again</div>` : '';
-  return `<div class="card ${p.status === 'waiting' || p.status === 'approved' ? '' : 'done'}">
+  const open = ['waiting', 'approved', 'not built'].includes(p.status);
+  return `<div class="card ${open ? '' : 'done'}">
     <div class="ctop"><div><div class="cname">${esc(p.name)}</div>
       <div class="cmeta">${esc(p.category || '')}${p.address ? ' · ' + esc(p.address) : ''}</div></div>
       <div class="tags">${state ? `<span class="tag ${state[1]}">${state[0]}</span>` : ''}
@@ -271,7 +272,7 @@ function card(p) {
     <span class="reach">${esc(ch[2])}</span>
     ${google(p)}
     ${acts}
-    ${p.status === 'waiting' || p.status === 'approved' ? photos(p) : ''}
+    ${open ? photos(p) : ''}
   </div>`;
 }
 

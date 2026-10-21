@@ -1619,14 +1619,32 @@ var pre=document.createElement('pre');pre.id='paul-contrast';pre.textContent=JSO
 # on the first page only (the header is the same on every page) to keep
 # `check` quick. Also: a page that scrolls sideways on a phone.
 PHONE_W, PHONE_H = 390, 844
+# Lines are counted per run of text: the text nodes that flow together
+# inside one link or button, up to the first box of their own (a block, a
+# flex item, an inline-block). Two rects are one line when their heights
+# mostly overlap. Counting every rect's top as a line (until 2026-10-21) read
+# a one-line "Royal Edge" logo as two or three lines - a crown icon beside it,
+# or the two words in different sizes, each sit a few pixels higher - and
+# failed Royal Edge's build twice, even after white-space:nowrap.
 PHONE_JS = r"""(function(){
+function box(n,el){for(var p=n.parentNode;p&&p!==el;p=p.parentNode){if(getComputedStyle(p).display!=='inline')return p;}return el;}
+function lines(rs){var ls=[];rs.sort(function(a,b){return a.top-b.top;});
+ for(var i=0;i<rs.length;i++){var r=rs[i],h=r.bottom-r.top,on=null;
+  for(var j=0;j<ls.length;j++){var l=ls[j],o=Math.min(l.b,r.bottom)-Math.max(l.t,r.top);
+   if(o>=0.5*Math.min(h,l.b-l.t)){on=l;break;}}
+  if(on){on.t=Math.min(on.t,r.top);on.b=Math.max(on.b,r.bottom);}else ls.push({t:r.top,b:r.bottom});}
+ return ls.length;}
 var out=[];var els=document.body.querySelectorAll('a,button,[class*="btn"],[class*="button"]');
 for(var n=0;n<els.length;n++){var el=els[n];var t=(el.innerText||'').replace(/\s+/g,' ').trim();
  if(!t||t.length>40)continue;var s=getComputedStyle(el);
  if(s.visibility!=='visible'||s.display==='none'||el.getClientRects().length===0)continue;
- var rg=document.createRange();rg.selectNodeContents(el);var tops={};var rs=rg.getClientRects();
- for(var i=0;i<rs.length;i++){if(rs[i].width>1)tops[Math.round(rs[i].top)]=1;}
- var lines=Object.keys(tops).length;if(lines>1)out.push({text:t,lines:lines});}
+ var runs=[],keys=[],w=document.createTreeWalker(el,NodeFilter.SHOW_TEXT,null),tn;
+ while((tn=w.nextNode())){if(!tn.nodeValue.trim())continue;var k=box(tn,el),at=keys.indexOf(k);
+  if(at<0){keys.push(k);runs.push([]);at=runs.length-1;}
+  var rg=document.createRange();rg.selectNodeContents(tn);var rs=rg.getClientRects();
+  for(var i=0;i<rs.length;i++){if(rs[i].width>1)runs[at].push(rs[i]);}}
+ var most=0;for(var i=0;i<runs.length;i++){most=Math.max(most,lines(runs[i]));}
+ if(most>1)out.push({text:t,lines:most});}
 var wide=document.documentElement.scrollWidth>window.innerWidth+1;
 var pre=document.createElement('pre');pre.id='paul-phone';pre.textContent=JSON.stringify({wraps:out,wide:wide,width:window.innerWidth});document.body.appendChild(pre);
 })();"""
@@ -3099,7 +3117,7 @@ def cmd_approve(a, run=subprocess.run):
     if not p:
         print(err)
         return 1
-    if p.get("status") not in ("waiting", "rejected"):
+    if p.get("status") not in ("waiting", "rejected", "not built"):
         print(f"{p['name']} is already {p['status']}")
         return 1
     # The Studio's reference box (owner, 2026-10-20): "I just want him to
@@ -3109,12 +3127,17 @@ def cmd_approve(a, run=subprocess.run):
     if given and not ref:
         print(f'"{given}" is not a web address - give the whole https://... link')
         return 1
+    again = p.get("status") == "not built"
     p.update(status="approved", decided=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
     if ref:
         p["reference"] = ref
     save_prospects(rows)
     record(f"approved by the owner: {p['name']}" + (f", after {ref}" if ref else ""))
     print(f"approved: {p['name']} - the next cycle builds it" + (f", after {ref}" if ref else ""))
+    if again:
+        back = restore_set_aside(p)
+        if back:
+            print(f"its last build is back in work/ ({back}) - Paul finishes it rather than starting over")
     if a.build:
         # Not live yet: the build is a dry one - built here, nothing published.
         live = bool(read_json(A("state", "live.json")))
@@ -3201,13 +3224,43 @@ def cmd_build(a, run=subprocess.run):
     return 0
 
 
+def restore_set_aside(p):
+    """Try again on a build that was not shipped (owner, 2026-10-21: Royal
+    Edge, failed twice by a phone check that was itself wrong). Its last
+    build - set aside in sites/_below-bar/ by finish - goes back into work/
+    with REVISE.md saying why it stopped, so the next cycle finishes that
+    build instead of paying for a new one. Returns where it came from, or
+    None when there is nothing to bring back or work/ is busy."""
+    work = A("work")
+    if work.is_dir() and any(work.iterdir()):
+        return None
+    kept = [d for d in A("sites", "_below-bar").glob("*")
+            if (read_json(d / "prospect.json", {}) or {}).get("id") == p.get("id")
+            and (d / "site" / "index.html").is_file()]
+    if not kept:
+        return None
+    last = max(kept, key=lambda d: d.stat().st_mtime)
+    if work.is_dir():
+        work.rmdir()
+    shutil.move(str(last), str(work))
+    write_json(work / "prospect.json", p)
+    (work / "REVISE.md").write_text(
+        f"# Try again - {today()}\n\n"
+        f"This is your last build of {p.get('name')}. It was not shipped because: "
+        f"{p.get('note') or 'its check failed'}\n\n"
+        f"Run check first - the reason may already be gone (a check can be corrected). Fix only "
+        f"what check still reports, keep everything else, then finish as usual. Do not start over "
+        f"and do not pick a new business.\n")
+    return last.relative_to(A()).as_posix()
+
+
 def cmd_reject(a):
     rows = load_prospects()
     p, err = find_prospect(rows, a.who)
     if not p:
         print(err)
         return 1
-    if p.get("status") not in ("waiting", "approved"):
+    if p.get("status") not in ("waiting", "approved", "not built"):
         print(f"{p['name']} is already {p['status']}")
         return 1
     p.update(status="rejected", decided=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
