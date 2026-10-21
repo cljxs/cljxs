@@ -155,8 +155,37 @@ def retry(conn, item_id):
 
 
 def recent(conn, n=10):
-    return [dict(r, hunt=json.loads(r["hunt"]) if r["hunt"] else [])
+    return [dict(r, hunt=json.loads(r["hunt"]) if r["hunt"] else [], progress=progress(conn, r))
             for r in conn.execute("SELECT * FROM inbox ORDER BY id DESC LIMIT ?", (n,))]
+
+
+# What a downloaded link's video is doing now, from videos.stage. 2026-10-21:
+# the house said "in the studio" for an inbox "done", which only means
+# downloaded - the Teague episode read as finished while it was still being
+# transcribed, and its clips were nowhere.
+STAGE_WORDS = {"ingested": "downloaded - writing down what is said",
+               "transcribed": "transcribed - finding the moments",
+               "found": "making the clips"}
+
+
+def progress(conn, item):
+    if item["state"] != "done" or not item["video_id"]:
+        return None
+    v = conn.execute("SELECT stage, error FROM videos WHERE id = ?", (item["video_id"],)).fetchone()
+    if not v:
+        return "its video was forgotten"
+    n = conn.execute("SELECT COUNT(*) FROM clips WHERE video_id = ? AND status != 'deleted'",
+                     (item["video_id"],)).fetchone()[0]
+    if v["stage"] == "failed":
+        return f"failed: {(v['error'] or 'no reason kept')[:200]}"
+    if v["stage"] == "done":
+        return f"{n} clip(s) ready" if n else "finished - no moment scored high enough"
+    words = STAGE_WORDS.get(v["stage"], v["stage"])
+    if n:
+        words += f" ({n} made so far)"
+    if v["error"]:
+        words += f" - last try: {v['error'][:160]}; it tries again at the next pickup"
+    return words
 
 
 # ------------------------------------------------------------------ hooks

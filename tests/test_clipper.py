@@ -3049,6 +3049,34 @@ class InboxLinks(unittest.TestCase):
         with self.assertRaises(ValueError):
             inbox.retry(self.conn, r["id"])
 
+    def test_a_downloaded_link_says_what_its_video_is_doing(self):
+        # 2026-10-21: the Teague episode's link read "in the studio" (the
+        # inbox's "done" = downloaded) while it was still being transcribed,
+        # and the owner went looking for clips that did not exist yet.
+        inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/t.mp4?rlkey=k", "Teague")
+        vid = inbox.drain_one(self.conn, {}, CFG, self.ingester([]))["video_id"]
+        said = lambda: inbox.recent(self.conn)[0]["progress"]
+        self.assertIn("writing down what is said", said())
+        self.conn.execute("UPDATE videos SET stage = 'transcribed' WHERE id = ?", (vid,))
+        self.assertIn("finding the moments", said())
+        self.conn.execute("UPDATE videos SET stage = 'found', error = 'render: ffmpeg died' WHERE id = ?", (vid,))
+        self.assertIn("making the clips", said())
+        self.assertIn("ffmpeg died", said())
+        self.conn.execute("UPDATE videos SET stage = 'failed' WHERE id = ?", (vid,))
+        self.assertTrue(said().startswith("failed: render: ffmpeg died"))
+        self.conn.execute("UPDATE videos SET stage = 'done', error = NULL WHERE id = ?", (vid,))
+        self.assertIn("no moment scored", said())
+        for rank, status in ((1, "rendered"), (2, "rendered"), (3, "deleted")):
+            cand = self.conn.execute("INSERT INTO candidates (video_id, start, end, text, score, scorer, features, "
+                                     "reasons) VALUES (?, 0, 30, '', 50, 't', '{}', '[]')", (vid,)).lastrowid
+            self.conn.execute("INSERT INTO clips (video_id, candidate_id, rank, path, start, end, score, status, "
+                              "meta, created_at) VALUES (?, ?, ?, '', 0, 30, 50, ?, '{}', ?)",
+                              (vid, cand, rank, status, db.now()))
+        self.assertEqual(said(), "2 clip(s) ready")
+        # A queued link has no video yet: the house keeps its own words.
+        inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/u.mp4?rlkey=k", "Next")
+        self.assertIsNone(said())
+
     def test_too_big_for_the_disk_is_read_from_dropbox_instead(self):
         inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/big.mp4?rlkey=k", "Big")
         calls = []

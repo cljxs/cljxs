@@ -3169,7 +3169,7 @@ async function downloadClip(a){
 // The form is drawn once, in openClipPanel, so a refresh never wipes what
 // is being typed; only the source list and the inbox below it are redrawn.
 const INBOX_STATE = { queued: 'waiting for the next pickup', working: 'downloading and clipping',
-                      done: 'in the studio', failed: 'failed' };
+                      done: 'downloaded', failed: 'failed' };
 function drawClipAdd(c){
   const sel = $('caSource');
   const keep = sel.value;
@@ -3186,7 +3186,7 @@ function drawClipAdd(c){
   const rows = c.inbox || [];
   $('caInbox').innerHTML = rows.map(r => `
       <div class="w">#${r.id} <b>${esc(r.title || r.url.slice(0, 60))}</b> · ${esc(r.source)} ·
-        <span style="color:${r.state === 'failed' ? '#f59e0b' : 'inherit'}">${esc(INBOX_STATE[r.state] || r.state)}</span>
+        <span style="color:${r.state === 'failed' || /^failed/.test(r.progress || '') ? '#f59e0b' : 'inherit'}">${esc(r.progress || INBOX_STATE[r.state] || r.state)}</span>
         ${r.video_id ? ` · video #${r.video_id}` : ''}${(r.hunt || []).length ? ` · ${r.hunt.length} hook topic(s)` : ''}
         ${r.note ? `<div class="muted">${esc(String(r.note).slice(0, 240))}</div>` : ''}
         ${r.state === 'failed' ? `<div class="acts"><button class="no" data-retry="${r.id}">Try again</button></div>` : ''}
