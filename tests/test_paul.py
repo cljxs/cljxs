@@ -2747,6 +2747,18 @@ class AMenuOpensOnATap(unittest.TestCase):
                                      '<header><a href="#top">Royal Edge</a><a class="book" href="https://booksy.com/x">Book</a>'
                                      '</header><p>x</p><div class="bar"><a href="https://booksy.com/x">Book now</a></div>'), [])
 
+    def test_what_makes_a_phone_scroll_sideways_is_named(self):
+        # Royal Edge's rebuild: "the phone layout scrolls sideways" twice,
+        # and nothing said what to fix. A row meant to scroll is not blamed.
+        css = (".menu{position:absolute;top:0;left:0;width:300px;transform:translateX(400px)}"
+               ".row{display:flex;overflow-x:auto}.row div{flex:0 0 300px;height:9px}")
+        with tempfile.TemporaryDirectory() as d:
+            _page(d, STYLE + css, '<header><nav class="menu main"><a href="#top">Fades</a></nav></header>'
+                                  '<div class="row"><div></div><div></div></div>')
+            got = paul.phone_problems(d, _a_browser())
+        self.assertTrue(got["wide"])
+        self.assertEqual(got["over"], [('<nav class="menu main">', 700)])
+
     def test_an_intro_that_covers_the_page_is_waited_out(self):
         # The quality bar's own header, under its logo intro: switching
         # animations off (the first version of the probe) left the intro over
@@ -2778,6 +2790,20 @@ class SamplePhotosSaySample(unittest.TestCase):
                      '<div class="card"><img src="img/s.png" alt="a"><p>Sample</p></div>'):
             self.assertEqual(self.bare(body), [("img/s.png", "unlabelled")], body)
 
+    def test_a_label_that_lets_taps_through_is_on_the_picture(self):
+        # Royal Edge's rebuild (2026-10-21) was refused twice with its span
+        # over each photo: pointer-events:none hides an element from
+        # elementsFromPoint, which the probe read as no label at all.
+        self.assertEqual(self.bare('<div class="card"><img src="img/s.png" alt="a">'
+                                   '<span class="tag" style="pointer-events:none">Sample</span></div>'), [])
+
+    def test_paul_is_told_why(self):
+        with tempfile.TemporaryDirectory() as d:
+            _page(d, STYLE + self.CARD + ".card img{position:relative;z-index:1}",
+                  '<div class="card"><img src="img/s.png" alt="a"><span class="tag">Sample</span></div>')
+            [(_p, _s, kind, why)] = paul.image_problems(d, _a_browser(), samples=["img/s.png"])
+        self.assertEqual((kind, why), ("unlabelled", paul.SAMPLE_WHY["behind"]))
+
     def test_only_sample_photos_need_it(self):
         self.assertEqual(self.bare('<div class="card"><img src="img/s.png" alt="a"></div>', samples=()), [])
 
@@ -2806,6 +2832,32 @@ class RoyalEdgeAfterManCave(SiteRules):
         self.assertEqual([e for e in errs if "goes nowhere" in e],
                          ['index.html links to "#fades" but nothing on that page has id="fades" - the link goes nowhere'])
         self.assertEqual(self.errors(index=index.replace('<p id="beards">', '<p id="fades"></p><p id="beards">')), [])
+
+
+class TheOwnerCanSeeWhyABuildWasRefused(PaulCase):
+    """Owner, 2026-10-21, of Royal Edge's rebuild refused twice: "How should
+    we fix this?" `paul.py measure` runs the browser checks on the build set
+    aside, with Paul's own words, and wakes no model."""
+
+    def test_it_measures_the_newest_build_set_aside(self):
+        for name, age in (("2026-10-20-old-1", 100), ("2026-10-21-royal-edge-2", 0)):
+            d = paul.A("sites", "_below-bar", name)
+            (d / "site").mkdir(parents=True)
+            (d / "site" / "index.html").write_text("<h1>x</h1>")
+            paul.write_json(d / "target.json", target(name=name))
+            os.utime(d, (time.time() - age, time.time() - age))
+        saved = (paul.find_browser, paul.measured_contrast, paul.measured_phone, paul.measured_images)
+        self.addCleanup(lambda: [setattr(paul, k, v) for k, v in zip(
+            ("find_browser", "measured_contrast", "measured_phone", "measured_images"), saved)])
+        paul.find_browser = lambda: "chrome"
+        paul.measured_contrast = lambda *a, **k: []
+        paul.measured_images = lambda *a, **k: []
+        paul.measured_phone = lambda *a, **k: {"wraps": [], "wide": True, "hidden": [], "styled": 1,
+                                               "over": [('<div class="dd mega">', 540)]}
+        rc, out = self.run_quiet(paul.cmd_measure, self.args(folder=None))
+        self.assertEqual(rc, 1)
+        self.assertIn("2026-10-21-royal-edge-2", out)
+        self.assertIn('<div class="dd mega"> reaches 540px on a 390px screen', out)
 
 
 class ASiteSentBackWithANewLook(PaulCase):

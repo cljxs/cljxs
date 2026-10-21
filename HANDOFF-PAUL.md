@@ -193,6 +193,7 @@ Useful commands (all free, no model woken unless said):
     python3 scripts/paul.py preflight     could Paul run? keys, browser, Vercel plan
     python3 scripts/paul.py status        pitches waiting, live previews
     python3 scripts/paul.py prospects     the prospect list and what the next cycle does
+    python3 scripts/paul.py measure       the browser checks on work/ or the newest build set aside
     python3 scripts/paul.py find          start a cycle now (wakes Paul)
     python3 scripts/last-run.py paul      what his last cycle actually did and cost
 

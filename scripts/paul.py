@@ -1694,7 +1694,15 @@ var a=sig(),sh=[].slice.call(document.styleSheets);sh.forEach(function(x){x.disa
 var n=0;for(var i=0;i<a.length;i++)if(a[i]!==b[i])n++;return a.length?Math.round(n/a.length*100)/100:1;}"""
 # Bump when a probe learns something new, so a site measured before is
 # measured again rather than passed from memory.
-PROBE_V = 2
+PROBE_V = 3
+# Why a sample photo's label was not found on it, as Paul is told.
+SAMPLE_WHY = {
+    "none": "no element saying Sample has its middle inside the photo - a ::before/::after "
+            "label cannot be measured, use a real element",
+    "small": "the Sample label inside it is hidden or under 10px",
+    "behind": "the Sample label is behind the photo - give the label position:absolute and a "
+              "z-index above the image",
+}
 
 
 # THE PHONE PROBE. College Hill Barbers (2026-10-06): on a phone the header's
@@ -1732,6 +1740,17 @@ for(var n=0;n<els.length;n++){var el=els[n];var t=(el.innerText||'').replace(/\s
  var most=0;for(var i=0;i<runs.length;i++){most=Math.max(most,lines(runs[i]));}
  if(most>1)out.push({text:t,lines:most});}
 var wide=document.documentElement.scrollWidth>window.innerWidth+1;
+// What sticks out (Royal Edge, 2026-10-21: "the phone layout scrolls
+// sideways" twice, and Paul could not find what): the outermost elements
+// past the right edge, leaving out what a clipping box or a fixed one hides.
+function desc(e){var c=(e.getAttribute('class')||'').trim().split(/\s+/).slice(0,2).join('.');
+ return '<'+e.tagName.toLowerCase()+(e.id?' id="'+e.id+'"':'')+(c?' class="'+c.replace(/\./g,' ')+'"':'')+'>';}
+var over=[];if(wide){var W=window.innerWidth;
+ var past=[].slice.call(document.body.querySelectorAll('*')).filter(function(e){var r=e.getBoundingClientRect();if(!(r.right>W+1&&r.width>0))return false;
+  for(var a=e;a&&a!==document.body;a=a.parentElement){var s=getComputedStyle(a);if(s.position==='fixed')return false;
+   if(a!==e&&s.overflowX!=='visible'&&a.getBoundingClientRect().right<=W+1)return false;}return true;});
+ over=past.filter(function(e){return past.indexOf(e.parentElement)<0;}).slice(0,3).map(function(e){
+  return {el:desc(e),right:Math.round(e.getBoundingClientRect().right+window.scrollX)};});}
 // Every finite animation and transition jumped to its end - an intro over
 // the page, a menu sliding open - as a visitor sees it a moment later.
 // Waiting for them does not work: headless Chrome may never play them.
@@ -1755,7 +1774,7 @@ function sweep(){for(var k in names){if(!got[k]&&every.some(function(l){return l
 function toggles(){return [].slice.call(document.querySelectorAll('header summary,nav summary,header button,nav button,header [aria-expanded],nav [aria-expanded],header [aria-controls],nav [aria-controls]'));}
 var tapped=[];
 function finish(){var hidden=[];for(var k in names)if(!got[k])hidden.push(names[k]);window.scrollTo(0,0);
- var pre=document.createElement('pre');pre.id='paul-phone';pre.textContent=JSON.stringify({wraps:out,wide:wide,width:window.innerWidth,hidden:hidden,styled:paulStyled()});document.body.appendChild(pre);}
+ var pre=document.createElement('pre');pre.id='paul-phone';pre.textContent=JSON.stringify({wraps:out,wide:wide,over:over,width:window.innerWidth,hidden:hidden,styled:paulStyled()});document.body.appendChild(pre);}
 // What a visitor can tap, once the page's intro has played: every menu
 // button tapped in turn, each given time to open.
 function step(){sweep();var ts=toggles().filter(function(t){return tapped.indexOf(t)<0&&reach(t);});
@@ -1808,7 +1827,8 @@ def phone_problems(site, browser, run=subprocess.run):
         return None
     return {"wraps": [(w.get("text", ""), w.get("lines")) for w in d.get("wraps") or []],
             "wide": bool(d.get("wide")), "hidden": [str(x) for x in d.get("hidden") or []],
-            "styled": d.get("styled")}
+            "styled": d.get("styled"),
+            "over": [(str(o.get("el")), o.get("right")) for o in d.get("over") or [] if isinstance(o, dict)]}
 
 
 def measured_phone(site, browser, memo, run=subprocess.run):
@@ -1819,7 +1839,8 @@ def measured_phone(site, browser, memo, run=subprocess.run):
     if seen.get("phone_site") == fp and isinstance(seen.get("phone"), dict):
         got = seen["phone"]
         return {"wraps": [tuple(w) for w in got.get("wraps") or []], "wide": bool(got.get("wide")),
-                "hidden": list(got.get("hidden") or []), "styled": got.get("styled")}
+                "hidden": list(got.get("hidden") or []), "styled": got.get("styled"),
+                "over": [tuple(o) for o in got.get("over") or []]}
     got = phone_problems(site, browser, run=run)
     if got is not None:
         memo.parent.mkdir(parents=True, exist_ok=True)
@@ -1921,17 +1942,23 @@ function done(){var out=[];imgs.forEach(function(i){
  var SAMPLES=__SAMPLES__;
  function own(e){var t='';for(var c=e.firstChild;c;c=c.nextSibling)if(c.nodeType===3)t+=c.nodeValue;return t;}
  var tags=[].slice.call(document.body.querySelectorAll('*')).filter(function(e){return /\bsample\b/i.test(own(e));});
+ // A label that lets taps through (pointer-events:none, the usual way to
+ // lay a badge over a photo) is invisible to elementsFromPoint, and read as
+ // missing (Royal Edge, 2026-10-21) - so every element is hit-testable here.
+ var pe=document.createElement('style');pe.textContent='*{pointer-events:auto!important}';document.head.appendChild(pe);
  var bare=[];imgs.forEach(function(i){var u=decodeURI(i.src||'');
   if(!SAMPLES.some(function(r){return u.slice(-(r.length+1))==='/'+r;}))return;
   var s=getComputedStyle(i);if(s.display==='none'||s.visibility!=='visible')return;
   i.scrollIntoView({block:'center'});var r=i.getBoundingClientRect();if(r.width<40||r.height<40)return;
+  var why='none';
   var on=tags.some(function(t){var q=t.getBoundingClientRect(),ts=getComputedStyle(t);
-   if(q.width<2||q.height<2||ts.visibility!=='visible'||parseFloat(ts.fontSize)<10)return false;
    var x=q.left+q.width/2,y=q.top+q.height/2;if(x<r.left||x>r.right||y<r.top||y>r.bottom)return false;
+   if(q.width<2||q.height<2||ts.visibility!=='visible'||parseFloat(ts.fontSize)<10){why='small';return false;}
    var st=document.elementsFromPoint(x,y),a=st.indexOf(i),b=-1;
    for(var k=0;k<st.length;k++){if(st[k]===t||t.contains(st[k])){b=k;break;}}
-   return b>=0&&(a<0||b<a);});
-  if(!on)bare.push(i.getAttribute('src')||'');});
+   if(b>=0&&(a<0||b<a))return true;why='behind';return false;});
+  if(!on)bare.push({src:i.getAttribute('src')||'',why:why});});
+ pe.remove();
  var pre=document.createElement('pre');pre.id='paul-images';pre.textContent=JSON.stringify({images:out,bare:bare,styled:paulStyled()});document.body.appendChild(pre);}
 (function wait(){if(imgs.every(function(i){return i.complete;})||Date.now()-t0>3000)done();else setTimeout(wait,50);})();
 })();""".replace("SKEW", str(IMAGE_SKEW)).replace("ENLARGED", str(IMAGE_ENLARGED)).replace(
@@ -1977,8 +2004,9 @@ def image_problems(site, browser, run=subprocess.run, width=1280, height=900, sa
             detail = (f"{f.get('by')}%" if f.get("kind") == "stretched"
                       else f"shown at {f.get('shown')} from a {f.get('natural')} photo, {f.get('scale')}x")
             bad.append((rel, f.get("src", ""), f.get("kind"), detail))
-        for src in d.get("bare") or []:
-            bad.append((rel, src, "unlabelled", "no Sample label on it"))
+        for b in d.get("bare") or []:
+            b = b if isinstance(b, dict) else {"src": b}
+            bad.append((rel, b.get("src", ""), "unlabelled", SAMPLE_WHY.get(b.get("why"), SAMPLE_WHY["none"])))
         if isinstance(d.get("styled"), (int, float)) and d["styled"] < STYLED_MIN:
             bad.append((rel, "", "unstyled", f"{round(d['styled'] * 100)}% of the page changes "
                                              f"with its stylesheets switched off"))
@@ -2028,6 +2056,62 @@ def mail_verdict(address, get=http_get):
     return "unknown", f"{domain} lists no mail server"
 
 
+def browser_problems(t, work, browser):
+    """(errors, notes) from the page as a browser draws it: contrast, photos,
+    the phone layout and menu, styling at both widths. One set of words for
+    check, finish and `paul.py measure`."""
+    errs, notes = [], []
+    bad = measured_contrast(work / "site", browser, work / "shots" / ".measured.json")
+    if bad is None:
+        notes.append("text contrast not measured - the browser gave no answer")
+    for rel, text, ratio, need in (bad or [])[:6]:
+        errs.append(f'"{text}" on {rel} is hard to read: contrast {ratio}:1, needs '
+                    f"{need}:1 - change the text colour or what is behind it")
+    samples = sorted(str(p.get("file") or "").lstrip("./").removeprefix("site/")
+                     for p in t.get("photos") or [] if isinstance(p, dict) and p.get("kind") == "sample")
+    pics = measured_images(work / "site", browser, work / "shots" / ".measured.json", samples=samples)
+    if pics is None:
+        notes.append("photo sizes not measured - the browser gave no answer")
+    for rel, src, kind, detail in (pics or [])[:6]:
+        errs.append(f"{src} on {rel} is stretched out of its own shape ({detail}) - give it "
+                    f"object-fit:cover, or a box with the photo's proportions" if kind == "stretched" else
+                    f'{src} on {rel} is a sample photo with no "Sample" on it ({detail}) - put the '
+                    f'word over the picture in an element of its own, e.g. <span class="sample-tag">'
+                    f"Sample</span> inside the photo's box" if kind == "unlabelled" else
+                    f"on a computer (1280px) {rel} shows unstyled ({detail}) - its CSS does not "
+                    f"apply. Link the stylesheet by a relative path (style.css, not /style.css) "
+                    f"and close every @media block" if kind == "unstyled" else
+                    f"{src} on {rel} is blown up ({detail}) so it looks soft and stretched - use a "
+                    f"larger version of the photo, or show it smaller")
+    phone = measured_phone(work / "site", browser, work / "shots" / ".measured.json")
+    if phone is None:
+        notes.append("the phone layout was not measured - the browser gave no answer")
+    else:
+        for text, lines in phone["wraps"][:4]:
+            errs.append(f'on a phone ({PHONE_W}px) "{text}" breaks onto {lines} lines - '
+                        f"shorten the label (\"Call\" with the number on its own line, "
+                        f"or the number alone), shrink it, or move it out of the header")
+        if phone["wide"]:
+            over = phone.get("over") or []
+            errs.append(f"on a phone ({PHONE_W}px) the page scrolls sideways - "
+                        + ("; ".join(f"{el} reaches {right}px" for el, right in over[:3])
+                           + f" on a {PHONE_W}px screen. Make it fit (max-width:100%, wrap, or "
+                             f"hide it until opened with display:none)" if over else
+                           "something is wider than the screen"))
+        # A drop-down that opens on hover only cannot be opened on a phone
+        # or the owner's iPad (owner, 2026-10-21: a Services drop-down).
+        for text in (phone.get("hidden") or [])[:4]:
+            errs.append(f'on a phone ({PHONE_W}px) the menu item "{text}" never shows, even after '
+                        f"tapping every menu button - a menu must open on a tap (<details><summary>, "
+                        f"or a <button> that toggles it), not on hover alone")
+        st = phone.get("styled")
+        if isinstance(st, (int, float)) and st < STYLED_MIN:
+            errs.append(f"on a phone ({PHONE_W}px) index.html shows unstyled ({round(st * 100)}% of "
+                        f"the page changes with its stylesheets switched off) - its CSS does not "
+                        f"apply. Link the stylesheet by a relative path and close every @media block")
+    return errs, notes
+
+
 def run_checks(t, get=http_get, work=None):
     """Every rule, for check (Paul, mid-cycle) and finish (code, after) alike.
     One function, two readers: when they were two copies elsewhere in this
@@ -2056,50 +2140,9 @@ def run_checks(t, get=http_get, work=None):
         notes += rnotes
     browser = find_browser()
     if browser and (work / "site" / "index.html").is_file():
-        bad = measured_contrast(work / "site", browser, work / "shots" / ".measured.json")
-        if bad is None:
-            notes.append("text contrast not measured - the browser gave no answer")
-        for rel, text, ratio, need in (bad or [])[:6]:
-            errs.append(f'"{text}" on {rel} is hard to read: contrast {ratio}:1, needs '
-                        f"{need}:1 - change the text colour or what is behind it")
-        samples = sorted(str(p.get("file") or "").lstrip("./").removeprefix("site/")
-                         for p in t.get("photos") or [] if isinstance(p, dict) and p.get("kind") == "sample")
-        pics = measured_images(work / "site", browser, work / "shots" / ".measured.json", samples=samples)
-        if pics is None:
-            notes.append("photo sizes not measured - the browser gave no answer")
-        for rel, src, kind, detail in (pics or [])[:6]:
-            errs.append(f"{src} on {rel} is stretched out of its own shape ({detail}) - give it "
-                        f"object-fit:cover, or a box with the photo's proportions" if kind == "stretched" else
-                        f'{src} on {rel} is a sample photo with no "Sample" on it - put the word over '
-                        f'the picture in an element of its own, e.g. <span class="sample-tag">Sample</span> '
-                        f"inside the photo's box" if kind == "unlabelled" else
-                        f"on a computer (1280px) {rel} shows unstyled ({detail}) - its CSS does not "
-                        f"apply. Link the stylesheet by a relative path (style.css, not /style.css) "
-                        f"and close every @media block" if kind == "unstyled" else
-                        f"{src} on {rel} is blown up ({detail}) so it looks soft and stretched - use a "
-                        f"larger version of the photo, or show it smaller")
-        phone = measured_phone(work / "site", browser, work / "shots" / ".measured.json")
-        if phone is None:
-            notes.append("the phone layout was not measured - the browser gave no answer")
-        else:
-            for text, lines in phone["wraps"][:4]:
-                errs.append(f'on a phone ({PHONE_W}px) "{text}" breaks onto {lines} lines - '
-                            f"shorten the label (\"Call\" with the number on its own line, "
-                            f"or the number alone), shrink it, or move it out of the header")
-            if phone["wide"]:
-                errs.append(f"on a phone ({PHONE_W}px) the page scrolls sideways - something is "
-                            f"wider than the screen")
-            # A drop-down that opens on hover only cannot be opened on a phone
-            # or the owner's iPad (owner, 2026-10-21: a Services drop-down).
-            for text in (phone.get("hidden") or [])[:4]:
-                errs.append(f'on a phone ({PHONE_W}px) the menu item "{text}" never shows, even after '
-                            f"tapping every menu button - a menu must open on a tap (<details><summary>, "
-                            f"or a <button> that toggles it), not on hover alone")
-            st = phone.get("styled")
-            if isinstance(st, (int, float)) and st < STYLED_MIN:
-                errs.append(f"on a phone ({PHONE_W}px) index.html shows unstyled ({round(st * 100)}% of "
-                            f"the page changes with its stylesheets switched off) - its CSS does not "
-                            f"apply. Link the stylesheet by a relative path and close every @media block")
+        berrs, bnotes = browser_problems(t, work, browser)
+        errs += berrs
+        notes += bnotes
 
     dp = work / "draft.md"
     if not dp.is_file():
@@ -2803,6 +2846,38 @@ def cmd_revise(a):
           + (f", built after {ref}" if ref else "") + "; the next cycle fixes it.")
     print("  a dry cycle now:  python3 scripts/paul.py dry-next && systemctl start --no-block paul-cycle.service")
     return 0
+
+
+def cmd_measure(a):
+    """What the browser checks find on a build, without waking Paul: work/ if
+    it holds one, else the newest build set aside in sites/_below-bar/
+    (Royal Edge, 2026-10-21: refused twice, and the owner asked how to fix
+    it). Nothing is changed but the measurement memo beside it."""
+    if a.folder:
+        d = Path(a.folder)
+    elif A("work", "site", "index.html").is_file():
+        d = A("work")
+    else:
+        aside = [x for x in A("sites", "_below-bar").glob("*") if (x / "site" / "index.html").is_file()] \
+            if A("sites", "_below-bar").is_dir() else []
+        d = max(aside, key=lambda x: x.stat().st_mtime, default=None)
+    if not d or not (d / "site" / "index.html").is_file():
+        print("no build to measure - give a folder that holds site/index.html")
+        return 1
+    browser = find_browser()
+    if not browser:
+        print("no headless browser on this machine - see paul.py preflight")
+        return 1
+    t = read_json(d / "target.json", {}) or {}
+    errs, notes = browser_problems(t, d, browser)
+    print(f"{t.get('name') or '?'} - {d.relative_to(A()) if d.is_relative_to(A()) else d}")
+    for e in errs:
+        print(f"  - {e}")
+    for n in notes:
+        print(f"  note: {n}")
+    if not errs:
+        print("  the browser checks find nothing to refuse")
+    return 1 if errs else 0
 
 
 def mark_dry_next():
@@ -4200,6 +4275,9 @@ def main(argv=None):
     p.add_argument("who", help="the slug, or (part of) the business name")
     p.add_argument("notes", nargs="+", help="what to fix, in your words")
     p.add_argument("--ref", help="a new site whose layout and feel Paul should take after")
+    p = sub.add_parser("measure", help="the browser checks on a build (work/, or the newest set aside) - "
+                                       "no model woken")
+    p.add_argument("folder", nargs="?", help="a folder holding site/index.html")
     sub.add_parser("prospects", help="the businesses Paul found, and what the next cycle does")
     p = sub.add_parser("approve", help="approve a prospect for Paul to build")
     p.add_argument("who", help="its number, or part of its name")
@@ -4250,7 +4328,7 @@ def main(argv=None):
     return {"init": cmd_init, "sender": cmd_sender, "preflight": cmd_preflight,
             "status": cmd_status, "mark": cmd_mark, "exclude": cmd_exclude,
             "teardown": cmd_teardown, "go-live": cmd_go_live, "dry-next": cmd_dry_next,
-            "revise": cmd_revise, "prospects": cmd_prospects, "approve": cmd_approve,
+            "revise": cmd_revise, "measure": cmd_measure, "prospects": cmd_prospects, "approve": cmd_approve,
             "reject": cmd_reject, "build": cmd_build, "find": cmd_find, "remove": cmd_remove,
             "places": cmd_places, "photo": cmd_photo,
             "focus": cmd_focus, "nearby": cmd_nearby, "leads": cmd_leads, "deck": cmd_deck,
