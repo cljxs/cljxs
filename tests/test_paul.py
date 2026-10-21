@@ -1574,6 +1574,110 @@ class TheOwnerSendsASiteBack(PaulCase):
         self.assertIn("work/REVISE.md", header)
 
 
+def by_host(sites_dir):
+    """live_get, serving each preview from its own folder - two builds of one
+    business are on disk during a revision, and live_get takes the first."""
+    def get(url, timeout=20, limit=400_000):
+        u = urllib.parse.urlsplit(url)
+        host = u.hostname or ""
+        if not host.endswith(".vercel.app"):
+            return offline(url)
+        f = Path(sites_dir) / host.split(".")[0] / (urllib.parse.unquote(u.path.lstrip("/")) or "index.html")
+        if not f.is_file():
+            return page("", 404, url)
+        return page(f.read_text(errors="replace"), 200, url, {"x-robots-tag": "noindex, nofollow"})
+    return get
+
+
+class ARevisionShipsAndSaysSo(TheOwnerSendsASiteBack):
+    """Royal Edge, 2026-10-21. Sent back to fix a photo, Paul fixed it - and
+    his check refused it: "Royal Edge already in contacted.csv", its own row.
+    And the owner could not tell where it had got to: "I need to be able to
+    tell the process of what's going on like if it's building still or if
+    it's updated and to look at the new site." """
+
+    test_it_goes_back_to_work_with_the_notes_and_without_the_safeguards = None
+    test_an_old_build_is_not_set_aside_as_abandoned = None
+    test_it_will_not_overwrite_a_build_in_progress = None
+    test_an_unknown_or_ambiguous_name_is_refused = None
+    test_paul_is_told_what_to_do_with_it = None
+
+    OLD = "rosas-tailoring-concept-abc123"
+
+    def drafted(self):
+        slug = self.built(name="Rosa's Tailoring", slug=self.OLD)
+        paul.log_build({"day": "2026-10-20", "mode": "live", "outcome": "built", "slug": slug,
+                        "name": "Rosa's Tailoring"})
+        paul.append_row(paul.A("state", "contacted.csv"), paul.CONTACTED_FIELDS,
+                        {"date": "2026-10-20", "slug": slug, "business": "Rosa's Tailoring",
+                         "phone": "(512) 444-0199", "preview_url": f"https://{slug}.vercel.app",
+                         "status": "drafted"})
+        return slug
+
+    def deck(self):
+        _rc, out = self.run_quiet(paul.cmd_deck, self.args())
+        return {b["slug"]: b for b in json.loads(out)["builds"]}
+
+    def test_a_drafted_business_revised_ships_replaces_its_row_and_says_so(self):
+        old = self.drafted()
+        rc, out = self.run_quiet(paul.cmd_revise, self.args(who=old, notes=["the", "shop", "photo", "is", "a", "customer"]))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.deck()[old]["revision"]["state"], "sent")
+        self.run_quiet(paul.cmd_brief, self.args(dry=False), get=offline)
+        self.assertEqual(paul.revisions()[old]["state"], "building", "his cycle took it")
+        self.work()
+        api = FakeVercel()
+        rc, out = self.run_quiet(paul.cmd_finish, self.args(dry=False), get=by_host(paul.A("sites")),
+                                 api=api, sleep=lambda s: None)
+        self.assertEqual(rc, 0, out)
+        new = api.name
+        rows = paul.contacted()
+        self.assertEqual(len(rows), 1, "one business, one row - not a second pitch")
+        self.assertEqual((rows[0]["slug"], rows[0]["preview_url"], rows[0]["status"]),
+                         (new, f"https://{new}.vercel.app", "drafted"))
+        deck = self.deck()
+        self.assertEqual((deck[old]["revision"]["state"], deck[old]["revision"]["new_slug"]), ("updated", new))
+        self.assertEqual(deck[new]["from_note"]["notes"], "the shop photo is a customer")
+
+    def test_a_new_business_already_pitched_is_still_refused(self):
+        self.drafted()
+        self.work()
+        api = FakeVercel()
+        rc, out = self.run_quiet(paul.cmd_finish, self.args(dry=False), get=by_host(paul.A("sites")),
+                                 api=api, sleep=lambda s: None)
+        self.assertEqual(rc, 1)
+        self.assertIn("already in contacted.csv", out, "only a revision passes its own row")
+
+    def test_a_revision_that_did_not_ship_is_resumed_on_the_next_send_back(self):
+        old = self.drafted()
+        self.run_quiet(paul.cmd_revise, self.args(who=old, notes=["use", "the", "storefront"]))
+        (paul.A("work", "site", "index.html")).write_text(INDEX.replace("</body>", "<p>PAULS FIX</p></body>"))
+        paul.write_json(paul.A("work", "target.json"), {"status": "below-bar", "why": "the check refused it"})
+        paul.save_cycle({"started": int(time.time()) - 5, "mode": "live", "day": paul.today(), "passes": 0})
+        paul.A("state", "last-run.txt").write_text("2026-10-21 | resumed: Rosa's\n")
+        self.run_quiet(paul.cmd_finish, self.args(dry=False), get=offline, api=FakeVercel(), sleep=lambda s: None)
+        self.assertEqual(paul.revisions()[old]["state"], "not shipped")
+        self.assertIn("the check refused it", paul.revisions()[old]["why"])
+        # Made before revise.json existed (Royal Edge's): found by its REVISE.md.
+        kept = next(paul.A("sites", "_below-bar").iterdir())
+        (kept / "revise.json").unlink()
+        rc, out = self.run_quiet(paul.cmd_revise, self.args(who=old, notes=["finish", "your", "fix"]))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("resuming your last revision", out)
+        self.assertIn("PAULS FIX", paul.A("work", "site", "index.html").read_text(), "his work, not the old site")
+        revise = paul.A("work", "REVISE.md").read_text()
+        self.assertIn("finish your fix", revise)
+        self.assertIn("The owner asked then: use the storefront", revise)
+
+    def test_the_studio_shows_it_and_can_delete(self):
+        studio = (ROOT / "mission-control-api" / "public" / "paul.html").read_text()
+        for bit in ("function revision(b)", "UPDATED FROM YOUR NOTE", "PAUL IS WORKING NOW",
+                    'data-remove="${esc(b.slug)}"', "${p.status !== 'rejected' ? photos(p) : ''}"):
+            self.assertIn(bit, studio)
+        js = (ROOT / "mission-control-api" / "paul.js").read_text()
+        self.assertIn("paul(['remove', slug, '--yes'], 120000)", js)
+
+
 def prospect(**over):
     """A prospect as Paul writes one in a scouting cycle: the build's facts,
     minus the site, plus a line for the owner."""

@@ -428,6 +428,41 @@ def log_build(entry):
         f.write(json.dumps(entry) + "\n")
 
 
+# A site sent back to Paul, from the owner's note to the new version (owner,
+# 2026-10-21: "show me an updated sign... I need to be able to tell the
+# process of what's going on"). Keyed by the slug that was sent back:
+#   sent -> building (his cycle took it) -> updated (new_slug) | not shipped (why)
+# Written where each step happens - revise, brief, finish - never inferred.
+REVISIONS = ("state", "revisions.json")
+
+
+def revisions():
+    return read_json(A(*REVISIONS), {}) or {}
+
+
+def set_revision(slug, **fields):
+    allr = revisions()
+    allr[slug] = {**allr.get(slug, {}), **fields,
+                  "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    write_json(A(*REVISIONS), allr)
+
+
+def revising():
+    """The slug work/ is a revision of, or None."""
+    return (read_json(A("work", "revise.json"), {}) or {}).get("slug")
+
+
+def already_pitched(t):
+    """contacted.csv's row that keeps Paul off this business, or None. A
+    revision of the business is not picking it again: Royal Edge's fix was
+    refused as "already in contacted.csv" (2026-10-21) - by its own row."""
+    row = seen_row(t.get("name") or "", t.get("phone", ""))
+    if row and revising() and norm_name(row["business"]) == norm_name(t.get("name")) \
+            and row.get("status") not in ("declined", "do-not-contact"):
+        return None
+    return row
+
+
 # --------------------------------------------------------------------------
 # sender, credentials, budget
 # --------------------------------------------------------------------------
@@ -2263,10 +2298,21 @@ def cmd_status(a):
 DECK_BUILDS = 12
 
 
+def cycle_running(run=subprocess.run):
+    """Is Paul's cycle running right now? From systemd, which started it."""
+    try:
+        r = run(["systemctl", "is-active", "paul-cycle.service"], capture_output=True, text=True, timeout=10)
+        return (r.stdout or "").strip() in ("active", "activating")
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def cmd_deck(a):
     """Everything the village's Paul panel shows, as JSON - the panel holds
     no rules, so it and `status` cannot disagree. Newest build first."""
     rows = {r["slug"]: r for r in contacted() if r.get("slug")}
+    revs = revisions()
+    made_from = {r.get("new_slug"): dict(r, slug=old) for old, r in revs.items() if r.get("new_slug")}
     deps = {d["slug"]: d for d in deployments() if d.get("slug")}
     out = []
     for b in reversed(builds()):
@@ -2286,6 +2332,9 @@ def cmd_deck(a):
                          for r in (t or {}).get("identity") or [] if isinstance(r, dict)],
             "notes": (t or {}).get("notes") or None,
             "draft": draft.read_text(errors="replace") if draft.is_file() else None,
+            # Sent back: how far it got. Made from a note: which note.
+            "revision": revs.get(slug),
+            "from_note": made_from.get(slug),
         })
         if len(out) >= DECK_BUILDS:
             break
@@ -2309,6 +2358,7 @@ def cmd_deck(a):
         "today": today(),
         "last_run": lr.read_text().strip() if lr.is_file() else None,
         "go_live": bool(live), "dry_next": A("state", "dry-next").is_file(),
+        "running": cycle_running(),
         "focus": focus_kind(),
         "waiting": sum(1 for r in contacted() if r["status"] == "drafted"),
         "builds": out,
@@ -2563,19 +2613,42 @@ def cmd_revise(a):
     if not notes:
         print("say what to fix - those words are what Paul reads")
         return 2
-    shutil.copytree(A("sites", slug), work / "site")
-    strip_safeguards(work / "site")
-    write_json(work / "target.json", t)
-    old = A("outbox", slug, "draft.md")
-    if old.is_file():
-        (work / "previous-draft.md").write_text(old.read_text(errors="replace"))
+    # A revision of this site that did not ship is newer work than the site:
+    # Royal Edge's fixed photo was set aside by a refusal that was the
+    # check's fault (2026-10-21). Sending it back again resumes that work.
+    tried = [d for d in (A("sites", "_below-bar").glob("*") if A("sites", "_below-bar").is_dir() else [])
+             if (d / "site" / "index.html").is_file() and (
+                 (read_json(d / "revise.json", {}) or {}).get("slug") == slug
+                 or f"(sites/{slug})" in ((d / "REVISE.md").read_text(errors="replace")
+                                          if (d / "REVISE.md").is_file() else ""))]
+    tried = max(tried, key=lambda d: d.stat().st_mtime, default=None)
+    before = ""
+    if tried and tried.stat().st_mtime > A("sites", slug).stat().st_mtime:
+        before = (tried / "REVISE.md").read_text(errors="replace") if (tried / "REVISE.md").is_file() else ""
+        if work.is_dir():
+            work.rmdir()
+        shutil.move(str(tried), str(work))
+        (work / "REVISE.md").unlink(missing_ok=True)
+        print(f"resuming your last revision of it (from {tried.relative_to(A()).as_posix()}), not the old site")
+    else:
+        shutil.copytree(A("sites", slug), work / "site")
+        strip_safeguards(work / "site")
+        write_json(work / "target.json", t)
+        old = A("outbox", slug, "draft.md")
+        if old.is_file():
+            (work / "previous-draft.md").write_text(old.read_text(errors="replace"))
+    write_json(work / "revise.json", {"slug": slug})
+    earlier = re.search(r"## What the owner wants fixed\n\n(.*?)\n\n", before, re.S)
     (work / "REVISE.md").write_text(
         f"# Sent back by the owner - {today()}\n\n"
         f"This is your build of {t.get('name')} (sites/{slug}). Fix it - do not pick a new "
         f"business. Keep what works; change what the owner asks, then run check.\n\n"
-        f"## What the owner wants fixed\n\n{notes}\n\n"
+        + (f"You already worked on this once; your work is in work/site/. The owner asked "
+           f"then: {earlier.group(1).strip()}\n\n" if earlier else "")
+        + f"## What the owner wants fixed\n\n{notes}\n\n"
         f"Write a new work/draft.md (your last one is work/previous-draft.md) and update "
         f"work/target.json if the photos or claims change.\n")
+    set_revision(slug, state="sent", notes=notes, name=t.get("name"))
     record(f"sent back by the owner: {t.get('name')} - {notes}"[:300])
     print(f"{t.get('name')} is back in work/ with your notes; the next cycle fixes it.")
     print("  a dry cycle now:  python3 scripts/paul.py dry-next && systemctl start --no-block paul-cycle.service")
@@ -3508,6 +3581,8 @@ def cmd_brief(a, get=http_get):
         old = (time.time() - newest) / 86400
         t = read_json(work / "target.json", {}) or read_json(work / "prospect.json", {}) or {}
         if (work / "REVISE.md").is_file():
+            if revising():
+                set_revision(revising(), state="building")
             resume = (f'work/ holds "{t.get("name") or "a business"}", sent back by the owner '
                       f"to fix - read work/REVISE.md first and fix every point in it. Same "
                       f"business: do not look for a new one")
@@ -3681,7 +3756,7 @@ def cmd_check(a, get=http_get):
         later = pool.submit(fresh_shots, index, A("work", "shots")) if built and index.is_file() else None
         errs, notes, info = run_checks(t, get)
         shots = later.result() if later else []
-    if built and not errs and t.get("name") and seen_row(t["name"], t.get("phone", "")):
+    if built and not errs and t.get("name") and already_pitched(t):
         errs.append(f"{t['name']} is already in contacted.csv - pick another business")
 
     ok_line, why = remember.written_this_cycle(A("state", "last-run.txt"), started)
@@ -3805,8 +3880,9 @@ def finish_build(a, get=http_get, api=None, browser=None, sleep=time.sleep):
         return 0
 
     errs, notes, info = run_checks(t, get)
-    if status == "built" and not errs and not dry and seen_row(t["name"], t.get("phone", "")):
+    if status == "built" and not errs and not dry and already_pitched(t):
         errs.append(f"{t['name']} is already in contacted.csv")
+    was = revising()
 
     if status == "below-bar" or errs:
         short = make_slug(t.get("name") or "site", suffix="x").rsplit("-concept-", 1)[0]
@@ -3820,6 +3896,8 @@ def finish_build(a, get=http_get, api=None, browser=None, sleep=time.sleep):
                    "why": str(reason)[:300],
                    "name": t.get("name")})
         record(f"below bar, not shipped: {t.get('name') or '?'} - {reason}"[:300])
+        if was:
+            set_revision(was, state="not shipped", why=str(reason)[:300])
         print(f"not shipped: {reason}")
         return 0 if status == "below-bar" else 1
 
@@ -3871,6 +3949,8 @@ def finish_build(a, get=http_get, api=None, browser=None, sleep=time.sleep):
         log_build({"day": day, "mode": "dry", "outcome": "built", "slug": slug,
                    "name": t["name"], "kind": t.get("kind"), "layout": t.get("layout")})
         record(f"DRY: {t['name']} | built locally, sites/{slug} | {head.get('channel')} | not deployed")
+        if was:
+            set_revision(was, state="updated", new_slug=slug)
         print(f"dry cycle: {t['name']} built locally at agents/paul/sites/{slug}")
         return 0
 
@@ -3910,10 +3990,18 @@ def finish_build(a, get=http_get, api=None, browser=None, sleep=time.sleep):
     draft = (box / "draft.md").read_text().replace(PREVIEW_URL, url)
     (box / "draft.md").write_text(draft)
     live_shots = shoot(url, box, browser)
-    append_row(A("state", "contacted.csv"), CONTACTED_FIELDS,
-               {"date": day, "slug": slug, "business": t["name"], "phone": t.get("phone"),
-                "area": s.get("area"), "preview_url": url, "channel": head.get("channel"),
-                "status": "drafted"})
+    row = {"date": day, "slug": slug, "business": t["name"], "phone": t.get("phone"),
+           "area": s.get("area"), "preview_url": url, "channel": head.get("channel"),
+           "status": "drafted"}
+    rows = contacted()
+    mine = [r for r in rows if was and norm_name(r["business"]) == norm_name(t["name"])]
+    if mine:
+        # One business, one row: the revision's link replaces the old one; a
+        # pitch already sent keeps its status.
+        mine[-1].update({k: v for k, v in row.items() if k != "status"})
+        write_rows(A("state", "contacted.csv"), CONTACTED_FIELDS, rows)
+    else:
+        append_row(A("state", "contacted.csv"), CONTACTED_FIELDS, row)
     append_row(A("state", "deployments.csv"), DEPLOY_FIELDS,
                {"slug": slug, "preview_url": url, "business": t["name"], "deployed": day,
                 "teardown": down, "status": "live"})
@@ -3926,6 +4014,8 @@ def finish_build(a, get=http_get, api=None, browser=None, sleep=time.sleep):
     log_build({"day": day, "mode": "live", "outcome": "built", "slug": slug, "name": t["name"],
                "kind": t.get("kind"), "layout": t.get("layout")})
     record(f"{t['name']} | {url} | {head.get('channel')} | drafted")
+    if was:
+        set_revision(was, state="updated", new_slug=slug, preview_url=url)
     print(f"ready to send: outbox/{slug}/draft.md  preview {url}")
     return 0
 

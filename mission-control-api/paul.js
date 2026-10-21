@@ -109,6 +109,15 @@ function register(app) {
     const go = await paul(['find']);
     res.json({ ok: true, out: r.out.split('\n')[0] + (go.ok ? ' Paul has started on it.' : ' It is fixed at his next cycle.') });
   });
+  // Delete (owner, 2026-10-21: "a delete button so I can delete the College
+  // Hill Barbers sites"): paul.py remove, which takes a live preview down
+  // first and keeps the business off Paul's list.
+  app.post('/api/paul/remove/:slug', async (req, res) => {
+    const { slug } = req.params;
+    if (!SLUG_RE.test(slug)) return res.status(400).json({ error: 'bad name' });
+    const r = await paul(['remove', slug, '--yes'], 120000);
+    res.status(r.ok ? 200 : 409).json(r);
+  });
   app.post('/api/paul/find', async (req, res) => {
     const r = await paul(['find']);
     res.status(r.ok ? 200 : 409).json(r);

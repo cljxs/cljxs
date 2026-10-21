@@ -74,6 +74,13 @@
   .acts{display:flex;gap:8px}
   .acts .btn{flex:0 0 auto}
   .said{font-size:12.5px;color:var(--mute)}
+  .rev{margin:10px 0 2px;padding:10px 12px;border-radius:10px;font-size:13.5px;line-height:1.45;border:1px solid}
+  .rev.ok{color:var(--green2);border-color:rgba(34,197,94,.5);background:rgba(34,197,94,.08)}
+  .rev.run{color:var(--blue);border-color:rgba(56,189,248,.5);background:rgba(56,189,248,.08)}
+  .rev.wait{color:#fbbf24;border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.08)}
+  .rev.bad{color:#fb7185;border-color:rgba(244,63,94,.5);background:rgba(244,63,94,.08)}
+  .rev .said{display:block;margin-top:4px}
+  .btn.del{color:#fb7185;border-color:rgba(244,63,94,.45)}
   .foot{margin-top:14px;color:var(--mute);font-size:13px}
   .empty{color:var(--mute);padding:26px 4px;text-align:center}
   .act{padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}
@@ -205,7 +212,7 @@ function draw() {
     st.email ? `<span class="pill">${esc(st.email)}</span>` : '',
     st.area ? `<span class="pill">${esc(st.area)}</span>` : ''].join('');
   $('status').innerHTML = `<div class="k">Status</div>
-    <div class="line">${esc(plan(P))}</div>
+    <div class="line">${P.running ? '<span class="tag t-blue">PAUL IS WORKING NOW</span> ' : ''}${esc(plan(P))}</div>
     <div class="muted">Last run: ${esc(P.last_run || 'never')}</div>
     <div class="muted">${P.go_live ? 'Live: previews are published for you to send' : 'Dry runs only: sites are built here and never published'}${
       P.dry_next ? ' · the next run is a dry run' : ''}${P.focus ? ' · focus: ' + esc(P.focus) : ''}</div>`;
@@ -274,7 +281,7 @@ function card(p) {
     <span class="reach">${esc(ch[2])}</span>
     ${google(p)}
     ${acts}
-    ${open ? photos(p) : ''}
+    ${p.status !== 'rejected' ? photos(p) : ''}
   </div>`;
 }
 
@@ -351,7 +358,10 @@ function work(b) {
     : `<div class="said">no ${n} screenshot</div>`;
   return `<div class="card"><div class="ctop"><div><div class="cname">${esc(b.name)}</div>
       <div class="cmeta">${esc(b.day || '')} · ${b.mode === 'live' ? 'live' : 'dry run'}${b.kind ? ' · ' + esc(b.kind) : ''}</div></div>
-      ${b.status ? `<div class="tags"><span class="tag t-gray">${esc(String(b.status).toUpperCase())}</span></div>` : ''}</div>
+      <div class="tags">${b.from_note ? '<span class="tag t-green">UPDATED FROM YOUR NOTE</span>' : ''}
+        ${b.status ? `<span class="tag t-gray">${esc(String(b.status).toUpperCase())}</span>` : ''}</div></div>
+    ${b.from_note ? `<div class="said">Made ${esc(b.day || '')} from your note: “${esc(b.from_note.notes || '')}”</div>` : ''}
+    ${revision(b)}
     <div class="shots">${shot('mobile')}${shot('desktop')}</div>
     <div class="acts"><a class="btn" href="/paul/site/${encodeURIComponent(b.slug)}/" target="_blank" rel="noopener">Open the site</a>
       ${b.preview_url ? `<a class="btn go" href="${esc(b.preview_url)}" target="_blank" rel="noopener">Live preview</a>` : ''}</div>
@@ -360,7 +370,31 @@ function work(b) {
     <label class="refl" for="fix-${esc(b.slug)}">Something to fix before you pitch it? Tell Paul</label>
     <textarea class="refbox fixbox" id="fix-${esc(b.slug)}" data-notes="${esc(b.slug)}" rows="3"
       placeholder="e.g. The photo under THE SHOP is a customer, not the front windows - use a storefront photo">${esc(fixes[b.slug] || '')}</textarea>
-    <div class="acts"><button class="btn go" data-revise="${esc(b.slug)}" ${busy ? 'disabled' : ''}>Send back to Paul</button></div></div>`;
+    <div class="acts"><button class="btn go" data-revise="${esc(b.slug)}" ${busy ? 'disabled' : ''}>Send back to Paul</button>
+      <button class="btn del" data-remove="${esc(b.slug)}" data-name="${esc(b.name)}" ${busy ? 'disabled' : ''}>Delete</button></div></div>`;
+}
+
+// Where a site sent back to Paul has got to (paul.py revisions: sent ->
+// building -> updated | not shipped) - so the owner can tell whether he is
+// still working on it, or it is done and which card is the new one.
+function revision(b) {
+  const r = b.revision;
+  if (!r) return '';
+  const said = r.notes ? ` <span class="said">“${esc(r.notes)}”</span>` : '';
+  if (r.state === 'updated') {
+    return `<div class="rev ok"><b>✓ Updated</b> - the new version is ${r.new_slug ? 'the card marked UPDATED FROM YOUR NOTE' : 'above'}${
+      r.preview_url ? ` · <a href="${esc(r.preview_url)}" target="_blank" rel="noopener">open its live preview</a>` : ''}${
+      r.new_slug ? ` · <a href="/paul/site/${encodeURIComponent(r.new_slug)}/" target="_blank" rel="noopener">open the new site</a>` : ''}.${said}</div>`;
+  }
+  if (r.state === 'not shipped') {
+    return `<div class="rev bad"><b>⚠ Paul's update didn't pass:</b> ${esc(r.why || '')}. Send it back again to have him finish it.${said}</div>`;
+  }
+  if (r.state === 'building') {
+    return P.running
+      ? `<div class="rev run"><b>🔨 Paul is working on your note now.</b> This card stays as it was; the new version appears as its own card.${said}</div>`
+      : `<div class="rev wait"><b>⏸ Paul stopped before finishing.</b> He picks it up at his next cycle (see Activity).${said}</div>`;
+  }
+  return `<div class="rev wait"><b>📝 Sent back to Paul</b> - ${P.running ? 'he is starting on it now' : 'waiting for his next cycle'}.${said}</div>`;
 }
 
 function draft(b) {
@@ -395,6 +429,11 @@ $('body').onclick = e => {
   const a = e.target.closest('[data-approve]'), r = e.target.closest('[data-reject]');
   const g = e.target.closest('[data-google]'), x = e.target.closest('[data-unphoto]');
   if (g) return act(`/api/paul/prospects/${g.dataset.google}/google`, 'checked');
+  const del = e.target.closest('[data-remove]');
+  if (del) {
+    if (!confirm(`Delete every ${del.dataset.name} site? Any live preview is taken down, its drafts go, and Paul never picks ${del.dataset.name} again.`)) return;
+    return act(`/api/paul/remove/${encodeURIComponent(del.dataset.remove)}`, 'deleted');
+  }
   const v = e.target.closest('[data-revise]');
   if (v) {
     const notes = (fixes[v.dataset.revise] || '').trim();
