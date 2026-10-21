@@ -132,4 +132,4 @@ Real captured inputs live in `tests/fixtures/`; refresh with
   scripts and `clipper/`; a changed header needs `scripts/deploy.sh <name>`;
   a changed Deck `.js` needs `python3 scripts/restart-deck.py`.
 * Other docs: `BACKBONE.md` (queue/API), `clipper/DESIGN.md`,
-  `agentroom/README.md`, `HANDOFF-AGENT-ROOM.md`, `HANDOFF-ACE-BELFORT-BOLT.md`, `HANDOFF-PAUL.md`, `HANDOFF-SCOUT-EMILY.md`, `docs/` (public site pages).
+  `agentroom/README.md`, `HANDOFF-AGENT-ROOM.md`, `HANDOFF-ACE-BELFORT-BOLT.md`, `HANDOFF-PAUL.md`, `HANDOFF-SCOUT-EMILY.md`, `HANDOFF-CLIP.md`, `docs/` (public site pages).
