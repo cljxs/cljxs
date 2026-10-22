@@ -88,6 +88,7 @@ generated - edit the header, then `scripts/deploy.sh <name>`).
 | Spotter (YouTube research, quota) | `clipper/trends.py` |
 | Trimming a short clip to its moment | `clipper/trim.py` |
 | What the Deck shows | `clipper/report.py` (`snapshot`) |
+| Update video's progress bar (ffmpeg `-progress`, `clipper progress`) | `clipper/progress.py` |
 | Disk space: finished clips' videos deleted, `cleanup`, `report` | `clipper/storage.py` (`drop_clip_files`, `finished_sources`) |
 
 ## paul.py anchors

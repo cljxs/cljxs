@@ -13,7 +13,7 @@ import json
 import traceback
 from pathlib import Path
 
-from clipper import campaign, captions, db, media, moments, postcopy, render, score, stories, transcribe, trim
+from clipper import campaign, captions, db, media, moments, postcopy, progress, render, score, stories, transcribe, trim
 
 MAX_ATTEMPTS = 3
 
@@ -205,7 +205,7 @@ def clip_ass(cfg, src, c, words, conn):
                           cfg["caption_max_chars"], hook=hook, hook_top=top), cut, hook
 
 
-def cut_clip(cfg, video, src, c, words, out, conn):
+def cut_clip(cfg, video, src, c, words, out, conn, progress=None):
     """Render one chosen moment to `out` and return its meta - the one way a
     clip is cut, for the first render and for recut() alike. A copy without
     subtitles is kept beside it (render.clean_path), so fixing a subtitle
@@ -215,7 +215,8 @@ def cut_clip(cfg, video, src, c, words, out, conn):
         raise ValueError(f"video {video['id']}'s source was deleted to save space (clipper cleanup "
                          f"--sources) - add the video again to cut more from it")
     info = render.render(video["media_path"], out, c["start"], c["end"], ass,
-                         render.source_cfg(cfg, src), watermark=src["watermark"], clean=True)
+                         render.source_cfg(cfg, src), watermark=src["watermark"], clean=True,
+                         progress=progress)
     return {"source": src["name"], "rights": src["rights"], "evidence": src["evidence"],
             "watermark": Path(src["watermark"]).name if src["watermark"] else None,
             "hook": hook, "campaign_key": cut["key"] if cut else None,
@@ -330,28 +331,31 @@ def recut(conn, paths, cfg, clip_id):
     # The owner's corrected subtitles when there are any (set_subtitles).
     words = clip_words(conn, paths, video, clip)
     clean = render.clean_path(out)
-    if clean.is_file():
-        # Only the subtitles change, so only they are redone - onto the copy
-        # kept without them. Everything else in meta is still true.
-        ass, _cut, _hook = clip_ass(cfg, src, c, words, conn)
-        info = render.burn(clean, out, ass, render.source_cfg(cfg, src))
-        meta = json.loads(clip["meta"])
-        meta.pop("subtitles_pending", None)
-        meta.update(width=info["width"], height=info["height"], duration=info["duration"])
-        how = "subtitles only"
-    else:
-        # A clip made before copies were kept: cut whole, which keeps one now.
-        tmp = out.with_name(out.stem + ".recut" + out.suffix)
-        meta = cut_clip(cfg, video, src, c, words, tmp, conn)
-        tmp_clean = render.clean_path(tmp)
-        if tmp_clean.is_file():
-            tmp_clean.replace(clean)
-        # Everything the render wrote beside the video - the subtitle file too -
-        # takes the clip's own name, or the old subtitles stay on disk as the
-        # clip's and a stray 05.recut.ass is left behind (found by the test).
-        for f in list(out.parent.glob(tmp.stem + ".*")):
-            f.replace(out.with_suffix(f.suffix))
-        how = "whole"
+    # What the page waiting on this shows: the step, and how far ffmpeg has
+    # got (progress.py - owner, 2026-10-22: "a percentage or something").
+    with progress.Progress(out, c["end"] - c["start"]) as shown:
+        if clean.is_file():
+            # Only the subtitles change, so only they are redone - onto the copy
+            # kept without them. Everything else in meta is still true.
+            ass, _cut, _hook = clip_ass(cfg, src, c, words, conn)
+            info = render.burn(clean, out, ass, render.source_cfg(cfg, src), progress=shown)
+            meta = json.loads(clip["meta"])
+            meta.pop("subtitles_pending", None)
+            meta.update(width=info["width"], height=info["height"], duration=info["duration"])
+            how = "subtitles only"
+        else:
+            # A clip made before copies were kept: cut whole, which keeps one now.
+            tmp = out.with_name(out.stem + ".recut" + out.suffix)
+            meta = cut_clip(cfg, video, src, c, words, tmp, conn, progress=shown)
+            tmp_clean = render.clean_path(tmp)
+            if tmp_clean.is_file():
+                tmp_clean.replace(clean)
+            # Everything the render wrote beside the video - the subtitle file too -
+            # takes the clip's own name, or the old subtitles stay on disk as the
+            # clip's and a stray 05.recut.ass is left behind (found by the test).
+            for f in list(out.parent.glob(tmp.stem + ".*")):
+                f.replace(out.with_suffix(f.suffix))
+            how = "whole"
     meta["text"] = transcribe.respell_text(c["text"], spellings_of(conn, video))
     out.with_suffix(".json").write_text(json.dumps(meta, indent=1))
     with conn:

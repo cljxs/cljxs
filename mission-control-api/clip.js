@@ -221,6 +221,15 @@ function register(app) {
     catch { res.status(500).json({ error: 'clipper printed something that is not JSON' }); }
   });
 
+  // How far Update video has got (clipper progress - progress.py works it
+  // out; this only passes it on), asked every couple of seconds while it runs.
+  app.get('/api/clip/progress/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ error: 'bad id' });
+    const r = await clipper(['progress', req.params.id], 15000);
+    try { res.json(JSON.parse(r.stdout)); }
+    catch { res.json({ running: false }); }
+  });
+
   app.post('/api/clip/subtitles/:id', async (req, res) => {
     if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
     const b = req.body || {};

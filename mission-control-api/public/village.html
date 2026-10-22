@@ -203,6 +203,12 @@
      caption is its own box with a button that plays just that moment. */
   #sedbox{width:min(1040px,100%)}
   #sedbox h2 .edn{float:none;font-size:13px;font-weight:500;color:var(--mute);margin-left:6px;white-space:nowrap}
+  #sedBar{margin-top:10px}
+  #sedBar .sbar{height:10px;border-radius:6px;background:var(--line);overflow:hidden}
+  #sedBar .sbar i{display:block;height:100%;width:0;background:var(--up,#34d399);transition:width .6s}
+  #sedBar .sbar.wait i{width:30%;animation:sedwait 1.4s ease-in-out infinite alternate}
+  @keyframes sedwait{from{margin-left:0}to{margin-left:70%}}
+  #sedBarSaid{display:block;margin-top:6px;font-size:14px}
   .sedwrap{display:grid;grid-template-columns:minmax(220px,300px) 1fr;gap:16px;margin-top:12px;align-items:start}
   #sedVideo{width:100%;max-height:68vh;border-radius:11px;background:#000;position:sticky;top:0}
   #sedLines{max-height:68vh;overflow-y:auto;padding-right:4px}
@@ -415,6 +421,8 @@
       <div id="sedLines"></div>
     </div>
     <div class="muted" id="sedSaid"></div>
+    <div id="sedBar" hidden><div class="sbar" id="sedBarTrack"><i id="sedBarFill"></i></div>
+      <span id="sedBarSaid"></span></div>
     <div class="edacts"><button id="sedCancel">Close</button><button id="sedReset">Back to transcript</button>
       <button id="sedKeep">Save</button>
       <button id="sedSave" class="yes">Update video</button></div>
@@ -3266,7 +3274,10 @@ function editPost(post){
 // without having to remake the entire video" - so the clip plays beside the
 // boxes, each caption's time plays just that caption, Save keeps the fixes
 // without touching the video, and Update video redoes the subtitles only.
-// Resolves with {lines} or {reset: true} to update the video, or null.
+// Update video and Back to transcript run here, with the box kept open and
+// a bar showing how far the remake has got (clipper progress, asked every two
+// seconds - owner, 2026-10-22: "a percentage or something showing ... progress").
+// Resolves with {updated: message} once the video is updated, or null.
 const clockOf = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 
 function editSubtitles(id, first, src){
@@ -3335,8 +3346,58 @@ function editSubtitles(id, first, src){
       if (dirty() && !confirm('Close without saving your changes?')) return;
       done(null);
     };
+    const BUTTONS = ['sedCancel', 'sedReset', 'sedKeep', 'sedSave'];
+    const bar = (percent, words) => {
+      $('sedBar').hidden = false;
+      $('sedBarTrack').classList.toggle('wait', percent === null || percent === undefined);
+      $('sedBarFill').style.width = percent === null || percent === undefined ? '' : `${percent}%`;
+      $('sedBarSaid').textContent = words;
+    };
+    const update = async body => {
+      BUTTONS.forEach(b => { $(b).disabled = true; });
+      video.pause();
+      say('');
+      bar(null, 'Starting…');
+      let waiting = true;
+      const started = Date.now();
+      (async () => {
+        while (waiting) {
+          await new Promise(r => setTimeout(r, 2000));
+          if (!waiting) break;
+          try {
+            const p = await (await fetch(`/api/clip/progress/${encodeURIComponent(id)}`, { cache: 'no-store' })).json();
+            const secs = Math.round((Date.now() - started) / 1000);
+            if (waiting && p.running) {
+              const step = String(p.step || 'working');
+              bar(p.percent, step.charAt(0).toUpperCase() + step.slice(1)
+                + (p.percent === null || p.percent === undefined ? '…' : ` - ${p.percent}%`) + ` · ${clockOf(secs)}`);
+            }
+          } catch (e) { /* the next ask will tell */ }
+        }
+      })();
+      try {
+        const r = await fetch(`/api/clip/subtitles/${encodeURIComponent(id)}`, { method: 'POST',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const j = await r.json();
+        waiting = false;
+        if (!r.ok || j.ok === false) {
+          $('sedBar').hidden = true;
+          say(String(j.message || j.error || 'The video was not updated.').replace(/^clipper: /, '').slice(0, 400));
+          BUTTONS.forEach(b => { $(b).disabled = false; });
+          return;
+        }
+        bar(100, 'Done - the video has your subtitles.');
+        setTimeout(() => { $('sedBar').hidden = true; BUTTONS.forEach(b => { $(b).disabled = false; });
+                           done({ updated: j.message || 'Updated.' }); }, 900);
+      } catch (e) {
+        waiting = false;
+        $('sedBar').hidden = true;
+        say('Could not reach the API: ' + e.message);
+        BUTTONS.forEach(b => { $(b).disabled = false; });
+      }
+    };
     $('sedReset').onclick = () => {
-      if (confirm('Throw away your edits and use the transcript again? The video is updated.')) done({ reset: true });
+      if (confirm('Throw away your edits and use the transcript again? The video is updated.')) update({ reset: true });
     };
     $('sedKeep').onclick = async () => {
       if (!dirty()) { say('Nothing changed since the last save.'); return; }
@@ -3354,8 +3415,9 @@ function editSubtitles(id, first, src){
         loadClip();
       } catch (e) { say('Could not reach the API: ' + e.message); }
     };
-    $('sedSave').onclick = () => done({ lines: read() });
+    $('sedSave').onclick = () => update({ lines: read() });
     draw();
+    $('sedBar').hidden = true;
     $('sed').classList.add('on');
   });
 }
@@ -3369,12 +3431,8 @@ async function fixSubtitles(id){
   } catch (e) { alert('Could not read the subtitles: ' + e.message); return; }
   const k = ((CLIP && CLIP.clips) || []).find(c => String(c.id) === String(id));
   const src = k ? `/api/clip/file/${encodeURIComponent(k.video_id)}/${encodeURIComponent(k.rank)}?v=${Date.now()}` : '';
-  const body = await editSubtitles(id, sub, src);
-  if (!body) return;
   clipBusy = true;
-  document.querySelectorAll('#clipClips button').forEach(b => b.disabled = true);
-  try { await clipPost(`/api/clip/subtitles/${encodeURIComponent(id)}`, body); }
-  catch (e) { alert('Could not reach the API: ' + e.message); }
+  try { await editSubtitles(id, sub, src); }
   finally { clipBusy = false; loadClip(); }
 }
 

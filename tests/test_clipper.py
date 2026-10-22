@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import types
+import warnings
 import unittest
 from pathlib import Path
 
@@ -576,7 +577,7 @@ class FramingFallsBackToTheCentre(unittest.TestCase):
         try:
             calls = []
             real_run, real_probe = media.run, media.probe
-            media.run = lambda cmd, cwd=None: calls.append(cmd)
+            media.run = lambda cmd, cwd=None, **kw: calls.append(cmd)
             media.probe = lambda p: {"width": 1920, "height": 1080, "has_video": True, "duration": 8.0}
             with tempfile.TemporaryDirectory() as d:
                 (Path(d) / "01.part.mp4").write_bytes(b"x")
@@ -628,7 +629,12 @@ class EndToEnd(unittest.TestCase):
 
     def cli(self, *args):
         out = io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        # A connection another test left open can be collected mid-command,
+        # and Python prints a ResourceWarning for it into what is captured
+        # here - not the command's output; it failed exact checks at random
+        # (2026-10-22). Clip's own commands close theirs (cli.main).
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out), warnings.catch_warnings():
+            warnings.simplefilter("ignore", ResourceWarning)
             code = cli.main(list(args))
         return code, out.getvalue()
 
@@ -1156,6 +1162,39 @@ class Posting(EndToEnd):
 
     def row(self):
         return self.conn.execute("SELECT * FROM clips WHERE id = ?", (self.clip["id"],)).fetchone()
+
+    def test_update_video_reports_how_far_it_has_got(self):
+        # Owner, 2026-10-22: "When I click update video I need a percentage
+        # or something showing ... progress". Read the way the page reads
+        # it, from inside the real ffmpeg run, then again after it.
+        from clipper import progress, render
+        self.ready()
+        path = Path(self.clip["path"])
+        seen, real = [], media.run
+
+        def watched(cmd, cwd=None, timeout=None, progress_file=None):
+            r = real(cmd, cwd=cwd, timeout=timeout, progress_file=progress_file)
+            if progress_file:
+                seen.append((progress.read(path), Path(progress_file).read_text()))
+                code, said = self.cli("progress", str(self.clip["id"]))
+                seen.append(json.loads(said.strip().splitlines()[-1]))
+            return r
+        media.run = watched
+        self.addCleanup(setattr, media, "run", real)
+        lines = [l["text"] for l in self.listing()["lines"]]
+        self.subs("--set-json", json.dumps(["Zebra fish"] + lines[1:]))
+        (during, report), said = seen
+        self.assertEqual((during["running"], during["step"]), (True, "putting in the subtitles"))
+        self.assertIn("out_time_us=", report, "ffmpeg's own report, as it writes it")
+        self.assertEqual(during["percent"], 99, "all of it written: 99 until the file is in place")
+        self.assertEqual((said["running"], said["percent"]), (True, 99), "the command the Deck asks")
+        self.assertEqual(progress.read(path), {"running": False}, "nothing shown once it is done")
+        self.assertFalse(any(f.exists() for f in progress.files(path)), "its files go with it")
+        # A clip with no copy kept is cut whole: the steps say so.
+        render.clean_path(path).unlink()
+        seen.clear()
+        self.subs("--reset")
+        self.assertEqual(seen[0][0]["step"], "cutting the clip")
 
     def test_save_leaves_the_video_and_approval_waits_for_the_update(self):
         from clipper import render
@@ -3617,3 +3656,37 @@ class HooksSearchTheWebOnThePlan(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--max-turns") + 1], "8", "room to search, from tasks/engines.json")
         doc = json.loads((config.ROOT / "tasks" / "engines.json").read_text())
         self.assertEqual(doc["agents"]["clip"]["fallback"], "none", "never a bill instead")
+
+
+class ProgressReports(unittest.TestCase):
+    """progress.read on ffmpeg's real -progress report (captured by
+    Posting.test_update_video_reports_how_far_it_has_got), and the page's
+    use of it."""
+
+    def test_halfway_unmeasured_and_stale(self):
+        from clipper import progress
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        clip = tmp / "03.mp4"
+        with progress.Progress(clip, 40.0) as p:
+            p.step("finding the people in each shot")
+            got = progress.read(clip)
+            self.assertEqual((got["running"], got["percent"]), (True, None), "no percentage before ffmpeg starts")
+            p.step("cutting the clip", measured=True)
+            p.ffmpeg.write_text("frame=300\nout_time_us=N/A\nprogress=continue\n"
+                                "frame=600\nout_time_us=20020000\nout_time=00:00:20.020000\nprogress=continue\n")
+            self.assertEqual(progress.read(clip)["percent"], 50)
+            self.assertEqual(progress.read(clip, now=p.started + progress.STALE_SECONDS + 1),
+                             {"running": False, "stale": True}, "a killed remake is not shown as running")
+        self.assertEqual(progress.read(clip), {"running": False})
+
+    def test_the_page_asks_while_it_waits(self):
+        html = (config.ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        body = html.split("function editSubtitles(", 1)[1].split("\nasync function clipCard(", 1)[0]
+        self.assertIn("/api/clip/progress/${encodeURIComponent(id)}", body)
+        self.assertIn("$('sedSave').onclick = () => update({ lines: read() });", body,
+                      "Update video waits in the box, with the bar")
+        self.assertIn('<div id="sedBar" hidden>', html)
+        js = (config.ROOT / "mission-control-api" / "clip.js").read_text()
+        self.assertIn("app.get('/api/clip/progress/:id'", js)
+        self.assertIn("clipper(['progress', req.params.id]", js)

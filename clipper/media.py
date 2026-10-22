@@ -24,7 +24,11 @@ KILLED = {-9: "was killed by the server - almost always because it ran out of me
           -15: "was stopped (a timeout or a restart)"}
 
 
-def run(cmd, cwd=None, timeout=None):
+def run(cmd, cwd=None, timeout=None, progress_file=None):
+    """progress_file: ffmpeg writes how far it has got there (-progress), for
+    a page waiting on it (progress.py)."""
+    if progress_file:
+        cmd = [cmd[0], "-progress", str(Path(progress_file).resolve()), "-nostats", *cmd[1:]]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, timeout=timeout)
     if r.returncode != 0:
         tail = "\n".join((r.stderr or "").strip().splitlines()[-6:])

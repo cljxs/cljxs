@@ -162,7 +162,7 @@ def command(src, out_name, start, end, info, ass_name, cfg, wm=None, plan=None, 
     return cmd
 
 
-def burn(clean, out_path, ass_text, cfg):
+def burn(clean, out_path, ass_text, cfg, progress=None):
     """New subtitles on a clip's copy without them (clean_path) - the only
     thing a subtitle fix changes, so nothing else is redone: no framing, no
     second loudness pass (the sound is copied as it is). Writes <out>.ass
@@ -171,11 +171,13 @@ def burn(clean, out_path, ass_text, cfg):
     ass_name = out_path.with_suffix(".ass").name
     (out_path.parent / ass_name).write_text(ass_text)
     tmp = out_path.with_name(out_path.stem + ".part.mp4")
+    if progress:
+        progress.step("putting in the subtitles", measured=True)
     media.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(clean), "-vf", f"ass={ass_name}",
                "-map", "0:v:0", "-map", "0:a:0?",
                "-c:v", "libx264", "-preset", cfg["x264_preset"], "-crf", str(cfg["x264_crf"]),
                "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart", tmp.name],
-              cwd=out_path.parent)
+              cwd=out_path.parent, progress_file=progress.ffmpeg if progress else None)
     tmp.replace(out_path)
     return media.probe(out_path)
 
@@ -235,7 +237,7 @@ def check_watermark(path, cfg):
                          cfg["watermark_max_width"])
 
 
-def render(src, out_path, start, end, ass_text, cfg, watermark=None, clean=False):
+def render(src, out_path, start, end, ass_text, cfg, watermark=None, clean=False, progress=None):
     """Writes <out>.ass beside <out>.mp4 and renders. ffmpeg runs in the output
     folder so the subtitle filter gets a bare filename: a full path would need
     its colons and backslashes escaped inside the filter graph. The watermark
@@ -253,6 +255,8 @@ def render(src, out_path, start, end, ass_text, cfg, watermark=None, clean=False
     plan, framing_note = None, None
     if cfg["crop_mode"] == "faces":
         from clipper import framing
+        if progress:
+            progress.step("finding the people in each shot")
         try:
             plan = framing.plan(src, start, end, info)
             framing_note = framing.summary(plan)
@@ -261,9 +265,11 @@ def render(src, out_path, start, end, ass_text, cfg, watermark=None, clean=False
     tmp = out_path.with_name(out_path.stem + ".part.mp4")
     keep = clean_path(out_path) if clean else None
     ctmp = keep.with_name(keep.stem + ".part.mp4") if keep else None
+    if progress:
+        progress.step("cutting the clip", measured=True)
     media.run(command(src, tmp.name, start, end, info, ass_name, cfg, wm, plan,
                       clean_name=ctmp.name if ctmp else None),
-              cwd=out_path.parent)
+              cwd=out_path.parent, progress_file=progress.ffmpeg if progress else None)
     tmp.replace(out_path)
     if ctmp:
         ctmp.replace(keep)

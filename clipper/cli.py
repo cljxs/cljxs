@@ -57,10 +57,18 @@ from clipper import (campaign, config, db, dropbox, inbox, ingest, media, pipeli
                      rights, score, storage, transcribe, trends, youtube)
 
 
+# Every connection a command opens, closed when it ends (main). Left to the
+# garbage collector they were closed at random later moments, each with a
+# ResourceWarning - which the tests read in a command's output (2026-10-22).
+_OPEN = []
+
+
 def open_all():
     cfg = config.load()
     paths = config.paths()
-    return cfg, paths, db.connect(paths["db"])
+    conn = db.connect(paths["db"])
+    _OPEN.append(conn)
+    return cfg, paths, conn
 
 
 def cmd_source(a):
@@ -578,6 +586,16 @@ def cmd_subtitles(a):
     return 0
 
 
+def cmd_progress(a):
+    """How far a clip's remake has got, as JSON - asked by the Fix subtitles
+    box every couple of seconds while Update video runs (progress.py)."""
+    from clipper import progress
+    cfg, paths, conn = open_all()
+    clip = conn.execute("SELECT path FROM clips WHERE id = ?", (a.clip,)).fetchone()
+    print(json.dumps(dict(progress.read(clip["path"]) if clip else {"running": False}, clip=a.clip)))
+    return 0
+
+
 def cmd_framing(a):
     """Why a clip is framed the way it is: each shot, every face in it - where,
     how big, how often seen, how much it changed - and what was kept."""
@@ -749,6 +767,9 @@ def main(argv=None):
     x.add_argument("--save-only", dest="save_only", action="store_true",
                    help="with --set-json: save the lines, leave the video until you update it")
     x.set_defaults(fn=cmd_subtitles)
+    x = sub.add_parser("progress", help="how far a clip's remake (Update video) has got, as JSON")
+    x.add_argument("clip", type=int)
+    x.set_defaults(fn=cmd_progress)
     x = sub.add_parser("framing", help="why a clip is framed the way it is: every face in every shot")
     x.add_argument("clip", type=int)
     x.set_defaults(fn=cmd_framing)
@@ -766,8 +787,14 @@ def main(argv=None):
         p.error("source rules needs NAME")
     if a.cmd == "source" and a.action == "channel" and not (a.name and a.channel):
         p.error("source channel needs NAME and --channel UC...")
+    # Only this command's own: a command run inside another (the tests do)
+    # must not close the outer one's connection.
+    mine = len(_OPEN)
     try:
         return a.fn(a)
     except (ValueError, OSError, RuntimeError) as exc:     # OSError: missing files, and network errors (URLError)
         print(f"clipper: {exc}", file=sys.stderr)
         return 2
+    finally:
+        while len(_OPEN) > mine:
+            _OPEN.pop().close()
