@@ -8,7 +8,8 @@
 // paul.py command that does it (owner, 2026-10-13): Approve + build, Reject,
 // and Find prospects; since 2026-10-15 also Add/remove photos and Check
 // Google; since 2026-10-21 I sent it (the owner marks a pitch they sent)
-// and Take down older previews. Nothing here sends or deploys.
+// and Take down older previews; since 2026-10-22 Delete this version.
+// Nothing here sends, deploys or deletes a whole business.
 
 const { execFile } = require('child_process');
 const express = require('express');
@@ -114,13 +115,15 @@ function register(app) {
     const go = await paul(['find']);
     res.json({ ok: true, out: r.out.split('\n')[0] + (go.ok ? ' Paul has started on it.' : ' It is fixed at his next cycle.') });
   });
-  // Delete (owner, 2026-10-21: "a delete button so I can delete the College
-  // Hill Barbers sites"): paul.py remove, which takes a live preview down
-  // first and keeps the business off Paul's list.
-  app.post('/api/paul/remove/:slug', async (req, res) => {
+  // Delete this version (owner, 2026-10-22: "I want delete this version,
+  // never delete the whole business" - Delete on an older Royal Edge card
+  // had run paul.py remove and taken all four). paul.py drop: one version,
+  // never a business's last, its files kept 30 days. Nothing here can
+  // delete a whole business.
+  app.post('/api/paul/drop/:slug', async (req, res) => {
     const { slug } = req.params;
     if (!SLUG_RE.test(slug)) return res.status(400).json({ error: 'bad name' });
-    const r = await paul(['remove', slug, '--yes'], 120000);
+    const r = await paul(['drop', slug], 120000);
     res.status(r.ok ? 200 : 409).json(r);
   });
   // I sent it (owner, 2026-10-21): the owner sent the pitch themselves and

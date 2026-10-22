@@ -377,7 +377,7 @@ function work(b) {
     <label class="refl" for="ref-s-${esc(b.slug)}">New reference site for the look (optional - empty keeps the one it was built from)</label>
     <input class="refbox" id="ref-s-${esc(b.slug)}" data-ref="s:${esc(b.slug)}" type="url" inputmode="url" autocapitalize="off" autocorrect="off" placeholder="https://a-site-you-like.com" value="${esc(refs['s:' + b.slug] || '')}">
     <div class="acts"><button class="btn go" data-revise="${esc(b.slug)}" ${busy ? 'disabled' : ''}>Send back to Paul</button>
-      <button class="btn del" data-remove="${esc(b.slug)}" data-name="${esc(b.name)}" ${busy ? 'disabled' : ''}>Delete</button></div></div>`;
+      ${b.versions > 1 ? `<button class="btn del" data-drop="${esc(b.slug)}" data-name="${esc(b.name)}" data-day="${esc(b.day || '')}" ${busy ? 'disabled' : ''}>Delete this version</button>` : ''}</div></div>`;
 }
 
 // Where a site sent back to Paul has got to (paul.py revisions: sent ->
@@ -457,10 +457,11 @@ $('body').onclick = e => {
   const a = e.target.closest('[data-approve]'), r = e.target.closest('[data-reject]');
   const g = e.target.closest('[data-google]'), x = e.target.closest('[data-unphoto]');
   if (g) return act(`/api/paul/prospects/${g.dataset.google}/google`, 'checked');
-  const del = e.target.closest('[data-remove]');
+  // One version only - its preview comes down, its files are kept 30 days.
+  const del = e.target.closest('[data-drop]');
   if (del) {
-    if (!confirm(`Delete every ${del.dataset.name} site? Any live preview is taken down, its drafts go, and Paul never picks ${del.dataset.name} again.`)) return;
-    return act(`/api/paul/remove/${encodeURIComponent(del.dataset.remove)}`, 'deleted');
+    if (!confirm(`Delete only this version of ${del.dataset.name} (made ${del.dataset.day})? Its live preview comes down for good; its files are kept 30 days. The other versions stay.`)) return;
+    return act(`/api/paul/drop/${encodeURIComponent(del.dataset.drop)}`, 'deleted');
   }
   const sent = e.target.closest('[data-sent]');
   if (sent) {

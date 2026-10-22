@@ -1696,10 +1696,10 @@ class ARevisionShipsAndSaysSo(TheOwnerSendsASiteBack):
     def test_the_studio_shows_it_and_can_delete(self):
         studio = (ROOT / "mission-control-api" / "public" / "paul.html").read_text()
         for bit in ("function revision(b)", "UPDATED FROM YOUR NOTE", "PAUL IS WORKING NOW",
-                    'data-remove="${esc(b.slug)}"', "${p.status !== 'rejected' ? photos(p) : ''}"):
+                    'data-drop="${esc(b.slug)}"', "${p.status !== 'rejected' ? photos(p) : ''}"):
             self.assertIn(bit, studio)
         js = (ROOT / "mission-control-api" / "paul.js").read_text()
-        self.assertIn("paul(['remove', slug, '--yes'], 120000)", js)
+        self.assertIn("paul(['drop', slug], 120000)", js, "one version - never a whole business (2026-10-22)")
 
 
 def prospect(**over):
@@ -3231,3 +3231,79 @@ class ABusinessDeletedByMistakeIsBuiltAgain(PaulCase):
         rc, out = self.restore(photos=1)
         self.assertEqual(rc, 1)
         self.assertIn("belongs to another prospect", out)
+
+
+
+class DeleteThisVersionOnly(PaulCase):
+    """Owner, 2026-10-22: Delete on an older Royal Edge card took every site
+    of it, and its previews. "I want delete this version, never delete the
+    whole business." """
+
+    SLUGS = ("royal-edge-concept-y8ehkl", "royal-edge-concept-ltg0xp", "royal-edge-concept-pvgrms")
+
+    def setUp(self):
+        super().setUp()
+        TheOwnerPicksPaulBuilds.seed(self, dict(prospect(name="Royal Edge"), status="built", slug=self.SLUGS[-1]))
+        for n, slug in enumerate(self.SLUGS):
+            TheOwnerSendsASiteBack.built(self, name="Royal Edge", slug=slug)
+            paul.log_build({"day": f"2026-10-2{n}", "mode": "live", "outcome": "built", "slug": slug, "name": "Royal Edge"})
+            paul.append_row(paul.A("state", "deployments.csv"), paul.DEPLOY_FIELDS,
+                            {"slug": slug, "preview_url": f"https://{slug}.vercel.app", "business": "Royal Edge",
+                             "deployed": "2026-10-21", "teardown": "2026-11-20", "status": "live"})
+        paul.append_row(paul.A("state", "contacted.csv"), paul.CONTACTED_FIELDS,
+                        {"slug": self.SLUGS[-1], "business": "Royal Edge", "status": "drafted",
+                         "preview_url": f"https://{self.SLUGS[-1]}.vercel.app"})
+
+    def drop(self, slug, api=None):
+        return self.run_quiet(paul.cmd_drop, self.args(slug=slug), api=api or FakeVercel())
+
+    def test_an_older_version_goes_and_the_rest_stay(self):
+        api = FakeVercel()
+        rc, out = self.drop(self.SLUGS[0], api)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([b["slug"] for b in paul.versions("Royal Edge")], list(self.SLUGS[1:]))
+        self.assertEqual([c.path for c in api.calls if c.method == "DELETE"], [f"/v9/projects/{self.SLUGS[0]}"])
+        for slug in self.SLUGS[1:]:
+            self.assertTrue((paul.A("sites", slug) / "index.html").is_file())
+            self.assertTrue(paul.A("outbox", slug, "draft.md").is_file())
+        self.assertEqual([p["name"] for p in paul.load_prospects()], ["Royal Edge"], "the business stays")
+        self.assertEqual(paul.contacted()[0]["slug"], self.SLUGS[-1])
+
+    def test_never_the_last_one(self):
+        self.drop(self.SLUGS[0])
+        self.drop(self.SLUGS[1])
+        rc, out = self.drop(self.SLUGS[2])
+        self.assertEqual(rc, 1)
+        self.assertIn("only version", out)
+        self.assertTrue((paul.A("sites", self.SLUGS[2]) / "index.html").is_file())
+
+    def test_never_the_one_whose_link_went_out(self):
+        self.run_quiet(paul.cmd_mark, self.args(who=self.SLUGS[-1], status="sent"))
+        rc, out = self.drop(self.SLUGS[-1])
+        self.assertEqual(rc, 1)
+        self.assertIn("whose link you sent", out)
+
+    def test_an_unsent_pitch_moves_to_the_newest_left(self):
+        rc, out = self.drop(self.SLUGS[-1])
+        self.assertEqual(rc, 0, out)
+        row = paul.contacted()[0]
+        self.assertEqual((row["slug"], row["preview_url"]), (self.SLUGS[1], f"https://{self.SLUGS[1]}.vercel.app"))
+
+    def test_undelete_within_30_days_and_gone_after(self):
+        self.drop(self.SLUGS[0])
+        rc, out = self.run_quiet(paul.cmd_undelete, self.args(slug=self.SLUGS[0]))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([b["slug"] for b in paul.versions("Royal Edge")], list(self.SLUGS), "back in its place")
+        self.assertTrue(paul.A("outbox", self.SLUGS[0], "draft.md").is_file())
+        self.drop(self.SLUGS[0])
+        self.run_quiet(paul.purge_deleted, day=paul.day_plus(paul.today(), 30))
+        self.assertTrue(paul.deleted_dir(self.SLUGS[0]).is_dir(), "kept for 30 days")
+        self.run_quiet(paul.purge_deleted, day=paul.day_plus(paul.today(), 31))
+        self.assertFalse(paul.deleted_dir(self.SLUGS[0]).exists())
+
+    def test_the_studio_offers_it_only_beside_another_version(self):
+        _rc, out = self.run_quiet(paul.cmd_deck, self.args())
+        self.assertEqual({b["versions"] for b in json.loads(out)["builds"]}, {3})
+        studio = (ROOT / "mission-control-api" / "public" / "paul.html").read_text()
+        self.assertIn("${b.versions > 1 ? `<button class=\"btn del\" data-drop=", studio)
+        self.assertNotIn("data-remove", studio)

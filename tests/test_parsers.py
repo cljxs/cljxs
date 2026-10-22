@@ -5686,11 +5686,14 @@ class PaulHasAWorkshop(unittest.TestCase):
         # and Delete (paul.py remove) - it takes a preview down, it sends nothing;
         # and I sent it (paul.py mark <slug> sent - the owner sent it, this
         # records that) and Take down older previews (paul.py retire).
-        self.assertEqual(sorted(posts), ["/api/paul/find", "/api/paul/prospects/:id/approve",
+        self.assertEqual(sorted(posts), ["/api/paul/drop/:slug", "/api/paul/find", "/api/paul/prospects/:id/approve",
                                          "/api/paul/prospects/:id/google", "/api/paul/prospects/:id/photos",
-                                         "/api/paul/prospects/:id/reject", "/api/paul/remove/:slug",
+                                         "/api/paul/prospects/:id/reject",
                                          "/api/paul/retire/:slug", "/api/paul/revise/:slug",
                                          "/api/paul/sent/:slug"])
+        # 2026-10-22: Delete deleted every site of a business from any card.
+        # Now one version (paul.py drop); nothing in the Studio removes a business.
+        self.assertNotIn("paul(['remove'", self.js)
         self.assertIn("paul(['mark', slug, 'sent'])", self.js, "the one status it can set")
         self.assertEqual(re.findall(r"app\.delete\('([^']+)'", self.js), ["/api/paul/prospects/:id/photos/:file"])
         self.assertIn("const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,80}$/;", self.js)

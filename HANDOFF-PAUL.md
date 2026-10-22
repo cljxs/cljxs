@@ -159,10 +159,18 @@ line and the signature (with a mailing address on email - CAN-SPAM). 25-200 word
     stopped, ✓ updated (with links to the new site), ⚠ didn't pass (and why).
     The new version is its own card marked UPDATED FROM YOUR NOTE.
     (`state/revisions.json`: sent -> building -> updated | not shipped.)
-  - **Delete**: every site of that business, its live preview taken down
-    first, and Paul never picks it again (`paul.py remove --yes`).
-- **Drafts tab:** the pitches to send. After sending:
-  `python3 scripts/paul.py mark <slug> sent` (also replied / won / declined / do-not-contact).
+  - **Delete this version** (`paul.py drop <slug>`): that version only - its
+    preview comes down, its files wait 30 days in `sites/_deleted/`
+    (`paul.py undelete <slug>`). Never a business's last version, never the
+    one whose link was sent. The owner's rule (2026-10-22, after the old
+    Delete took every Royal Edge site): **the Studio never deletes a whole
+    business**. `paul.py remove --yes` still does, from the terminal only;
+    `paul.py restore` builds one again (photos, reference, `--notes`).
+  - **Take down N older previews** on a business's newest card (`paul.py retire`).
+- **Drafts tab:** one pitch per business (its newest site's), with Copy
+  message / number / subject buttons and **I sent it** (`paul.py mark <slug> sent`;
+  replied / won / declined / do-not-contact from the terminal). Sending a
+  site back carries its pitch over unchanged.
 - **Activity tab:** his memory lines.
 
 From the terminal: `paul.py build "<Business>" --ref <url> --where "<Town, ST>" --now`

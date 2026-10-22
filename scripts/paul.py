@@ -2586,6 +2586,7 @@ def cmd_deck(a):
                          for r in (t or {}).get("identity") or [] if isinstance(r, dict)],
             "notes": (t or {}).get("notes") or None,
             "draft": text, "current": current,
+            "versions": len(versions(b.get("name"))) if built else 0,
             # What the Studio's Copy buttons copy: what to send, and where.
             "pitch": {"to": head.get("to"), "subject": head.get("subject"),
                       "message": message} if text else None,
@@ -2831,7 +2832,108 @@ def due_reason(d, contact_status, day):
 
 
 def cmd_teardown(a):
-    return teardown(list_only=a.list)
+    rc = teardown(list_only=a.list)
+    if not a.list:
+        purge_deleted()
+    return rc
+
+
+# One version deleted from the Studio (owner, 2026-10-22: "I want delete
+# this version, never delete the whole business" - the old Delete, on every
+# card, took every Royal Edge site and its previews). Its preview comes down
+# - Vercel cannot bring a project back - and its files wait here
+# DELETED_DAYS for `paul.py undelete`.
+DELETED_DAYS = 30
+
+
+def deleted_dir(slug):
+    return A("sites", "_deleted", slug)
+
+
+def versions(name):
+    """A business's built versions with a site on disk, oldest first."""
+    return [b for b in builds() if b.get("outcome") == "built" and b.get("slug")
+            and norm_name(b.get("name")) == norm_name(name)
+            and (A("sites", b["slug"]) / "index.html").is_file()]
+
+
+def cmd_drop(a, api=None):
+    """Delete one version of a business's site. Never its last one, and never
+    the one whose link went out in a pitch."""
+    log = builds()
+    me = next((b for b in log if b.get("slug") == a.slug and b.get("outcome") == "built"), None)
+    if not me or not (A("sites", a.slug) / "index.html").is_file():
+        print(f"no built site {a.slug}")
+        return 1
+    name = me.get("name")
+    mine = versions(name)
+    if len(mine) < 2:
+        print(f"this is the only version of {name} - nothing here deletes a whole business. "
+              f"To change it, send it back to Paul")
+        return 1
+    rows = contacted()
+    row = next((r for r in rows if norm_name(r["business"]) == norm_name(name)), None)
+    if row and row.get("slug") == a.slug and row.get("status") not in ("", "drafted"):
+        print(f"this is the version whose link you sent ({row['status']}) - it stays")
+        return 1
+    deps = deployments()
+    live = [d for d in deps if d.get("slug") == a.slug and d.get("status") == "live"]
+    if live and take_down(deps, [(d, "this version deleted by the owner") for d in live], today(), api):
+        print("its preview could not come down - nothing deleted")
+        return 1
+    dest = deleted_dir(a.slug)
+    dest.mkdir(parents=True, exist_ok=True)
+    for kind in ("sites", "outbox"):
+        if A(kind, a.slug).exists():
+            shutil.move(str(A(kind, a.slug)), str(dest / kind))
+    write_json(dest / "deleted.json", {"day": today(), "build": me, "index": log.index(me)})
+    A("state", "builds.jsonl").write_text("".join(json.dumps(b) + "\n" for b in log if b is not me))
+    print(f"deleted this version of {name} ({a.slug}); its files are kept {DELETED_DAYS} days - "
+          f"python3 scripts/paul.py undelete {a.slug}")
+    if row and row.get("slug") == a.slug:
+        # The pitch pointed here and was never sent: it moves to the newest left.
+        now = versions(name)[-1]["slug"]
+        dep = next((d for d in reversed(deps) if d.get("slug") == now), {})
+        row.update(slug=now, preview_url=dep.get("preview_url") or "")
+        write_rows(A("state", "contacted.csv"), CONTACTED_FIELDS, rows)
+        print(f"its pitch is now the one for {now}" + ("" if dep.get("status") == "live" else
+              " - that version has no live preview; send it back to Paul for one"))
+    record(f"the owner deleted one version of {name}: {a.slug}")
+    return 0
+
+
+def cmd_undelete(a):
+    """A version deleted from the Studio, back - files and its card. Its
+    preview does not come back; Send back to Paul makes a new one."""
+    dest = deleted_dir(a.slug)
+    info = read_json(dest / "deleted.json", {}) or {}
+    if not info.get("build"):
+        print(f"{a.slug} is not among the deleted versions")
+        return 1
+    for kind in ("sites", "outbox"):
+        if (dest / kind).exists():
+            if A(kind, a.slug).exists():
+                print(f"{kind}/{a.slug} exists again - nothing changed")
+                return 1
+            A(kind).mkdir(parents=True, exist_ok=True)
+            shutil.move(str(dest / kind), str(A(kind, a.slug)))
+    log = builds()
+    log.insert(min(int(info.get("index") or 0), len(log)), info["build"])
+    A("state", "builds.jsonl").write_text("".join(json.dumps(b) + "\n" for b in log))
+    shutil.rmtree(dest)
+    print(f"{info['build'].get('name')} {a.slug} is back - its preview is not; send it back to Paul for a new one")
+    return 0
+
+
+def purge_deleted(day=None):
+    """Deleted versions older than DELETED_DAYS are gone for good."""
+    day = day or today()
+    root = A("sites", "_deleted")
+    for d in sorted(root.glob("*")) if root.is_dir() else []:
+        when = (read_json(d / "deleted.json", {}) or {}).get("day")
+        if when and day > day_plus(when, DELETED_DAYS):
+            shutil.rmtree(d)
+            print(f"   deleted version {d.name} is past {DELETED_DAYS} days - gone")
 
 
 def cmd_go_live(a):
@@ -4464,6 +4566,10 @@ def main(argv=None):
     p = sub.add_parser("mark", help="after you send one: sent/replied/won/declined/do-not-contact")
     p.add_argument("who", help="the slug, or the business name")
     p.add_argument("status", choices=STATUSES)
+    p = sub.add_parser("drop", help="delete one version of a business's site (never its last)")
+    p.add_argument("slug")
+    p = sub.add_parser("undelete", help="bring back a version deleted in the last 30 days")
+    p.add_argument("slug")
     p = sub.add_parser("retire", help="take down a business's older previews; its newest stays up")
     p.add_argument("who", help="the slug, or the business name")
     p = sub.add_parser("exclude", help="a business Paul must never pick")
@@ -4537,7 +4643,8 @@ def main(argv=None):
 
     a = ap.parse_args(argv)
     return {"init": cmd_init, "sender": cmd_sender, "preflight": cmd_preflight,
-            "status": cmd_status, "mark": cmd_mark, "retire": cmd_retire, "exclude": cmd_exclude,
+            "status": cmd_status, "mark": cmd_mark, "retire": cmd_retire, "drop": cmd_drop,
+            "undelete": cmd_undelete, "exclude": cmd_exclude,
             "teardown": cmd_teardown, "go-live": cmd_go_live, "dry-next": cmd_dry_next,
             "revise": cmd_revise, "measure": cmd_measure, "prospects": cmd_prospects, "approve": cmd_approve,
             "reject": cmd_reject, "build": cmd_build, "restore": cmd_restore, "find": cmd_find, "remove": cmd_remove,
