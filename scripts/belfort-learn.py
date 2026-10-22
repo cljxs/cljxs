@@ -4,7 +4,7 @@ belfort-learn.py - what Belfort's own results say, worked out in code.
 
     belfort-learn.py record [--json]           # his record, and what the names he passed on did next
     belfort-learn.py review [--month YYYY-MM] [--write]   # the monthly review for the owner
-    belfort-learn.py replay [--trail 7] [--shadow] [--json]   # his trades under other sell rules
+    belfort-learn.py replay [--trail 7] [--shadow] [--json]   # his trades under the sell rules now and before
 
 Owner, 2026-10-07: "Does it learn from its wins and losses?" It did not.
 Every wake is a new conversation, MEMORY.md holds a week of his own notes,
@@ -323,16 +323,18 @@ def review(month=None):
 # daily bars, checking the sell rule - exit_check in belfort-trade.py, the one
 # the book uses, never a copy - at the open, the day's low, its high and the
 # close. A stop crossed during the day fills AT the stop; a gap through it
-# fills at the open, as it does for real. The book checks hourly, so real
-# fills land a little under the stop: "Rules now" is the same rule replayed,
-# and its distance from "Real" is how far to trust the other columns.
+# fills at the open, as it does for real. The book checked hourly until
+# 2026-10-22 and every 10 minutes since, so real fills land a little under
+# the stop: the rule a sale was made under, replayed, is how far to trust
+# the other columns.
 # His own judgement sales happen on their real day at their real price, if
 # the replayed position still holds shares then. A position added to is
 # replayed at its average cost from the first buy.
 
-PLANS = (("Rules now", None, None),
-         ("8% trail", 8.0, None),
-         ("Keep half", None, (12.0, 0.5)))       # once up 12%, never below half the best gain
+# (column, settings for exit_check) - an empty one is the book's own rules.
+PLANS = (("Rules now", {}),
+         ("Old rules", {"trail": "own", "take": 25.0}))   # trail = the stop's own distance
+RULES_CHANGED = T.RULES_CHANGED
 
 
 def _fetch():
@@ -381,18 +383,22 @@ def lots(p):
 
 def own_distance(lot, p):
     """The stop distance the book used for this position: stored on an open
-    one; for a closed one, read back from the sale its rule wrote. None means
-    the -10% every older position had."""
+    one, and on its buy since 2026-10-22; for an older closed one, read back
+    from the sale its rule wrote. None means the -10% every older position had."""
     pos = next((x for x in p.get("positions", []) if x["symbol"].upper() == lot["symbol"]), None)
     if lot["open"] and pos and pos.get("risk_pct"):
         return float(pos["risk_pct"])
+    if lot["buys"][0].get("risk_pct"):
+        return float(lot["buys"][0]["risk_pct"])
     for t in lot["sells"]:
         why = str(t.get("reason") or "")
         m = re.search(r"its stop: -([\d.]+)%", why)
         if m:
             return float(m.group(1))
         m = re.search(r"\(high \$([\d,.]+)\).*its stop \$([\d,.]+)", why)
-        if m:
+        # Until RULES_CHANGED the trail WAS the stop's own distance; after
+        # it, a protect sale says only TRAIL, which is not the stop.
+        if m and str(t.get("utc") or "") < RULES_CHANGED:
             high, stop = (float(x.replace(",", "")) for x in m.groups())
             if stop > lot["cost"] * 1.001:          # a stop at cost says nothing about the trail
                 return round((1 - stop / high) * 100, 2)
@@ -408,9 +414,10 @@ def real_result(lot, bars):
     return round(pnl, 2), last
 
 
-def replay_lot(lot, bars, qqq, distance=None, trail=None, keep=None):
+def replay_lot(lot, bars, qqq, distance=None, rules=None):
     """(profit, day it was sold out or None while still held) for one position
-    under one rule."""
+    under one set of rules (exit_check's trail and take)."""
+    rules = rules or {}
     cb, shares, entry = lot["cost"], lot["shares"], lot["bought"]
     pos = {"symbol": lot["symbol"], "cost_basis": cb, "shares": shares, "entry_utc": entry,
            "risk_pct": distance}
@@ -444,11 +451,11 @@ def replay_lot(lot, bars, qqq, distance=None, trail=None, keep=None):
             if kind == "close" and day in qqq_close:
                 mkt = {"price": qqq_close[day], "history": [[d, x] for d, x in qqq_close.items() if d <= day]}
             q = {"price": px, "history": prior + [[day, px]]}
-            rule, _why, stop = T.exit_check(pos, q, mkt, trail=trail, keep=keep)
+            rule, _why, stop = T.exit_check(pos, q, mkt, **rules)
             if rule in ("stop", "protect"):
                 sell(shares, px if kind in ("open", "close") else stop)
             elif rule in ("trim", "take"):
-                fill = px if kind == "open" else round(cb * (1 + T.TAKE_PROFIT / 100), 2)
+                fill = px if kind == "open" else round(cb * (1 + rules.get("take", T.TAKE_PROFIT) / 100), 2)
                 if rule == "trim":
                     sell(int(shares) // 2, fill)
                     pos["trimmed"] = True
@@ -518,12 +525,12 @@ def replay(p=None, plans=PLANS, get_bars=None, saved=None):
         row = {"symbol": lot["symbol"], "bought": lot["bought"], "cost": round(lot["cost"], 2),
                "shares": lot["shares"], "open": lot["open"], "distance": dist,
                "real": {"pnl": pnl, "out": last}}
-        for name, trail, keep in plans:
-            r_pnl, r_out = replay_lot(lot, bars, qqq, dist, trail, keep)
+        for name, rules in plans:
+            r_pnl, r_out = replay_lot(lot, bars, qqq, dist, rules)
             row[name] = {"pnl": r_pnl, "out": r_out}
         rows.append(row)
-    total = {k: round(sum(r[k]["pnl"] for r in rows), 2) for k in ["real"] + [n for n, _t, _k in plans]}
-    return {"rows": rows, "total": total, "plans": [n for n, _t, _k in plans], "skipped": skipped,
+    total = {k: round(sum(r[k]["pnl"] for r in rows), 2) for k in ["real"] + [n for n, _r in plans]}
+    return {"rows": rows, "total": total, "plans": [n for n, _r in plans], "skipped": skipped,
             "last_day": max((b[-1][0] for b in cache.values() if b), default=None)}
 
 
@@ -544,16 +551,17 @@ def replay_text(r):
     if r.get("skipped"):
         out.append(f"NOT IN THE TOTAL - no prices could be read for: {', '.join(r['skipped'])}. "
                    "Run it again in a few minutes.")
-    out += ["", "Rules now = today's sell rules replayed; its gap to Real is the replay's own error",
-            "(the book checks hourly, so real stops fill a little under the stop price).",
-            "8% trail = the stop follows the best close 8% below it (instead of 10%, or",
-            "the position's own 5-15%). Keep half = today's rules, plus: once up 12%, the",
-            "stop never sits below half the best gain. Nothing here changes a rule."]
+    out += ["", f"Rules now = the sell rules since {RULES_CHANGED}: half sold at +{T.TAKE_PROFIT:g}%, and once",
+            f"up {T.PROTECT_AT:g}% the stop follows the best close {T.TRAIL:g}% below it. Old rules (until",
+            "Oct 22) = half at +25%, the trail the stop's own distance (10%, or 5-15%). For a",
+            "sale made before then, Old rules' gap to Real is the replay's own error",
+            "(checks were hourly then; real stops filled a little under). Nothing here",
+            "changes a rule."]
     return "\n".join(out)
 
 
 def cmd_replay(a):
-    plans = PLANS + (((f"{a.trail:g}% trail", a.trail, None),) if a.trail else ())
+    plans = PLANS + (((f"{a.trail:g}% trail", {"trail": a.trail}),) if a.trail else ())
     p = T.load(T.SHADOW if a.shadow else None)
     r = replay(p, plans)
     print(json.dumps(r, indent=1) if a.json else replay_text(r))

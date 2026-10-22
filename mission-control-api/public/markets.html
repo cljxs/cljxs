@@ -366,7 +366,7 @@ function callsBox(rep) {
 function callLine(w) {
   const c = w.call;
   if (!c) return w.held ? '' : `<div style="margin-top:6px;color:var(--dim)">His call: none filed for this name yet - he writes one per candidate each wake.</div>`;
-  const when = String(c.wake || '').replace(/^\d{4}-(\d{2})-(\d{2})-(\w+)$/, (m, mo, d, slot) => `${slot === 'open' ? '9:35' : slot === 'close' ? '3:55' : slot} ET ${mo}/${d}`);
+  const when = String(c.wake || '').replace(/^\d{4}-(\d{2})-(\d{2})-(\w+)$/, (m, mo, d, slot) => `${{ open: '9:35', midday: '12:00', close: '3:55' }[slot] || slot} ET ${mo}/${d}`);
   return `<div style="margin-top:6px;color:var(--gold2)">His call (${esc(when)}): <span class="num">${esc(c.score)}/10</span> - <span style="color:var(--ink)">${esc(c.reason)}</span></div>`;
 }
 
@@ -462,7 +462,7 @@ async function loadBooks() {
   let html = `<div class="bk"><div class="sect">Belfort (AI)</div>${regime}${mine ? bookStats(mine) + bookPositions(mine) + bookTrades(mine) : ''}
     <div class="sect">No-AI book</div>`;
   if (!shadow) {
-    html += `<div class="verdict">The no-AI book starts at Belfort's next wake-up (9:35 AM or
+    html += `<div class="verdict">The no-AI book starts at Belfort's next wake-up (9:35 AM, noon or
       3:55 PM Eastern, weekdays): a separate $10,000 that follows his rules without his judgement.</div>`;
   } else {
     const pnl = shadow.value - shadow.starting_cash;

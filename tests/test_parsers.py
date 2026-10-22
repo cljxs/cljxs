@@ -220,6 +220,20 @@ class WakeSlots(unittest.TestCase):
         now = datetime(2026, 9, 16, 15, 55, tzinfo=timezone.utc)
         self.assertEqual(et_time.slot("belfort", now), "close")
 
+    def test_belfort_noon_wake_is_its_own(self):
+        # 2026-10-22: a third wake at 12:00 ET. Filed as -open.md it would be
+        # failed for not writing its own report, as the close once was.
+        self.assertEqual(et_time.slot("belfort", datetime(2026, 10, 22, 12, 0)), "midday")
+        self.assertEqual(et_time.slot("belfort", datetime(2026, 10, 22, 12, 59)), "midday")
+        self.assertEqual(et_time.slot("belfort", datetime(2026, 10, 22, 9, 36)), "open")
+        # The fallback clock runs an hour fast in winter: still the same wakes.
+        self.assertEqual(et_time.slot("belfort", datetime(2026, 12, 1, 13, 0)), "midday")
+        self.assertEqual(et_time.slot("belfort", datetime(2026, 12, 1, 10, 36)), "open")
+        self.assertEqual(et_time.slot("belfort", datetime(2026, 12, 1, 16, 56)), "close")
+        timer = (ROOT / "deploy" / "belfort-cycle.timer").read_text()
+        self.assertEqual([l.split()[1] for l in timer.splitlines() if l.startswith("OnCalendar=")],
+                         ["09:35", "12:00", "15:55"])
+
     def test_report_name_uses_the_eastern_day_not_the_utc_one(self):
         # 23:31 ET on the 15th is already the 16th in UTC. The name must say
         # the 15th - that was the whole bug.
@@ -606,7 +620,7 @@ class VerifierMessages(unittest.TestCase):
         agent = Path(tmp.name)
         (agent / "data").mkdir()
         (agent / "data" / "_meta.json").write_text(json.dumps({"report_name": "x.md"}))
-        for name, slots in (("belfort", {"open", "close"}),
+        for name, slots in (("belfort", {"open", "midday", "close"}),
                             ("ace", {"afternoon", "night"})):
             with self.subTest(agent=name):
                 _, slot_ = et_time.expected_report(agent, name)
@@ -665,7 +679,7 @@ class StampedNameIsNotTrustedBlindly(unittest.TestCase):
         self.stamp(report_name="2026-09-17-cycle-report.md")
         name, _ = et_time.expected_report(self.agent, "belfort")
         self.assertNotEqual(name, "2026-09-17-cycle-report.md")
-        self.assertRegex(name, r"^\d{4}-\d{2}-\d{2}-(open|close)\.md$")
+        self.assertRegex(name, r"^\d{4}-\d{2}-\d{2}-(open|midday|close)\.md$")
 
     def test_a_slot_from_another_agent_is_rejected(self):
         # belfort files open/close; ace files afternoon/night. A stamp that
@@ -2496,9 +2510,9 @@ class WhatACycleCosts(unittest.TestCase):
 
     def test_the_schedule_comes_from_the_timers(self):
         weekly = self.m.cycles_per_week()
-        # ace wakes twice daily, belfort twice on weekdays.
+        # ace wakes twice daily, belfort three times on weekdays (noon since 2026-10-22).
         self.assertEqual(weekly["ace"], 14)
-        self.assertEqual(weekly["belfort"], 10)
+        self.assertEqual(weekly["belfort"], 15)
         self.assertEqual(weekly["scout"], 7)
 
     def test_a_timer_that_wakes_no_model_is_not_counted(self):
@@ -15581,10 +15595,11 @@ class BelfortsSellRulesAreCode(unittest.TestCase):
         self.assertEqual(trade.exit_check(self.pos(), never)[:3:2], (None, 90.0))
 
     def test_the_protected_stop_follows_the_high(self):
-        # Up 20% at the high: the stop is 10% under it, +8% over cost - a gain kept.
-        rule, _, stop = trade.exit_check(self.pos(), self.q(110.0, [110, 120, 112]))
-        self.assertEqual((rule, round(stop, 2)), (None, 108.0))
-        self.assertEqual(trade.exit_check(self.pos(), self.q(107.9, [110, 120, 112]))[0], "protect")
+        # Up 20% at the high: the stop is 8% under it (10% until 2026-10-22),
+        # +10.4% over cost - a gain kept.
+        rule, _, stop = trade.exit_check(self.pos(), self.q(111.0, [110, 120, 112]))
+        self.assertEqual((rule, round(stop, 2)), (None, 110.4))
+        self.assertEqual(trade.exit_check(self.pos(), self.q(110.4, [110, 120, 112]))[0], "protect")
 
     def test_a_high_before_buying_does_not_count(self):
         q = self.q(101.0, [130, 125, 101], start="2026-09-17")      # 130 was the 17th
@@ -15651,28 +15666,31 @@ class BelfortsSellRulesAreCode(unittest.TestCase):
         self.assertTrue(after["trades"][-1]["reason"].startswith("PROTECT GAIN"))
         self.assertIn("nothing due", self.run_trade("exits", "--apply").stdout)
 
-    def test_half_at_25_percent_then_the_rest_rides_a_rising_stop(self):
+    def test_half_at_20_percent_then_the_rest_rides_a_rising_stop(self):
         # Owner, 2026-10-09: "would the stop loss keep rising if the stock keeps
         # rising" - the walkthrough he was given, run: 4 shares at $100.
+        # Half at +20% and an 8% trail since 2026-10-22 (were +25% and 10%).
         p = {"starting_cash": 10000.0, "cash": 9600.0, "cycle_count": 1,
              "trades": [{"side": "BUY", "symbol": "WINR", "shares": 4, "price": 100, "notional": 400,
                          "utc": "2026-09-21 13:36:00"}],
              "positions": [dict(self.pos(), symbol="WINR", shares=4)]}
         self.state.write_text(json.dumps(p))
         quotes = lambda price, closes: self.quotes.write_text(json.dumps({"quotes": {"WINR": self.q(price, closes)}}))
-        quotes(125.0, [110, 120])
+        quotes(119.0, [110, 115])
+        self.assertIn("nothing due", self.run_trade("exits", "--apply").stdout, "+19% is not +20%")
+        quotes(120.0, [110, 115])
         r = self.run_trade("exits", "--apply")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("sold 2 of 4 WINR: TAKE PROFIT (half)", r.stdout)
         after = json.loads(self.state.read_text())
         pos = after["positions"][0]
-        self.assertEqual((pos["shares"], pos["trimmed"]["price"], pos["trimmed"]["shares_before"]), (2, 125.0, 4))
+        self.assertEqual((pos["shares"], pos["trimmed"]["price"], pos["trimmed"]["shares_before"]), (2, 120.0, 4))
         self.assertIn("nothing due", self.run_trade("exits", "--apply").stdout, "trimmed once, never twice")
 
-        # It keeps climbing: the stop keeps rising, 10% under each new high.
+        # It keeps climbing: the stop keeps rising, 8% under each new high.
         for high in (140, 175, 200):
             stop = trade.exit_check(trade.entry_of(after, pos), self.q(float(high), [110, 120, high]))[2]
-            self.assertEqual(stop, round(high * 0.9, 2))
+            self.assertEqual(stop, round(high * 0.92, 2))
         # It falls back to the stop from a high of 200: the rest is sold there.
         quotes(180.0, [110, 120, 150, 200, 185])
         r = self.run_trade("exits", "--apply")
@@ -15681,9 +15699,9 @@ class BelfortsSellRulesAreCode(unittest.TestCase):
         self.assertEqual(done["positions"], [])
         self.assertEqual(trade.book_gap(done)[0], 0)
         t = done["trades"][-1]["trim_test"]
-        self.assertEqual((t["actual"], t["all_at_trim"]), (50.0 + 160.0, 100.0),
-                         "2 at +$25 and 2 at +$80, against all 4 at +$25")
-        self.assertEqual(trade.trim_test(done)["difference"], 110.0)
+        self.assertEqual((t["actual"], t["all_at_trim"]), (40.0 + 160.0, 80.0),
+                         "2 at +$20 and 2 at +$80, against all 4 at +$20")
+        self.assertEqual(trade.trim_test(done)["difference"], 120.0)
 
     def test_buying_more_starts_a_trimmed_position_over(self):
         pos = dict(self.pos(), symbol="WINR", shares=2, trimmed={"price": 125.0, "shares_before": 4})
@@ -16135,9 +16153,11 @@ class BelfortStopsSizesAndEarnings(unittest.TestCase):
         rule, reason, stop = trade.exit_check(pos, q(94.0, [100, 97]))
         self.assertEqual((rule, stop), ("stop", 94.0))
         self.assertIn("(its stop: -6%)", reason)
-        # protecting a gain: the same 6% under the high, not 10%
-        self.assertEqual(trade.exit_check(pos, q(115.0, [110, 120, 115]))[2], 112.8)
-        self.assertEqual(trade.exit_check(pos, q(112.8, [110, 120, 115]))[0], "protect")
+        # protecting a gain: 8% under the high whatever its own distance - the
+        # trail was this 6% until 2026-10-22; the stop below cost still is.
+        self.assertEqual(trade.exit_check(pos, q(115.0, [110, 120, 115]))[2], 110.4)
+        self.assertEqual(trade.exit_check(pos, q(110.4, [110, 120, 115]))[0], "protect")
+        self.assertEqual(trade.exit_check(pos, q(115.0, [110, 120, 115]), trail="own")[2], 112.8)
         # bought before the rule: no risk_pct, the old -10%
         del pos["risk_pct"]
         self.assertEqual(trade.exit_check(pos, q(94.0, [100, 97]))[:3:2], (None, 90.0))
@@ -16294,19 +16314,22 @@ class BelfortStopsSizesAndEarnings(unittest.TestCase):
                                   "entry_utc": "2026-09-01 14:00:00"}]}, "shadow.json")
         r = self.run_trade("shadow", "--exits-only")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("shadow book, hourly exits: sold PANW: STOP LOSS", r.stdout)
+        self.assertIn("shadow book, exits check: sold PANW: STOP LOSS", r.stdout)
         after = self.saved("shadow.json")
         self.assertEqual((after["positions"], after["cash"], after["cycle_count"]), ([], 9880.0, 4),
                          "no AMD bought, and not counted as a cycle")
         self.assertEqual(json.loads((self.state / "equity.jsonl").read_text().splitlines()[-1])["book"], "shadow")
         self.assertIn("nothing due", self.run_trade("shadow", "--exits-only").stdout)
 
-    def test_the_hourly_timer(self):
+    def test_the_ten_minute_timer(self):
         timer = (ROOT / "deploy" / "belfort-exits.timer").read_text()
         service = (ROOT / "deploy" / "belfort-exits.service").read_text()
-        # Owner, 2026-10-15: "Check more often" - every hour 10:35-15:35,
-        # between the 9:35 and 15:55 wakes, instead of 12:35 alone.
-        self.assertIn("OnCalendar=Mon..Fri 10..15:35 America/New_York", timer)
+        # Owner, 2026-10-15: "Check more often" - hourly, instead of 12:35
+        # alone. 2026-10-22: every 10 minutes, 09:45-15:55, five minutes after
+        # each fetch; hourly cost $38 on his trades in the replay.
+        cal = [l.split("=", 1)[1] for l in timer.splitlines() if l.startswith("OnCalendar=")]
+        self.assertEqual(cal, ["Mon..Fri 09:45/10 America/New_York",
+                               "Mon..Fri 10..15:05/10 America/New_York"])
         runs = [l.split("=", 1)[1] for l in service.splitlines() if l.startswith("ExecStart=")]
         self.assertEqual([r.split("belfort-trade.py ")[1] for r in runs], ["exits --apply", "shadow --exits-only"])
         self.assertNotIn("openclaw", service, "code only: no model is woken")
@@ -16334,7 +16357,8 @@ class BelfortStopsSizesAndEarnings(unittest.TestCase):
     def test_belfort_is_told(self):
         head = (ROOT / "agents" / "belfort" / "_belfort-agents-header.md").read_text()
         for line in ("belfort-trade.py size MRVL", "1% of the\nportfolio", "earnings within 5 trading days",
-                     "again **every\nhour from 10:35 to 15:35 ET**", "**8+ trading days**, and behind QQQ"):
+                     "again **every 10 minutes from 09:45 to 15:55 ET**", "**+20%**, **half** is sold",
+                     "**8% below it**", "**8+ trading days**, and behind QQQ"):
             self.assertIn(line, head)
 
 
@@ -19919,7 +19943,7 @@ class BelfortsSellRulesReplayOnRealPrices(unittest.TestCase):
         asked = []
         with contextlib.redirect_stderr(io.StringIO()):
             r = self.learn.replay(self.book, get_bars=lambda s: asked.append(s) or [], saved=saved)
-        self.assertEqual((asked, r["total"]["8% trail"]), ([], 285.01))
+        self.assertEqual((asked, r["total"]["Rules now"]), ([], 387.93))
 
     def test_the_saved_bars_file_is_read_as_the_fetcher_writes_it(self):
         # bars.json written by belfort-fetch.py's own chart(), from real bars.
@@ -19953,51 +19977,65 @@ class BelfortsSellRulesReplayOnRealPrices(unittest.TestCase):
         self.assertEqual(r["skipped"], ["ZZZZ"])
         self.assertIn("NOT IN THE TOTAL", self.learn.replay_text(r))
 
-    def test_the_rule_now_replayed_lands_on_the_real_sales(self):
-        # The replay's own error, shown beside the alternatives: same days,
-        # within $15 a position, $1 in total.
+    def test_the_rule_they_were_sold_under_lands_on_the_real_sales(self):
+        # The replay's own error, shown beside the rest: the rule before
+        # 2026-10-22, replayed, sells on the same days, within $15 a
+        # position and $1 in total.
         rows, r = self.run_replay()
         for sym, x in rows.items():
-            self.assertEqual(x["Rules now"]["out"], x["real"]["out"], sym)
-            self.assertLess(abs(x["Rules now"]["pnl"] - x["real"]["pnl"]), 15, sym)
-        self.assertLess(abs(r["total"]["Rules now"] - r["total"]["real"]), 1)
+            self.assertEqual(x["Old rules"]["out"], x["real"]["out"], sym)
+            self.assertLess(abs(x["Old rules"]["pnl"] - x["real"]["pnl"]), 15, sym)
+        self.assertLess(abs(r["total"]["Old rules"] - r["total"]["real"]), 1)
 
     def test_the_trail_is_read_back_from_the_sale(self):
         rows, _ = self.run_replay()
         self.assertEqual({x["distance"] for x in rows.values()}, {10.0})
-        lot = {"symbol": "X", "cost": 100.0, "open": False,
+        lot = {"symbol": "X", "cost": 100.0, "open": False, "buys": [{}],
                "sells": [{"reason": "STOP LOSS: -7.6% from cost $100.00 (its stop: -7.5%)"}]}
         self.assertEqual(self.learn.own_distance(lot, {"positions": []}), 7.5)
+        # Since 2026-10-22 a protect sale names the 8% trail, not the stop:
+        # the buy carries the stop instead.
+        lot["sells"] = [{"utc": "2026-10-30 15:00:00", "reason": self.WHY.format(
+            up="+20.0%", high="120.00", now="+10.4%", stop="110.40")}]
+        self.assertIsNone(self.learn.own_distance(lot, {"positions": []}))
+        lot["buys"] = [{"risk_pct": 6.5}]
+        self.assertEqual(self.learn.own_distance(lot, {"positions": []}), 6.5)
 
-    def test_an_eight_percent_trail_on_the_same_buys(self):
+    def test_the_rules_now_on_the_same_buys(self):
+        # Half at +20% and an 8% trail. MRVL touched +24.8% on 2026-10-06:
+        # half went at $289.78, the rest at the trail on 2026-10-12.
         rows, r = self.run_replay()
-        self.assertEqual(r["total"]["8% trail"], 285.01)
-        self.assertEqual(rows["MRVL"]["8% trail"]["out"], "2026-10-12")
+        self.assertEqual(r["total"]["Rules now"], 387.93)
+        self.assertEqual(rows["MRVL"]["Rules now"], {"pnl": 306.05, "out": "2026-10-12"})
+
+    def test_an_eight_percent_trail_alone(self):
+        rows, r = self.run_replay(self.learn.PLANS + (("8% trail, half at 25%", {"trail": 8.0, "take": 25.0}),))
+        self.assertEqual(r["total"]["8% trail, half at 25%"], 285.01)
 
     def test_a_gap_through_the_stop_fills_at_the_open(self):
         # PANW opened 2026-10-14 at $378.96, under an 8% stop of $386.32.
         # Filling at the stop would credit $29 that no stop could have got.
         rows, _ = self.run_replay()
-        self.assertEqual(rows["PANW"]["8% trail"]["pnl"], round((378.96 - 370.35) * 4, 2))
-
-    def test_keeping_half_the_gain(self):
-        rows, r = self.run_replay()
-        self.assertEqual(r["total"]["Keep half"], 313.33)
-        self.assertEqual(rows["CRWD"]["Keep half"]["out"], "2026-10-13")
+        self.assertEqual(rows["PANW"]["Rules now"]["pnl"], round((378.96 - 370.35) * 4, 2))
 
     def test_too_tight_a_trail_sells_on_an_ordinary_dip(self):
         # The other side of the trade-off, on the same real bars: 6% shook
         # CRWD out on 2026-09-28, before its run to $278.86.
-        rows, _ = self.run_replay(self.learn.PLANS + (("6% trail", 6.0, None),))
+        rows, _ = self.run_replay(self.learn.PLANS + (("6% trail", {"trail": 6.0}),))
         self.assertEqual(rows["CRWD"]["6% trail"]["out"], "2026-09-28")
 
-    def test_the_book_without_the_new_settings_is_unchanged(self):
+    def test_the_book_passes_no_replay_settings(self):
         T = self.learn.T
-        pos = {"symbol": "X", "cost_basis": 100.0, "shares": 4, "entry_utc": "2026-09-01"}
-        q = {"price": 109.0, "history": [["2026-09-01", 100.0], ["2026-09-02", 120.0]]}
-        self.assertIsNone(T.exit_check(pos, q)[0])                           # stop $108
-        self.assertEqual(T.exit_check(pos, q, keep=(12.0, 0.5))[0], "protect")   # stop $110
-        self.assertEqual(T.exit_check(pos, q, trail=8.0)[0], "protect")          # stop $110.40
+        pos = {"symbol": "X", "cost_basis": 100.0, "shares": 4, "entry_utc": "2026-09-01", "risk_pct": 12.0}
+        q = {"price": 111.0, "history": [["2026-09-01", 100.0], ["2026-09-02", 119.0]]}
+        self.assertEqual(T.exit_check(pos, q)[2], 109.48)                   # 8% under 119
+        self.assertEqual(T.exit_check(pos, q, trail="own")[2], 104.72)      # its own 12%
+        self.assertIsNone(T.exit_check(dict(pos, trimmed=False), dict(q, price=119.0))[0])
+        self.assertEqual(T.exit_check(pos, dict(q, price=120.0))[0], "trim")
+        self.assertIsNone(T.exit_check(pos, dict(q, price=120.0), take=25.0)[0])
+        src = (SCRIPTS / "belfort-trade.py").read_text()
+        self.assertEqual(re.findall(r"(?<!def )exit_check\([^)]*(?:trail|take)=", src), [],
+                         "the book never passes the replay's settings")
 
     def test_his_own_judgement_sale_keeps_its_day_and_price(self):
         self.book["trades"][3] = dict(self.book["trades"][3], reason="THESIS BROKEN: guidance cut",
@@ -20009,7 +20047,8 @@ class BelfortsSellRulesReplayOnRealPrices(unittest.TestCase):
     def test_the_text_fits_and_says_it_changes_nothing(self):
         _, r = self.run_replay()
         text = self.learn.replay_text(r)
-        self.assertIn("Nothing here changes a rule.", text)
+        self.assertIn("Nothing here", text)
+        self.assertIn("half sold at +20%", text)
         self.assertLessEqual(max(len(line) for line in text.splitlines()), 90)
 
 

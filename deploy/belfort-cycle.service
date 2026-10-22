@@ -1,5 +1,5 @@
 [Unit]
-Description=Belfort agent cycle (THIS one costs fuel - runs twice per trading day)
+Description=Belfort agent cycle (a plan wake - three per trading day: 09:35, 12:00, 15:55 ET)
 Documentation=https://github.com/cljxs/cljxs
 
 [Service]

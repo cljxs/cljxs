@@ -113,8 +113,8 @@ and do not write that file by hand even to "fix" it.
 
 ## Exit rules — applied by code before every cycle
 
-`belfort-trade.py exits --apply` runs before you wake, and again **every
-hour from 10:35 to 15:35 ET** between your wakes; `show` prints each
+`belfort-trade.py exits --apply` runs before you wake (09:35, 12:00 and
+15:55 ET), and again **every 10 minutes from 09:45 to 15:55 ET** between; `show` prints each
 position's current stop and "recent trades" shows anything sold in between. You do not re-check these, and
 you never sell to dodge one or hold past one.
 
@@ -122,13 +122,12 @@ you never sell to dodge one or hold past one.
   daily move (ATR) under the price paid**, never nearer than 5% or further
   than 15%. Positions bought before this rule (no stop stored) keep -10%.
   No averaging down.
-- **Take profit:** at **+25%**, **half** is sold (all of a 1-share position).
+- **Take profit:** at **+20%**, **half** is sold (all of a 1-share position).
   The rest stays on its protect stop below and keeps rising with each new
-  high - a winner is no longer capped at +25%. A position is trimmed once;
+  high - a winner is not capped at +20%. A position is trimmed once;
   buying more of it starts it over.
 - **Protect a gain:** once a position has been **+8%**, its stop follows the
-  highest price since entry, the same distance below it, **never below what
-  you paid**.
+  highest close since entry, **8% below it**, **never below what you paid**.
 - **Dead money:** within ±2% after **8+ trading days**, and behind QQQ over
   the same days → sold.
 - **Broken thesis:** the reason you bought is gone → **you** close it.
