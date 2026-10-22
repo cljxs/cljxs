@@ -78,6 +78,7 @@ generated - edit the header, then `scripts/deploy.sh <name>`).
 | Ingest, Dropbox pickup, link inbox, comments/pins | `clipper/ingest.py`, `clipper/dropbox.py`, `clipper/inbox.py` |
 | Transcribe, spellings | `clipper/transcribe.py` |
 | Moments, scoring, campaign lists | `clipper/moments.py`, `clipper/score.py`, `clipper/campaign.py` |
+| Complete thoughts: where each story/argument starts and ends (Sonnet on the plan) | `clipper/stories.py` (`read`, `apply`, `cuts_into`) |
 | Stages, recut, subtitles (`set_subtitles`, `recut`, `clip_ass`) | `clipper/pipeline.py` |
 | Framing on faces (`shot_layout`, `crowd`) | `clipper/framing.py` |
 | ffmpeg render, clean copy, `burn`, watermark | `clipper/render.py`, `clipper/media.py`, `clipper/cutout.py` |

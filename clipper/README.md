@@ -101,6 +101,31 @@ cd /root/ecosystem && python3 -m clipper spot && python3 -m clipper trends
 A run uses about 800 of the free 10,000 daily YouTube units, and it stops
 itself at 3,000.
 
+## Complete thoughts (2026-10-22)
+
+The scorer measures a clip; it cannot tell that someone is leading up to a
+story, or that the argument is not over. So before choosing, Clip has the
+transcript read 15 minutes at a time by **Sonnet on your Claude plan**
+(`clip` in `tasks/engines.json`, no cost per read), which marks where each
+story, argument, hot take and funny bit starts and ends. Code then:
+
+* makes each marked moment a clip candidate, up to `story_max_seconds`
+  (90) - other clips still stop at `max_clip_seconds` (60);
+* adds points for how good the model rated it (`stories.BONUS_*`);
+* skips any window that starts or ends inside a marked moment ("cuts into
+  a story") - the cut-off clip.
+
+The marks are kept in `media/<video>/stories.json`, so `refind` asks
+nothing again. When the plan will not answer, the video is clipped by
+score alone and the find event in `status` says so. `"story_reading": false`
+in `config.json` turns it off.
+
+**Write hooks** asks the plan too, with a web search: what is being said
+this week about the people and teams in the title, plus the arguments these
+shows always have (Jordan vs LeBron, rings, this era against back then, the
+hosts' playing days). If the plan cannot answer, the cheap model writes
+them as before, without searching, and the note under the box says which.
+
 ## Approving and posting
 
 Every clip gets its words when it is rendered: a title, a caption and

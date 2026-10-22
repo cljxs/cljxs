@@ -354,7 +354,14 @@ ASK_SYSTEM = ("You answer one question for a script, in exactly the format it as
               "You have no tools. No preamble and no follow-up.")
 
 
-def ask(agent, question, timeout=150, run=subprocess.run):
+# With tools (2026-10-22, Clip's Write hooks: tools=("WebSearch",)) the one
+# question may take up to the agent's max_turns, to search before answering.
+# Only the tools named; nothing that writes.
+ASK_TOOLS_SYSTEM = ("You answer one question for a script, in exactly the format it asks for. "
+                    "You may use the tools you have to look things up first. No preamble and no follow-up.")
+
+
+def ask(agent, question, timeout=150, run=subprocess.run, tools=()):
     """(answered, text). The agent's engine must be the plan."""
     s = setting(agent)
     if s["engine"] != "claude":
@@ -366,10 +373,13 @@ def ask(agent, question, timeout=150, run=subprocess.run):
         return False, f"no {TOKEN_KEY} in {PLAN_CREDENTIALS}"
     with tempfile.TemporaryDirectory() as d:
         pf = Path(d) / "system.md"
-        pf.write_text(ASK_SYSTEM)
+        pf.write_text(ASK_TOOLS_SYSTEM if tools else ASK_SYSTEM)
+        use = (["--max-turns", str(int(s["max_turns"])), "--tools", ",".join(tools),
+                "--allowedTools", *tools, "--permission-mode", "dontAsk"] if tools
+               else ["--max-turns", "1", "--tools", ""])
         try:
             r = run([binary, "-p", question, "--output-format", "json", "--model", str(s["model"]),
-                     "--max-turns", "1", "--tools", "", "--system-prompt-file", str(pf),
+                     *use, "--system-prompt-file", str(pf),
                      "--strict-mcp-config", "--no-session-persistence"],
                     cwd=d, env=claude_env(token), capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:

@@ -13,7 +13,7 @@ import json
 import traceback
 from pathlib import Path
 
-from clipper import campaign, captions, db, media, moments, postcopy, render, score, transcribe, trim
+from clipper import campaign, captions, db, media, moments, postcopy, render, score, stories, transcribe, trim
 
 MAX_ATTEMPTS = 3
 
@@ -126,9 +126,19 @@ def stage_find(conn, paths, cfg, video):
     pins = json.loads(video["pins"]) if "pins" in video.keys() and video["pins"] else []
     sents = moments.sentences(words, cfg["sentence_pause_seconds"])
     wins = moments.windows(sents, cfg["min_clip_seconds"], cfg["max_clip_seconds"])
+    # Where each story, argument and bit starts and ends (stories.py): each
+    # is a window of its own, up to story_max_seconds, and a window cutting
+    # through one is skipped.
+    marks, story_note = stories.read(sents, cfg, src["name"], video["title"], hunt,
+                                     cache=folder(paths, video) / "stories.json")
+    if marks:
+        have = set(wins)
+        wins += [(m["i"], m["j"]) for m in marks if (m["i"], m["j"]) not in have]
     funny = int(cfg["funny_clips_per_video"])
     frames = frames_of(paths, video) if funny > 0 else None
     scored = score.score_windows(sents, wins, words, loud, cfg, hunt, avoid, frames, pins)
+    if marks:
+        stories.apply(scored, marks)
     # At least one clip per topic on the campaign's list: the list is the
     # moments it says to make, so a smaller cap would silently drop some.
     chosen = moments.choose(scored, max(cfg["max_clips_per_video"], len(hunt)), cfg["min_score"],
@@ -156,7 +166,8 @@ def stage_find(conn, paths, cfg, video):
             conn.execute(
                 "INSERT INTO candidates (video_id, start, end, text, score, scorer, features, "
                 "reasons, selected) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (video["id"], start, end, c["text"], c["score"], score.SCORER,
+                (video["id"], start, end, c["text"], c["score"],
+                 f"{score.SCORER}+{stories.READER}" if c.get("story") else score.SCORER,
                  db.as_json(c["features"]), db.as_json(c["reasons"]),
                  1 if (c["i"], c["j"]) in picked else 0))
     if listed:
@@ -173,7 +184,10 @@ def stage_find(conn, paths, cfg, video):
                            + (f"; campaign topics clipped: {', '.join(covered) or 'none'}" if hunt else "")
                            + (f"; not found: {', '.join(missing)}" if missing else "")
                            + (f"; funny: {funnies} of {funny} "
-                              f"({len(score.laughs(words, frames))} laughs heard)" if funny else ""),
+                              f"({len(score.laughs(words, frames))} laughs heard)" if funny else "")
+                           + f"; {story_note}"
+                           + (f"; {sum(1 for c in chosen if c.get('story'))} chosen are marked moments"
+                              if marks else ""),
              video_id=video["id"])
     return "found"
 

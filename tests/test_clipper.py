@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -26,6 +27,14 @@ from clipper import captions, cli, config, db, media, moments, pipeline, render,
 
 WORDS = json.loads((FIXTURES / "clipper-words-librivox.json").read_text())["words"]
 CFG = dict(config.DEFAULTS)
+
+# No test asks the real Claude plan - on the droplet the login is there, and
+# every stage_find would read its transcript for real. Tests of the reading
+# itself pass their own ask.
+from clipper import stories  # noqa: E402
+stories._ask = lambda q: (False, "the plan is not asked in tests")
+from clipper import inbox as _inbox  # noqa: E402
+_inbox._plan = lambda q: (False, "the plan is not asked in tests")
 
 
 def w(start, end, word):
@@ -3281,7 +3290,8 @@ class HooksFromTheComments(unittest.TestCase):
                     youtube="https://youtu.be/dQw4w9WgXcQ", yt=yt, notes=notes)
         self.assertIn("(300 likes) 12:40 that block on Giannis", prompts[0])
         self.assertIn("Moments viewers pointed at", prompts[0])
-        self.assertEqual(notes, ["read 3 comments", "viewers pointed at 12:40 (2 comments)"])
+        self.assertEqual(notes[:2], ["read 3 comments", "viewers pointed at 12:40 (2 comments)"])
+        self.assertIn("Claude plan could not answer", notes[2], "and who wrote them, when not the plan")
 
     def test_without_comments_the_title_still_works(self):
         yt, _ = self.yt([], error="commentsDisabled")
@@ -3398,3 +3408,212 @@ class AVideosOwnHooks(EndToEnd):
              mock.patch.object(cli.dropbox, "pickup", return_value=nothing):
             self.cli("pickup")
         drain.assert_not_called()
+
+
+# ---------------------------------------------------------------- complete thoughts (stories.py)
+
+class CompleteThoughts(unittest.TestCase):
+    """Owner, 2026-10-21: "these clips cut off in the middle of someone's
+    story or train of thought ... I need complete thoughts". A model marks
+    where each story, argument and bit starts and ends; code checks the
+    marks, makes each a candidate, and skips any window cutting through one."""
+
+    def setUp(self):
+        self.sents = moments.sentences(WORDS, 0.8)
+        self.cfg = dict(CFG, story_max_seconds=90.0)
+
+    def test_the_stretches_cover_everything_and_overlap(self):
+        sents = [{"start": t, "end": t + 4.0, "text": "x."} for t in range(0, 3600, 5)]
+        parts = stories.stretches(sents)
+        self.assertEqual(parts[0][0], 0)
+        self.assertEqual(parts[-1][1], len(sents) - 1, "the end of the episode is read")
+        for (a0, a1), (b0, b1) in zip(parts, parts[1:]):
+            shared = sents[a1]["end"] - sents[b0]["start"]
+            self.assertGreaterEqual(shared, 90.0, "a 90 s moment on an edge is whole in one stretch")
+
+    def test_only_usable_marks_are_kept(self):
+        ok = next(j for j in range(len(self.sents)) if self.sents[j]["end"] - self.sents[3]["start"] >= 30)
+        doc = {"moments": [{"first": 3, "last": ok, "kind": "Story", "rating": 8, "title": "  The   fisherman "},
+                           {"first": 3, "last": 4, "kind": "funny", "rating": 9},           # too short
+                           {"first": 0, "last": len(self.sents) - 1, "rating": 9},          # too long
+                           {"first": 200, "last": 210, "rating": 9},                        # not shown
+                           {"first": "three", "last": 9}]}
+        good, dropped = stories.check(doc, self.sents, 0, 60, self.cfg)
+        self.assertEqual([(m["i"], m["j"], m["kind"], m["title"]) for m in good], [(3, ok, "story", "The fisherman")])
+        self.assertEqual(len(dropped), 4)
+
+    def test_the_same_moment_from_two_stretches_is_kept_once(self):
+        a = {"i": 10, "j": 20, "rating": 6}
+        b = {"i": 12, "j": 22, "rating": 8}
+        c = {"i": 30, "j": 40, "rating": 5}
+        self.assertEqual(stories.merge([a, b, c]), [b, c])
+
+    def test_a_marked_moment_wins_and_a_window_cutting_it_is_skipped(self):
+        m = {"i": 5, "j": 9, "kind": "story", "rating": 8, "title": "The lead-up and the payoff", "why": ""}
+        scored = [{"i": 5, "j": 9, "start": 5.0, "end": 9.5, "score": 50.0, "reasons": [], "topics": []},
+                  {"i": 7, "j": 12, "start": 7.0, "end": 12.5, "score": 70.0, "reasons": [], "topics": ["Knicks"], "laughs": 1},   # ends after, starts inside
+                  {"i": 2, "j": 6, "start": 2.0, "end": 6.5, "score": 70.0, "reasons": [], "topics": []},                       # stops before the payoff
+                  {"i": 4, "j": 10, "start": 4.0, "end": 10.5, "score": 55.0, "reasons": [], "topics": []},                      # holds it whole
+                  {"i": 20, "j": 25, "start": 20.0, "end": 25.5, "score": 60.0, "reasons": [], "topics": []},                     # elsewhere
+                  {"i": 6, "j": 8, "start": 6.0, "end": 8.5, "score": 0.0, "reasons": ["skipped: says 'use code'"], "topics": [], "avoided": True}]
+        stories.apply(scored, [m])
+        self.assertEqual(scored[0]["score"], 50.0 + stories.BONUS_BASE + stories.BONUS_PER * 8)
+        self.assertIn("a complete story (8/10)", scored[0]["reasons"][0])
+        for c in scored[1:3]:
+            self.assertEqual(c["score"], 0.0)
+            self.assertIn("cuts into a story", c["reasons"][0])
+        self.assertEqual(scored[1]["topics"], [], "no topic credit for the cut-off version")
+        self.assertEqual((scored[3]["score"], scored[4]["score"]), (55.0, 60.0))
+        self.assertEqual(scored[5]["reasons"], ["skipped: says 'use code'"], "the avoid list still wins")
+        chosen = moments.choose(scored, 3, 40)
+        self.assertEqual([(c["i"], c["j"]) for c in chosen], [(5, 9), (20, 25)])
+
+    def test_the_question_numbers_the_sentences_and_asks_for_whole_thoughts(self):
+        q = stories.question(self.sents, 2, 6, self.cfg, "club-520", "Teague's season preview",
+                             [{"name": "MVP Picks", "terms": ["mvp"]}])
+        self.assertIn(f"2 [0:{int(self.sents[2]['start']):02d}] {self.sents[2]['text']}", q)
+        self.assertNotIn(self.sents[7]["text"], q)
+        for said in ("COMPLETE", "20 to 90 seconds", "MVP Picks", "Teague's season preview", "lead-up"):
+            self.assertIn(said, q)
+
+    def test_kept_once_read_and_a_refusal_is_said_not_raised(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        j = next(j for j in range(len(self.sents)) if self.sents[j]["end"] - self.sents[3]["start"] >= 40)
+        asked = []
+
+        def ask(q):
+            asked.append(q)
+            return True, 'Here you go: ```json\n{"moments": [{"first": 3, "last": %d, "kind": "argument", "rating": 7}]}\n```' % j
+        marks, note = stories.read(self.sents, self.cfg, ask=ask, cache=tmp / "stories.json")
+        self.assertEqual([(m["i"], m["j"], m["kind"]) for m in marks], [(3, j, "argument")])
+        self.assertIn("1 complete moments marked", note)
+        again, note = stories.read(self.sents, self.cfg, ask=lambda q: self.fail("asked again"),
+                                   cache=tmp / "stories.json")
+        self.assertEqual(again, marks)
+        self.assertIn("kept from before", note)
+        none, note = stories.read(self.sents, self.cfg, ask=lambda q: (False, "usage limit reached"))
+        self.assertIsNone(none)
+        self.assertIn("clipped by score alone", note)
+        self.assertIn("usage limit reached", note)
+        self.assertEqual(stories.read(self.sents, dict(self.cfg, story_reading=False))[0], None)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class CompleteThoughtsThroughTheFindStage(EndToEnd):
+    """The marked moment becomes a clip as it was marked - longer than
+    max_clip_seconds (30 here) when it needs to be - and no clip cuts it."""
+
+    # EndToEnd's own test runs once, in EndToEnd: here it only doubled the
+    # suite's time, and its exact-output check caught other tests' unclosed
+    # connections being collected mid-run.
+    test_permitted_video_in_captioned_short_out = None
+
+    def ready(self):
+        self.cli("source", "add", "pd", "--rights", "public-domain", "--evidence", "LibriVox")
+        self.cli("ingest", "pd", str(self.video))
+        self.give_words(1)
+        self.paths, self.cfg = config.paths(), dict(config.load(), max_clips_per_video=3)
+        self.conn = db.connect(self.home / "clipper.db")
+        self.addCleanup(self.conn.close)
+        pipeline.stage_transcribe(self.conn, self.paths, self.cfg, self.video_row())
+        self.sents = moments.sentences(pipeline.words_of(self.conn, self.paths, self.video_row()),
+                                       self.cfg["sentence_pause_seconds"])
+        self.i = next(k for k, s in enumerate(self.sents) if s["start"] >= 5)
+        self.j = next(k for k in range(self.i, len(self.sents))
+                      if self.sents[k]["end"] - self.sents[self.i]["start"] >= 38)
+        old = stories._ask
+        self.addCleanup(setattr, stories, "_ask", old)
+
+    def video_row(self):
+        return self.conn.execute("SELECT * FROM videos").fetchone()
+
+    def test_the_marked_story_is_cut_whole_and_nothing_cuts_into_it(self):
+        self.ready()
+        asked = []
+        stories._ask = lambda q: (asked.append(q) or (True, json.dumps({"moments": [
+            {"first": self.i, "last": self.j, "kind": "story", "rating": 9, "title": "The fisherman's tale"}]})))
+        pipeline.stage_find(self.conn, self.paths, self.cfg, self.video_row())
+        self.assertEqual(len(asked), 1, "a minute of video is one stretch")
+        rows = self.conn.execute("SELECT * FROM candidates WHERE selected = 1").fetchall()
+        story = [r for r in rows if "a complete story" in r["reasons"]]
+        self.assertEqual(len(story), 1, [dict(r) for r in rows])
+        self.assertEqual(story[0]["scorer"], f"{score.SCORER}+{stories.READER}")
+        self.assertGreater(story[0]["end"] - story[0]["start"], self.cfg["max_clip_seconds"],
+                           "a story may run past the usual longest clip")
+        a, b = self.sents[self.i]["start"], self.sents[self.j]["end"]
+        self.assertLessEqual(story[0]["start"], a)
+        self.assertGreaterEqual(story[0]["end"], b)
+        for r in rows:
+            inside = r["start"] < b and a < r["end"]
+            whole = r["start"] <= a + 0.01 and r["end"] >= b - 0.01
+            self.assertTrue(not inside or whole, f"clip {r['start']}-{r['end']} cuts into the story {a}-{b}")
+        said = self.conn.execute("SELECT msg FROM events WHERE stage = 'find'").fetchall()[-1][0]
+        self.assertIn("1 complete moments marked", said)
+        self.assertIn("1 chosen are marked moments", said)
+        self.assertTrue((self.home / "media" / "1" / "stories.json").is_file())
+
+    def test_without_the_plan_it_clips_as_before(self):
+        self.ready()
+        stories._ask = lambda q: (False, "no CLAUDE_CODE_OAUTH_TOKEN")
+        pipeline.stage_find(self.conn, self.paths, self.cfg, self.video_row())
+        self.assertTrue(self.conn.execute("SELECT COUNT(*) FROM candidates WHERE selected = 1").fetchone()[0])
+        said = self.conn.execute("SELECT msg FROM events WHERE stage = 'find'").fetchall()[-1][0]
+        self.assertIn("clipped by score alone", said)
+
+
+class HooksSearchTheWebOnThePlan(unittest.TestCase):
+    """Owner, 2026-10-22: hooks for "common knowledge things that would be
+    discussed" (Jordan vs LeBron), and "search the web on what would be funny
+    or talked about". Asked of Sonnet on the plan with web search; the cheap
+    model, which cannot search, only when the plan cannot answer."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.conn = db.connect(Path(self.tmp.name) / "clipper.db")
+        self.addCleanup(self.conn.close)
+        self.cfg = dict(CFG)
+
+    def test_the_plan_searches_and_its_draft_is_checked_by_code(self):
+        asked, notes = [], []
+        reply = ('I searched first. {"topics": [{"name": "GOAT Debate", "terms": ["jordan", "lebron", "goat"]}, '
+                 '{"name": "MVP Picks", "terms": ["mvp", "jokic", "lol"]}]}')
+        text, cost = inbox.hooks(self.conn, self.cfg, "Teague's MVP picks", "club-520", notes=notes,
+                                 ask=lambda q: (asked.append(q) or (True, reply)),
+                                 call=lambda *a: self.fail("the cheap model was called"), key="k", left=1.0)
+        self.assertEqual(text, "GOAT Debate: jordan, lebron, goat; MVP Picks: mvp, jokic")
+        self.assertEqual(cost, 0.0)
+        self.assertEqual(db.spent_today(self.conn), 0.0, "nothing spent")
+        self.assertIn("search the web", asked[0])
+        self.assertIn("jordan, lebron, goat", asked[0], "the debates these shows always have")
+        self.assertIn("Teague's MVP picks", asked[0])
+        self.assertEqual(notes, ["written on your Claude plan, after a web search"])
+
+    def test_when_the_plan_cannot_answer_the_cheap_model_writes_them_without_searching(self):
+        prompts, notes = [], []
+        call = lambda prompt, key, slug: (prompts.append(prompt) or (HooksFromATitle.DRAFT, 0.001))
+        text, cost = inbox.hooks(self.conn, self.cfg, "LeBron's 76ers", notes=notes, call=call, key="k", left=1.0,
+                                 ask=lambda q: (False, "usage limit reached"))
+        self.assertTrue(text.startswith("Embiid"))
+        self.assertNotIn("search the web", prompts[0])
+        self.assertIn("jordan, lebron, goat", prompts[0])
+        self.assertNotIn("EVERGREEN", prompts[0])
+        self.assertIn("usage limit reached", notes[0])
+
+    def test_the_ask_names_web_search_and_only_it(self):
+        w = postcopy._script("wake_clip_test", "wake.py")
+        seen = []
+        res = json.dumps({"type": "result", "is_error": False, "result": "{}"})
+        old = (w.claude_bin, w.plan_token)
+        self.addCleanup(lambda: (setattr(w, "claude_bin", old[0]), setattr(w, "plan_token", old[1])))
+        w.claude_bin, w.plan_token = (lambda: "/bin/claude"), (lambda: "plan-login-placeholder")
+        w.ask("clip", "q?", tools=("WebSearch",), run=lambda cmd, **kw: seen.append(cmd) or
+              types.SimpleNamespace(returncode=0, stdout=res, stderr=""))
+        cmd = seen[0]
+        self.assertEqual(cmd[cmd.index("--tools") + 1], "WebSearch")
+        self.assertEqual(cmd[cmd.index("--allowedTools") + 1], "WebSearch")
+        self.assertEqual(cmd[cmd.index("--model") + 1], "sonnet")
+        self.assertEqual(cmd[cmd.index("--max-turns") + 1], "8", "room to search, from tasks/engines.json")
+        doc = json.loads((config.ROOT / "tasks" / "engines.json").read_text())
+        self.assertEqual(doc["agents"]["clip"]["fallback"], "none", "never a bill instead")

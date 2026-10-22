@@ -18,7 +18,10 @@
     "bolt is plain code; only its news book asks the plan one question a time",
     "(wake.py ask), at most 5 a day - bolt.py NEWS_WAKES_PER_DAY.",
     "coach is coach.py's Sunday review: one question on Sonnet a week, no tools,",
-    "and it only proposes - nothing it says changes a rule."
+    "and it only proposes - nothing it says changes a rule.",
+    "clip is Python; only its reading of a transcript (stories.py: where each story",
+    "and argument starts and ends, a few questions an episode, no tools) and Write",
+    "hooks (web search, up to max_turns) ask the plan. Neither falls back to a bill."
   ],
   "agents": {
     "ace": {
@@ -56,6 +59,12 @@
       "engine": "claude",
       "model": "sonnet",
       "max_turns": 1,
+      "fallback": "none"
+    },
+    "clip": {
+      "engine": "claude",
+      "model": "sonnet",
+      "max_turns": 8,
       "fallback": "none"
     }
   }

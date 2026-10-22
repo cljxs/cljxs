@@ -139,7 +139,9 @@ function register(app) {
     // inbox.py, which checks it is a YouTube link. Nothing is downloaded.
     const youtube = String(b.youtube || '').trim().slice(0, 300);
     if (/^https:\/\/(www\.|m\.)?(youtube\.com|youtu\.be)\//.test(youtube)) args.push('--youtube', youtube);
-    reply(res, await clipper(args, 90000));
+    // Up to 150 s on the Claude plan with a web search, then the cheap
+    // model's 60 s if the plan cannot answer (inbox.HOOKS_TIMEOUT).
+    reply(res, await clipper(args, 240000));
   });
 
   app.post('/api/clip/inbox/:id/retry', async (req, res) => {

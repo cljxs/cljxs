@@ -310,6 +310,6 @@ def score_windows(sents, wins, words, loud, cfg, hunt=None, avoid=(), frames=Non
             why = why + [f"gets a laugh {where}{more}"]
         out.append({"i": i, "j": j, "start": sents[i]["start"], "end": sents[j]["end"],
                     "text": text, "score": score, "features": f, "reasons": why,
-                    "topics": on_list, "laughs": 0 if bad else len(after),
+                    "topics": on_list, "laughs": 0 if bad else len(after), "avoided": bool(bad),
                     "laugh_tail": (lands[0] if lands and not bad else 0.0)})
     return out

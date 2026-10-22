@@ -3223,7 +3223,7 @@ async function clipHooks(){
   const title = $('caTitle').value.trim();
   if (!title) { $('caSaid').textContent = 'Paste the title first.'; return; }
   const youtube = $('caYoutube').value.trim();
-  $('caSaid').textContent = youtube ? 'Reading the comments and writing hooks…' : 'Writing hooks from the title…';
+  $('caSaid').textContent = (youtube ? 'Reading the comments, searching the web and writing hooks…' : 'Searching the web and writing hooks from the title…') + ' (up to two minutes)';
   const j = await addFormPost('/api/clip/hooks', { title, source: $('caSource').value, youtube });
   if (j && j.ok) {
     const lines = String(j.message || '').trim().split('\n');

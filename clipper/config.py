@@ -40,6 +40,13 @@ DEFAULTS = {
     # the talking as loud as the talking (score.laughs). 0 turns it off.
     "funny_clips_per_video": 2,
     "min_score": 40.0,
+    # Each stretch of transcript read by Sonnet on the owner's Claude plan,
+    # which marks where every story, argument and bit starts and ends
+    # (stories.py) - so a clip is one complete thought, not the middle of
+    # one. A marked moment may run to story_max_seconds (owner, 2026-10-22:
+    # "up to 90 seconds is fine"); other clips keep max_clip_seconds.
+    "story_reading": True,
+    "story_max_seconds": 90.0,
     # A gap this long between two words ends a sentence even with no
     # punctuation - Whisper leaves plenty out.
     "sentence_pause_seconds": 0.8,

@@ -228,7 +228,11 @@ flags. Besides the regular picks, `funny_clips_per_video` more are chosen for
 the laugh they get: a pause in the talking as loud as the talking
 (`score.laughs`, measured on a real live-audience recording), cut with the
 laugh kept on the end. Rule enforced by construction: a clip is a run of whole sentences, so
-it cannot start or end mid-sentence.
+it cannot start or end mid-sentence. Since 2026-10-22 a model also marks
+where each story and argument starts and ends (`stories.py`, Sonnet on the
+owner's plan): a marked moment is a candidate of up to 90 s, and a window
+that cuts into one is skipped - whole sentences were not enough to make a
+whole thought.
 
 **Hook Generator** (Ph. 2) — in: chosen clip + 3 sentences either side. Out:
 opening decision (keep / start earlier for setup / start later / verbatim

@@ -261,6 +261,18 @@ for framing. `python3 scripts/check-secrets.py` before every push.
 
 ---
 
+### Since this note was written
+
+- 2026-10-21: the Teague episode was killed for memory three times - the
+  copy without subtitles had no `-t` and ran on to the end of the episode
+  (fixed, `TheCleanCopyStopsWithTheClip`). The Add a video list now shows
+  each video's real stage.
+- 2026-10-22: **complete thoughts** - `clipper/stories.py` has Sonnet on
+  the plan mark where each story and argument starts and ends; marked
+  moments run to 90 s and windows cutting into one are skipped. Write hooks
+  searches the web on the plan and adds the evergreen debates. The owner
+  chose not to re-cut Teague: judge it on the next episodes.
+
 ## 8. Links
 
 - Repo (branch): https://github.com/cljxs/cljxs/tree/claude/ai-agent-ecosystem-setup-0280zz

@@ -205,6 +205,7 @@ transcript of their speech word for word, so:
   "Sixers Season", "Anthony Black", "Theme Song".
 2 to 8 moments, 2 to 6 terms each, terms lower case.
 
+EVERGREENSEARCH
 Reply with JSON only:
 {"topics": [{"name": "short label", "terms": ["word", "two words"]}]}
 
@@ -318,6 +319,37 @@ def hooks_text(topics):
     return "; ".join(f"{t['name']}: {', '.join(t['terms'])}" for t in topics)
 
 
+# Owner, 2026-10-22: "like whenever Jordan vs LeBron is debated, common
+# knowledge things that would be discussed". Shows like these keep coming
+# back to the same arguments whatever the title says; the hosts of Gil's
+# Arena and Club 520 played, so their own stories come up too.
+EVERGREEN = """
+Shows like this keep coming back to the same arguments, whatever the title
+says. Add the one to three this episode is most likely to have, as topics
+of their own, in the words the hosts would say - for example the GOAT
+debate (jordan, lebron, goat, kobe), rings and legacy (rings, legacy), this
+era against back then (back in the day, this era, soft), overrated and
+underrated, and the hosts' own playing days (when i played, my rookie year,
+in the league).
+"""
+
+# Write hooks on the owner's Claude plan searches the web first (owner,
+# 2026-10-22: "ask another AI to search the web on what would be funny or
+# talked about"). The cheap model it falls back to cannot search.
+SEARCH = """
+Before answering, search the web for what is being said this week about the
+people, teams and games in the title - trades, beefs, injuries, results,
+viral moments - and add the moments this episode is likely to cover. The
+terms are still the words the speakers will say, not a headline's.
+"""
+HOOKS_TIMEOUT = 150             # seconds the plan may take, searching included
+
+
+def _plan(q):
+    """(answered, text) from Sonnet on the plan, allowed to search the web."""
+    return postcopy._script("wake_clip_hooks", "wake.py").ask("clip", q, HOOKS_TIMEOUT, tools=("WebSearch",))
+
+
 def check_hooks(doc):
     """[{name, terms}] from a model's JSON, cleaned, or ValueError. Code
     decides what is usable: generic words are dropped, a topic left with no
@@ -348,12 +380,16 @@ def check_hooks(doc):
     return out
 
 
-def hooks(conn, cfg, title, source="", call=None, key=None, left=None, youtube=None, yt=None, notes=None):
+def hooks(conn, cfg, title, source="", call=None, key=None, left=None, youtube=None, yt=None, notes=None,
+          ask=None):
     """(hunt text, cost) for a video title - and its YouTube comments, when a
-    link to it is given. Checked against both caps before the call - the
+    link to it is given. Asked of Sonnet on the owner's Claude plan first,
+    which searches the web (no cost per press); when the plan cannot answer,
+    of the cheap model, checked against both caps before the call - the
     shared day (budget.py) and Clip's own - and its real cost recorded in
     Clip's ledger, the way post copy is. `notes`, a list, gets what the
-    comments said for the owner: how many were read, and the timestamps."""
+    comments said for the owner: how many were read, and the timestamps,
+    and which model wrote the hooks."""
     notes = notes if notes is not None else []
     title = (title or "").strip()[:MAX_TITLE]
     if not title:
@@ -361,14 +397,6 @@ def hooks(conn, cfg, title, source="", call=None, key=None, left=None, youtube=N
     slug = cfg.get("copy_model")
     if not slug:
         raise ValueError("drafting by model is switched off (copy_model is null) - write the hooks by hand")
-    if left is None:
-        left = postcopy.allowance_left()
-    if left is None or left < postcopy.MIN_LEFT:
-        raise ValueError("today's shared AI allowance is spent - write the hooks by hand, or try tomorrow")
-    db.spend_guard(conn, cfg, HOOKS_ESTIMATE)
-    key = key if key is not None else postcopy._script("preflight_hooks", "preflight.py").openrouter_key()
-    if not key:
-        raise ValueError("no OpenRouter key")
     prompt = HOOKS_PROMPT.replace("SOURCE", source or "").replace("TITLE", title)
     if youtube:
         try:
@@ -383,7 +411,26 @@ def hooks(conn, cfg, title, source="", call=None, key=None, left=None, youtube=N
             if stamps:
                 notes.append("viewers pointed at " + ", ".join(
                     f"{clock_of(t)} ({n} comment{'s' if n != 1 else ''})" for t, n, _l in stamps))
-    doc, cost = (call or call_hooks)(prompt, key, slug)
+    ok, text = (ask or _plan)(prompt.replace("EVERGREENSEARCH", EVERGREEN + SEARCH))
+    if ok:
+        try:
+            topics = check_hooks(postcopy._script("emily_assets_hooks", "emily-assets.py").read_proof(text))
+            notes.append("written on your Claude plan, after a web search")
+            return hooks_text(topics), 0.0
+        except ValueError as exc:
+            notes.append(f"the plan's draft was not usable ({exc}) - written by the cheap model instead")
+    else:
+        notes.append(f"the Claude plan could not answer ({text[:120]}) - written by the cheap model, "
+                     "without a web search")
+    if left is None:
+        left = postcopy.allowance_left()
+    if left is None or left < postcopy.MIN_LEFT:
+        raise ValueError("today's shared AI allowance is spent - write the hooks by hand, or try tomorrow")
+    db.spend_guard(conn, cfg, HOOKS_ESTIMATE)
+    key = key if key is not None else postcopy._script("preflight_hooks", "preflight.py").openrouter_key()
+    if not key:
+        raise ValueError("no OpenRouter key")
+    doc, cost = (call or call_hooks)(prompt.replace("EVERGREENSEARCH", EVERGREEN), key, slug)
     db.record_cost(conn, "openrouter", "hooks", float(cost or 0), note=title[:80])
     return hooks_text(check_hooks(doc)), cost
 
