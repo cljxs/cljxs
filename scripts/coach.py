@@ -5,6 +5,7 @@ coach.py - the trading journal, a daily analysis, and a weekly review.
     coach.py journal [--day YYYY-MM-DD] [--json]   the day's trades, every book
     coach.py daily   [--day YYYY-MM-DD]            journal + analysis, saved (no model)
     coach.py weekly  [--end YYYY-MM-DD] [--dry]    the week's review and proposals
+    coach.py backfill --book ace --since YYYY-MM-DD   one book's past days, the rest kept
     coach.py show --json                           what the Deck draws
 
 Owner, 2026-10-19: "You are my Trading Performance Coach ... DAILY ROUTINE:
@@ -33,6 +34,15 @@ computes every number it is shown. The proposals are proposals: they are
 saved for the owner, and nothing here edits a rule. A week with too few
 closed trades gets no proposals - a rule changed on three trades is noise.
 
+ACE (owner, 2026-10-22: "a coach for ace like how belfort has"). His settled
+bets are journaled from his own book (ace-book.py), each with its edge from
+ace-judge.py's bar and its closing-line value from ace-clv.py - the measure
+his preregistration is judged on; a loss is not a mistake in betting, a
+price the market then beat is. His rules are frozen until ace-judge.py's
+FROZEN_UNTIL, so until then the Sunday review only comments on him, under
+its own heading, and proposes nothing: a rule changed early restarts the
+clock. After it, he is reviewed like the others.
+
 Times are Eastern (et_time). Free apart from one question a week.
 """
 
@@ -59,6 +69,8 @@ CHASE_TOP = 0.10              # bought in the top 10% of the 24 hours before: ch
 EARLY_EXIT_PCT = 3.0          # sold, then it rose this much more: an early exit (stops excepted)
 GAVE_BACK_PCT = 5.0           # was up this much and closed at or under zero
 MIN_WEEK_TRADES = 5           # fewer closed trades than this: observe, propose nothing
+MIN_WEEK_BETS = 10            # fewer settled Ace bets than this: no comment on him either
+EDGE_BANDS = ((3.0, "edge under 3 pts"), (5.0, "edge 3-5 pts"), (float("inf"), "edge 5+ pts"))
 DAILY_ONLY = "Observation only. The daily routine never changes a rule."
 
 
@@ -75,6 +87,12 @@ def _bolt():
 
 def _belfort():
     return _load("belfort_trade_coach", "belfort-trade.py")
+
+
+def _ace():
+    """Ace's book, closing lines and bar - read there, never restated."""
+    return (_load("ace_book_coach", "ace-book.py"), _load("ace_clv_coach", "ace-clv.py"),
+            _load("ace_judge_coach", "ace-judge.py"))
 
 
 def et_day(utc):
@@ -192,8 +210,49 @@ def _chased(b, sym, buy):
     return round((float(buy["price"]) - lo) / (hi - lo), 2) if hi > lo else None
 
 
+def ace_rows():
+    """Ace's settled bets, as journal rows. The P&L is the book's; "entry" is
+    the price taken and "exit" the closing price, because the close is what a
+    bet is graded on. Closing lines are kept 30 days (ace-clv.KEEP_DAYS), so
+    an older bet carries none."""
+    book, clv, judge = _ace()
+    if not book.BETS.is_file():
+        return []
+    lines = clv._read(clv.LINES, {})
+    rows = []
+    for b in book.fold(book.events())["settled"]:
+        stake, profit = float(b.get("stake") or 0), float(b.get("profit") or 0)
+        entry = lines.get(clv.game_key(b.get("sport"), b.get("match"), b.get("starts_utc")))
+        g = clv.grade({"selection": b.get("selection"), "status": "bet", "price": b.get("price"),
+                       "novig_pct": b.get("novig_pct"), "my_pct": b.get("my_pct")}, entry) if entry else None
+        close, whose = clv.headline_clv(g) if g else (None, None)
+        bar = judge.bar(b.get("my_pct"), b) if b.get("my_pct") is not None else None
+        sport = str(b.get("sport") or "").upper()
+        why_sold = f"{b.get('result')}: {b.get('detail') or ''}".strip()
+        if close is not None:
+            why_sold += f"; closed at {g.get('close_price')}, {whose} CLV {close:+.1f}%"
+        rows.append({
+            "book": "ace", "agent": "Ace", "asset": f"{sport} bet", "symbol": b.get("selection"),
+            "side": b.get("side") or "", "opened_utc": b.get("utc"), "closed_utc": b.get("settled_utc"),
+            "entry_price": b.get("price"), "exit_price": (g or {}).get("close_price") or "-",
+            "size_usd": stake, "pnl_usd": round(profit, 2),
+            "pnl_pct": round(profit / stake * 100, 2) if stake else 0.0,
+            "setup": " · ".join(x for x in (sport, f"edge {bar['gap_pts']:+.1f} pts vs {bar['q_source']} "
+                                                  f"{float(bar['q']):.1f}%" if bar and bar["gap_pts"] is not None
+                                            else "") if x),
+            "score": None, "entry_reason": b.get("why") or "", "exit_reason": why_sold,
+            "exit_rule": b.get("result"), "stop_pct": None, "min_score": None,
+            "best_pct": None, "after_exit_pct": None, "chased": None,
+            "sport": sport, "market_pct": bar["q"] if bar else b.get("novig_pct"),
+            "edge_pts": bar["gap_pts"] if bar else None,
+            "under_bar": (bar["why"] if bar and bar["gap_pts"] is not None and not bar["clears"] else None),
+            "clv_pct": close, "clv_book": whose,
+        })
+    return rows
+
+
 def all_rows():
-    return belfort_rows() + bolt_rows() + bolt_rows(news=True)
+    return belfort_rows() + bolt_rows() + bolt_rows(news=True) + ace_rows()
 
 
 def rows_between(start_day, end_day, rows=None):
@@ -219,6 +278,13 @@ def mistakes(r):
         out.append(("early exit", f"{r['after_exit_pct']:+.1f}% more since it was sold"))
     if r.get("best_pct") is not None and r["best_pct"] >= GAVE_BACK_PCT and r["pnl_pct"] <= 0:
         out.append(("gave back a gain", f"was up {r['best_pct']:+.1f}%, closed {r['pnl_pct']:+.1f}%"))
+    # Ace: a lost bet is not a mistake - a 60% shot loses four times in ten.
+    # A price the market beat by the close is, and so is a bet off his bar.
+    if r.get("clv_pct") is not None and r["clv_pct"] < 0:
+        out.append(("beaten by the close", f"took {r['entry_price']}, closed {r['exit_price']}: "
+                                           f"{r['clv_book']} CLV {r['clv_pct']:+.1f}%"))
+    if r.get("under_bar"):
+        out.append(("bet under the bar", r["under_bar"]))
     return out
 
 
@@ -263,12 +329,40 @@ def analyse(rows):
              and r["pnl_pct"] >= -float(r["stop_pct"])]
     if small:
         well.append(f"{len(small)} loss(es) kept inside the stop")
+    trades = [r for r in rows if r["book"] != "ace"]
     patterns = {"by exit rule": grouped(rows, lambda r: f"{r['agent']}: {r['exit_rule']}"),
-                "by setup score": grouped(rows, lambda r: f"{r['agent']}: {r['score'] if r.get('score') is not None else '?'}"),
-                "by asset": grouped(rows, lambda r: r["symbol"])}
+                "by setup score": grouped(trades, lambda r: f"{r['agent']}: {r['score'] if r.get('score') is not None else '?'}"),
+                "by asset": grouped(trades, lambda r: r["symbol"])}
     return {"books": {a: summary(v) for a, v in books.items()}, "total": summary(rows),
             "went_well": well, "went_badly": badly, "mistakes": slips, "patterns": patterns,
-            "note": DAILY_ONLY}
+            "ace": ace_summary(rows), "note": DAILY_ONLY}
+
+
+def ace_summary(rows):
+    """Ace's bets measured the way his preregistration measures them -
+    closing-line value first - and grouped by what might explain it."""
+    bets = [r for r in rows if r["book"] == "ace"]
+    if not bets:
+        return None
+    closed = [r for r in bets if r.get("clv_pct") is not None]
+
+    def band(r):
+        e = r.get("edge_pts")
+        return "edge unknown" if e is None else next(name for top, name in EDGE_BANDS if e < top)
+    return {"bets": len(bets), "with_close": len(closed),
+            "avg_clv_pct": round(sum(r["clv_pct"] for r in closed) / len(closed), 2) if closed else None,
+            "beat_close": sum(1 for r in closed if r["clv_pct"] > 0),
+            "frozen_until": _ace()[2].FROZEN_UNTIL,
+            "by sport": grouped(bets, lambda r: r["sport"]),
+            "favourite or underdog": grouped(bets, lambda r: "unknown" if r.get("market_pct") is None
+                                             else "favourite" if float(r["market_pct"]) >= 50 else "underdog"),
+            "by edge": grouped(bets, band)}
+
+
+def ace_line(s):
+    clv = (f"closing-line value {s['avg_clv_pct']:+.2f}% a bet over {s['with_close']}, beat the close on "
+           f"{s['beat_close']}" if s["with_close"] else "no closing line kept for these bets")
+    return f"{s['bets']} bet(s) settled; {clv}. Rules frozen until {s['frozen_until']}."
 
 
 # ------------------------------------------------------------------ daily
@@ -301,11 +395,24 @@ def daily_markdown(day, rows, a):
     L += ["", "**Patterns**", ""]
     for k, g in a["patterns"]["by exit rule"].items():
         L.append(f"- {k}: {g['trades']} trade(s), {g['wins']} won, avg {g['avg_pct']:+.1f}%")
+    if a.get("ace"):
+        L += ["", "**Ace**", "", f"- {ace_line(a['ace'])}"]
+        for k in ("by sport", "favourite or underdog", "by edge"):
+            L += [f"- {k}: " + ", ".join(f"{n} {g['wins']}/{g['trades']} won, ${g['net_usd']:+,.2f}"
+                                         for n, g in a["ace"][k].items())]
     return "\n".join(L) + "\n"
 
 
-def run_daily(day):
+def run_daily(day, books=None):
+    """The day's journal and analysis. With `books`, only those books are
+    read again; the other rows are kept from the day's saved journal, so a
+    backfill does not lose what can no longer be worked out (Bolt's chase
+    reading needs hourly prices only a week old)."""
     rows = rows_between(day, day)
+    saved = JOURNAL / f"{day}.json"
+    if books is not None and saved.is_file():
+        kept = [r for r in json.loads(saved.read_text()).get("rows", []) if r.get("book") not in books]
+        rows = sorted(kept + [r for r in rows if r["book"] in books], key=lambda r: str(r["closed_utc"]))
     a = analyse(rows)
     JOURNAL.mkdir(parents=True, exist_ok=True)
     (JOURNAL / f"{day}.json").write_text(json.dumps({"day": day, "rows": rows, "analysis": a}, indent=1) + "\n")
@@ -324,6 +431,7 @@ def current_rules():
     """The rules as they stand, from the scripts that own them - what a
     proposal has to name to change."""
     b, bt = _bolt(), _belfort()
+    ab, _clv, aj = _ace()
     return {
         "Bolt (crypto, both books)": {
             "buy": f"best scorer {b.MIN_SCORE}+/10 on the rubric, one buy each {b.CYCLE_HOURS:g}h, "
@@ -338,10 +446,19 @@ def current_rules():
                      f"+{bt.PROTECT_AT:g}%, dead money after {bt.DEAD_DAYS} days within {bt.DEAD_BAND:g}% and behind QQQ",
             "size": f"risk {bt.RISK_PER_TRADE_PCT:g}% of the portfolio a trade, at most {bt.MAX_POSITION_PCT:g}% "
                     f"in one name, {bt.MIN_CASH_PCT:g}% cash"},
+        "Ace (sports bets)": {
+            "bet": f"his blind estimate pulled {aj.SHRINK:.0%} of the way to the market (Pinnacle, else "
+                   f"DraftKings) must clear it by {aj.GAP_MIN_PTS:g} pts or {aj.GAP_MIN_REL:g}% of it, with "
+                   f"positive EV; sides priced {aj.BET_RANGE[0]:g}-{aj.BET_RANGE[1]:g}% only; "
+                   f"${ab.STARTING_BANKROLL * ab.FLAT_STAKE_PCT / 100:,.0f} flat, at most {ab.MAX_OPEN_BETS} open",
+            "measured by": "closing-line value (Pinnacle's close, else DraftKings'), not win rate",
+            "stops": f"betting stops after {aj.EVIDENCE_MIN_BETS} bets with average CLV at or below zero, "
+                     f"or at a {ab.FAULT_STOP_PCT:g}% loss",
+            "status": f"FROZEN until {aj.FROZEN_UNTIL} by his preregistration"},
     }
 
 
-ASK = """You are a trading performance coach reviewing one week of two paper-trading agents.
+ASK = """You are a trading performance coach reviewing one week of paper-trading and paper-betting agents.
 Use ONLY the data below - every number was computed by code from their books. Do not give
 financial advice; improve the process. Do not invent numbers: cite the data for every claim.
 
@@ -355,6 +472,7 @@ proposed rule with its exact number, and the data that supports it. Propose at m
 changes in all, only where the week's data is clear; "no change" is a valid answer. A
 change based on fewer than 3 trades of its kind is not clear.
 
+{notes}
 CURRENT RULES
 {rules}
 
@@ -370,23 +488,50 @@ def weekly_data(start, end):
     for m in a["mistakes"]:
         kinds[m["kind"]] = kinds.get(m["kind"], 0) + 1
     return rows, {"summary_by_agent": a["books"], "total": a["total"], "mistake_counts": kinds,
-                  "mistakes": a["mistakes"], "patterns": a["patterns"],
+                  "mistakes": a["mistakes"], "patterns": a["patterns"], "ace": a["ace"],
                   "by_weekday": grouped(rows, lambda r: (et_time.to_eastern(r["closed_utc"]) or datetime.min).strftime("%a"))}
+
+
+def week_notes(rows, end):
+    """What the review may do this week, decided here rather than left to the
+    model: who has enough data, and whether Ace's rules are still frozen."""
+    trades = [r for r in rows if r["book"] != "ace"]
+    bets = [r for r in rows if r["book"] == "ace"]
+    frozen_until = _ace()[2].FROZEN_UNTIL
+    notes = []
+    if len(trades) < MIN_WEEK_TRADES:
+        notes.append(f"Belfort and Bolt closed {len(trades)} trade(s) in all - fewer than {MIN_WEEK_TRADES}: "
+                     f"propose no change for them; write \"no change\".")
+    if len(bets) < MIN_WEEK_BETS:
+        notes.append(f"Ace settled {len(bets)} bet(s) - fewer than {MIN_WEEK_BETS}: say nothing about him "
+                     f"beyond that.")
+    elif end < frozen_until:
+        notes.append(f"ACE'S RULES ARE FROZEN until {frozen_until} by a preregistration: changing one restarts "
+                     f"his experiment. Propose NO change for Ace under UPDATED RULES. Add a fifth section, "
+                     f"## ACE - NOTES FOR THE {frozen_until} READ-OUT, with at most three observations, each "
+                     f"citing a number. Judge him on closing-line value, not wins: a lost bet is not a mistake.")
+    else:
+        notes.append("Ace may be proposed for like the others. Judge him on closing-line value, not wins.")
+    return notes, len(trades) >= MIN_WEEK_TRADES or len(bets) >= MIN_WEEK_BETS
 
 
 def run_weekly(end_day, ask=None, dry=False):
     start, end = week_of(end_day)
     rows, data = weekly_data(start, end)
     rules = current_rules()
-    if len(rows) < MIN_WEEK_TRADES:
-        review = (f"_{len(rows)} closed trade(s) this week - fewer than {MIN_WEEK_TRADES}. Observing only: "
-                  f"no rule change is proposed on this little data._")
+    notes, enough = week_notes(rows, end)
+    if not enough:
+        bets = sum(1 for r in rows if r["book"] == "ace")
+        review = (f"_{len(rows) - bets} closed trade(s) and {bets} settled bet(s) this week - fewer than "
+                  f"{MIN_WEEK_TRADES} trades and {MIN_WEEK_BETS} bets. Observing only: no rule change is "
+                  f"proposed on this little data._")
         asked = False
     elif dry:
         review, asked = "_dry run - the question was not asked_", False
     else:
         question = ASK.format(rules=json.dumps(rules, indent=1), start=start, end=end,
-                              data=json.dumps(data, indent=1))
+                              data=json.dumps(data, indent=1),
+                              notes="THIS WEEK\n" + "\n".join(f"- {n}" for n in notes) + "\n")
         ask = ask or _load("wake_coach", "wake.py").ask
         ok, text = ask("coach", question, 300)
         review = text.strip() if ok else f"_the review could not be written: {text}_"
@@ -396,6 +541,8 @@ def run_weekly(end_day, ask=None, dry=False):
     for agent, s in data["summary_by_agent"].items():
         md.append(f"- **{agent}**: {s['trades']} trades, win rate {s['win_rate']}%, net ${s['net_usd']:+,.2f}, "
                   f"expectancy {s['expectancy_pct']:+.2f}% a trade, avg hold {s['avg_hold_h']}h")
+    if data["ace"]:
+        md.append(f"- **Ace**: {ace_line(data['ace'])}")
     if data["mistake_counts"]:
         md.append("- mistakes seen: " + ", ".join(f"{k} {v}" for k, v in data["mistake_counts"].items()))
     md += ["", review, ""]
@@ -427,6 +574,9 @@ def main(argv):
     w = sub.add_parser("weekly")
     w.add_argument("--end", help="the Sunday the week ends on; default today, Eastern")
     w.add_argument("--dry", action="store_true")
+    bf = sub.add_parser("backfill", help="one book's past days, every other book's rows kept as saved")
+    bf.add_argument("--book", required=True, choices=["ace", "belfort", "bolt", "bolt-news"])
+    bf.add_argument("--since", required=True, help="YYYY-MM-DD, Eastern")
     s = sub.add_parser("show")
     s.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
@@ -440,6 +590,15 @@ def main(argv):
         print(f"journal {day}: {len(rows)} trade(s), {len(an['mistakes'])} mistake(s) seen - coach/journal/{day}.md")
     elif a.cmd == "weekly":
         print(run_weekly(a.end or today, dry=a.dry))
+    elif a.cmd == "backfill":
+        day = datetime.strptime(a.since, "%Y-%m-%d")
+        yesterday = (et_time.eastern_now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        n = 0
+        while day.strftime("%Y-%m-%d") <= yesterday:
+            rows, _an = run_daily(day.strftime("%Y-%m-%d"), books={a.book})
+            n += sum(1 for r in rows if r["book"] == a.book)
+            day += timedelta(days=1)
+        print(f"backfill {a.book} since {a.since}: {n} row(s) journaled; other books kept as saved")
     elif a.cmd == "show":
         print(json.dumps(show()))
     return 0

@@ -6,8 +6,9 @@
 <meta name="theme-color" content="#0b1020">
 <title>Coach</title>
 <!-- The trading coach (owner, 2026-10-19): a journal of every trade Belfort
-     and Bolt close, a daily analysis that only observes, and a Sunday review
-     that proposes rule changes for the owner to approve. Everything comes
+     and Bolt close - and every bet Ace settles (2026-10-22) - a daily analysis
+     that only observes, and a Sunday review that proposes rule changes for the
+     owner to approve; none for Ace while his preregistration runs. Everything comes
      from scripts/coach.py through /api/coach; nothing is worked out here.
      Opened from the village frame's navigation (?embed=1). -->
 <style>
@@ -62,7 +63,7 @@
 <body>
 <div class="frame">
   <div class="head">
-    <div><h1>Trading Coach</h1><div class="sub">Belfort (stocks) · Bolt and Bolt + news (crypto) · a journal, a daily look, a Sunday review</div></div>
+    <div><h1>Trading Coach</h1><div class="sub">Belfort (stocks) · Bolt and Bolt + news (crypto) · Ace (sports bets) · a journal, a daily look, a Sunday review</div></div>
     <div class="sp"></div>
     <a class="btn" id="back" href="/dashboard">← Deck</a>
     <button class="btn" id="close" style="display:none">× Close</button>
@@ -135,7 +136,20 @@ function daily() {
       <div class="k">What went badly</div><ul>${(a.went_badly || []).map(x => `<li>${esc(x)}</li>`).join('') || '<li class="muted">no losing trade</li>'}</ul>
       <div class="k">Mistakes</div><ul>${(a.mistakes || []).map(m => `<li class="mist">${esc(m.agent)} ${esc(m.symbol)}: ${esc(m.kind)} - ${esc(m.detail)}</li>`).join('') || '<li class="muted">none a script can see</li>'}</ul>
       <div class="k">Patterns</div><ul>${Object.entries((a.patterns || {})['by exit rule'] || {}).map(([k, g]) => `<li>${esc(k)}: ${g.trades} trade(s), ${g.wins} won, avg ${pct(g.avg_pct)}</li>`).join('') || '<li class="muted">—</li>'}</ul>
+      ${a.ace ? aceCard(a.ace) : ''}
       <div class="muted">${esc(a.note || '')}</div></div>`; }).join('');
+}
+
+// Ace is measured by closing-line value - did the market move to his price
+// by the start - not by wins; his rules are frozen until the date coach.py
+// gives, so this only reports.
+function aceCard(s) {
+  const groups = ['by sport', 'favourite or underdog', 'by edge'].map(k => `<li>${esc(k)}: ${Object.entries(s[k] || {})
+    .map(([n, g]) => `${esc(n)} ${g.wins}/${g.trades} won, ${money(g.net_usd)}`).join(' · ')}</li>`).join('');
+  const clv = s.with_close ? `closing-line value ${pct(s.avg_clv_pct)} a bet over ${s.with_close}, beat the close on ${s.beat_close}`
+    : 'no closing line kept for these bets';
+  return `<div class="k">Ace</div><ul><li>${s.bets} bet(s) settled · ${esc(clv)}</li>${groups}
+    <li class="muted">Rules frozen until ${esc(s.frozen_until)} - observed only.</li></ul>`;
 }
 
 function weekly() {

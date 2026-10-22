@@ -478,6 +478,10 @@ STAKE_CAP_PCT = 3.0
 # value at or below zero means no edge has shown up - betting stops and the
 # owner decides. (The fault stop, a 30% loss, is ace-book.py's.)
 EVIDENCE_MIN_BETS = 60
+# The numbers above are preregistered (agents/ace/PREREGISTRATION.md): none
+# changes before this day except a logged bug fix, or the clock restarts.
+# coach.py reads it, so its Sunday review proposes nothing for Ace until then.
+FROZEN_UNTIL = "2026-12-01"
 RETIRED_BANKROLL_KEYS = ("unit_pct", "max_stake_pct", "max_open_bets",
                          "stop_loss_pct", "stop_loss_floor")
 
@@ -545,8 +549,7 @@ def evidence_stop():
                           journal_path=AGENT / "state" / "judgements.jsonl")
     except Exception:
         return None
-    clvs = [g.get("sharp_clv_pct") if g.get("sharp_clv_pct") is not None else g.get("clv_pct")
-            for g in r.get("graded", []) if g.get("status") == "bet"]
+    clvs = [_clv().headline_clv(g)[0] for g in r.get("graded", []) if g.get("status") == "bet"]
     clvs = [c for c in clvs if c is not None]
     if len(clvs) >= EVIDENCE_MIN_BETS and sum(clvs) / len(clvs) <= 0:
         return (f"after {len(clvs)} bets the average closing-line value is "
