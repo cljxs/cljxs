@@ -1,5 +1,5 @@
 [Unit]
-Description=Belfort's hourly check: the sell rules on both books, no AI, no buys
+Description=Belfort's 10-minute check: the sell rules on both books, no AI, no buys
 Documentation=https://github.com/cljxs/cljxs
 After=network-online.target
 

@@ -80,7 +80,7 @@ def day(now=None):
 # Ace's day wake moved to 11:30 on 2026-10-03 and keeps the name "afternoon":
 # every saved report, ledger and check already uses it.
 ACE = ((20, "afternoon"), (24, "night"))                         # 11:30 23:30
-BELFORT = ((12, "open"), (24, "close"))                          # 09:35 15:55
+BELFORT = ((11, "open"), (14, "midday"), (24, "close"))          # 09:35 12:00 15:55
 
 SLOTS = {"ace": ACE, "belfort": BELFORT}
 

@@ -996,6 +996,17 @@ def _a_browser():
 
 @unittest.skipUnless(_a_browser(), "needs a headless Chrome")
 class TextAVisitorCanRead(unittest.TestCase):
+    def test_text_below_the_first_screen_is_measured_on_a_smooth_scrolling_page(self):
+        # The template has html{scroll-behavior:smooth}; until 2026-10-21 the
+        # probe looked before the scroll arrived and skipped this text unsaid.
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "index.html").write_text(
+                '<!doctype html><html><head><style>html{scroll-behavior:smooth}body{margin:0;background:#fff}'
+                '</style></head><body><p>Top</p><div style="height:3000px"></div>'
+                '<p style="color:#ddd">Hard to read below the fold</p><div style="height:3000px"></div></body></html>')
+            got = paul.contrast_problems(d, _a_browser())
+        self.assertEqual([(t, need) for _p, t, _r, need in got], [("Hard to read below the fold", 4.5)])
+
     """Milkbox's "Call us" (2026-10-05): brown text on a brown button,
     inherited from a{color}, in both screenshots - Paul read them and missed
     it. Measured in a real browser. White text on a photo must NOT be
@@ -1403,15 +1414,27 @@ class PhotosAsAVisitorSeesThem(unittest.TestCase):
             got = paul.image_problems(d, _a_browser())
             self.assertEqual(sorted(os.listdir(d)), ["img", "index.html"], "the probe was left behind")
         self.assertEqual([(src, kind) for _p, src, kind, _d in got],
-                         [("img/small.png", "enlarged"), ("img/wide.png", "stretched"), ("img/small.png", "enlarged")],
+                         [("img/small.png", "enlarged"), ("img/wide.png", "stretched"), ("img/wide.png", "enlarged"),
+                          ("img/small.png", "enlarged")],
                          "below the fold, lazy, is measured too")
-        self.assertIn("shown at 400x600 from a 200x300 photo, 2x", got[0][3])
+        self.assertIn("shown at 400x600 from a 200x300 photo; a phone or iPad screen needs 1.5x that, "
+                      "so at most 133px wide", got[0][3])
 
-    def test_a_photo_shown_at_its_size_passes(self):
+    def test_a_photo_with_the_detail_for_a_sharp_screen_passes(self):
         with tempfile.TemporaryDirectory() as d:
-            self.site(d, '<img src="img/big.png" style="width:100%;max-width:800px;height:auto" alt="a">'
-                         '<img src="img/wide.png" style="width:400px;height:400px;object-fit:cover" alt="b">')
+            self.site(d, '<img src="img/big.png" style="width:100%;max-width:533px;height:auto" alt="a">'
+                         '<img src="img/wide.png" style="width:260px;height:260px;object-fit:cover" alt="b">')
             self.assertEqual(paul.image_problems(d, _a_browser()), [])
+
+    def test_shown_at_its_own_size_is_soft_on_a_sharp_screen(self):
+        # Royal Edge's About photos (owner, 2026-10-21, on the iPad: "all
+        # over stretched and look bad") passed at 1x: shown about as wide as
+        # the file. An iPad draws two dots per pixel.
+        with tempfile.TemporaryDirectory() as d:
+            self.site(d, '<img src="img/big.png" style="width:100%;max-width:800px;height:auto" alt="a">')
+            [(_p, src, kind, detail)] = paul.image_problems(d, _a_browser())
+        self.assertEqual((src, kind), ("img/big.png", "enlarged"))
+        self.assertIn("at most 533px wide", detail)
 
 
 class APhoneSeesWhatAPhoneSees(unittest.TestCase):
@@ -1532,7 +1555,8 @@ class TheOwnerSendsASiteBack(PaulCase):
         self.assertNotIn(paul.CONCEPT_ID, page, "code adds the notice again at finish")
         self.assertNotIn('name="robots"', page)
         self.assertFalse((w / "site" / "robots.txt").exists())
-        self.assertIn("Hello.", (w / "previous-draft.md").read_text())
+        self.assertEqual((w / "draft.md").read_text(), "Channel: email\nTo: x@y.test\n\nHello.\n",
+                         "the pitch rides along, without the dry-run line")
         self.assertTrue((paul.A("sites", slug) / "index.html").is_file(), "the old build stays")
         _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
         self.assertIn('"College Hill Barbers", sent back by the owner', facts)
@@ -1672,10 +1696,10 @@ class ARevisionShipsAndSaysSo(TheOwnerSendsASiteBack):
     def test_the_studio_shows_it_and_can_delete(self):
         studio = (ROOT / "mission-control-api" / "public" / "paul.html").read_text()
         for bit in ("function revision(b)", "UPDATED FROM YOUR NOTE", "PAUL IS WORKING NOW",
-                    'data-remove="${esc(b.slug)}"', "${p.status !== 'rejected' ? photos(p) : ''}"):
+                    'data-drop="${esc(b.slug)}"', "${p.status !== 'rejected' ? photos(p) : ''}"):
             self.assertIn(bit, studio)
         js = (ROOT / "mission-control-api" / "paul.js").read_text()
-        self.assertIn("paul(['remove', slug, '--yes'], 120000)", js)
+        self.assertIn("paul(['drop', slug], 120000)", js, "one version - never a whole business (2026-10-22)")
 
 
 def prospect(**over):
@@ -2708,7 +2732,7 @@ class APageStyledAtEveryWidth(unittest.TestCase):
                 errs, _n, _i = paul.run_checks(target(), offline, work=w)
             finally:
                 paul.find_browser = saved
-        self.assertTrue(any("on a computer (1280px) index.html shows unstyled" in e for e in errs), errs)
+        self.assertTrue(any("index.html shows unstyled (on a computer (1280px)" in e for e in errs), errs)
 
 
 @unittest.skipUnless(_a_browser(), "needs a headless Chrome")
@@ -2747,6 +2771,18 @@ class AMenuOpensOnATap(unittest.TestCase):
                                      '<header><a href="#top">Royal Edge</a><a class="book" href="https://booksy.com/x">Book</a>'
                                      '</header><p>x</p><div class="bar"><a href="https://booksy.com/x">Book now</a></div>'), [])
 
+    def test_what_makes_a_phone_scroll_sideways_is_named(self):
+        # Royal Edge's rebuild: "the phone layout scrolls sideways" twice,
+        # and nothing said what to fix. A row meant to scroll is not blamed.
+        css = (".menu{position:absolute;top:0;left:0;width:300px;transform:translateX(400px)}"
+               ".row{display:flex;overflow-x:auto}.row div{flex:0 0 300px;height:9px}")
+        with tempfile.TemporaryDirectory() as d:
+            _page(d, STYLE + css, '<header><nav class="menu main"><a href="#top">Fades</a></nav></header>'
+                                  '<div class="row"><div></div><div></div></div>')
+            got = paul.phone_problems(d, _a_browser())
+        self.assertTrue(got["wide"])
+        self.assertEqual(got["over"], [('<nav class="menu main">', 700)])
+
     def test_an_intro_that_covers_the_page_is_waited_out(self):
         # The quality bar's own header, under its logo intro: switching
         # animations off (the first version of the probe) left the intro over
@@ -2778,6 +2814,39 @@ class SamplePhotosSaySample(unittest.TestCase):
                      '<div class="card"><img src="img/s.png" alt="a"><p>Sample</p></div>'):
             self.assertEqual(self.bare(body), [("img/s.png", "unlabelled")], body)
 
+    def test_a_label_that_lets_taps_through_is_on_the_picture(self):
+        # Royal Edge's rebuild (2026-10-21) was refused twice with its span
+        # over each photo: pointer-events:none hides an element from
+        # elementsFromPoint, which the probe read as no label at all.
+        self.assertEqual(self.bare('<div class="card"><img src="img/s.png" alt="a">'
+                                   '<span class="tag" style="pointer-events:none">Sample</span></div>'), [])
+
+    def test_royal_edges_own_products_pass_on_a_smooth_scrolling_page(self):
+        # Paul's rules, read off work/site/style.css on the droplet
+        # (2026-10-21), refused three times as "behind the photo": the
+        # template's scroll-behavior:smooth made scrollIntoView a glide, and
+        # the probe looked before it arrived.
+        css = (":root{--gold:#c9a24a}html{scroll-behavior:smooth}.prods{display:grid;gap:18px}"
+               ".prods figure{position:relative;margin:0;aspect-ratio:1/1;overflow:hidden;border-radius:6px}"
+               ".prods img{width:100%;height:100%;object-fit:cover;object-position:center 70%}"
+               ".sample-tag{position:absolute;left:12px;top:12px;background:#0d0d0d;color:var(--gold);"
+               "border:1px solid var(--gold);padding:4px 12px;border-radius:4px;font-weight:600;"
+               "letter-spacing:.08em;text-transform:uppercase;font-size:.85rem}"
+               "@media (min-width:760px){.prods{grid-template-columns:repeat(3,1fr)}}.prods .sample-tag{z-index:5}")
+        with tempfile.TemporaryDirectory() as d:
+            _page(d, STYLE + css, '<div style="height:1500px"></div><section class="prods">'
+                  + '<figure><img src="img/s.png" alt="a"><span class="sample-tag">Sample</span></figure>' * 3
+                  + '</section><div style="height:1500px"></div>')
+            (Path(d) / "img" / "s.png").write_bytes(_png(1000, 1000))   # a Pexels download, ?w=1000
+            self.assertEqual(paul.image_problems(d, _a_browser(), samples=["img/s.png"]), [])
+
+    def test_paul_is_told_why(self):
+        with tempfile.TemporaryDirectory() as d:
+            _page(d, STYLE + self.CARD + ".card img{position:relative;z-index:1}",
+                  '<div class="card"><img src="img/s.png" alt="a"><span class="tag">Sample</span></div>')
+            [(_p, _s, kind, why)] = paul.image_problems(d, _a_browser(), samples=["img/s.png"])
+        self.assertEqual((kind, why), ("unlabelled", paul.SAMPLE_WHY["behind"]))
+
     def test_only_sample_photos_need_it(self):
         self.assertEqual(self.bare('<div class="card"><img src="img/s.png" alt="a"></div>', samples=()), [])
 
@@ -2806,6 +2875,32 @@ class RoyalEdgeAfterManCave(SiteRules):
         self.assertEqual([e for e in errs if "goes nowhere" in e],
                          ['index.html links to "#fades" but nothing on that page has id="fades" - the link goes nowhere'])
         self.assertEqual(self.errors(index=index.replace('<p id="beards">', '<p id="fades"></p><p id="beards">')), [])
+
+
+class TheOwnerCanSeeWhyABuildWasRefused(PaulCase):
+    """Owner, 2026-10-21, of Royal Edge's rebuild refused twice: "How should
+    we fix this?" `paul.py measure` runs the browser checks on the build set
+    aside, with Paul's own words, and wakes no model."""
+
+    def test_it_measures_the_newest_build_set_aside(self):
+        for name, age in (("2026-10-20-old-1", 100), ("2026-10-21-royal-edge-2", 0)):
+            d = paul.A("sites", "_below-bar", name)
+            (d / "site").mkdir(parents=True)
+            (d / "site" / "index.html").write_text("<h1>x</h1>")
+            paul.write_json(d / "target.json", target(name=name))
+            os.utime(d, (time.time() - age, time.time() - age))
+        saved = (paul.find_browser, paul.measured_contrast, paul.measured_phone, paul.measured_images)
+        self.addCleanup(lambda: [setattr(paul, k, v) for k, v in zip(
+            ("find_browser", "measured_contrast", "measured_phone", "measured_images"), saved)])
+        paul.find_browser = lambda: "chrome"
+        paul.measured_contrast = lambda *a, **k: []
+        paul.measured_images = lambda *a, **k: []
+        paul.measured_phone = lambda *a, **k: {"wraps": [], "wide": True, "hidden": [], "styled": 1,
+                                               "over": [('<div class="dd mega">', 540)]}
+        rc, out = self.run_quiet(paul.cmd_measure, self.args(folder=None))
+        self.assertEqual(rc, 1)
+        self.assertIn("2026-10-21-royal-edge-2", out)
+        self.assertIn('<div class="dd mega"> reaches 540px on a 390px screen', out)
 
 
 class ASiteSentBackWithANewLook(PaulCase):
@@ -2856,3 +2951,359 @@ class ASiteSentBackWithANewLook(PaulCase):
         self.assertIn("ref ? { notes, ref } : { notes }", studio)
         deck = (ROOT / "mission-control-api" / "paul.js").read_text()
         self.assertIn("['revise', slug, ...(ref ? ['--ref', ref] : []), '--', notes]", deck)
+
+
+@unittest.skipUnless(_a_browser(), "needs a headless Chrome")
+class PhotosThatFitBesideTheText(unittest.TestCase):
+    """Royal Edge's About (owner, 2026-10-21, on the iPad): two tall phone
+    photos stacked beside two paragraphs - "all over stretched and look
+    bad. They also create a bunch of blank space". The owner chose a row of
+    photos under the text."""
+
+    TEXT = ('<div class="about-text"><h2>Royal Edge on Sycamore Street</h2><p>A barbershop at 621 Sycamore St '
+            'in Waterloo, Iowa.</p><p>Skin fades, beard trims, kids cuts and designs.</p></div>')
+    BASE = "body{margin:0;font:18px/1.6 sans-serif}.wrap{max-width:1100px;margin:0 auto;padding:0 20px}"
+
+    def measure(self, css, body, size=(590, 1280)):
+        with tempfile.TemporaryDirectory() as d:
+            site = Path(d) / "site"
+            (site / "img").mkdir(parents=True)
+            for n in (1, 2, 3):
+                (site / "img" / f"yours-0{n}.png").write_bytes(_png(*size))
+            (site / "style.css").write_text(self.BASE + css)
+            (site / "index.html").write_text('<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                                             '<link rel="stylesheet" href="style.css"></head><body>' + body + "</body></html>")
+            return paul.measured_images(site, _a_browser(), Path(d) / "memo.json")
+
+    def test_the_about_as_it_was_is_caught(self):
+        got = self.measure(".about{display:grid;grid-template-columns:1fr 1fr;gap:40px}"
+                           ".about-photos img{width:100%;display:block;margin-bottom:20px}",
+                           '<section class="wrap about">' + self.TEXT + '<div class="about-photos">'
+                           '<img src="img/yours-01.png" alt="a"><img src="img/yours-02.png" alt="b"></div></section>')
+        self.assertEqual(sorted({k for _p, _s, k, _d in got}), ["enlarged", "gap"])
+        [gap] = [d for _p, _s, k, d in got if k == "gap"]
+        self.assertIn('<div class="about-text"> ends', gap)
+        self.assertIn('above <div class="about-photos"> beside it', gap)
+
+    def test_a_row_under_the_text_passes(self):
+        self.assertEqual(self.measure(
+            ".row{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.row img{width:100%;aspect-ratio:1/1;"
+            "object-fit:cover;display:block}@media(max-width:700px){.row{grid-template-columns:1fr}}",
+            '<section class="wrap">' + self.TEXT + '<div class="row"><img src="img/yours-01.png" alt="a">'
+            '<img src="img/yours-02.png" alt="b"><img src="img/yours-03.png" alt="c"></div></section>'), [])
+
+    def test_text_that_stays_beside_the_photos_is_not_a_gap(self):
+        got = self.measure(".about{display:grid;grid-template-columns:1fr 1fr;gap:40px}.about-text{position:sticky;top:0}"
+                           ".about-photos img{width:300px;display:block;margin-bottom:20px}",
+                           '<section class="wrap about">' + self.TEXT + '<div class="about-photos">'
+                           '<img src="img/yours-01.png" alt="a"><img src="img/yours-02.png" alt="b"></div></section>',
+                           size=(600, 1300))
+        self.assertEqual(got, [])
+
+    def test_a_photo_too_wide_on_an_upright_ipad_is_caught_there(self):
+        # One column under 900px, as Royal Edge's CSS has: at 1280 the photo
+        # is 300px, on an upright iPad the whole width.
+        got = self.measure(".pic{width:300px}@media(max-width:899px){.pic{width:100%}}.pic{display:block}",
+                           '<section class="wrap"><img class="pic" src="img/yours-01.png" alt="a"></section>',
+                           size=(700, 700))
+        [(_p, src, kind, detail)] = got
+        self.assertEqual((src, kind), ("img/yours-01.png", "enlarged"))
+        self.assertIn("on an iPad (820px)", detail)
+
+    def test_the_quality_bar_has_no_gap(self):
+        # Its dotted price leader is an empty span: read by its content, it
+        # "ended" at the top of the page, 1671px above the price beside it.
+        with tempfile.TemporaryDirectory() as d:
+            shutil.copytree(ROOT / "agents" / "paul" / "templates" / "local", Path(d) / "s")
+            self.assertEqual(paul.measured_images(Path(d) / "s", _a_browser(), Path(d) / "m.json"), [])
+
+
+class APitchIsWrittenOnceAndCopiedOnAPhone(PaulCase):
+    """Owner, 2026-10-21, with four Royal Edge pitches in Drafts: "Paul
+    doesn't need to draft a pitch every time we send something back if the
+    pitch isn't changing... I need to be able to copy and paste the pitch
+    when I'm on my phone." """
+
+    URL = "https://royal-edge-concept-wys8bh.vercel.app"
+
+    def composed(self, dry=False):
+        head, body = paul.parse_draft(DRAFT)
+        return paul.compose_draft(head, body, SENDER, dry).replace(paul.PREVIEW_URL, self.URL)
+
+    def test_a_sent_pitch_comes_back_as_paul_wrote_it(self):
+        for dry in (False, True):
+            back = paul.reusable_draft(self.composed(dry))
+            self.assertIn(paul.PREVIEW_URL, back)
+            self.assertNotIn(self.URL, back)
+            self.assertNotIn(paul.OPT_OUT, back, "code adds the opt-out line again")
+            self.assertNotIn(SENDER["name"], back.split("\n\n", 1)[1], "and the signature")
+            self.assertEqual(paul.check_draft(back, target())[0], [], "Paul's check passes it as it is")
+            head, body = paul.parse_draft(back)
+            self.assertEqual(paul.compose_draft(head, body, SENDER, False).replace(paul.PREVIEW_URL, self.URL),
+                             self.composed(False), "finishing it again gives the same pitch")
+
+    def test_a_phone_script_keeps_every_line(self):
+        text = "Channel: phone\nTo: (319) 427-5796\n\nHi, it is here: " + self.URL + ". " + paul.OPT_OUT + "\n"
+        self.assertEqual(paul.reusable_draft(text),
+                         "Channel: phone\nTo: (319) 427-5796\n\nHi, it is here: [PREVIEW URL]. " + paul.OPT_OUT + "\n")
+
+    def test_sending_back_carries_it_and_says_so(self):
+        TheOwnerSendsASiteBack.built(self, name="Royal Edge", slug="royal-edge-concept-wys8bh")
+        paul.A("outbox", "royal-edge-concept-wys8bh", "draft.md").write_text(self.composed())
+        self.run_quiet(paul.cmd_revise, self.args(who="Royal Edge", notes=["photos", "in", "a", "row"], ref=None))
+        self.assertIn(paul.PREVIEW_URL, paul.A("work", "draft.md").read_text())
+        self.assertIn("Leave it as it is unless", paul.A("work", "REVISE.md").read_text())
+        header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
+        self.assertIn("Your pitch is carried", header)
+
+    def test_drafts_shows_one_per_business_with_what_to_copy(self):
+        for slug, day in (("royal-edge-concept-y8ehkl", "2026-10-20"), ("royal-edge-concept-wys8bh", "2026-10-21")):
+            TheOwnerSendsASiteBack.built(self, name="Royal Edge", slug=slug)
+            paul.A("outbox", slug, "draft.md").write_text(self.composed().replace(self.URL, f"https://{slug}.vercel.app"))
+            paul.log_build({"day": day, "mode": "live", "outcome": "built", "slug": slug, "name": "Royal Edge"})
+        _rc, out = self.run_quiet(paul.cmd_deck, self.args())
+        builds = json.loads(out)["builds"]
+        self.assertEqual([(b["slug"], b["current"]) for b in builds],
+                         [("royal-edge-concept-wys8bh", True), ("royal-edge-concept-y8ehkl", False)])
+        pitch = builds[0]["pitch"]
+        self.assertEqual((pitch["to"], pitch["subject"]), ("rosa@rosas.test", "A website for Rosa's Tailoring"))
+        self.assertTrue(pitch["message"].startswith("Hi Rosa,"))
+        self.assertIn("https://royal-edge-concept-wys8bh.vercel.app", pitch["message"])
+        self.assertIn(paul.OPT_OUT, pitch["message"], "what is sent is what code composed")
+        studio = (ROOT / "mission-control-api" / "public" / "paul.html").read_text()
+        self.assertIn("built.filter(b => b.current && b.draft", studio)
+        self.assertIn('data-part="message">Copy message', studio)
+        self.assertIn("document.execCommand('copy')", studio, "plain http has no navigator.clipboard")
+        self.assertIn("pre{white-space:pre-wrap;overflow-wrap:anywhere;", studio, "a long link wraps on a phone")
+
+
+class IsentItAndTheOlderPreviewsComeDown(PaulCase):
+    """Owner, 2026-10-21: an "I sent it" button instead of typing paul.py
+    mark, and a button to take down Royal Edge's older previews - four were
+    up, one per revision, and only the newest is in its pitch."""
+
+    SLUGS = ("royal-edge-concept-y8ehkl", "royal-edge-concept-pvgrms", "royal-edge-concept-wys8bh")
+
+    def setUp(self):
+        super().setUp()
+        for n, slug in enumerate(self.SLUGS):
+            TheOwnerSendsASiteBack.built(self, name="Royal Edge", slug=slug)
+            paul.log_build({"day": f"2026-10-2{n}", "mode": "live", "outcome": "built", "slug": slug,
+                            "name": "Royal Edge"})
+            paul.append_row(paul.A("state", "deployments.csv"), paul.DEPLOY_FIELDS,
+                            {"slug": slug, "preview_url": f"https://{slug}.vercel.app", "business": "Royal Edge",
+                             "deployed": "2026-10-21", "teardown": "2026-11-20", "status": "live"})
+        # One row per business: a revision's link replaces the old one.
+        paul.append_row(paul.A("state", "contacted.csv"), paul.CONTACTED_FIELDS,
+                        {"slug": self.SLUGS[-1], "business": "Royal Edge", "status": "drafted"})
+
+    def live(self):
+        return [d["slug"] for d in paul.deployments() if d["status"] == "live"]
+
+    def test_the_older_ones_come_down_and_the_newest_stays(self):
+        api = FakeVercel()
+        rc, out = self.run_quiet(paul.cmd_retire, self.args(who=self.SLUGS[-1]), api=api)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.live(), [self.SLUGS[-1]])
+        self.assertEqual(sorted(c.path for c in api.calls if c.method == "DELETE"),
+                         sorted(f"/v9/projects/{s}" for s in self.SLUGS[:2]))
+        rc, out = self.run_quiet(paul.cmd_retire, self.args(who="Royal Edge"), api=FakeVercel())
+        self.assertIn("no older preview up", out)
+
+    def test_not_once_the_pitch_has_gone_out(self):
+        self.run_quiet(paul.cmd_mark, self.args(who=self.SLUGS[-1], status="sent"))
+        api = FakeVercel()
+        rc, out = self.run_quiet(paul.cmd_retire, self.args(who="Royal Edge"), api=api)
+        self.assertEqual(rc, 1)
+        self.assertIn("may be an older one", out)
+        self.assertEqual(len(self.live()), 3)
+        self.assertFalse([c for c in api.calls if c.method == "DELETE"])
+
+    def test_the_studio_shows_it(self):
+        self.run_quiet(paul.cmd_retire, self.args(who="Royal Edge"), api=FakeVercel())
+        paul.append_row(paul.A("state", "deployments.csv"), paul.DEPLOY_FIELDS,
+                        {"slug": "x", "preview_url": "https://x.vercel.app", "business": "Royal Edge", "status": "live"})
+        _rc, out = self.run_quiet(paul.cmd_deck, self.args())
+        cards = {b["slug"]: b for b in json.loads(out)["builds"]}
+        newest, oldest = cards[self.SLUGS[-1]], cards[self.SLUGS[0]]
+        self.assertEqual((newest["current"], newest["older_live"]), (True, 1))
+        self.assertEqual((oldest["current"], oldest["older_live"], oldest["preview_url"]), (False, 0, None),
+                         "a preview taken down has no link")
+        self.assertEqual(newest["preview_url"], f"https://{self.SLUGS[-1]}.vercel.app")
+        studio = (ROOT / "mission-control-api" / "public" / "paul.html").read_text()
+        for s in ('data-retire="${esc(b.slug)}"', 'data-sent="${esc(b.slug)}"', "OLDER VERSION"):
+            self.assertIn(s, studio)
+
+    def test_the_buttons_through_the_deck(self):
+        node = shutil.which("node")
+        api = ROOT / "mission-control-api"
+        if not (node and (api / "node_modules" / "express").is_dir()):
+            self.skipTest("node or the Deck's node_modules are not installed")
+        js = (f"const express=require({json.dumps(str(api / 'node_modules' / 'express'))});"
+              f"const paul=require({json.dumps(str(api / 'paul.js'))});"
+              "const http=require('http');const app=express();app.use(express.json());paul.register(app);"
+              "const srv=app.listen(0,'127.0.0.1',async()=>{const port=srv.address().port;"
+              "const go=p=>new Promise(ok=>{const q=http.request({host:'127.0.0.1',port,path:p,method:'POST'},"
+              "r=>{let s='';r.on('data',c=>s+=c);r.on('end',()=>ok([r.statusCode,s]));});q.end();});"
+              f"const out={{bad:await go('/api/paul/sent/..%2Fx'),retire:await go('/api/paul/retire/{self.SLUGS[-1]}'),"
+              f"sent:await go('/api/paul/sent/{self.SLUGS[-1]}')}};"
+              "process.stdout.write(JSON.stringify(out));srv.close();});")
+        root = self.root
+        (root / "scripts").symlink_to(ROOT / "scripts")
+        # No VERCEL_TOKEN here: retire answers, and takes nothing down.
+        r = subprocess.run([node, "-e", js], capture_output=True, text=True, timeout=120,
+                           env=dict(os.environ, ECOSYSTEM_ROOT=str(root)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["bad"][0], 400)
+        self.assertIn("no VERCEL_TOKEN", out["retire"][1])
+        self.assertEqual(out["sent"][0], 200, out["sent"])
+        self.assertEqual([r["status"] for r in paul.contacted()], ["sent"])
+
+
+class ABusinessDeletedByMistakeIsBuiltAgain(PaulCase):
+    """Owner, 2026-10-22: Delete on an older Royal Edge card took every site
+    of it, and its previews - "can we recover what I had?" No backups; the
+    owner chose to rebuild it with every edit made since. Delete had kept it
+    in contacted.csv so Paul would never pick it, and left the photos the
+    owner saved under its old prospect number."""
+
+    NOTES = "No video. A row of your photos under About us. Sample on each product photo."
+
+    def setUp(self):
+        super().setUp()
+        TheOwnerPicksPaulBuilds.seed(self, dict(prospect(name="Waiting Bakery", phone="(512) 444-0100"), status="waiting"),
+                                     dict(prospect(name="Royal Edge"), status="built", slug="royal-edge-concept-pvgrms",
+                                          source="owner", reference="https://rudysbarbershop.com/"),
+                                     dict(prospect(name="Later Cafe", phone="(512) 444-0101"), status="waiting"))
+        paul.add_photo(2, JPEG, "facebook")
+        TheOwnerSendsASiteBack.built(self, name="Royal Edge", slug="royal-edge-concept-pvgrms")
+        paul.log_build({"day": "2026-10-21", "mode": "live", "outcome": "built", "slug": "royal-edge-concept-pvgrms",
+                        "name": "Royal Edge"})
+        paul.append_row(paul.A("state", "contacted.csv"), paul.CONTACTED_FIELDS,
+                        {"date": "2026-10-21", "slug": "royal-edge-concept-pvgrms", "business": "Royal Edge",
+                         "status": "drafted"})
+        self.run_quiet(paul.cmd_remove, self.args(who="Royal Edge", yes=True), api=FakeVercel())
+
+    def restore(self, **kw):
+        a = dict(name="Royal Edge", ref="https://mancaveformen.com", where="Waterloo, IA", notes=self.NOTES,
+                 photos=None, now=False)
+        a.update(kw)
+        return self.run_quiet(paul.cmd_restore, self.args(**a))
+
+    def test_it_comes_back_with_its_photos_its_look_and_the_owners_edits(self):
+        self.assertEqual([p["name"] for p in paul.load_prospects()], ["Waiting Bakery", "Later Cafe"],
+                         "Delete took the card")
+        rc, out = self.restore()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("back as prospect 2, with the 1 photo(s) you saved", out)
+        p = [p for p in paul.load_prospects() if p["name"] == "Royal Edge"][0]
+        self.assertEqual((p["id"], p["status"], p["reference"], p["owner_notes"]),
+                         (2, "approved", "https://mancaveformen.com", self.NOTES))
+        self.assertFalse([r for r in paul.contacted() if r["business"] == "Royal Edge"],
+                         "the row for a pitch never sent, to a preview that is gone, goes")
+        _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
+        self.assertIn("BUILD: the owner approved Royal Edge", facts)
+        self.assertIn("OWNER WANTS  No video. A row of your photos under About us. Sample on each", facts)
+        self.assertIn("OWNER'S REF  https://mancaveformen.com", facts)
+        self.assertIn("1 of THEIR OWN photos", facts)
+        self.assertFalse(paul.already_pitched(target(name="Royal Edge", phone="(319) 427-5796")),
+                         "his check would refuse it as already pitched")
+
+    def test_not_when_the_pitch_went_out(self):
+        rows = paul.contacted()
+        rows[0]["status"] = "sent"
+        paul.write_rows(paul.A("state", "contacted.csv"), paul.CONTACTED_FIELDS, rows)
+        rc, out = self.restore()
+        self.assertEqual(rc, 1)
+        self.assertIn("a pitch went out", out)
+        self.assertEqual([p["name"] for p in paul.load_prospects()], ["Waiting Bakery", "Later Cafe"])
+
+    def test_not_while_it_still_has_a_site(self):
+        TheOwnerSendsASiteBack.built(self, name="Royal Edge", slug="royal-edge-concept-new123")
+        paul.log_build({"day": "2026-10-22", "mode": "live", "outcome": "built", "slug": "royal-edge-concept-new123",
+                        "name": "Royal Edge"})
+        rc, out = self.restore()
+        self.assertEqual(rc, 1)
+        self.assertIn("still has a site", out)
+
+    def test_photos_that_belong_to_a_waiting_prospect_are_not_taken(self):
+        rc, out = self.restore(photos=1)
+        self.assertEqual(rc, 1)
+        self.assertIn("belongs to another prospect", out)
+
+
+
+class DeleteThisVersionOnly(PaulCase):
+    """Owner, 2026-10-22: Delete on an older Royal Edge card took every site
+    of it, and its previews. "I want delete this version, never delete the
+    whole business." """
+
+    SLUGS = ("royal-edge-concept-y8ehkl", "royal-edge-concept-ltg0xp", "royal-edge-concept-pvgrms")
+
+    def setUp(self):
+        super().setUp()
+        TheOwnerPicksPaulBuilds.seed(self, dict(prospect(name="Royal Edge"), status="built", slug=self.SLUGS[-1]))
+        for n, slug in enumerate(self.SLUGS):
+            TheOwnerSendsASiteBack.built(self, name="Royal Edge", slug=slug)
+            paul.log_build({"day": f"2026-10-2{n}", "mode": "live", "outcome": "built", "slug": slug, "name": "Royal Edge"})
+            paul.append_row(paul.A("state", "deployments.csv"), paul.DEPLOY_FIELDS,
+                            {"slug": slug, "preview_url": f"https://{slug}.vercel.app", "business": "Royal Edge",
+                             "deployed": "2026-10-21", "teardown": "2026-11-20", "status": "live"})
+        paul.append_row(paul.A("state", "contacted.csv"), paul.CONTACTED_FIELDS,
+                        {"slug": self.SLUGS[-1], "business": "Royal Edge", "status": "drafted",
+                         "preview_url": f"https://{self.SLUGS[-1]}.vercel.app"})
+
+    def drop(self, slug, api=None):
+        return self.run_quiet(paul.cmd_drop, self.args(slug=slug), api=api or FakeVercel())
+
+    def test_an_older_version_goes_and_the_rest_stay(self):
+        api = FakeVercel()
+        rc, out = self.drop(self.SLUGS[0], api)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([b["slug"] for b in paul.versions("Royal Edge")], list(self.SLUGS[1:]))
+        self.assertEqual([c.path for c in api.calls if c.method == "DELETE"], [f"/v9/projects/{self.SLUGS[0]}"])
+        for slug in self.SLUGS[1:]:
+            self.assertTrue((paul.A("sites", slug) / "index.html").is_file())
+            self.assertTrue(paul.A("outbox", slug, "draft.md").is_file())
+        self.assertEqual([p["name"] for p in paul.load_prospects()], ["Royal Edge"], "the business stays")
+        self.assertEqual(paul.contacted()[0]["slug"], self.SLUGS[-1])
+
+    def test_never_the_last_one(self):
+        self.drop(self.SLUGS[0])
+        self.drop(self.SLUGS[1])
+        rc, out = self.drop(self.SLUGS[2])
+        self.assertEqual(rc, 1)
+        self.assertIn("only version", out)
+        self.assertTrue((paul.A("sites", self.SLUGS[2]) / "index.html").is_file())
+
+    def test_never_the_one_whose_link_went_out(self):
+        self.run_quiet(paul.cmd_mark, self.args(who=self.SLUGS[-1], status="sent"))
+        rc, out = self.drop(self.SLUGS[-1])
+        self.assertEqual(rc, 1)
+        self.assertIn("whose link you sent", out)
+
+    def test_an_unsent_pitch_moves_to_the_newest_left(self):
+        rc, out = self.drop(self.SLUGS[-1])
+        self.assertEqual(rc, 0, out)
+        row = paul.contacted()[0]
+        self.assertEqual((row["slug"], row["preview_url"]), (self.SLUGS[1], f"https://{self.SLUGS[1]}.vercel.app"))
+
+    def test_undelete_within_30_days_and_gone_after(self):
+        self.drop(self.SLUGS[0])
+        rc, out = self.run_quiet(paul.cmd_undelete, self.args(slug=self.SLUGS[0]))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([b["slug"] for b in paul.versions("Royal Edge")], list(self.SLUGS), "back in its place")
+        self.assertTrue(paul.A("outbox", self.SLUGS[0], "draft.md").is_file())
+        self.drop(self.SLUGS[0])
+        self.run_quiet(paul.purge_deleted, day=paul.day_plus(paul.today(), 30))
+        self.assertTrue(paul.deleted_dir(self.SLUGS[0]).is_dir(), "kept for 30 days")
+        self.run_quiet(paul.purge_deleted, day=paul.day_plus(paul.today(), 31))
+        self.assertFalse(paul.deleted_dir(self.SLUGS[0]).exists())
+
+    def test_the_studio_offers_it_only_beside_another_version(self):
+        _rc, out = self.run_quiet(paul.cmd_deck, self.args())
+        self.assertEqual({b["versions"] for b in json.loads(out)["builds"]}, {3})
+        studio = (ROOT / "mission-control-api" / "public" / "paul.html").read_text()
+        self.assertIn("${b.versions > 1 ? `<button class=\"btn del\" data-drop=", studio)
+        self.assertNotIn("data-remove", studio)

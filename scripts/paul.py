@@ -1320,7 +1320,7 @@ def check_site(site, t, old_page=None):
     for rel, size in sorted(sc["images"].items()):
         if size > MAX_IMAGE_BYTES:
             errs.append(f"{rel} is {size // 1024} KB - download a smaller size "
-                        f"(Unsplash/Pexels: add ?w=1600&q=80 to the URL)")
+                        f"(Unsplash/Pexels: add ?w=2000&q=75 to the URL)")
     if sc["bytes"] > MAX_SITE_BYTES:
         errs.append(f"the site is {sc['bytes'] // 1024} KB - keep it under "
                     f"{MAX_SITE_BYTES // 1024} KB so it is fast on a phone")
@@ -1644,6 +1644,11 @@ def seo_problems(site, t):
     return errs
 
 
+# Every probe scrolls with behavior:'instant'. The template's
+# html{scroll-behavior:smooth} turned scrollIntoView into a glide still under
+# way when the probe looked: below the first screen, contrast was skipped
+# unsaid and Royal Edge's Sample labels read as behind their photos
+# (2026-10-21).
 # Measured in the browser, because a colour in CSS is not the colour on the
 # screen: Milkbox's "Call us" (2026-10-05) was brown text on a brown button,
 # inherited from a{color}, and Paul read the screenshot and missed it. For
@@ -1669,7 +1674,7 @@ for(var n=0;n<all.length&&seen<400;n++){var el=all[n];if(/^(SCRIPT|STYLE|NOSCRIP
  var own='';for(var c=el.firstChild;c;c=c.nextSibling)if(c.nodeType===3)own+=c.nodeValue;own=own.replace(/\s+/g,' ').trim();if(!own)continue;
  var s=getComputedStyle(el);if(s.visibility!=='visible'||s.display==='none'||el.getClientRects().length===0)continue;
  var fill=rgba(s.webkitTextFillColor||s.color);if(fill[3]===0)continue;seen++;
- el.scrollIntoView({block:'center'});var bg=behind(el);if(!bg)continue;
+ el.scrollIntoView({block:'center',behavior:'instant'});var bg=behind(el);if(!bg)continue;
  var fg=over(rgba(s.color),bg);var L1=lum(fg),L2=lum(bg);var ratio=(Math.max(L1,L2)+0.05)/(Math.min(L1,L2)+0.05);
  var px=parseFloat(s.fontSize),w=parseInt(s.fontWeight)||400;var need=(px>=24||(px>=18.66&&w>=700))?3:4.5;
  if(ratio<need)out.push({text:own.slice(0,60),ratio:Math.round(ratio*100)/100,need:need});}
@@ -1692,9 +1697,20 @@ var els=[document.body].concat([].slice.call(document.body.querySelectorAll('*')
 function sig(){return els.map(function(e){var s=getComputedStyle(e);return P.map(function(k){return s[k];}).join('|');});}
 var a=sig(),sh=[].slice.call(document.styleSheets);sh.forEach(function(x){x.disabled=true;});var b=sig();sh.forEach(function(x){x.disabled=false;});
 var n=0;for(var i=0;i<a.length;i++)if(a[i]!==b[i])n++;return a.length?Math.round(n/a.length*100)/100:1;}"""
+# An element as Paul would find it in his own markup: <nav class="menu main">.
+DESC_JS = r"""function desc(e){var c=(e.getAttribute('class')||'').trim().split(/\s+/).slice(0,2).join(' ');
+ return '<'+e.tagName.toLowerCase()+(e.id?' id="'+e.id+'"':'')+(c?' class="'+c+'"':'')+'>';}"""
 # Bump when a probe learns something new, so a site measured before is
 # measured again rather than passed from memory.
-PROBE_V = 2
+PROBE_V = 5
+# Why a sample photo's label was not found on it, as Paul is told.
+SAMPLE_WHY = {
+    "none": "no element saying Sample has its middle inside the photo - a ::before/::after "
+            "label cannot be measured, use a real element",
+    "small": "the Sample label inside it is hidden or under 10px",
+    "behind": "the Sample label is behind the photo - give the label position:absolute and a "
+              "z-index above the image",
+}
 
 
 # THE PHONE PROBE. College Hill Barbers (2026-10-06): on a phone the header's
@@ -1732,6 +1748,15 @@ for(var n=0;n<els.length;n++){var el=els[n];var t=(el.innerText||'').replace(/\s
  var most=0;for(var i=0;i<runs.length;i++){most=Math.max(most,lines(runs[i]));}
  if(most>1)out.push({text:t,lines:most});}
 var wide=document.documentElement.scrollWidth>window.innerWidth+1;
+// What sticks out (Royal Edge, 2026-10-21: "the phone layout scrolls
+// sideways" twice, and Paul could not find what): the outermost elements
+// past the right edge, leaving out what a clipping box or a fixed one hides.
+var over=[];if(wide){var W=window.innerWidth;
+ var past=[].slice.call(document.body.querySelectorAll('*')).filter(function(e){var r=e.getBoundingClientRect();if(!(r.right>W+1&&r.width>0))return false;
+  for(var a=e;a&&a!==document.body;a=a.parentElement){var s=getComputedStyle(a);if(s.position==='fixed')return false;
+   if(a!==e&&s.overflowX!=='visible'&&a.getBoundingClientRect().right<=W+1)return false;}return true;});
+ over=past.filter(function(e){return past.indexOf(e.parentElement)<0;}).slice(0,3).map(function(e){
+  return {el:desc(e),right:Math.round(e.getBoundingClientRect().right+window.scrollX)};});}
 // Every finite animation and transition jumped to its end - an intro over
 // the page, a menu sliding open - as a visitor sees it a moment later.
 // Waiting for them does not work: headless Chrome may never play them.
@@ -1739,7 +1764,7 @@ function settled(then){var n=0;(function end(){(document.getAnimations?document.
  var e=a.effect&&a.effect.getTiming?a.effect.getTiming():{};if(e.iterations!==Infinity){try{a.finish();}catch(x){}}});
  if(n++<2)return setTimeout(end,50);then();})();}
 document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a[href]');if(a)e.preventDefault();},true);
-function reach(e){e.scrollIntoView({block:'center',inline:'center'});var r=e.getBoundingClientRect();if(r.width<2||r.height<2)return false;
+function reach(e){e.scrollIntoView({block:'center',inline:'center',behavior:'instant'});var r=e.getBoundingClientRect();if(r.width<2||r.height<2)return false;
  var x=r.left+r.width/2,y=r.top+r.height/2;if(x<0||y<0||x>innerWidth||y>innerHeight)return false;
  var h=document.elementFromPoint(x,y);return !!h&&(h===e||e.contains(h));}
 // textContent, not innerText: a link inside a closed drop-down has no
@@ -1755,13 +1780,13 @@ function sweep(){for(var k in names){if(!got[k]&&every.some(function(l){return l
 function toggles(){return [].slice.call(document.querySelectorAll('header summary,nav summary,header button,nav button,header [aria-expanded],nav [aria-expanded],header [aria-controls],nav [aria-controls]'));}
 var tapped=[];
 function finish(){var hidden=[];for(var k in names)if(!got[k])hidden.push(names[k]);window.scrollTo(0,0);
- var pre=document.createElement('pre');pre.id='paul-phone';pre.textContent=JSON.stringify({wraps:out,wide:wide,width:window.innerWidth,hidden:hidden,styled:paulStyled()});document.body.appendChild(pre);}
+ var pre=document.createElement('pre');pre.id='paul-phone';pre.textContent=JSON.stringify({wraps:out,wide:wide,over:over,width:window.innerWidth,hidden:hidden,styled:paulStyled()});document.body.appendChild(pre);}
 // What a visitor can tap, once the page's intro has played: every menu
 // button tapped in turn, each given time to open.
 function step(){sweep();var ts=toggles().filter(function(t){return tapped.indexOf(t)<0&&reach(t);});
  if(!ts.length||tapped.length>=12)return finish();tapped.push(ts[0]);ts[0].click();setTimeout(function(){settled(step);},50);}
 settled(step);
-})();""".replace("(function(){", "(function(){" + STYLED_JS, 1)
+})();""".replace("(function(){", "(function(){" + STYLED_JS + DESC_JS, 1)
 
 
 def phone_problems(site, browser, run=subprocess.run):
@@ -1808,7 +1833,8 @@ def phone_problems(site, browser, run=subprocess.run):
         return None
     return {"wraps": [(w.get("text", ""), w.get("lines")) for w in d.get("wraps") or []],
             "wide": bool(d.get("wide")), "hidden": [str(x) for x in d.get("hidden") or []],
-            "styled": d.get("styled")}
+            "styled": d.get("styled"),
+            "over": [(str(o.get("el")), o.get("right")) for o in d.get("over") or [] if isinstance(o, dict)]}
 
 
 def measured_phone(site, browser, memo, run=subprocess.run):
@@ -1819,7 +1845,8 @@ def measured_phone(site, browser, memo, run=subprocess.run):
     if seen.get("phone_site") == fp and isinstance(seen.get("phone"), dict):
         got = seen["phone"]
         return {"wraps": [tuple(w) for w in got.get("wraps") or []], "wide": bool(got.get("wide")),
-                "hidden": list(got.get("hidden") or []), "styled": got.get("styled")}
+                "hidden": list(got.get("hidden") or []), "styled": got.get("styled"),
+                "over": [tuple(o) for o in got.get("over") or []]}
     got = phone_problems(site, browser, run=run)
     if got is not None:
         memo.parent.mkdir(parents=True, exist_ok=True)
@@ -1848,7 +1875,7 @@ def measured_contrast(site, browser, memo, run=subprocess.run):
     command to the background - and the next Gemini cycle spent 70 tool
     calls running and polling commands. An unchanged site is not measured
     twice."""
-    fp = site_fingerprint(site)
+    fp = f"{site_fingerprint(site)}|{PROBE_V}"
     memo = Path(memo)
     seen = read_json(memo, {}) or {}
     # A list is an answer; None (the browser said nothing) is asked again.
@@ -1903,8 +1930,20 @@ def contrast_problems(site, browser, run=subprocess.run, width=1280, height=900)
 # than the file is - which is what looks soft and stretched. Headless Chrome
 # loads lazy images below the fold anyway (measured 2026-10-21, 9000px down);
 # they are made eager too, in case a later Chrome stops doing that.
-IMAGE_ENLARGED = 1.25      # shown this much larger than the file: visibly soft
+# Sharp screens (owner, 2026-10-21, Royal Edge's About photos on the iPad:
+# "all over stretched and look bad"). Phones and iPads draw two or three
+# dots per CSS pixel, so a photo that only matched its file at 1x - which
+# passed - is soft on every screen the owner and the businesses use. A file
+# needs IMAGE_SHARP pixels for each pixel it is shown at. Measured at a
+# computer's width and an upright iPad's, where single-column layouts show
+# photos widest.
+IMAGE_SHARP = 1.5
 IMAGE_SKEW = 0.05          # proportions changed by more than this: stretched
+IMAGE_SCREENS = ((1280, 900, "a computer"), (820, 1180, "an iPad"))
+# A photo column running on past the text beside it (the same About: two
+# tall photos beside two paragraphs - "a bunch of blank space"), in
+# screen heights.
+GAP_SCREENS = 0.75
 IMAGE_JS = r"""(function(){
 var imgs=[].slice.call(document.images);imgs.forEach(function(i){i.loading='eager';});
 var t0=Date.now();
@@ -1916,34 +1955,57 @@ function done(){var out=[];imgs.forEach(function(i){
  var fit=s.objectFit,sx=r.width/nw,sy=r.height/nh,scale;
  if(fit==='fill'){var d=Math.abs(sx/sy-1);if(d>SKEW)out.push({src:src,kind:'stretched',by:Math.round(d*100)});scale=Math.max(sx,sy);}
  else if(fit==='contain'||fit==='scale-down'){scale=Math.min(sx,sy);}else if(fit==='none'){scale=1;}else{scale=Math.max(sx,sy);}
- if(scale>ENLARGED)out.push({src:src,kind:'enlarged',scale:Math.round(scale*100)/100,
-   natural:nw+'x'+nh,shown:Math.round(r.width)+'x'+Math.round(r.height)});});
+ if(scale*SHARP>1)out.push({src:src,kind:'enlarged',scale:Math.round(scale*100)/100,
+   natural:nw+'x'+nh,shown:Math.round(r.width)+'x'+Math.round(r.height),most:Math.floor(r.width/(scale*SHARP))});});
+ // Side by side, one ending far above the other: what each holds, not its
+ // box - a grid stretches the short column's box to the tall one's height.
+ // An empty element (a dotted price leader) holds nothing: its own box.
+ function ends(e){var g=document.createRange();g.selectNodeContents(e);var r=g.getBoundingClientRect();
+  return (r.width||r.height)?r.bottom:e.getBoundingClientRect().bottom;}
+ function sticky(e){if(getComputedStyle(e).position==='sticky')return true;
+  for(var c=e.firstElementChild;c;c=c.nextElementSibling)if(getComputedStyle(c).position==='sticky')return true;return false;}
+ var gaps=[];[].slice.call(document.body.querySelectorAll('*')).forEach(function(p){
+  var kids=[].slice.call(p.children).filter(function(c){var s=getComputedStyle(c);
+   return s.display!=='none'&&s.position!=='absolute'&&s.position!=='fixed'&&c.getBoundingClientRect().height>0;});
+  for(var k=0;k+1<kids.length;k++){var a=kids[k].getBoundingClientRect(),b=kids[k+1].getBoundingClientRect();
+   if(a.right>b.left+1&&b.right>a.left+1)continue;if(Math.min(a.bottom,b.bottom)<=Math.max(a.top,b.top))continue;
+   var ea=ends(kids[k]),eb=ends(kids[k+1]),lo=ea<eb?kids[k]:kids[k+1],hi=lo===kids[k]?kids[k+1]:kids[k];
+   var gap=Math.abs(ea-eb);if(gap>GAP*innerHeight&&!sticky(lo)&&gaps.length<3)gaps.push({short:desc(lo),tall:desc(hi),gap:Math.round(gap)});}});
  var SAMPLES=__SAMPLES__;
  function own(e){var t='';for(var c=e.firstChild;c;c=c.nextSibling)if(c.nodeType===3)t+=c.nodeValue;return t;}
  var tags=[].slice.call(document.body.querySelectorAll('*')).filter(function(e){return /\bsample\b/i.test(own(e));});
+ // A label that lets taps through (pointer-events:none, the usual way to
+ // lay a badge over a photo) is invisible to elementsFromPoint, and read as
+ // missing (Royal Edge, 2026-10-21) - so every element is hit-testable here.
+ var pe=document.createElement('style');pe.textContent='*{pointer-events:auto!important}';document.head.appendChild(pe);
  var bare=[];imgs.forEach(function(i){var u=decodeURI(i.src||'');
   if(!SAMPLES.some(function(r){return u.slice(-(r.length+1))==='/'+r;}))return;
   var s=getComputedStyle(i);if(s.display==='none'||s.visibility!=='visible')return;
-  i.scrollIntoView({block:'center'});var r=i.getBoundingClientRect();if(r.width<40||r.height<40)return;
+  i.scrollIntoView({block:'center',behavior:'instant'});var r=i.getBoundingClientRect();if(r.width<40||r.height<40)return;
+  var why='none';
   var on=tags.some(function(t){var q=t.getBoundingClientRect(),ts=getComputedStyle(t);
-   if(q.width<2||q.height<2||ts.visibility!=='visible'||parseFloat(ts.fontSize)<10)return false;
    var x=q.left+q.width/2,y=q.top+q.height/2;if(x<r.left||x>r.right||y<r.top||y>r.bottom)return false;
+   if(q.width<2||q.height<2||ts.visibility!=='visible'||parseFloat(ts.fontSize)<10){why='small';return false;}
    var st=document.elementsFromPoint(x,y),a=st.indexOf(i),b=-1;
    for(var k=0;k<st.length;k++){if(st[k]===t||t.contains(st[k])){b=k;break;}}
-   return b>=0&&(a<0||b<a);});
-  if(!on)bare.push(i.getAttribute('src')||'');});
- var pre=document.createElement('pre');pre.id='paul-images';pre.textContent=JSON.stringify({images:out,bare:bare,styled:paulStyled()});document.body.appendChild(pre);}
+   if(b>=0&&(a<0||b<a))return true;why='behind';return false;});
+  if(!on)bare.push({src:i.getAttribute('src')||'',why:why});});
+ pe.remove();
+ var pre=document.createElement('pre');pre.id='paul-images';pre.textContent=JSON.stringify({images:out,bare:bare,gaps:gaps,styled:paulStyled()});document.body.appendChild(pre);}
 (function wait(){if(imgs.every(function(i){return i.complete;})||Date.now()-t0>3000)done();else setTimeout(wait,50);})();
-})();""".replace("SKEW", str(IMAGE_SKEW)).replace("ENLARGED", str(IMAGE_ENLARGED)).replace(
-    "(function(){", "(function(){" + STYLED_JS, 1)
+})();""".replace("SKEW", str(IMAGE_SKEW)).replace("SHARP", str(IMAGE_SHARP)).replace(
+    "GAP*", f"{GAP_SCREENS}*").replace("(function(){", "(function(){" + STYLED_JS + DESC_JS, 1)
 
 
-def image_problems(site, browser, run=subprocess.run, width=1280, height=900, samples=()):
-    """[(page, src, kind, detail)] for photos stretched or blown up, sample
-    photos with no "Sample" on them (kind "unlabelled"), and a page whose
-    CSS does not apply at this width (kind "unstyled", src ""), or None when
-    the browser gave no answer. Run on a hidden copy of each page, as
-    contrast is; the copy is always removed."""
+def image_problems(site, browser, run=subprocess.run, width=1280, height=900, samples=(),
+                   screen="a computer"):
+    """[(page, src, kind, detail)] for photos stretched or shown bigger than
+    a sharp screen can show them (kind "enlarged"), sample photos with no
+    "Sample" on them ("unlabelled"), a column ending far above the one
+    beside it ("gap", src the taller one), and a page whose CSS does not
+    apply at this width ("unstyled", src ""), or None when the browser gave
+    no answer. Run on a hidden copy of each page, as contrast is; the copy
+    is always removed."""
     site = Path(site)
     bad, answered = [], False
     for page in sorted(site.rglob("*.html"))[:6]:
@@ -1973,14 +2035,20 @@ def image_problems(site, browser, run=subprocess.run, width=1280, height=900, sa
             continue
         answered = True
         rel = page.relative_to(site).as_posix()
+        at = f"on {screen} ({width}px)"
         for f in d.get("images") or []:
             detail = (f"{f.get('by')}%" if f.get("kind") == "stretched"
-                      else f"shown at {f.get('shown')} from a {f.get('natural')} photo, {f.get('scale')}x")
+                      else f"{at} it is shown at {f.get('shown')} from a {f.get('natural')} photo; a "
+                           f"phone or iPad screen needs {IMAGE_SHARP}x that, so at most {f.get('most')}px wide")
             bad.append((rel, f.get("src", ""), f.get("kind"), detail))
-        for src in d.get("bare") or []:
-            bad.append((rel, src, "unlabelled", "no Sample label on it"))
+        for g in d.get("gaps") or []:
+            bad.append((rel, g.get("tall", ""), "gap", f"{at} {g.get('short')} ends {g.get('gap')}px "
+                                                       f"above {g.get('tall')} beside it"))
+        for b in d.get("bare") or []:
+            b = b if isinstance(b, dict) else {"src": b}
+            bad.append((rel, b.get("src", ""), "unlabelled", SAMPLE_WHY.get(b.get("why"), SAMPLE_WHY["none"])))
         if isinstance(d.get("styled"), (int, float)) and d["styled"] < STYLED_MIN:
-            bad.append((rel, "", "unstyled", f"{round(d['styled'] * 100)}% of the page changes "
+            bad.append((rel, "", "unstyled", f"{at}: {round(d['styled'] * 100)}% of the page changes "
                                              f"with its stylesheets switched off"))
     return bad if answered else None
 
@@ -1992,7 +2060,16 @@ def measured_images(site, browser, memo, run=subprocess.run, samples=()):
     seen = read_json(memo, {}) or {}
     if seen.get("images_site") == fp and isinstance(seen.get("images"), list):
         return [tuple(x) for x in seen["images"]]
-    bad = image_problems(site, browser, run=run, samples=samples)
+    bad, seen_once = None, set()
+    for w, h, screen in IMAGE_SCREENS:
+        got = image_problems(site, browser, run=run, width=w, height=h, samples=samples, screen=screen)
+        if got is None:
+            continue
+        bad = bad or []
+        for x in got:                    # once per photo and kind, at the first screen
+            if (x[0], x[1], x[2]) not in seen_once:
+                seen_once.add((x[0], x[1], x[2]))
+                bad.append(x)
     if bad is not None:
         memo.parent.mkdir(parents=True, exist_ok=True)
         write_json(memo, {**(read_json(memo, {}) or {}), "images_site": fp, "images": bad})
@@ -2028,6 +2105,64 @@ def mail_verdict(address, get=http_get):
     return "unknown", f"{domain} lists no mail server"
 
 
+def browser_problems(t, work, browser):
+    """(errors, notes) from the page as a browser draws it: contrast, photos,
+    the phone layout and menu, styling at both widths. One set of words for
+    check, finish and `paul.py measure`."""
+    errs, notes = [], []
+    bad = measured_contrast(work / "site", browser, work / "shots" / ".measured.json")
+    if bad is None:
+        notes.append("text contrast not measured - the browser gave no answer")
+    for rel, text, ratio, need in (bad or [])[:6]:
+        errs.append(f'"{text}" on {rel} is hard to read: contrast {ratio}:1, needs '
+                    f"{need}:1 - change the text colour or what is behind it")
+    samples = sorted(str(p.get("file") or "").lstrip("./").removeprefix("site/")
+                     for p in t.get("photos") or [] if isinstance(p, dict) and p.get("kind") == "sample")
+    pics = measured_images(work / "site", browser, work / "shots" / ".measured.json", samples=samples)
+    if pics is None:
+        notes.append("photo sizes not measured - the browser gave no answer")
+    for rel, src, kind, detail in (pics or [])[:6]:
+        errs.append(f"{src} on {rel} is stretched out of its own shape ({detail}) - give it "
+                    f"object-fit:cover, or a box with the photo's proportions" if kind == "stretched" else
+                    f'{src} on {rel} is a sample photo with no "Sample" on it ({detail}) - put the '
+                    f'word over the picture in an element of its own, e.g. <span class="sample-tag">'
+                    f"Sample</span> inside the photo's box" if kind == "unlabelled" else
+                    f"{rel} shows unstyled ({detail}) - its CSS does not "
+                    f"apply. Link the stylesheet by a relative path (style.css, not /style.css) "
+                    f"and close every @media block" if kind == "unstyled" else
+                    f"{rel}: {detail} - a big empty space. Put the photos in a row above or below "
+                    f"the text, or make them smaller, so the two sides end together" if kind == "gap" else
+                    f"{src} on {rel} is blown up - {detail}, so it looks soft and stretched. Show it "
+                    f"smaller (a max-width, or a smaller box in a row), or use a larger photo")
+    phone = measured_phone(work / "site", browser, work / "shots" / ".measured.json")
+    if phone is None:
+        notes.append("the phone layout was not measured - the browser gave no answer")
+    else:
+        for text, lines in phone["wraps"][:4]:
+            errs.append(f'on a phone ({PHONE_W}px) "{text}" breaks onto {lines} lines - '
+                        f"shorten the label (\"Call\" with the number on its own line, "
+                        f"or the number alone), shrink it, or move it out of the header")
+        if phone["wide"]:
+            over = phone.get("over") or []
+            errs.append(f"on a phone ({PHONE_W}px) the page scrolls sideways - "
+                        + ("; ".join(f"{el} reaches {right}px" for el, right in over[:3])
+                           + f" on a {PHONE_W}px screen. Make it fit (max-width:100%, wrap, or "
+                             f"hide it until opened with display:none)" if over else
+                           "something is wider than the screen"))
+        # A drop-down that opens on hover only cannot be opened on a phone
+        # or the owner's iPad (owner, 2026-10-21: a Services drop-down).
+        for text in (phone.get("hidden") or [])[:4]:
+            errs.append(f'on a phone ({PHONE_W}px) the menu item "{text}" never shows, even after '
+                        f"tapping every menu button - a menu must open on a tap (<details><summary>, "
+                        f"or a <button> that toggles it), not on hover alone")
+        st = phone.get("styled")
+        if isinstance(st, (int, float)) and st < STYLED_MIN:
+            errs.append(f"on a phone ({PHONE_W}px) index.html shows unstyled ({round(st * 100)}% of "
+                        f"the page changes with its stylesheets switched off) - its CSS does not "
+                        f"apply. Link the stylesheet by a relative path and close every @media block")
+    return errs, notes
+
+
 def run_checks(t, get=http_get, work=None):
     """Every rule, for check (Paul, mid-cycle) and finish (code, after) alike.
     One function, two readers: when they were two copies elsewhere in this
@@ -2056,50 +2191,9 @@ def run_checks(t, get=http_get, work=None):
         notes += rnotes
     browser = find_browser()
     if browser and (work / "site" / "index.html").is_file():
-        bad = measured_contrast(work / "site", browser, work / "shots" / ".measured.json")
-        if bad is None:
-            notes.append("text contrast not measured - the browser gave no answer")
-        for rel, text, ratio, need in (bad or [])[:6]:
-            errs.append(f'"{text}" on {rel} is hard to read: contrast {ratio}:1, needs '
-                        f"{need}:1 - change the text colour or what is behind it")
-        samples = sorted(str(p.get("file") or "").lstrip("./").removeprefix("site/")
-                         for p in t.get("photos") or [] if isinstance(p, dict) and p.get("kind") == "sample")
-        pics = measured_images(work / "site", browser, work / "shots" / ".measured.json", samples=samples)
-        if pics is None:
-            notes.append("photo sizes not measured - the browser gave no answer")
-        for rel, src, kind, detail in (pics or [])[:6]:
-            errs.append(f"{src} on {rel} is stretched out of its own shape ({detail}) - give it "
-                        f"object-fit:cover, or a box with the photo's proportions" if kind == "stretched" else
-                        f'{src} on {rel} is a sample photo with no "Sample" on it - put the word over '
-                        f'the picture in an element of its own, e.g. <span class="sample-tag">Sample</span> '
-                        f"inside the photo's box" if kind == "unlabelled" else
-                        f"on a computer (1280px) {rel} shows unstyled ({detail}) - its CSS does not "
-                        f"apply. Link the stylesheet by a relative path (style.css, not /style.css) "
-                        f"and close every @media block" if kind == "unstyled" else
-                        f"{src} on {rel} is blown up ({detail}) so it looks soft and stretched - use a "
-                        f"larger version of the photo, or show it smaller")
-        phone = measured_phone(work / "site", browser, work / "shots" / ".measured.json")
-        if phone is None:
-            notes.append("the phone layout was not measured - the browser gave no answer")
-        else:
-            for text, lines in phone["wraps"][:4]:
-                errs.append(f'on a phone ({PHONE_W}px) "{text}" breaks onto {lines} lines - '
-                            f"shorten the label (\"Call\" with the number on its own line, "
-                            f"or the number alone), shrink it, or move it out of the header")
-            if phone["wide"]:
-                errs.append(f"on a phone ({PHONE_W}px) the page scrolls sideways - something is "
-                            f"wider than the screen")
-            # A drop-down that opens on hover only cannot be opened on a phone
-            # or the owner's iPad (owner, 2026-10-21: a Services drop-down).
-            for text in (phone.get("hidden") or [])[:4]:
-                errs.append(f'on a phone ({PHONE_W}px) the menu item "{text}" never shows, even after '
-                            f"tapping every menu button - a menu must open on a tap (<details><summary>, "
-                            f"or a <button> that toggles it), not on hover alone")
-            st = phone.get("styled")
-            if isinstance(st, (int, float)) and st < STYLED_MIN:
-                errs.append(f"on a phone ({PHONE_W}px) index.html shows unstyled ({round(st * 100)}% of "
-                            f"the page changes with its stylesheets switched off) - its CSS does not "
-                            f"apply. Link the stylesheet by a relative path and close every @media block")
+        berrs, bnotes = browser_problems(t, work, browser)
+        errs += berrs
+        notes += bnotes
 
     dp = work / "draft.md"
     if not dp.is_file():
@@ -2187,6 +2281,28 @@ def compose_draft(head, body, sender, dry):
             lines += [f"{sender.get('email', '')} · {sender.get('phone', '')}",
                       sender.get("address", "")]
     return "\n".join(lines) + "\n"
+
+
+def reusable_draft(text):
+    """A pitch code composed (outbox/<slug>/draft.md), back as Paul wrote it:
+    the link a placeholder again, without the dry-run line, the opt-out line
+    and the signature code adds. Owner, 2026-10-21: "Paul doesn't need to
+    draft a pitch every time we send something back if the pitch isn't
+    changing" - Royal Edge had four, one per revision."""
+    lines = str(text or "").splitlines()
+    if lines and lines[0].startswith("DRY RUN"):
+        lines = lines[1:]
+    head, body = parse_draft("\n".join(lines).strip())
+    body = re.sub(r"https?://[a-z0-9-]+-concept-[a-z0-9]{6}\.vercel\.app/?", PREVIEW_URL, body)
+    if (head.get("channel") or "") != "phone":
+        rows = body.splitlines()
+        cut = max((i for i, ln in enumerate(rows) if ln.strip() == OPT_OUT), default=None)
+        if cut is not None:
+            body = "\n".join(rows[:cut]).rstrip()
+    top = [f"Channel: {head.get('channel', '')}", f"To: {head.get('to', '')}"]
+    if head.get("subject"):
+        top.append(f"Subject: {head['subject']}")
+    return "\n".join(top) + "\n\n" + body.strip() + "\n"
 
 
 def live_checks(url, site, business, get=http_get):
@@ -2439,24 +2555,41 @@ def cmd_deck(a):
     revs = revisions()
     made_from = {r.get("new_slug"): dict(r, slug=old) for old, r in revs.items() if r.get("new_slug")}
     deps = {d["slug"]: d for d in deployments() if d.get("slug")}
-    out = []
+    out, newest = [], set()
     for b in reversed(builds()):
         slug = str(b.get("slug") or "")
         site, box = A("sites", slug), A("outbox", slug)
         t = read_json(box / "target.json", {}) if slug else {}
         draft = box / "draft.md"
+        text = draft.read_text(errors="replace") if draft.is_file() else None
+        # One pitch per business: its newest site's (Royal Edge had four
+        # in Drafts, one per revision, 2026-10-21).
+        built = bool(slug) and (site / "index.html").is_file()
+        current = built and norm_name(b.get("name")) not in newest
+        if built:
+            newest.add(norm_name(b.get("name")))
+        head, message = parse_draft(re.sub(r"\ADRY RUN[^\n]*\n+", "", text or ""))
         out.append({
             "day": b.get("day"), "mode": b.get("mode"), "outcome": b.get("outcome"),
             "slug": slug, "name": b.get("name"), "kind": b.get("kind"), "layout": b.get("layout"),
-            "site": bool(slug) and (site / "index.html").is_file(),
+            "site": built,
             "shots": [n for n, _w, _h in SHOTS if slug and (box / f"{n}.png").is_file()],
-            "preview_url": (deps.get(slug) or {}).get("preview_url") or None,
+            # A preview taken down has no link to open.
+            "preview_url": (deps.get(slug) or {}).get("preview_url")
+            if (deps.get(slug) or {}).get("status") == "live" else None,
+            # On a business's newest card: its older previews still up.
+            "older_live": sum(1 for d in deps.values() if d.get("status") == "live" and d["slug"] != slug
+                              and norm_name(d.get("business")) == norm_name(b.get("name"))) if current else 0,
             "teardown": (deps.get(slug) or {}).get("teardown") or None,
             "status": (rows.get(slug) or {}).get("status") or None,
             "identity": [{"detail": r.get("detail"), "source": r.get("source")}
                          for r in (t or {}).get("identity") or [] if isinstance(r, dict)],
             "notes": (t or {}).get("notes") or None,
-            "draft": draft.read_text(errors="replace") if draft.is_file() else None,
+            "draft": text, "current": current,
+            "versions": len(versions(b.get("name"))) if built else 0,
+            # What the Studio's Copy buttons copy: what to send, and where.
+            "pitch": {"to": head.get("to"), "subject": head.get("subject"),
+                      "message": message} if text else None,
             # Sent back: how far it got. Made from a note: which note.
             "revision": revs.get(slug),
             "from_note": made_from.get(slug),
@@ -2623,6 +2756,12 @@ def teardown(only=None, list_only=False, day=None, api=None):
             print(f"  due: {d['preview_url']} ({d['business']}) - {why}")
         print(f"{len(due)} preview(s) due to come down")
         return 0
+    return take_down(deps, due, day, api)
+
+
+def take_down(deps, due, day, api=None):
+    """Remove each (row, why) in due from Vercel and record it in
+    deployments.csv (deps is the whole file, rows in it). 0, or 1 if any failed."""
     if not due:
         return 0
     token = vercel_token()
@@ -2642,6 +2781,43 @@ def teardown(only=None, list_only=False, day=None, api=None):
     return 1 if failed else 0
 
 
+def older_previews(who):
+    """(name, the newest site's slug, [live deployment rows of its older
+    sites], deps) for a business, by name or slug. Its newest site is the
+    one its pitch links to; each revision put up a preview of its own."""
+    log = [b for b in builds() if b.get("outcome") == "built" and b.get("slug")
+           and (A("sites", b["slug"]) / "index.html").is_file()]
+    hit = [b for b in log if b["slug"] == who] or [b for b in log if norm_name(b.get("name")) == norm_name(who)]
+    if not hit:
+        return None, None, [], []
+    name = hit[0].get("name")
+    newest = [b for b in log if norm_name(b.get("name")) == norm_name(name)][-1]["slug"]
+    deps = deployments()
+    old = [d for d in deps if d.get("status") == "live" and d.get("slug") != newest
+           and norm_name(d.get("business")) == norm_name(name)]
+    return name, newest, old, deps
+
+
+def cmd_retire(a, api=None):
+    """Take down a business's older previews and keep its newest (owner,
+    2026-10-21: Royal Edge had four up, one per revision). Not once a pitch
+    has gone out: the link they were sent may be an older one."""
+    name, newest, old, deps = older_previews(a.who)
+    if not name:
+        print(f'no built site matches "{a.who}"')
+        return 1
+    row = next((r for r in contacted() if norm_name(r["business"]) == norm_name(name)), None)
+    if row and row.get("status") not in ("", "drafted"):
+        print(f"{name} is marked {row['status']} - the link they were sent may be an older one, "
+              f"so its previews stay up until their usual day")
+        return 1
+    if not old:
+        print(f"{name} has no older preview up - only the newest, {newest}")
+        return 0
+    print(f"{name}: keeping {newest}, taking down {len(old)} older preview(s)")
+    return take_down(deps, [(d, "an older version - the newest stays up") for d in old], today(), api)
+
+
 def due_reason(d, contact_status, day):
     """Why this preview should come down today, or None. The whole policy."""
     if d.get("status") != "live":
@@ -2656,7 +2832,108 @@ def due_reason(d, contact_status, day):
 
 
 def cmd_teardown(a):
-    return teardown(list_only=a.list)
+    rc = teardown(list_only=a.list)
+    if not a.list:
+        purge_deleted()
+    return rc
+
+
+# One version deleted from the Studio (owner, 2026-10-22: "I want delete
+# this version, never delete the whole business" - the old Delete, on every
+# card, took every Royal Edge site and its previews). Its preview comes down
+# - Vercel cannot bring a project back - and its files wait here
+# DELETED_DAYS for `paul.py undelete`.
+DELETED_DAYS = 30
+
+
+def deleted_dir(slug):
+    return A("sites", "_deleted", slug)
+
+
+def versions(name):
+    """A business's built versions with a site on disk, oldest first."""
+    return [b for b in builds() if b.get("outcome") == "built" and b.get("slug")
+            and norm_name(b.get("name")) == norm_name(name)
+            and (A("sites", b["slug"]) / "index.html").is_file()]
+
+
+def cmd_drop(a, api=None):
+    """Delete one version of a business's site. Never its last one, and never
+    the one whose link went out in a pitch."""
+    log = builds()
+    me = next((b for b in log if b.get("slug") == a.slug and b.get("outcome") == "built"), None)
+    if not me or not (A("sites", a.slug) / "index.html").is_file():
+        print(f"no built site {a.slug}")
+        return 1
+    name = me.get("name")
+    mine = versions(name)
+    if len(mine) < 2:
+        print(f"this is the only version of {name} - nothing here deletes a whole business. "
+              f"To change it, send it back to Paul")
+        return 1
+    rows = contacted()
+    row = next((r for r in rows if norm_name(r["business"]) == norm_name(name)), None)
+    if row and row.get("slug") == a.slug and row.get("status") not in ("", "drafted"):
+        print(f"this is the version whose link you sent ({row['status']}) - it stays")
+        return 1
+    deps = deployments()
+    live = [d for d in deps if d.get("slug") == a.slug and d.get("status") == "live"]
+    if live and take_down(deps, [(d, "this version deleted by the owner") for d in live], today(), api):
+        print("its preview could not come down - nothing deleted")
+        return 1
+    dest = deleted_dir(a.slug)
+    dest.mkdir(parents=True, exist_ok=True)
+    for kind in ("sites", "outbox"):
+        if A(kind, a.slug).exists():
+            shutil.move(str(A(kind, a.slug)), str(dest / kind))
+    write_json(dest / "deleted.json", {"day": today(), "build": me, "index": log.index(me)})
+    A("state", "builds.jsonl").write_text("".join(json.dumps(b) + "\n" for b in log if b is not me))
+    print(f"deleted this version of {name} ({a.slug}); its files are kept {DELETED_DAYS} days - "
+          f"python3 scripts/paul.py undelete {a.slug}")
+    if row and row.get("slug") == a.slug:
+        # The pitch pointed here and was never sent: it moves to the newest left.
+        now = versions(name)[-1]["slug"]
+        dep = next((d for d in reversed(deps) if d.get("slug") == now), {})
+        row.update(slug=now, preview_url=dep.get("preview_url") or "")
+        write_rows(A("state", "contacted.csv"), CONTACTED_FIELDS, rows)
+        print(f"its pitch is now the one for {now}" + ("" if dep.get("status") == "live" else
+              " - that version has no live preview; send it back to Paul for one"))
+    record(f"the owner deleted one version of {name}: {a.slug}")
+    return 0
+
+
+def cmd_undelete(a):
+    """A version deleted from the Studio, back - files and its card. Its
+    preview does not come back; Send back to Paul makes a new one."""
+    dest = deleted_dir(a.slug)
+    info = read_json(dest / "deleted.json", {}) or {}
+    if not info.get("build"):
+        print(f"{a.slug} is not among the deleted versions")
+        return 1
+    for kind in ("sites", "outbox"):
+        if (dest / kind).exists():
+            if A(kind, a.slug).exists():
+                print(f"{kind}/{a.slug} exists again - nothing changed")
+                return 1
+            A(kind).mkdir(parents=True, exist_ok=True)
+            shutil.move(str(dest / kind), str(A(kind, a.slug)))
+    log = builds()
+    log.insert(min(int(info.get("index") or 0), len(log)), info["build"])
+    A("state", "builds.jsonl").write_text("".join(json.dumps(b) + "\n" for b in log))
+    shutil.rmtree(dest)
+    print(f"{info['build'].get('name')} {a.slug} is back - its preview is not; send it back to Paul for a new one")
+    return 0
+
+
+def purge_deleted(day=None):
+    """Deleted versions older than DELETED_DAYS are gone for good."""
+    day = day or today()
+    root = A("sites", "_deleted")
+    for d in sorted(root.glob("*")) if root.is_dir() else []:
+        when = (read_json(d / "deleted.json", {}) or {}).get("day")
+        if when and day > day_plus(when, DELETED_DAYS):
+            shutil.rmtree(d)
+            print(f"   deleted version {d.name} is past {DELETED_DAYS} days - gone")
 
 
 def cmd_go_live(a):
@@ -2766,7 +3043,8 @@ def cmd_revise(a):
         write_json(work / "target.json", t)
         old = A("outbox", slug, "draft.md")
         if old.is_file():
-            (work / "previous-draft.md").write_text(old.read_text(errors="replace"))
+            # The pitch rides along as it is; code puts the new link in.
+            (work / "draft.md").write_text(reusable_draft(old.read_text(errors="replace")))
     write_json(work / "revise.json", {"slug": slug})
     # The prospect rides along, as in a build: its id is where the owner's
     # saved photos are (Royal Edge's revision had none placed, 2026-10-21),
@@ -2794,8 +3072,9 @@ def cmd_revise(a):
         + (f"The owner picked a new reference site for the look: {ref} (FACTS: OWNER'S REF). "
            f"Rebuild the layout after it; keep this business's facts, photos and claims.\n\n"
            if ref else "")
-        + f"Write a new work/draft.md (your last one is work/previous-draft.md) and update "
-        f"work/target.json if the photos or claims change.\n")
+        + f"Your pitch is carried over in work/draft.md, with {PREVIEW_URL} where code puts the "
+        f"new link. Leave it as it is unless what you change makes it wrong - then change only "
+        f"that. Update work/target.json if the photos or claims change.\n")
     set_revision(slug, state="sent", notes=notes, name=t.get("name"))
     record((f"sent back by the owner: {t.get('name')} - {notes}"
             + (f" (after {ref})" if ref else ""))[:300])
@@ -2803,6 +3082,38 @@ def cmd_revise(a):
           + (f", built after {ref}" if ref else "") + "; the next cycle fixes it.")
     print("  a dry cycle now:  python3 scripts/paul.py dry-next && systemctl start --no-block paul-cycle.service")
     return 0
+
+
+def cmd_measure(a):
+    """What the browser checks find on a build, without waking Paul: work/ if
+    it holds one, else the newest build set aside in sites/_below-bar/
+    (Royal Edge, 2026-10-21: refused twice, and the owner asked how to fix
+    it). Nothing is changed but the measurement memo beside it."""
+    if a.folder:
+        d = Path(a.folder)
+    elif A("work", "site", "index.html").is_file():
+        d = A("work")
+    else:
+        aside = [x for x in A("sites", "_below-bar").glob("*") if (x / "site" / "index.html").is_file()] \
+            if A("sites", "_below-bar").is_dir() else []
+        d = max(aside, key=lambda x: x.stat().st_mtime, default=None)
+    if not d or not (d / "site" / "index.html").is_file():
+        print("no build to measure - give a folder that holds site/index.html")
+        return 1
+    browser = find_browser()
+    if not browser:
+        print("no headless browser on this machine - see paul.py preflight")
+        return 1
+    t = read_json(d / "target.json", {}) or {}
+    errs, notes = browser_problems(t, d, browser)
+    print(f"{t.get('name') or '?'} - {d.relative_to(A()) if d.is_relative_to(A()) else d}")
+    for e in errs:
+        print(f"  - {e}")
+    for n in notes:
+        print(f"  note: {n}")
+    if not errs:
+        print("  the browser checks find nothing to refuse")
+    return 1 if errs else 0
 
 
 def mark_dry_next():
@@ -3520,6 +3831,9 @@ def cmd_build(a, run=subprocess.run):
         said = f"added and approved: {p['name']} (prospect {p['id']})"
     if ref:
         p["reference"] = ref
+    notes = " ".join(str(getattr(a, "notes", None) or "").split())
+    if notes:
+        p["owner_notes"] = notes
     save_prospects(rows)
     record(f"the owner asked for {p['name']}" + (f", after {ref}" if ref else ""))
     print(said + (f"\nreference: {ref}" if ref else ""))
@@ -3536,6 +3850,59 @@ def cmd_build(a, run=subprocess.run):
         print(("started Paul's cycle now" + ("" if live else " (a dry run - you have not gone live)"))
               if ok else f"could not start the cycle ({detail}) - it runs at its usual time")
     return 0
+
+
+def cmd_restore(a, run=subprocess.run):
+    """Build a business again after Delete took every site of it (owner,
+    2026-10-22: Delete on an older Royal Edge card removed all four, and
+    their previews; "just rebuild it"). Delete kept it in contacted.csv so
+    Paul would never pick it, and its saved photos stayed in state/photos/
+    under its old prospect number. Its row goes - only while the pitch was
+    never sent - the prospect comes back under that number, so the photos
+    are its again, and it is built as `paul.py build` builds a named one."""
+    name = " ".join(str(a.name or "").split())
+    if any(norm_name(b.get("name")) == norm_name(name) and b.get("slug")
+           and (A("sites", b["slug"]) / "index.html").is_file() for b in builds()):
+        print(f"{name} still has a site - send it back to Paul instead")
+        return 1
+    rows = contacted()
+    mine = [r for r in rows if norm_name(r["business"]) == norm_name(name)]
+    if any(r.get("status") not in ("", "drafted") for r in mine):
+        print(f"{name} is marked {mine[0]['status']} in contacted.csv - a pitch went out, or it "
+              f"is not to be contacted, so Paul will not build it again")
+        return 1
+    pros = load_prospects()
+    if any(norm_name(p.get("name")) == norm_name(name) for p in pros):
+        print(f"{name} is already a prospect - approve it in the Studio")
+        return 1
+    taken = {str(p.get("id")) for p in pros}
+    if a.photos is not None:
+        pid = a.photos
+    else:
+        orphans = sorted(int(d.name) for d in A("state", "photos").glob("*")
+                         if d.is_dir() and d.name.isdigit() and d.name not in taken) \
+            if A("state", "photos").is_dir() else []
+        if len(orphans) > 1:
+            print(f"photos of {len(orphans)} businesses no longer listed ({', '.join(map(str, orphans))}) - "
+                  f"say which are {name}'s with --photos <number>")
+            return 1
+        pid = orphans[0] if orphans else None
+    if pid is not None and str(pid) in taken:
+        print(f"photo folder {pid} belongs to another prospect")
+        return 1
+    if pid is None:
+        pid = max([int(p.get("id") or 0) for p in pros] + [0]) + 1
+    if mine:
+        write_rows(A("state", "contacted.csv"), CONTACTED_FIELDS, [r for r in rows if r not in mine])
+    p = {"id": pid, "name": name, "found": today(), "status": "waiting", "source": "owner",
+         "why": "built again after its sites were deleted by mistake"}
+    if a.where:
+        p["where"] = a.where.strip()
+    save_prospects(pros + [p])
+    n = len(supplied(pid))
+    print(f"{name} is back as prospect {pid}" + (f", with the {n} photo(s) you saved for it" if n else
+                                                  " (no saved photos found)"))
+    return cmd_build(a, run=run)
 
 
 def restore_set_aside(p):
@@ -3825,6 +4192,17 @@ def cmd_brief(a, get=http_get):
               "             checked yet. Find it yourself as in scouting: its address, phone",
               "             and hours from its own pages, Google or Facebook, each with the URL.",
               "             Not sure it is the right business, or it closed? below-bar, say why."]
+    if mine.get("owner_notes"):
+        words, line = str(mine["owner_notes"]).split(), ""
+        rows_ = []
+        for w in words:
+            if len(line) + len(w) > 62:
+                rows_.append(line)
+                line = ""
+            line += (" " if line else "") + w
+        rows_.append(line)
+        L += ["OWNER WANTS  " + rows_[0], *[f"             {r}" for r in rows_[1:]],
+              "             Build every point of it. Code's checks still apply."]
     if mine.get("reference"):
         L += [f"OWNER'S REF  {mine['reference']}",
               "             The owner picked this site for this build. Open it first (WebFetch)",
@@ -4188,6 +4566,12 @@ def main(argv=None):
     p = sub.add_parser("mark", help="after you send one: sent/replied/won/declined/do-not-contact")
     p.add_argument("who", help="the slug, or the business name")
     p.add_argument("status", choices=STATUSES)
+    p = sub.add_parser("drop", help="delete one version of a business's site (never its last)")
+    p.add_argument("slug")
+    p = sub.add_parser("undelete", help="bring back a version deleted in the last 30 days")
+    p.add_argument("slug")
+    p = sub.add_parser("retire", help="take down a business's older previews; its newest stays up")
+    p.add_argument("who", help="the slug, or the business name")
     p = sub.add_parser("exclude", help="a business Paul must never pick")
     p.add_argument("business")
     p.add_argument("phone", nargs="?")
@@ -4200,6 +4584,9 @@ def main(argv=None):
     p.add_argument("who", help="the slug, or (part of) the business name")
     p.add_argument("notes", nargs="+", help="what to fix, in your words")
     p.add_argument("--ref", help="a new site whose layout and feel Paul should take after")
+    p = sub.add_parser("measure", help="the browser checks on a build (work/, or the newest set aside) - "
+                                       "no model woken")
+    p.add_argument("folder", nargs="?", help="a folder holding site/index.html")
     sub.add_parser("prospects", help="the businesses Paul found, and what the next cycle does")
     p = sub.add_parser("approve", help="approve a prospect for Paul to build")
     p.add_argument("who", help="its number, or part of its name")
@@ -4209,6 +4596,14 @@ def main(argv=None):
     p.add_argument("name", help="the business, as it is known")
     p.add_argument("--ref", help="a site whose layout and feel Paul should take after")
     p.add_argument("--where", help="its town, if Paul might find the wrong one")
+    p.add_argument("--notes", help="what the owner wants on it, in their words")
+    p.add_argument("--now", action="store_true", help="and start the cycle now")
+    p = sub.add_parser("restore", help="build a business again after its sites were deleted by mistake")
+    p.add_argument("name", help="the business, as it was")
+    p.add_argument("--ref", help="a site whose layout and feel Paul should take after")
+    p.add_argument("--where", help="its town")
+    p.add_argument("--notes", help="what the owner wants on it, in their words")
+    p.add_argument("--photos", type=int, help="the number of its folder in state/photos/, if not found")
     p.add_argument("--now", action="store_true", help="and start the cycle now")
     p = sub.add_parser("reject", help="reject a prospect - never proposed again")
     p.add_argument("who", help="its number, or part of its name")
@@ -4248,10 +4643,11 @@ def main(argv=None):
 
     a = ap.parse_args(argv)
     return {"init": cmd_init, "sender": cmd_sender, "preflight": cmd_preflight,
-            "status": cmd_status, "mark": cmd_mark, "exclude": cmd_exclude,
+            "status": cmd_status, "mark": cmd_mark, "retire": cmd_retire, "drop": cmd_drop,
+            "undelete": cmd_undelete, "exclude": cmd_exclude,
             "teardown": cmd_teardown, "go-live": cmd_go_live, "dry-next": cmd_dry_next,
-            "revise": cmd_revise, "prospects": cmd_prospects, "approve": cmd_approve,
-            "reject": cmd_reject, "build": cmd_build, "find": cmd_find, "remove": cmd_remove,
+            "revise": cmd_revise, "measure": cmd_measure, "prospects": cmd_prospects, "approve": cmd_approve,
+            "reject": cmd_reject, "build": cmd_build, "restore": cmd_restore, "find": cmd_find, "remove": cmd_remove,
             "places": cmd_places, "photo": cmd_photo,
             "focus": cmd_focus, "nearby": cmd_nearby, "leads": cmd_leads, "deck": cmd_deck,
             "should-run": cmd_should_run, "brief": cmd_brief, "finish": cmd_finish,

@@ -52,7 +52,8 @@
   .sechead{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
   .sechead h2{margin:0;font-size:17px}
   .sechead .muted{color:var(--mute);font-size:13px}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(360px,100%),1fr));gap:14px}
+  .grid>*{min-width:0}
   .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px}
   .card.done{opacity:.72}
   .ctop{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
@@ -71,7 +72,7 @@
   a.chip:hover{border-color:var(--mute)}
   .reach{align-self:flex-start;font-size:11px;font-weight:700;letter-spacing:.08em;padding:3px 9px;border-radius:6px;
     color:var(--green2);border:1px solid rgba(34,197,94,.45);background:rgba(34,197,94,.08)}
-  .acts{display:flex;gap:8px}
+  .acts{display:flex;gap:8px;flex-wrap:wrap}
   .acts .btn{flex:0 0 auto}
   .said{font-size:12.5px;color:var(--mute)}
   .rev{margin:10px 0 2px;padding:10px 12px;border-radius:10px;font-size:13.5px;line-height:1.45;border:1px solid}
@@ -86,7 +87,7 @@
   .act{padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}
   .shots{display:grid;grid-template-columns:1fr 2.6fr;gap:8px;align-items:start}
   .shots img{width:100%;max-height:360px;object-fit:cover;object-position:top;display:block;border-radius:8px;border:1px solid var(--line)}
-  pre{white-space:pre-wrap;font:12.5px/1.55 ui-monospace,Menlo,monospace;color:#cfd6e4;background:rgba(0,0,0,.25);
+  pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12.5px/1.55 ui-monospace,Menlo,monospace;color:#cfd6e4;background:rgba(0,0,0,.25);
     border:1px solid var(--line);border-radius:8px;padding:12px;margin:0}
   .err{color:#fb7185}
   /* Google and the owner's photos, on a prospect */
@@ -218,7 +219,8 @@ function draw() {
       P.dry_next ? ' · the next run is a dry run' : ''}${P.focus ? ' · focus: ' + esc(P.focus) : ''}</div>`;
   const pros = P.prospects || [];
   const built = (P.builds || []).filter(b => b.site);
-  const drafts = built.filter(b => b.draft && (!b.status || b.status === 'drafted'));
+  // One per business, its newest site's (paul.py deck decides which).
+  const drafts = built.filter(b => b.current && b.draft && (!b.status || b.status === 'drafted'));
   $('n-prospects').textContent = pros.filter(p => p.status === 'waiting').length;
   $('n-work').textContent = built.length;
   $('n-drafts').textContent = drafts.length;
@@ -358,13 +360,15 @@ function work(b) {
     : `<div class="said">no ${n} screenshot</div>`;
   return `<div class="card"><div class="ctop"><div><div class="cname">${esc(b.name)}</div>
       <div class="cmeta">${esc(b.day || '')} · ${b.mode === 'live' ? 'live' : 'dry run'}${b.kind ? ' · ' + esc(b.kind) : ''}</div></div>
-      <div class="tags">${b.from_note ? '<span class="tag t-green">UPDATED FROM YOUR NOTE</span>' : ''}
+      <div class="tags">${b.current ? '' : '<span class="tag t-gray">OLDER VERSION</span>'}
+        ${b.from_note ? '<span class="tag t-green">UPDATED FROM YOUR NOTE</span>' : ''}
         ${b.status ? `<span class="tag t-gray">${esc(String(b.status).toUpperCase())}</span>` : ''}</div></div>
     ${b.from_note ? `<div class="said">Made ${esc(b.day || '')} from your note: “${esc(b.from_note.notes || '')}”</div>` : ''}
     ${revision(b)}
     <div class="shots">${shot('mobile')}${shot('desktop')}</div>
     <div class="acts"><a class="btn" href="/paul/site/${encodeURIComponent(b.slug)}/" target="_blank" rel="noopener">Open the site</a>
       ${b.preview_url ? `<a class="btn go" href="${esc(b.preview_url)}" target="_blank" rel="noopener">Live preview</a>` : ''}</div>
+    ${b.older_live ? `<div class="acts"><button class="btn del" data-retire="${esc(b.slug)}" data-name="${esc(b.name)}" data-n="${b.older_live}" ${busy ? 'disabled' : ''}>Take down ${b.older_live} older preview${b.older_live > 1 ? 's' : ''}</button></div>` : ''}
     ${b.notes ? `<div class="why"><b>Paul's notes:</b> ${esc(b.notes)}</div>` : ''}
     ${b.teardown ? `<div class="said">preview comes down ${esc(b.teardown)}</div>` : ''}
     <label class="refl" for="fix-${esc(b.slug)}">Something to fix before you pitch it? Tell Paul</label>
@@ -373,7 +377,7 @@ function work(b) {
     <label class="refl" for="ref-s-${esc(b.slug)}">New reference site for the look (optional - empty keeps the one it was built from)</label>
     <input class="refbox" id="ref-s-${esc(b.slug)}" data-ref="s:${esc(b.slug)}" type="url" inputmode="url" autocapitalize="off" autocorrect="off" placeholder="https://a-site-you-like.com" value="${esc(refs['s:' + b.slug] || '')}">
     <div class="acts"><button class="btn go" data-revise="${esc(b.slug)}" ${busy ? 'disabled' : ''}>Send back to Paul</button>
-      <button class="btn del" data-remove="${esc(b.slug)}" data-name="${esc(b.name)}" ${busy ? 'disabled' : ''}>Delete</button></div></div>`;
+      ${b.versions > 1 ? `<button class="btn del" data-drop="${esc(b.slug)}" data-name="${esc(b.name)}" data-day="${esc(b.day || '')}" ${busy ? 'disabled' : ''}>Delete this version</button>` : ''}</div></div>`;
 }
 
 // Where a site sent back to Paul has got to (paul.py revisions: sent ->
@@ -400,9 +404,31 @@ function revision(b) {
 }
 
 function draft(b) {
+  const p = b.pitch || {};
+  const to = /^https?:/.test(p.to || '') ? 'profile link' : /@/.test(p.to || '') ? 'email address' : 'number';
   return `<div class="card"><div class="cname">${esc(b.name)}</div>
+    <div class="acts"><button class="btn go" data-copy="${esc(b.slug)}" data-part="message">Copy message</button>
+      ${p.to ? `<button class="btn" data-copy="${esc(b.slug)}" data-part="to">Copy ${to}</button>` : ''}
+      ${p.subject ? `<button class="btn" data-copy="${esc(b.slug)}" data-part="subject">Copy subject</button>` : ''}</div>
     <pre>${esc(b.draft)}</pre>
-    <div class="said">Send it yourself, then: python3 scripts/paul.py mark ${esc(b.slug)} sent</div></div>`;
+    <div class="said">Send it yourself, then tap I sent it.</div>
+    <div class="acts"><button class="btn go" data-sent="${esc(b.slug)}" data-name="${esc(b.name)}" ${busy ? 'disabled' : ''}>I sent it</button></div></div>`;
+}
+
+// Copy on a phone (owner, 2026-10-21). The Deck is plain http over
+// Tailscale, where Safari has no navigator.clipboard - so the old way too:
+// a selected textarea and execCommand('copy'), inside the tap.
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text).then(() => true, () => false);
+  const t = document.createElement('textarea');
+  t.value = text; t.setAttribute('readonly', '');
+  t.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;font-size:16px';
+  document.body.appendChild(t);
+  t.select(); t.setSelectionRange(0, text.length);
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  t.remove();
+  return Promise.resolve(ok);
 }
 
 async function act(path, label, body) {
@@ -431,10 +457,28 @@ $('body').onclick = e => {
   const a = e.target.closest('[data-approve]'), r = e.target.closest('[data-reject]');
   const g = e.target.closest('[data-google]'), x = e.target.closest('[data-unphoto]');
   if (g) return act(`/api/paul/prospects/${g.dataset.google}/google`, 'checked');
-  const del = e.target.closest('[data-remove]');
+  // One version only - its preview comes down, its files are kept 30 days.
+  const del = e.target.closest('[data-drop]');
   if (del) {
-    if (!confirm(`Delete every ${del.dataset.name} site? Any live preview is taken down, its drafts go, and Paul never picks ${del.dataset.name} again.`)) return;
-    return act(`/api/paul/remove/${encodeURIComponent(del.dataset.remove)}`, 'deleted');
+    if (!confirm(`Delete only this version of ${del.dataset.name} (made ${del.dataset.day})? Its live preview comes down for good; its files are kept 30 days. The other versions stay.`)) return;
+    return act(`/api/paul/drop/${encodeURIComponent(del.dataset.drop)}`, 'deleted');
+  }
+  const sent = e.target.closest('[data-sent]');
+  if (sent) {
+    if (!confirm(`Mark the ${sent.dataset.name} pitch as sent? It leaves Drafts, and Paul never pitches ${sent.dataset.name} again.`)) return;
+    return act(`/api/paul/sent/${encodeURIComponent(sent.dataset.sent)}`, 'marked sent');
+  }
+  const old = e.target.closest('[data-retire]');
+  if (old) {
+    if (!confirm(`Take down ${old.dataset.n} older ${old.dataset.name} preview(s)? The newest - the one in its pitch - stays up.`)) return;
+    return act(`/api/paul/retire/${encodeURIComponent(old.dataset.retire)}`, 'taken down');
+  }
+  const c = e.target.closest('[data-copy]');
+  if (c) {
+    const b = (P.builds || []).find(x => x.slug === c.dataset.copy);
+    const text = ((b && b.pitch) || {})[c.dataset.part] || '';
+    return copyText(text).then(ok => toast(ok ? 'Copied - paste it where you send it'
+      : 'Could not copy - press and hold the text below to select it'));
   }
   const v = e.target.closest('[data-revise]');
   if (v) {
@@ -458,7 +502,9 @@ $('body').onclick = e => {
 };
 load();
 // Not while a box is being typed in: a redraw would close the keyboard.
-setInterval(() => { if (!busy && !(document.activeElement && document.activeElement.matches('[data-ref],[data-notes]'))) load(); }, 30000);
+// Nor while text is selected: a redraw dropped the owner's selection of a pitch.
+setInterval(() => { if (!busy && !(document.activeElement && document.activeElement.matches('[data-ref],[data-notes]'))
+  && !String(window.getSelection ? window.getSelection() : '')) load(); }, 30000);
 </script>
 </body>
 </html>

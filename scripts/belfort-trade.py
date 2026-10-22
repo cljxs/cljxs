@@ -76,14 +76,22 @@ MIN_CASH_PCT = 5.0          # the owner lowered it from 15% on 2026-10-01
 
 # The exit rules, in percent from cost.
 STOP_LOSS = -10.0           # close, no exceptions, no averaging down
-TAKE_PROFIT = 25.0          # sell half - or all of a 1-share position - once
+TAKE_PROFIT = 20.0          # sell half - or all of a 1-share position - once
 # Owner, 2026-10-09: half, not all. O'Neil's 20-25% rule says take most or
 # part there and keep the rest on a stop; Minervini and Qullamaggie sell part
 # into strength. The other half stays on the protect stop below, which keeps
-# rising with each new high - so a big run is no longer capped at +25%.
+# rising with each new high - so a big run is not capped there.
+# Owner, 2026-10-22: at +20%, not +25%. MRVL reached +24.8% on 2026-10-06
+# and was sold at +5.6% a week later; half sold at +20% would have kept it.
 PROTECT_AT = 8.0            # once a position has been up this much...
-TRAIL = 10.0                # ...its stop follows the highest price, this far below,
+TRAIL = 8.0                 # ...its stop follows the highest price, this far below,
                             #    and never below what was paid
+# Owner, 2026-10-22, from `belfort-learn.py replay`: MRVL, PANW and CRWD ran
+# 13-19% up and the trail - then 10%, or the position's own 5-15% - sold
+# them at +1.5% to +5.6%. On his six positions an 8% trail made $421 where
+# the old rule made $298, and was worse on none. The trail is now 8% for
+# every position; the stop-loss distance below cost is unchanged.
+RULES_CHANGED = "2026-10-22"   # the trail and the take-profit above, for the replay
 # Dead money: 8+ trading days within +/-2% AND behind QQQ over the same days.
 # Was 5 days and no market comparison; a swing trade often goes sideways
 # for a week before it moves, and flat in a flat market is not dead.
@@ -94,7 +102,7 @@ DEAD_DAYS, DEAD_BAND = 8, 2.0
 # nearer than STOP_MIN_PCT or further than STOP_MAX_PCT; a new buy may lose
 # at most RISK_PER_TRADE_PCT of the portfolio if that stop is hit. A flat
 # -10% was a coin-flip on SMCI and a big loss on MSFT. Positions bought
-# before this keep STOP_LOSS and TRAIL.
+# before this keep STOP_LOSS.
 ATR_MULT = 2.0
 STOP_MIN_PCT, STOP_MAX_PCT = 5.0, 15.0
 RISK_PER_TRADE_PCT = 1.0
@@ -260,13 +268,18 @@ def since(q_or_hist, day):
     return next((float(c) for d, c in hist or [] if d >= day), None)
 
 
-def exit_check(pos, q, qqq=None):
+def exit_check(pos, q, qqq=None, trail=None, take=None):
     """(rule, reason, stop_price) for one open position against its quote;
     rule is None when nothing is due. The stop is the position's own
     distance (risk_pct, set from volatility when bought; -10% for older
-    positions) under what was paid - or, once it has been up 8%, that far
-    under its highest price, never below what was paid. qqq is QQQ's quote,
-    for the dead-money comparison."""
+    positions) under what was paid - or, once it has been up 8%, TRAIL under
+    its highest price, never below what was paid. qqq is QQQ's quote, for
+    the dead-money comparison.
+
+    trail and take are for belfort-learn.py's replay, which tries other rules
+    on real prices; the book passes neither. trail is a distance in place of
+    TRAIL, or "own" for the rule before RULES_CHANGED (the position's own
+    distance); take is a take-profit level in place of TAKE_PROFIT."""
     cb = float(pos.get("cost_basis") or 0)
     if not q or not cb or q.get("price") is None:
         return None, "no quote", None
@@ -281,7 +294,8 @@ def exit_check(pos, q, qqq=None):
     pnl = round((px / cb - 1) * 100, 6)
     peak_pnl = round((peak / cb - 1) * 100, 6)
     dist = float(pos.get("risk_pct") or -STOP_LOSS)
-    trail = float(pos.get("risk_pct") or TRAIL)
+    trail = dist if trail == "own" else float(trail or TRAIL)
+    take = float(take or TAKE_PROFIT)
     stop = round(cb * (1 - dist / 100), 2)
     if peak_pnl >= PROTECT_AT:
         stop = round(max(cb, peak * (1 - trail / 100)), 2)
@@ -289,7 +303,7 @@ def exit_check(pos, q, qqq=None):
 
     if pnl <= -dist:
         return "stop", f"STOP LOSS: {pnl:+.1f}% from cost ${cb:,.2f} (its stop: -{dist:g}%)", stop
-    if pnl >= TAKE_PROFIT and not pos.get("trimmed"):
+    if pnl >= take and not pos.get("trimmed"):
         if float(pos.get("shares") or 0) >= 2:
             return "trim", (f"TAKE PROFIT (half): {pnl:+.1f}% from cost ${cb:,.2f} - the rest rides "
                             f"its stop"), stop
@@ -609,7 +623,10 @@ def buy(p, symbol, shares, price=None, reason="", score=0, cited=None, state=Non
     p["trades"].append({"cycle": p.get("cycle_count", 0), "side": "BUY", "symbol": sym,
                         "shares": shares, "price": round(float(px), 2),
                         "notional": round(cost, 2), "utc": now(), "reason": reason or "",
-                        "catalyst": cited, "regime": state, "score": score})
+                        "catalyst": cited, "regime": state, "score": score,
+                        # Kept on the trade too: the position goes when it is sold, and
+                        # belfort-learn.py's replay needs the stop it was bought with.
+                        "risk_pct": r})
     print(f"BOUGHT {shares} {sym} @ ${float(px):,.2f} = ${cost:,.2f}   cash now ${float(p['cash']):,.2f}")
     return 0
 
@@ -718,7 +735,7 @@ def cmd_shadow(a):
         did = apply_exits(p) or ["nothing due"]
         save(p, SHADOW)
         log_equity(p, "shadow")
-        print("shadow book, hourly exits: " + "; ".join(did))
+        print("shadow book, exits check: " + "; ".join(did))
         return 0
     did = shadow_turn(p)
     p["cycle_count"] = int(p.get("cycle_count") or 0) + 1
@@ -1362,7 +1379,7 @@ def main():
     b.set_defaults(fn=cmd_buy)
 
     sh = sub.add_parser("shadow")
-    sh.add_argument("--exits-only", action="store_true", help="the hourly check: sell what is due, buy nothing")
+    sh.add_argument("--exits-only", action="store_true", help="the 10-minute check: sell what is due, buy nothing")
     sh.set_defaults(fn=cmd_shadow)
     z = sub.add_parser("size", help="the most of a name a buy may take now, and what limits it")
     z.add_argument("symbol")
@@ -1386,9 +1403,9 @@ def main():
 
     a = ap.parse_args()
     # ONE AT A TIME. Every command reads portfolio.json and writes it back
-    # whole. The rule check runs hourly since 2026-10-15, closer to Belfort's
-    # own wakes, and a sell from his cycle landing between its read and its
-    # write would be undone. The kernel's lock: a crash releases it.
+    # whole. The rule check runs every 10 minutes since 2026-10-22, into
+    # Belfort's own wakes, and a sell from his cycle landing between its read
+    # and its write would be undone. The kernel's lock: a crash releases it.
     STATE.parent.mkdir(parents=True, exist_ok=True)
     with open(STATE.parent / ".trade.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)

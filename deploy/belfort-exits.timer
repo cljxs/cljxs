@@ -1,12 +1,14 @@
 [Unit]
-Description=Belfort's sell-rule check, every hour 10:35-15:35 Eastern on weekdays
+Description=Belfort's sell-rule check, every 10 minutes 09:45-15:55 Eastern on weekdays
 
 [Timer]
-# Hourly since 2026-10-15 (owner: check more often). Was 12:35 only, so a
-# stop crossed at 10:00 waited until midday and one crossed at 13:00 until
-# the 15:55 wake. With the 9:35 and 15:55 wakes, the rules are now checked
-# eight times a trading day. The fetcher has prices from 10 minutes before.
-OnCalendar=Mon..Fri 10..15:35 America/New_York
+# Every 10 minutes since 2026-10-22 (owner). Hourly, a stop crossed at 10:40
+# waited until 11:35, and `belfort-learn.py replay` put the cost of that at
+# $38 on his trades and $125 on the no-AI book's. The fetcher writes prices
+# at :00, :10 ...; this runs five minutes after each, from 09:45 (the 09:35
+# wake checks the open itself). No AI and no buys - code only, free.
+OnCalendar=Mon..Fri 09:45/10 America/New_York
+OnCalendar=Mon..Fri 10..15:05/10 America/New_York
 Persistent=false
 
 [Install]

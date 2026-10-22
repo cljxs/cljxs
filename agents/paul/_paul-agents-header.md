@@ -145,9 +145,9 @@ refuses its name and any 8 words in a row from its pages.
 
 If FACTS `resume` says the owner sent a site back, read `work/REVISE.md`
 and fix every point in it in `work/site/`, keeping what works. Update
-`work/target.json` if the photos or claims change, write a new
-`work/draft.md` (`work/previous-draft.md` is your last one), then check and
-finish as below.
+`work/target.json` if the photos or claims change. Your pitch is carried
+over in `work/draft.md`: leave it as it is unless your fix makes it wrong,
+then change only that. Check and finish as below.
 
 ## 2. work/target.json
 
@@ -239,9 +239,15 @@ think they paid for this.
   video hero gets a photo hero.
 - **Every caption says what is in that photo.** Open it with view_image
   first: a customer in the chair is not "the front windows" (Royal Edge,
-  2026-10-21). Unsure what it shows - no caption. **Show a photo no bigger
-  than the file** and in its own shape (`object-fit: cover` in a box):
-  code measures every photo and refuses one blown up or stretched.
+  2026-10-21). Unsure what it shows - no caption. **Show a photo at most
+  two-thirds as wide as its file** (phones and iPads draw two dots per
+  pixel: a 1170px screenshot shows sharp up to 780px) and in its own shape
+  (`object-fit: cover` in a box). Code measures every photo on a computer
+  and an upright iPad and refuses one blown up or stretched, and says how
+  wide it may go. The owner's photos are often screenshots: show them
+  smaller - a row of two or three cropped to one shape under the text
+  (Royal Edge's About, 2026-10-21), never a tall stack beside a short
+  paragraph; code refuses a column ending far above the one beside it.
 - **About us** without their story: write it from what you sourced - where
   they are, what they do, how to book - in a warm voice. Never invent a
   founder, a founding year, years of experience or an award; code refuses

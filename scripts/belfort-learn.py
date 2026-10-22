@@ -4,6 +4,7 @@ belfort-learn.py - what Belfort's own results say, worked out in code.
 
     belfort-learn.py record [--json]           # his record, and what the names he passed on did next
     belfort-learn.py review [--month YYYY-MM] [--write]   # the monthly review for the owner
+    belfort-learn.py replay [--trail 7] [--shadow] [--json]   # his trades under the sell rules now and before
 
 Owner, 2026-10-07: "Does it learn from its wins and losses?" It did not.
 Every wake is a new conversation, MEMORY.md holds a week of his own notes,
@@ -22,6 +23,11 @@ none of it is a model's recollection of how it has been doing:
    only for a group of MIN_SAMPLE or more, and only ever suggestions. Nothing
    here changes a rule. The owner decides; a run of five losses is luck, and
    rules that chase it are worse than rules that ignore it.
+4. The replay (owner, 2026-10-22: "we are selling way lower than the
+   highs"): every position he has held, walked day by day through real daily
+   prices under the sell rules as they are and under the alternatives the
+   owner is weighing. It decides nothing; it shows what each rule would have
+   done on the same buys.
 
 Standard library only.
 """
@@ -29,8 +35,10 @@ Standard library only.
 import argparse
 import importlib.util
 import json
+import re
 import sys
-from datetime import timedelta
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -309,6 +317,257 @@ def review(month=None):
     return "\n".join(lines) + "\n"
 
 
+# --- the replay -------------------------------------------------------------
+#
+# Each position from its first buy to its last sale is walked through real
+# daily bars, checking the sell rule - exit_check in belfort-trade.py, the one
+# the book uses, never a copy - at the open, the day's low, its high and the
+# close. A stop crossed during the day fills AT the stop; a gap through it
+# fills at the open, as it does for real. The book checked hourly until
+# 2026-10-22 and every 10 minutes since, so real fills land a little under
+# the stop: the rule a sale was made under, replayed, is how far to trust
+# the other columns.
+# His own judgement sales happen on their real day at their real price, if
+# the replayed position still holds shares then. A position added to is
+# replayed at its average cost from the first buy.
+
+# (column, settings for exit_check) - an empty one is the book's own rules.
+PLANS = (("Rules now", {}),
+         ("Old rules", {"trail": "own", "take": 25.0}))   # trail = the stop's own distance
+RULES_CHANGED = T.RULES_CHANGED
+
+
+def _fetch():
+    spec = importlib.util.spec_from_file_location("belfort_fetch_learn",
+                                                  Path(__file__).resolve().parent / "belfort-fetch.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def daily_bars(sym, get=None):
+    """[(day, open, high, low, close)] for a year, from the chart the fetcher
+    already reads."""
+    f = _fetch()
+    raw = json.loads((get or f.http_get)(f.CHART_URL.format(sym=sym)))
+    r = raw["chart"]["result"][0]
+    q = r["indicators"]["quote"][0]
+    out = []
+    for ts, o, h, l, c in zip(r["timestamp"], q["open"], q["high"], q["low"], q["close"]):
+        if None not in (h, l, c):
+            day = datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d")
+            out.append((day, float(o if o is not None else c), float(h), float(l), float(c)))
+    return out
+
+
+def lots(p):
+    """Every position from its first buy until it was sold out, or still open."""
+    held, out = {}, []
+    for t in p.get("trades", []):
+        sym, side = str(t.get("symbol", "")).upper(), str(t.get("side", "")).upper()
+        if side == "BUY":
+            held.setdefault(sym, {"symbol": sym, "buys": [], "sells": []})["buys"].append(t)
+        elif side == "SELL" and sym in held:
+            lot = held[sym]
+            lot["sells"].append(t)
+            if sum(float(x["shares"]) for x in lot["sells"]) >= sum(float(x["shares"]) for x in lot["buys"]):
+                out.append(held.pop(sym))
+    out += held.values()
+    for lot in out:
+        lot["shares"] = sum(float(x["shares"]) for x in lot["buys"])
+        lot["cost"] = sum(float(x["shares"]) * float(x["price"]) for x in lot["buys"]) / lot["shares"]
+        lot["bought"] = str(lot["buys"][0].get("utc") or "")[:10]
+        lot["open"] = sum(float(x["shares"]) for x in lot["sells"]) < lot["shares"]
+    return out
+
+
+def own_distance(lot, p):
+    """The stop distance the book used for this position: stored on an open
+    one, and on its buy since 2026-10-22; for an older closed one, read back
+    from the sale its rule wrote. None means the -10% every older position had."""
+    pos = next((x for x in p.get("positions", []) if x["symbol"].upper() == lot["symbol"]), None)
+    if lot["open"] and pos and pos.get("risk_pct"):
+        return float(pos["risk_pct"])
+    if lot["buys"][0].get("risk_pct"):
+        return float(lot["buys"][0]["risk_pct"])
+    for t in lot["sells"]:
+        why = str(t.get("reason") or "")
+        m = re.search(r"its stop: -([\d.]+)%", why)
+        if m:
+            return float(m.group(1))
+        m = re.search(r"\(high \$([\d,.]+)\).*its stop \$([\d,.]+)", why)
+        # Until RULES_CHANGED the trail WAS the stop's own distance; after
+        # it, a protect sale says only TRAIL, which is not the stop.
+        if m and str(t.get("utc") or "") < RULES_CHANGED:
+            high, stop = (float(x.replace(",", "")) for x in m.groups())
+            if stop > lot["cost"] * 1.001:          # a stop at cost says nothing about the trail
+                return round((1 - stop / high) * 100, 2)
+    return None
+
+
+def real_result(lot, bars):
+    pnl = sum(float(t.get("realised_pnl") or 0) for t in lot["sells"])
+    left = lot["shares"] - sum(float(t["shares"]) for t in lot["sells"])
+    if left > 0 and bars:
+        pnl += (bars[-1][4] - lot["cost"]) * left
+    last = str(lot["sells"][-1].get("utc") or "")[:10] if lot["sells"] and left <= 0 else None
+    return round(pnl, 2), last
+
+
+def replay_lot(lot, bars, qqq, distance=None, rules=None):
+    """(profit, day it was sold out or None while still held) for one position
+    under one set of rules (exit_check's trail and take)."""
+    rules = rules or {}
+    cb, shares, entry = lot["cost"], lot["shares"], lot["bought"]
+    pos = {"symbol": lot["symbol"], "cost_basis": cb, "shares": shares, "entry_utc": entry,
+           "risk_pct": distance}
+    judged = {}
+    for t in lot["sells"]:
+        if not any(str(t.get("reason", "")).startswith(pre) for pre, _ in T.RULE_NAMES):
+            judged.setdefault(str(t.get("utc"))[:10], []).append(t)
+    qqq_close = {d: c for d, _o, _h, _l, c in qqq}
+    pnl, prior, out = 0.0, [], None
+
+    def sell(n, px):
+        nonlocal shares, pnl
+        n = min(n, shares)
+        pnl += (px - cb) * n
+        shares -= n
+        pos["shares"] = shares
+
+    for day, o, h, l, c in bars:
+        if day < entry:
+            continue
+        if day == entry:
+            prior.append([day, c])
+            continue
+        for kind, px in (("open", o), ("low", l), ("high", h), ("close", c)):
+            if kind == "close":
+                for t in judged.get(day, []):
+                    sell(float(t["shares"]), float(t["price"]))
+            if shares <= 0:
+                break
+            mkt = None
+            if kind == "close" and day in qqq_close:
+                mkt = {"price": qqq_close[day], "history": [[d, x] for d, x in qqq_close.items() if d <= day]}
+            q = {"price": px, "history": prior + [[day, px]]}
+            rule, _why, stop = T.exit_check(pos, q, mkt, **rules)
+            if rule in ("stop", "protect"):
+                sell(shares, px if kind in ("open", "close") else stop)
+            elif rule in ("trim", "take"):
+                fill = px if kind == "open" else round(cb * (1 + rules.get("take", T.TAKE_PROFIT) / 100), 2)
+                if rule == "trim":
+                    sell(int(shares) // 2, fill)
+                    pos["trimmed"] = True
+                else:
+                    sell(shares, fill)
+            elif rule == "dead":
+                sell(shares, px)
+        prior.append([day, c])
+        if shares <= 0:
+            out = day
+            break
+    if shares > 0 and bars:
+        pnl += (bars[-1][4] - cb) * shares
+    return round(pnl, 2), out
+
+
+def saved_bars(path=None):
+    """{symbol: [(day, open, high, low, close)]} from data/bars.json, the 90
+    daily bars belfort-fetch.py already keeps for every watched name and QQQ -
+    read first, so a replay asks Yahoo only for what is not there."""
+    try:
+        doc = json.loads((path or T.BARS).read_text())
+    except Exception:
+        return {}
+    return {sym: [(b[0], b[1], b[2], b[3], b[4]) for b in (c.get("bars") or []) if None not in b[1:5]]
+            for sym, c in (doc.get("bars") or {}).items()}
+
+
+def replay(p=None, plans=PLANS, get_bars=None, saved=None):
+    """Every position, real against each plan."""
+    p = p or T.load()
+    saved = saved_bars() if saved is None else saved
+    every = lots(p)
+    first = {}
+    for lot in every:
+        first[lot["symbol"]] = min(first.get(lot["symbol"], lot["bought"]), lot["bought"])
+    first["QQQ"] = min(first.values(), default="")
+
+    def fetched(sym):
+        time.sleep(0.5)                     # Yahoo refuses quick runs of calls
+        return (get_bars or daily_bars)(sym)
+
+    cache = {}
+
+    def bars_of(sym):
+        if sym not in cache:
+            have = saved.get(sym) or []
+            if have and have[0][0] < first.get(sym, ""):
+                cache[sym] = have
+            else:
+                try:
+                    cache[sym] = fetched(sym)
+                except Exception as exc:
+                    print(f"replay: no prices for {sym} - {exc}", file=sys.stderr)
+                    cache[sym] = []
+        return cache[sym]
+
+    qqq = bars_of("QQQ")
+    rows, skipped = [], []
+    for lot in sorted(every, key=lambda x: x["bought"]):
+        bars = bars_of(lot["symbol"])
+        if not bars:
+            skipped.append(lot["symbol"])
+            continue
+        dist = own_distance(lot, p)
+        pnl, last = real_result(lot, bars)
+        row = {"symbol": lot["symbol"], "bought": lot["bought"], "cost": round(lot["cost"], 2),
+               "shares": lot["shares"], "open": lot["open"], "distance": dist,
+               "real": {"pnl": pnl, "out": last}}
+        for name, rules in plans:
+            r_pnl, r_out = replay_lot(lot, bars, qqq, dist, rules)
+            row[name] = {"pnl": r_pnl, "out": r_out}
+        rows.append(row)
+    total = {k: round(sum(r[k]["pnl"] for r in rows), 2) for k in ["real"] + [n for n, _r in plans]}
+    return {"rows": rows, "total": total, "plans": [n for n, _r in plans], "skipped": skipped,
+            "last_day": max((b[-1][0] for b in cache.values() if b), default=None)}
+
+
+def replay_text(r):
+    def short(day):
+        return datetime.strptime(day, "%Y-%m-%d").strftime("%b %d") if day else "held"
+
+    cols = ["real"] + r["plans"]
+    head = ["Real"] + r["plans"]
+    out = [f"Belfort's positions replayed on real daily prices, up to {r['last_day']}.",
+           "Each cell: profit, then the day it was sold ('held': still held, at the last close).", "",
+           f"{'':16}" + "".join(f"{h:>13}" for h in head)]
+    for row in r["rows"]:
+        tag = f"{row['symbol']} {short(row['bought'])}"
+        out.append(f"{tag:16}" + "".join(f"{row[c]['pnl']:>+13,.2f}" for c in cols))
+        out.append(f"{'':16}" + "".join(f"{short(row[c]['out']):>13}" for c in cols))
+    out.append(f"{'TOTAL':16}" + "".join(f"{r['total'][c]:>+13,.2f}" for c in cols))
+    if r.get("skipped"):
+        out.append(f"NOT IN THE TOTAL - no prices could be read for: {', '.join(r['skipped'])}. "
+                   "Run it again in a few minutes.")
+    out += ["", f"Rules now = the sell rules since {RULES_CHANGED}: half sold at +{T.TAKE_PROFIT:g}%, and once",
+            f"up {T.PROTECT_AT:g}% the stop follows the best close {T.TRAIL:g}% below it. Old rules (until",
+            "Oct 22) = half at +25%, the trail the stop's own distance (10%, or 5-15%). For a",
+            "sale made before then, Old rules' gap to Real is the replay's own error",
+            "(checks were hourly then; real stops filled a little under). Nothing here",
+            "changes a rule."]
+    return "\n".join(out)
+
+
+def cmd_replay(a):
+    plans = PLANS + (((f"{a.trail:g}% trail", {"trail": a.trail}),) if a.trail else ())
+    p = T.load(T.SHADOW if a.shadow else None)
+    r = replay(p, plans)
+    print(json.dumps(r, indent=1) if a.json else replay_text(r))
+    return 0
+
+
 def reviews():
     files = sorted(REVIEWS.glob("*.md"), reverse=True) if REVIEWS.is_dir() else []
     return [{"name": f.name, "text": f.read_text(errors="replace")} for f in files[:24]]
@@ -349,6 +608,11 @@ def main():
     v.add_argument("--month", help="YYYY-MM; the month before this one if left out")
     v.add_argument("--write", action="store_true", help="save it as reviews/<month>.md")
     v.set_defaults(fn=cmd_review)
+    x = sub.add_parser("replay", help="his positions under the sell rules now and the alternatives")
+    x.add_argument("--trail", type=float, help="also try this trailing distance, in percent")
+    x.add_argument("--shadow", action="store_true", help="the no-AI book instead of Belfort's")
+    x.add_argument("--json", action="store_true")
+    x.set_defaults(fn=cmd_replay)
     a = ap.parse_args()
     return a.fn(a) or 0
 

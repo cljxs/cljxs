@@ -162,14 +162,15 @@ was under 4% (sales never credited to cash).
 | Timer (Eastern, Mon-Fri) | Runs | Costs |
 |---|---|---|
 | `belfort-fetch` every 10 min 09:00-16:50 | `scripts/belfort-fetch.py`: quotes, indicators, news, earnings, candidates | nothing |
-| `belfort-exits` hourly 10:35-15:35 | `belfort-trade.py exits --apply`: the sell rules, by code | nothing |
-| `belfort-cycle` 09:35 and 15:55 | `scripts/belfort-cycle.sh`: exits, then wake.py -> Belfort, then `scripts/belfort-verify.py` | 2 plan wakes a trading day |
+| `belfort-exits` every 10 min 09:45-15:55 (since 2026-10-22) | `belfort-trade.py exits --apply`: the sell rules, by code | nothing |
+| `belfort-cycle` 09:35, 12:00 (since 2026-10-22) and 15:55 | `scripts/belfort-cycle.sh`: exits, then wake.py -> Belfort, then `scripts/belfort-verify.py` | 3 plan wakes a trading day |
 | `belfort-review` 1st of the month 08:05 | `scripts/belfort-learn.py review --write`: the monthly review of his record | nothing |
 
-**Exits (code, before every wake and hourly):** each position's own stop
+**Exits (code, before every wake and every 10 minutes):** each position's own stop
 (2x its average daily move under the price paid, 5-15%; older ones -10%);
-take half at +25% and let the rest run; once +8%, the stop trails the high,
-never below cost; dead money (within 2% after 8 trading days and behind QQQ)
+take half at +20% and let the rest run; once +8%, the stop trails the best
+close by 8%, never below cost (owner, 2026-10-22, from the replay: the trail
+was 10% or the stop's own distance, and half was sold at +25%); dead money (within 2% after 8 trading days and behind QQQ)
 sold. Only a **broken thesis** is the model's own exit.
 
 **Entries (model, at most one a wake):** trend (price > SMA20 > SMA50), RSI
@@ -186,6 +187,9 @@ mechanical rules beside him (`belfort-trade.py shadow`); it has done worse
 than Belfort, which is what prompted Bolt's news book. `belfort-learn.py`
 gives him his record (by catalyst type and score) as evidence, never as a rule
 change - rules change only when the owner changes them.
+`python3 scripts/belfort-learn.py replay` (2026-10-22) walks every position he has
+held through real daily prices under the sell rules now and before 2026-10-22
+(`--trail N` tries any trail); it changes nothing.
 
 Rules for the model: `agents/belfort/_belfort-agents-header.md`. Tests:
 `tests/test_parsers.py` classes starting `Belfort` and `TheMarketsPage`.
