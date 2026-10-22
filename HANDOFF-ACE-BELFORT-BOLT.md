@@ -186,6 +186,9 @@ mechanical rules beside him (`belfort-trade.py shadow`); it has done worse
 than Belfort, which is what prompted Bolt's news book. `belfort-learn.py`
 gives him his record (by catalyst type and score) as evidence, never as a rule
 change - rules change only when the owner changes them.
+`python3 scripts/belfort-learn.py replay` (2026-10-22) walks every position he has
+held through real daily prices under the sell rules now and the alternatives
+(8% trail, keep half the gain from +12%, `--trail N`); it changes nothing.
 
 Rules for the model: `agents/belfort/_belfort-agents-header.md`. Tests:
 `tests/test_parsers.py` classes starting `Belfort` and `TheMarketsPage`.

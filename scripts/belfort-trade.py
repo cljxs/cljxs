@@ -260,13 +260,19 @@ def since(q_or_hist, day):
     return next((float(c) for d, c in hist or [] if d >= day), None)
 
 
-def exit_check(pos, q, qqq=None):
+def exit_check(pos, q, qqq=None, trail=None, keep=None):
     """(rule, reason, stop_price) for one open position against its quote;
     rule is None when nothing is due. The stop is the position's own
     distance (risk_pct, set from volatility when bought; -10% for older
     positions) under what was paid - or, once it has been up 8%, that far
     under its highest price, never below what was paid. qqq is QQQ's quote,
-    for the dead-money comparison."""
+    for the dead-money comparison.
+
+    trail and keep are for belfort-learn.py's replay, which tries other
+    rules on real prices; the book passes neither. trail is a trailing
+    distance in place of the position's own; keep=(at_pct, share) keeps the
+    stop, once the position has been up at_pct, at no less than cost plus
+    that share of its best gain."""
     cb = float(pos.get("cost_basis") or 0)
     if not q or not cb or q.get("price") is None:
         return None, "no quote", None
@@ -281,10 +287,12 @@ def exit_check(pos, q, qqq=None):
     pnl = round((px / cb - 1) * 100, 6)
     peak_pnl = round((peak / cb - 1) * 100, 6)
     dist = float(pos.get("risk_pct") or -STOP_LOSS)
-    trail = float(pos.get("risk_pct") or TRAIL)
+    trail = float(trail or pos.get("risk_pct") or TRAIL)
     stop = round(cb * (1 - dist / 100), 2)
     if peak_pnl >= PROTECT_AT:
         stop = round(max(cb, peak * (1 - trail / 100)), 2)
+        if keep and peak_pnl >= keep[0]:
+            stop = round(max(stop, cb + (peak - cb) * keep[1]), 2)
     held = sum(1 for d, _ in history if d > entry_day)
 
     if pnl <= -dist:

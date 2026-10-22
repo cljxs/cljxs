@@ -19873,6 +19873,146 @@ class TheMarketsPageIsWiredInOnePlace(unittest.TestCase):
         self.assertIn("function mdToHtml", (self.API / "public" / "shared" / "md.js").read_text())
 
 
+class BelfortsSellRulesReplayOnRealPrices(unittest.TestCase):
+    """Owner, 2026-10-22: "we are selling way lower than the highs". MRVL,
+    PANW and CRWD each ran 13-19% up and were sold at +1.5% to +5.6% by the
+    10% trailing stop. `belfort-learn.py replay` walks his positions through
+    real daily bars under the rule now and the alternatives, calling the
+    book's own exit_check. The three trades are the Coach's journal rows of
+    that day; the prices are Yahoo's real bars."""
+
+    WHY = ("PROTECT GAIN: was up {up} (high ${high}), now {now}, at or under its stop ${stop}")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        old = os.environ.get("ECOSYSTEM_ROOT")
+        os.environ["ECOSYSTEM_ROOT"] = self.tmp.name
+        self.addCleanup(lambda: os.environ.__setitem__("ECOSYSTEM_ROOT", old) if old
+                        else os.environ.pop("ECOSYSTEM_ROOT", None))
+        self.learn = load(f"belfort_learn_replay_{time.time_ns()}", "belfort-learn.py")
+        fx = json.loads((FIXTURES / "yahoo-chart-daily-mrvl-panw-crwd-qqq-2026-10.json").read_text())
+        self.bars = lambda sym: self.learn.daily_bars(sym, get=lambda url: json.dumps(fx[sym]))
+        buy = lambda s, n, px, d: {"side": "BUY", "symbol": s, "shares": n, "price": px,
+                                   "utc": f"{d} 14:11:00", "reason": "CUSTOMER: a fact"}
+        sell = lambda s, n, px, d, pnl, why: {"side": "SELL", "symbol": s, "shares": n, "price": px,
+                                              "utc": f"{d} 19:55:00", "realised_pnl": pnl, "reason": why}
+        self.book = {"positions": [], "trades": [
+            buy("CRWD", 4, 241.88, "2026-09-16"), buy("MRVL", 9, 241.48, "2026-09-17"),
+            buy("PANW", 4, 370.35, "2026-09-18"),
+            sell("MRVL", 9, 255.03, "2026-10-13", 121.95,
+                 self.WHY.format(up="+18.9%", high="287.01", now="+5.6%", stop="258.31")),
+            sell("PANW", 4, 375.92, "2026-10-14", 22.28,
+                 self.WHY.format(up="+13.4%", high="419.91", now="+1.5%", stop="377.92")),
+            sell("CRWD", 4, 249.72, "2026-10-14", 31.36,
+                 self.WHY.format(up="+15.3%", high="278.86", now="+3.2%", stop="250.97"))]}
+
+    def run_replay(self, plans=None):
+        with contextlib.redirect_stderr(io.StringIO()), unittest.mock.patch.object(self.learn.time, "sleep"):
+            r = self.learn.replay(self.book, plans or self.learn.PLANS, get_bars=self.bars, saved={})
+        return {x["symbol"]: x for x in r["rows"]}, r
+
+    def test_the_saved_bars_are_read_before_yahoo(self):
+        # Yahoo answered "429 Too Many Requests" to the first live run; the
+        # fetcher's bars.json already holds 90 days for every watched name.
+        saved = {s: self.bars(s) for s in ("MRVL", "PANW", "CRWD", "QQQ")}
+        asked = []
+        with contextlib.redirect_stderr(io.StringIO()):
+            r = self.learn.replay(self.book, get_bars=lambda s: asked.append(s) or [], saved=saved)
+        self.assertEqual((asked, r["total"]["8% trail"]), ([], 285.01))
+
+    def test_the_saved_bars_file_is_read_as_the_fetcher_writes_it(self):
+        # bars.json written by belfort-fetch.py's own chart(), from real bars.
+        fetch = load("belfort_fetch_replay", "belfort-fetch.py")
+        charts = {}
+        for sym in ("MRVL", "QQQ"):
+            d, o, h, l, c = zip(*self.bars(sym))
+            charts[sym] = fetch.chart(list(d), list(o), list(h), list(l), list(c), [1000] * len(d))
+        path = Path(self.tmp.name) / "bars.json"
+        path.write_text(json.dumps({"asof_utc": "2026-10-22 14:00:00", "bars": charts}))
+        saved = self.learn.saved_bars(path)
+        self.assertEqual(saved["MRVL"], [(a, round(b, 2), round(c, 2), round(d, 2), round(e, 2))
+                                         for a, b, c, d, e in self.bars("MRVL")])
+
+    def test_a_position_still_held_is_valued_at_the_last_close(self):
+        self.book["trades"] = [{"side": "BUY", "symbol": "MRVL", "shares": 2, "price": 260.0,
+                                "utc": "2026-10-15 14:00:00", "reason": "x"}]
+        self.book["positions"] = [{"symbol": "MRVL", "shares": 2, "cost_basis": 260.0,
+                                   "entry_utc": "2026-10-15 14:00:00", "risk_pct": 9.0}]
+        rows, _ = self.run_replay()
+        last = self.bars("MRVL")[-1][4]
+        self.assertEqual(rows["MRVL"]["distance"], 9.0)
+        self.assertEqual(rows["MRVL"]["real"], {"pnl": round((last - 260.0) * 2, 2), "out": None})
+
+    def test_a_name_without_prices_is_named_not_dropped(self):
+        self.book["trades"].append({"side": "BUY", "symbol": "ZZZZ", "shares": 1, "price": 10.0,
+                                    "utc": "2026-10-01 14:00:00"})
+        with contextlib.redirect_stderr(io.StringIO()), unittest.mock.patch.object(self.learn.time, "sleep"):
+            r = self.learn.replay(self.book, get_bars=lambda s: self.bars(s) if s != "ZZZZ" else
+                                  (_ for _ in ()).throw(OSError("HTTP Error 429")), saved={})
+        self.assertEqual(r["skipped"], ["ZZZZ"])
+        self.assertIn("NOT IN THE TOTAL", self.learn.replay_text(r))
+
+    def test_the_rule_now_replayed_lands_on_the_real_sales(self):
+        # The replay's own error, shown beside the alternatives: same days,
+        # within $15 a position, $1 in total.
+        rows, r = self.run_replay()
+        for sym, x in rows.items():
+            self.assertEqual(x["Rules now"]["out"], x["real"]["out"], sym)
+            self.assertLess(abs(x["Rules now"]["pnl"] - x["real"]["pnl"]), 15, sym)
+        self.assertLess(abs(r["total"]["Rules now"] - r["total"]["real"]), 1)
+
+    def test_the_trail_is_read_back_from_the_sale(self):
+        rows, _ = self.run_replay()
+        self.assertEqual({x["distance"] for x in rows.values()}, {10.0})
+        lot = {"symbol": "X", "cost": 100.0, "open": False,
+               "sells": [{"reason": "STOP LOSS: -7.6% from cost $100.00 (its stop: -7.5%)"}]}
+        self.assertEqual(self.learn.own_distance(lot, {"positions": []}), 7.5)
+
+    def test_an_eight_percent_trail_on_the_same_buys(self):
+        rows, r = self.run_replay()
+        self.assertEqual(r["total"]["8% trail"], 285.01)
+        self.assertEqual(rows["MRVL"]["8% trail"]["out"], "2026-10-12")
+
+    def test_a_gap_through_the_stop_fills_at_the_open(self):
+        # PANW opened 2026-10-14 at $378.96, under an 8% stop of $386.32.
+        # Filling at the stop would credit $29 that no stop could have got.
+        rows, _ = self.run_replay()
+        self.assertEqual(rows["PANW"]["8% trail"]["pnl"], round((378.96 - 370.35) * 4, 2))
+
+    def test_keeping_half_the_gain(self):
+        rows, r = self.run_replay()
+        self.assertEqual(r["total"]["Keep half"], 313.33)
+        self.assertEqual(rows["CRWD"]["Keep half"]["out"], "2026-10-13")
+
+    def test_too_tight_a_trail_sells_on_an_ordinary_dip(self):
+        # The other side of the trade-off, on the same real bars: 6% shook
+        # CRWD out on 2026-09-28, before its run to $278.86.
+        rows, _ = self.run_replay(self.learn.PLANS + (("6% trail", 6.0, None),))
+        self.assertEqual(rows["CRWD"]["6% trail"]["out"], "2026-09-28")
+
+    def test_the_book_without_the_new_settings_is_unchanged(self):
+        T = self.learn.T
+        pos = {"symbol": "X", "cost_basis": 100.0, "shares": 4, "entry_utc": "2026-09-01"}
+        q = {"price": 109.0, "history": [["2026-09-01", 100.0], ["2026-09-02", 120.0]]}
+        self.assertIsNone(T.exit_check(pos, q)[0])                           # stop $108
+        self.assertEqual(T.exit_check(pos, q, keep=(12.0, 0.5))[0], "protect")   # stop $110
+        self.assertEqual(T.exit_check(pos, q, trail=8.0)[0], "protect")          # stop $110.40
+
+    def test_his_own_judgement_sale_keeps_its_day_and_price(self):
+        self.book["trades"][3] = dict(self.book["trades"][3], reason="THESIS BROKEN: guidance cut",
+                                      utc="2026-09-25 15:00:00", price=250.0,
+                                      realised_pnl=round((250.0 - 241.48) * 9, 2))
+        rows, _ = self.run_replay()
+        self.assertEqual(rows["MRVL"]["Rules now"], {"pnl": round((250.0 - 241.48) * 9, 2), "out": "2026-09-25"})
+
+    def test_the_text_fits_and_says_it_changes_nothing(self):
+        _, r = self.run_replay()
+        text = self.learn.replay_text(r)
+        self.assertIn("Nothing here changes a rule.", text)
+        self.assertLessEqual(max(len(line) for line in text.splitlines()), 90)
+
+
 class BelfortsLatestReportIsTheLatestWake(unittest.TestCase):
     """The Markets page first showed "2026-10-05-open" as the latest report:
     by name it sorts after "-close", though the close is the later wake."""
