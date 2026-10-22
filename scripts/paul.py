@@ -3729,6 +3729,9 @@ def cmd_build(a, run=subprocess.run):
         said = f"added and approved: {p['name']} (prospect {p['id']})"
     if ref:
         p["reference"] = ref
+    notes = " ".join(str(getattr(a, "notes", None) or "").split())
+    if notes:
+        p["owner_notes"] = notes
     save_prospects(rows)
     record(f"the owner asked for {p['name']}" + (f", after {ref}" if ref else ""))
     print(said + (f"\nreference: {ref}" if ref else ""))
@@ -3745,6 +3748,59 @@ def cmd_build(a, run=subprocess.run):
         print(("started Paul's cycle now" + ("" if live else " (a dry run - you have not gone live)"))
               if ok else f"could not start the cycle ({detail}) - it runs at its usual time")
     return 0
+
+
+def cmd_restore(a, run=subprocess.run):
+    """Build a business again after Delete took every site of it (owner,
+    2026-10-22: Delete on an older Royal Edge card removed all four, and
+    their previews; "just rebuild it"). Delete kept it in contacted.csv so
+    Paul would never pick it, and its saved photos stayed in state/photos/
+    under its old prospect number. Its row goes - only while the pitch was
+    never sent - the prospect comes back under that number, so the photos
+    are its again, and it is built as `paul.py build` builds a named one."""
+    name = " ".join(str(a.name or "").split())
+    if any(norm_name(b.get("name")) == norm_name(name) and b.get("slug")
+           and (A("sites", b["slug"]) / "index.html").is_file() for b in builds()):
+        print(f"{name} still has a site - send it back to Paul instead")
+        return 1
+    rows = contacted()
+    mine = [r for r in rows if norm_name(r["business"]) == norm_name(name)]
+    if any(r.get("status") not in ("", "drafted") for r in mine):
+        print(f"{name} is marked {mine[0]['status']} in contacted.csv - a pitch went out, or it "
+              f"is not to be contacted, so Paul will not build it again")
+        return 1
+    pros = load_prospects()
+    if any(norm_name(p.get("name")) == norm_name(name) for p in pros):
+        print(f"{name} is already a prospect - approve it in the Studio")
+        return 1
+    taken = {str(p.get("id")) for p in pros}
+    if a.photos is not None:
+        pid = a.photos
+    else:
+        orphans = sorted(int(d.name) for d in A("state", "photos").glob("*")
+                         if d.is_dir() and d.name.isdigit() and d.name not in taken) \
+            if A("state", "photos").is_dir() else []
+        if len(orphans) > 1:
+            print(f"photos of {len(orphans)} businesses no longer listed ({', '.join(map(str, orphans))}) - "
+                  f"say which are {name}'s with --photos <number>")
+            return 1
+        pid = orphans[0] if orphans else None
+    if pid is not None and str(pid) in taken:
+        print(f"photo folder {pid} belongs to another prospect")
+        return 1
+    if pid is None:
+        pid = max([int(p.get("id") or 0) for p in pros] + [0]) + 1
+    if mine:
+        write_rows(A("state", "contacted.csv"), CONTACTED_FIELDS, [r for r in rows if r not in mine])
+    p = {"id": pid, "name": name, "found": today(), "status": "waiting", "source": "owner",
+         "why": "built again after its sites were deleted by mistake"}
+    if a.where:
+        p["where"] = a.where.strip()
+    save_prospects(pros + [p])
+    n = len(supplied(pid))
+    print(f"{name} is back as prospect {pid}" + (f", with the {n} photo(s) you saved for it" if n else
+                                                  " (no saved photos found)"))
+    return cmd_build(a, run=run)
 
 
 def restore_set_aside(p):
@@ -4034,6 +4090,17 @@ def cmd_brief(a, get=http_get):
               "             checked yet. Find it yourself as in scouting: its address, phone",
               "             and hours from its own pages, Google or Facebook, each with the URL.",
               "             Not sure it is the right business, or it closed? below-bar, say why."]
+    if mine.get("owner_notes"):
+        words, line = str(mine["owner_notes"]).split(), ""
+        rows_ = []
+        for w in words:
+            if len(line) + len(w) > 62:
+                rows_.append(line)
+                line = ""
+            line += (" " if line else "") + w
+        rows_.append(line)
+        L += ["OWNER WANTS  " + rows_[0], *[f"             {r}" for r in rows_[1:]],
+              "             Build every point of it. Code's checks still apply."]
     if mine.get("reference"):
         L += [f"OWNER'S REF  {mine['reference']}",
               "             The owner picked this site for this build. Open it first (WebFetch)",
@@ -4423,6 +4490,14 @@ def main(argv=None):
     p.add_argument("name", help="the business, as it is known")
     p.add_argument("--ref", help="a site whose layout and feel Paul should take after")
     p.add_argument("--where", help="its town, if Paul might find the wrong one")
+    p.add_argument("--notes", help="what the owner wants on it, in their words")
+    p.add_argument("--now", action="store_true", help="and start the cycle now")
+    p = sub.add_parser("restore", help="build a business again after its sites were deleted by mistake")
+    p.add_argument("name", help="the business, as it was")
+    p.add_argument("--ref", help="a site whose layout and feel Paul should take after")
+    p.add_argument("--where", help="its town")
+    p.add_argument("--notes", help="what the owner wants on it, in their words")
+    p.add_argument("--photos", type=int, help="the number of its folder in state/photos/, if not found")
     p.add_argument("--now", action="store_true", help="and start the cycle now")
     p = sub.add_parser("reject", help="reject a prospect - never proposed again")
     p.add_argument("who", help="its number, or part of its name")
@@ -4465,7 +4540,7 @@ def main(argv=None):
             "status": cmd_status, "mark": cmd_mark, "retire": cmd_retire, "exclude": cmd_exclude,
             "teardown": cmd_teardown, "go-live": cmd_go_live, "dry-next": cmd_dry_next,
             "revise": cmd_revise, "measure": cmd_measure, "prospects": cmd_prospects, "approve": cmd_approve,
-            "reject": cmd_reject, "build": cmd_build, "find": cmd_find, "remove": cmd_remove,
+            "reject": cmd_reject, "build": cmd_build, "restore": cmd_restore, "find": cmd_find, "remove": cmd_remove,
             "places": cmd_places, "photo": cmd_photo,
             "focus": cmd_focus, "nearby": cmd_nearby, "leads": cmd_leads, "deck": cmd_deck,
             "should-run": cmd_should_run, "brief": cmd_brief, "finish": cmd_finish,

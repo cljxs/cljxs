@@ -3159,3 +3159,75 @@ class IsentItAndTheOlderPreviewsComeDown(PaulCase):
         self.assertIn("no VERCEL_TOKEN", out["retire"][1])
         self.assertEqual(out["sent"][0], 200, out["sent"])
         self.assertEqual([r["status"] for r in paul.contacted()], ["sent"])
+
+
+class ABusinessDeletedByMistakeIsBuiltAgain(PaulCase):
+    """Owner, 2026-10-22: Delete on an older Royal Edge card took every site
+    of it, and its previews - "can we recover what I had?" No backups; the
+    owner chose to rebuild it with every edit made since. Delete had kept it
+    in contacted.csv so Paul would never pick it, and left the photos the
+    owner saved under its old prospect number."""
+
+    NOTES = "No video. A row of your photos under About us. Sample on each product photo."
+
+    def setUp(self):
+        super().setUp()
+        TheOwnerPicksPaulBuilds.seed(self, dict(prospect(name="Waiting Bakery", phone="(512) 444-0100"), status="waiting"),
+                                     dict(prospect(name="Royal Edge"), status="built", slug="royal-edge-concept-pvgrms",
+                                          source="owner", reference="https://rudysbarbershop.com/"),
+                                     dict(prospect(name="Later Cafe", phone="(512) 444-0101"), status="waiting"))
+        paul.add_photo(2, JPEG, "facebook")
+        TheOwnerSendsASiteBack.built(self, name="Royal Edge", slug="royal-edge-concept-pvgrms")
+        paul.log_build({"day": "2026-10-21", "mode": "live", "outcome": "built", "slug": "royal-edge-concept-pvgrms",
+                        "name": "Royal Edge"})
+        paul.append_row(paul.A("state", "contacted.csv"), paul.CONTACTED_FIELDS,
+                        {"date": "2026-10-21", "slug": "royal-edge-concept-pvgrms", "business": "Royal Edge",
+                         "status": "drafted"})
+        self.run_quiet(paul.cmd_remove, self.args(who="Royal Edge", yes=True), api=FakeVercel())
+
+    def restore(self, **kw):
+        a = dict(name="Royal Edge", ref="https://mancaveformen.com", where="Waterloo, IA", notes=self.NOTES,
+                 photos=None, now=False)
+        a.update(kw)
+        return self.run_quiet(paul.cmd_restore, self.args(**a))
+
+    def test_it_comes_back_with_its_photos_its_look_and_the_owners_edits(self):
+        self.assertEqual([p["name"] for p in paul.load_prospects()], ["Waiting Bakery", "Later Cafe"],
+                         "Delete took the card")
+        rc, out = self.restore()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("back as prospect 2, with the 1 photo(s) you saved", out)
+        p = [p for p in paul.load_prospects() if p["name"] == "Royal Edge"][0]
+        self.assertEqual((p["id"], p["status"], p["reference"], p["owner_notes"]),
+                         (2, "approved", "https://mancaveformen.com", self.NOTES))
+        self.assertFalse([r for r in paul.contacted() if r["business"] == "Royal Edge"],
+                         "the row for a pitch never sent, to a preview that is gone, goes")
+        _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
+        self.assertIn("BUILD: the owner approved Royal Edge", facts)
+        self.assertIn("OWNER WANTS  No video. A row of your photos under About us. Sample on each", facts)
+        self.assertIn("OWNER'S REF  https://mancaveformen.com", facts)
+        self.assertIn("1 of THEIR OWN photos", facts)
+        self.assertFalse(paul.already_pitched(target(name="Royal Edge", phone="(319) 427-5796")),
+                         "his check would refuse it as already pitched")
+
+    def test_not_when_the_pitch_went_out(self):
+        rows = paul.contacted()
+        rows[0]["status"] = "sent"
+        paul.write_rows(paul.A("state", "contacted.csv"), paul.CONTACTED_FIELDS, rows)
+        rc, out = self.restore()
+        self.assertEqual(rc, 1)
+        self.assertIn("a pitch went out", out)
+        self.assertEqual([p["name"] for p in paul.load_prospects()], ["Waiting Bakery", "Later Cafe"])
+
+    def test_not_while_it_still_has_a_site(self):
+        TheOwnerSendsASiteBack.built(self, name="Royal Edge", slug="royal-edge-concept-new123")
+        paul.log_build({"day": "2026-10-22", "mode": "live", "outcome": "built", "slug": "royal-edge-concept-new123",
+                        "name": "Royal Edge"})
+        rc, out = self.restore()
+        self.assertEqual(rc, 1)
+        self.assertIn("still has a site", out)
+
+    def test_photos_that_belong_to_a_waiting_prospect_are_not_taken(self):
+        rc, out = self.restore(photos=1)
+        self.assertEqual(rc, 1)
+        self.assertIn("belongs to another prospect", out)
