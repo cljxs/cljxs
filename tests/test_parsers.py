@@ -15437,12 +15437,17 @@ class AceBankrollHoldsDataNotRules(unittest.TestCase):
         self.assertIn("30% fault stop", b.refusal("nfl", "999", "X ML"))
 
     def test_the_evidence_stop(self):
-        graded = lambda clv: {"graded": [{"status": "bet", "clv_pct": clv, "sharp_clv_pct": None}] * 60}
-        self.m._clv = lambda: types.SimpleNamespace(report=lambda **k: graded(-0.1))
+        graded = lambda clv, sharp=None: {"graded": [{"status": "bet", "clv_pct": clv, "sharp_clv_pct": sharp}] * 60}
+        # headline_clv is ace-clv.py's own: Pinnacle's close where there is one.
+        hl = load("ace_clv_headline", "ace-clv.py").headline_clv
+        fake = lambda doc: (lambda: types.SimpleNamespace(report=lambda **k: doc, headline_clv=hl))
+        self.m._clv = fake(graded(-0.1))
         self.assertIn("after 60 bets the average closing-line value is -0.10%", self.m.evidence_stop())
-        self.m._clv = lambda: types.SimpleNamespace(report=lambda **k: graded(0.4))
+        self.m._clv = fake(graded(0.4))
         self.assertIsNone(self.m.evidence_stop())
-        self.m._clv = lambda: types.SimpleNamespace(report=lambda **k: {"graded": graded(-5)["graded"][:59]})
+        self.m._clv = fake(graded(0.4, sharp=-0.3))
+        self.assertIn("is -0.30%", self.m.evidence_stop(), "Pinnacle's close is the headline")
+        self.m._clv = fake({"graded": graded(-5)["graded"][:59]})
         self.assertIsNone(self.m.evidence_stop(), "59 bets is too few to judge")
 
     def test_mark_strips_the_retired_keys_and_keeps_the_rest(self):

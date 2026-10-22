@@ -225,6 +225,15 @@ def clv_at(price, close_pct):
     return round((float(close_pct) / 100 * d - 1) * 100, 1)
 
 
+def headline_clv(g):
+    """(closing-line value, whose close) for a graded bet: Pinnacle's where
+    there is one - the preregistered headline - DraftKings' otherwise. The
+    evidence stop and the coach both read it here."""
+    if g.get("sharp_clv_pct") is not None:
+        return g["sharp_clv_pct"], "Pinnacle"
+    return g.get("clv_pct"), ("DraftKings" if g.get("clv_pct") is not None else None)
+
+
 def grade(judgement, entry, now=None):
     """One judged row against its game's closing line. None if the game has not
     started, or the row cannot be joined to a price."""

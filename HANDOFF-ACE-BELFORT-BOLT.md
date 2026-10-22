@@ -244,7 +244,15 @@ Sunday propose STOP / START / CONTINUE / updated rules.
   Fewer than 5 closed trades in the week: no proposals (noise). The answers
   are **proposals only**, saved for the owner; nothing edits a rule. The
   first real Sunday review is **2026-10-25**.
-- Commands: `python3 scripts/coach.py journal`, `daily`, `weekly --dry`, `show --json`.
+- **Ace too (2026-10-22, owner's option A):** his settled bets are journaled
+  from `ace-book.py`, each with its edge (`ace-judge.py bar`) and closing-line
+  value (`ace-clv.py headline_clv`). The daily mistakes for him are "beaten by
+  the close" and "bet under the bar" - never a plain loss. Until
+  `ace-judge.py FROZEN_UNTIL` (2026-12-01) the Sunday review only comments on
+  him, under its own heading, and proposes nothing; after it he is reviewed
+  like the others. `coach.py backfill --book ace --since YYYY-MM-DD` journals
+  his past days and keeps every other book's saved rows.
+- Commands: `python3 scripts/coach.py journal`, `daily`, `weekly --dry`, `backfill`, `show --json`.
   Tests: `tests/test_coach.py`.
 
 ---
