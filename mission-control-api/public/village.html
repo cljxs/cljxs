@@ -348,6 +348,7 @@
   .acts.clipacts{display:grid;grid-template-columns:1fr 1fr;gap:6px}
   .acts.clipacts button{width:100%;padding:8px 4px}
 </style>
+<script src="/shared/busy.js"></script>
 </head>
 <body>
 <div id="game"></div>
@@ -2748,8 +2749,8 @@ function drawIdeas(){
         ${i.brief ? `<div class="d" style="margin-bottom:10px">${esc(i.brief)}</div>` : ''}
         ${evidencePanels(i)}
         <div class="acts">
-          <button class="no"  onclick="event.stopPropagation();actOnIdea(${Number(i.id)},'reject')">✗ Reject</button>
-          <button class="yes" onclick="event.stopPropagation();actOnIdea(${Number(i.id)},'approve')">✓ Approve</button>
+          <button class="no"  data-busy="Rejecting" onclick="event.stopPropagation();actOnIdea(${Number(i.id)},'reject')">✗ Reject</button>
+          <button class="yes" data-busy="Approving - Emily's design is being drawn, up to 3 minutes" onclick="event.stopPropagation();actOnIdea(${Number(i.id)},'approve')">✓ Approve</button>
         </div>
       </div>` : ''}
     </div>`;
@@ -2774,7 +2775,7 @@ async function loadScoutScan(started) {
   host.innerHTML = s.running
     ? `<button class="shopbtn" disabled>⏳ Scanning Etsy now - this takes a few minutes, up to an hour</button>
        <div class="muted">Last scan landed ${esc(last)}. New niches and ideas show up after it finishes.</div>`
-    : `<button class="shopbtn" onclick="runScoutScan(this)">🔭 Run a market scan now</button>
+    : `<button class="shopbtn" data-busy="Scanning Etsy - about a minute" onclick="runScoutScan(this)">🔭 Run a market scan now</button>
        <div class="muted">Last scan ${esc(last)} · it also runs every morning at 6:30 Central · no AI, nothing to pay${started ? ' · <b>finished</b>' : ''}</div>`;
   if (s.running) scanPoll = setTimeout(() => loadScoutScan(true), 15000);
 }
@@ -2880,7 +2881,7 @@ function openClipPanel(){
       <label for="caHunt">Hooks to hunt for <span class="muted">(optional)</span></label>
       <textarea id="caHunt" rows="3" placeholder="Embiid: embiid, joel; LeBron: lebron, bron" autocapitalize="none" autocorrect="off" spellcheck="false"></textarea>
       <div class="acts">
-        <button class="no" id="caHooks">✨ Write hooks</button>
+        <button class="no" id="caHooks" data-busy="Reading the comments and writing hooks">✨ Write hooks</button>
         <button class="yes" id="caQueue">Add to Clip's queue</button>
       </div>
       <div class="muted" id="caSaid">Clip picks it up within 15 minutes, downloads it and cuts the clips - they appear under Clips, waiting for you.</div>
@@ -3121,7 +3122,7 @@ function drawClip(){
       <b>python3 scripts/set-credential.py clip YOUTUBE_API_KEY</b></div>`;
   }
   const last = sp.last_run;
-  spot += `<div class="acts"><button class="yes" data-clip="spot" ${sp.has_key ? '' : 'disabled'}>Research now</button>
+  spot += `<div class="acts"><button class="yes" data-clip="spot" data-busy="Researching YouTube - up to a minute" ${sp.has_key ? '' : 'disabled'}>Research now</button>
     <span class="muted">${last ? 'last research ' + esc(last.ts) + ' UTC · ' + last.units + ' units' : 'not run yet'}</span></div>`;
   const creators = sp.creators || [];
   if (creators.length) {
