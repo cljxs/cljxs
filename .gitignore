@@ -183,5 +183,5 @@ agents/stan/reports/
 agents/stan/MEMORY.md
 
 # The trading coach's journal and reviews (scripts/coach.py) - runtime, like the books.
-coach/journal/
-coach/weekly/
+# One folder per coach since 2026-10-23 (coach/belfort, coach/bolt, coach/ace).
+coach/

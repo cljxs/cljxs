@@ -252,7 +252,14 @@ Sunday propose STOP / START / CONTINUE / updated rules.
   him, under its own heading, and proposes nothing; after it he is reviewed
   like the others. `coach.py backfill --book ace --since YYYY-MM-DD` journals
   his past days and keeps every other book's saved rows.
-- Commands: `python3 scripts/coach.py journal`, `daily`, `weekly --dry`, `backfill`, `show --json`.
+- **Three coaches since 2026-10-23** (owner: "all separate from each other"):
+  Belfort, Bolt (both books together - they are one comparison) and Ace each
+  keep their own files in `coach/<name>/journal` and `coach/<name>/weekly`,
+  and each Sunday question sees only its own agent's numbers and rules
+  (`COACHES`, `rules_for`). The one combined journal was split once by
+  `coach.py split` (it also runs by itself); the old files are in
+  `coach/combined-before-split/`. The Coach page has a Belfort / Bolt / Ace switch.
+- Commands: `python3 scripts/coach.py journal`, `daily`, `weekly --dry` (each takes `--coach`), `backfill`, `split`, `show --json`.
   Tests: `tests/test_coach.py`.
 
 ---

@@ -8,7 +8,9 @@ change any trading rules or strategies during the daily analysis ... Every
 Sunday ... propose specific, actionable changes."
 """
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -120,12 +122,12 @@ class TheDailyAnalysisOnlyObserves(CoachCase):
     def test_it_writes_the_journal_and_nothing_else(self):
         self.belfort(self.BEL)
         before = {p for p in self.root.rglob("*") if p.is_file() and "scripts" not in p.parts}
-        rows, a = self.c.run_daily("2026-10-19")
+        rows, a = self.c.run_daily("2026-10-19", "belfort")
         after = {p for p in self.root.rglob("*") if p.is_file() and "scripts" not in p.parts}
         self.assertEqual({p.relative_to(self.root).as_posix() for p in after - before},
-                         {"coach/journal/2026-10-19.md", "coach/journal/2026-10-19.json"},
+                         {"coach/belfort/journal/2026-10-19.md", "coach/belfort/journal/2026-10-19.json"},
                          "the daily routine changes no rule and no book")
-        md = (self.root / "coach/journal/2026-10-19.md").read_text()
+        md = (self.root / "coach/belfort/journal/2026-10-19.md").read_text()
         for heading in ("What went well", "What went badly", "Mistakes", "Patterns", "Observation only"):
             self.assertIn(heading, md)
 
@@ -151,7 +153,7 @@ class TheWeeklyReviewOnlyProposes(CoachCase):
 
     def test_too_few_trades_and_no_question_is_asked(self):
         self.week(self.c.MIN_WEEK_TRADES - 1)
-        review = self.c.run_weekly("2026-10-25", ask=lambda *a: self.fail("asked on too little data"))
+        review = self.c.run_weekly("2026-10-25", "bolt", ask=lambda *a: self.fail("asked on too little data"))
         self.assertIn("no rule change is proposed", review)
 
     def test_the_week_and_the_rules_go_to_the_coach_and_come_back_as_proposals(self):
@@ -161,17 +163,19 @@ class TheWeeklyReviewOnlyProposes(CoachCase):
         def ask(agent, question, timeout):
             asked.append((agent, question))
             return True, "## STOP\n- x\n## START\n- y\n## CONTINUE\n- z\n## UPDATED RULES FOR NEXT WEEK\nno change"
-        self.c.run_weekly("2026-10-25", ask=ask)
+        self.c.run_weekly("2026-10-25", "bolt", ask=ask)
         agent, q = asked[0]
         self.assertEqual(agent, "coach")
         self.assertIn("Use ONLY the data below", q)
+        self.assertIn("You are Bolt's performance coach", q)
         b = load("bolt_rules", "bolt.py")
         self.assertIn(f"trailing stop {b.TRAIL_PCT:g}% under the best price", q, "the rules as the script holds them")
         self.assertIn('"summary_by_agent"', q)
-        saved = json.loads((self.root / "coach/weekly/2026-10-25.json").read_text())
-        self.assertEqual((saved["status"], saved["start"]), ("proposed", "2026-10-19"))
+        self.assertIn("Say whether the news check helped", q)
+        saved = json.loads((self.root / "coach/bolt/weekly/2026-10-25.json").read_text())
+        self.assertEqual((saved["status"], saved["start"], saved["coach"]), ("proposed", "2026-10-19", "bolt"))
         self.assertIn("Nothing here changes a rule until you approve it",
-                      (self.root / "coach/weekly/2026-10-25.md").read_text())
+                      (self.root / "coach/bolt/weekly/2026-10-25.md").read_text())
 
     def test_the_coach_is_one_sonnet_question_on_the_plan_that_never_falls_back(self):
         s = json.loads((ROOT / "tasks" / "engines.json").read_text())["agents"]["coach"]
@@ -256,13 +260,13 @@ class AceHasACoach(CoachCase):
     def test_the_daily_look_measures_him_by_the_close(self):
         self.bets()
         self.close_at(200, -245, 32.1)
-        rows, a = self.c.run_daily("2026-10-14")
+        rows, a = self.c.run_daily("2026-10-14", "ace")
         s = a["ace"]
         self.assertEqual((s["bets"], s["with_close"], s["beat_close"], s["frozen_until"]),
                          (2, 1, 1, "2026-12-01"))
         self.assertEqual(set(s["by sport"]), {"NBA", "CFB"})
         self.assertEqual(set(s["favourite or underdog"]), {"underdog"})
-        md = (self.root / "coach/journal/2026-10-14.md").read_text()
+        md = (self.root / "coach/ace/journal/2026-10-14.md").read_text()
         self.assertIn("closing-line value +2.70% a bet over 1, beat the close on 1", md)
         self.assertIn("Rules frozen until 2026-12-01", md)
 
@@ -273,19 +277,21 @@ class AceHasACoach(CoachCase):
 
     def ask_week(self, end):
         asked = []
-        self.c.run_weekly(end, ask=lambda agent, q, t: asked.append(q) or (True, "## STOP\n- x"))
+        self.c.run_weekly(end, "ace", ask=lambda agent, q, t: asked.append(q) or (True, "## STOP\n- x"))
         return asked
 
     def test_until_the_preregistration_ends_the_review_proposes_nothing_for_him(self):
         self.week_of_bets(self.c.MIN_WEEK_BETS)
         (q,) = self.ask_week("2026-10-25")
-        self.assertIn("ACE'S RULES ARE FROZEN until 2026-12-01", q)
-        self.assertIn("Propose NO change for Ace under UPDATED RULES", q)
-        self.assertIn("## ACE - NOTES FOR THE 2026-12-01 READ-OUT", q)
-        self.assertIn("propose no change for them", q, "Belfort and Bolt closed nothing this week")
+        self.assertIn("You are Ace's performance coach - Ace is a paper sports bettor", q)
+        self.assertIn("HIS RULES ARE FROZEN until 2026-12-01", q)
+        self.assertIn("propose NO change", q)
+        self.assertIn("## NOTES FOR THE 2026-12-01 READ-OUT", q)
         self.assertIn('"status": "FROZEN until 2026-12-01 by his preregistration"', q)
         self.assertIn(f"pulled {load('aj', 'ace-judge.py').SHRINK:.0%} of the way", q, "rules from ace-judge.py")
-        md = (self.root / "coach/weekly/2026-10-25.md").read_text()
+        for other in ("Belfort", "Bolt"):
+            self.assertNotIn(other, q, "his coach sees his numbers and rules alone")
+        md = (self.root / "coach/ace/weekly/2026-10-25.md").read_text()
         self.assertIn("**Ace**: 10 bet(s) settled", md)
 
     def test_after_it_he_is_reviewed_like_the_others(self):
@@ -294,11 +300,12 @@ class AceHasACoach(CoachCase):
                    for i in range(self.c.MIN_WEEK_BETS)])
         (q,) = self.ask_week("2026-12-06")
         self.assertNotIn("FROZEN until", q.split("CURRENT RULES")[0])
-        self.assertIn("Ace may be proposed for like the others", q)
+        self.assertIn("Judge him on closing-line value, not wins", q)
 
     def test_too_few_bets_and_trades_and_no_question_is_asked(self):
         self.week_of_bets(self.c.MIN_WEEK_BETS - 1)
-        review = self.c.run_weekly("2026-10-25", ask=lambda *a: self.fail("asked on too little data"))
+        review = self.c.run_weekly("2026-10-25", "ace", ask=lambda *a: self.fail("asked on too little data"))
+        self.assertIn("9 settled bet(s) this week", review)
         self.assertIn("no rule change is proposed", review)
 
     def test_the_freeze_date_is_the_preregistrations(self):
@@ -306,28 +313,128 @@ class AceHasACoach(CoachCase):
         prereg = (ROOT / "agents/ace/PREREGISTRATION.md").read_text()
         self.assertIn(f"before **{aj.FROZEN_UNTIL}**", prereg)
 
-    def test_a_backfill_keeps_what_the_other_books_saved(self):
-        # Bolt's chase reading needs hourly prices only a week old: a
-        # backfill that re-read Bolt would wipe it from older days.
-        journal = self.root / "coach/journal"
-        self.bolt([("SOL", "2026-10-14T10:00:00Z", 100.0, "2026-10-14T20:00:00Z", 98.0, -2.0, 1.0, 8,
-                    "stop loss (-8%)")])
-        self.c.run_daily("2026-10-14")
-        saved = json.loads((journal / "2026-10-14.json").read_text())
-        saved["rows"][0]["chased"] = 0.95          # read when its hourly prices were fresh
-        (journal / "2026-10-14.json").write_text(json.dumps(saved))
+    def test_his_backfill_touches_his_journal_alone(self):
         self.bets()
         with unittest.mock.patch.object(self.c.et_time, "eastern_now", lambda: datetime(2026, 10, 15, 9, 0)):
             self.assertEqual(self.c.main(["backfill", "--book", "ace", "--since", "2026-10-14"]), 0)
-        saved = json.loads((journal / "2026-10-14.json").read_text())
-        self.assertEqual([(r["agent"], r.get("chased")) for r in saved["rows"]],
-                         [("Bolt", 0.95), ("Ace", None), ("Ace", None)])
-        self.assertIn("chased", [m["kind"] for m in saved["analysis"]["mistakes"]])
+        saved = json.loads((self.root / "coach/ace/journal/2026-10-14.json").read_text())
+        self.assertEqual([r["symbol"] for r in saved["rows"]], ["BKN ML", "MOST ML"])
+        self.assertFalse((self.root / "coach/bolt").exists())
+        self.assertFalse((self.root / "coach/belfort").exists())
 
     def test_the_page_names_him(self):
         page = (ROOT / "mission-control-api/public/coach.html").read_text()
         self.assertIn("Ace (sports bets)", page)
         self.assertIn("a.ace", page)
+        self.assertIn("(w.data || {}).ace", page, "his Sunday card too")
+
+
+class ThreeCoachesNeverMixed(CoachCase):
+    """Owner, 2026-10-23: "make bolt, belfort and aces coach all separate from
+    each other so me and the data [don't] get confused". Each coach keeps its
+    own files and asks its own question, which sees only its agent."""
+
+    def setUp(self):
+        super().setUp()
+        (self.root / "agents/ace/state").mkdir(parents=True)
+
+    def sol(self, day="2026-10-19", n=1):
+        self.bolt([("SOL", f"{day}T10:00:00Z", 100.0, f"{day}T18:00:00Z", 104.0, 4.0, 9.0, 8,
+                    "trailing stop (8% off its best, +9.0%)")] * n)
+
+    def test_each_coach_journals_only_its_own_agent(self):
+        self.belfort(self.BEL)
+        self.sol()
+        with unittest.mock.patch.object(self.c.et_time, "eastern_now", lambda: datetime(2026, 10, 20, 0, 30)):
+            self.assertEqual(self.c.main(["daily"]), 0)
+        got = {c: [r["agent"] for r in json.loads((self.root / f"coach/{c}/journal/2026-10-19.json").read_text())["rows"]]
+               for c in ("belfort", "bolt", "ace")}
+        self.assertEqual(got, {"belfort": ["Belfort"], "bolt": ["Bolt"], "ace": []})
+        shown = self.c.show()["coaches"]
+        self.assertEqual(list(shown), ["belfort", "bolt", "ace"])
+        self.assertEqual(shown["bolt"]["daily"][0]["analysis"]["books"].keys(), {"Bolt"})
+        self.assertIn("# Belfort's journal - 2026-10-19",
+                      (self.root / "coach/belfort/journal/2026-10-19.md").read_text())
+
+    def test_three_questions_each_with_its_own_rules_only(self):
+        trades = []
+        for sym in ("NVDA", "AMD", "MU", "TSM", "ARM"):
+            trades += [dict(t, symbol=sym) for t in self.BEL]
+        self.belfort(trades)
+        self.sol(n=self.c.MIN_WEEK_TRADES)
+        asked = []
+        ask = lambda agent, q, t: asked.append(q) or (True, "## STOP\n- x")
+        real = self.c._load
+        with unittest.mock.patch.object(self.c, "_load",
+                                        lambda name, file: types_ask(ask) if file == "wake.py" else real(name, file)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.c.main(["weekly", "--end", "2026-10-25"])
+        self.assertEqual(len(asked), 2, "Belfort and Bolt had a week's data; Ace had none and is not asked")
+        mine = {"Belfort": '"Belfort (stocks)"', "Bolt": '"Bolt (crypto, both books)"', "Ace": '"Ace (sports bets)"'}
+        for q, who in zip(asked, ("Belfort", "Bolt")):
+            self.assertIn(f"You are {who}'s performance coach", q)
+            self.assertEqual([k for k, rules in mine.items() if rules in q], [who], "its own rules only")
+        for c in ("belfort", "bolt", "ace"):
+            self.assertTrue((self.root / f"coach/{c}/weekly/2026-10-25.json").is_file(), c)
+        self.assertIn("0 settled bet(s) this week", (self.root / "coach/ace/weekly/2026-10-25.md").read_text())
+
+    def test_the_combined_journal_is_split_once_and_kept(self):
+        old = self.root / "coach/journal"
+        old.mkdir(parents=True)
+        (self.root / "coach/weekly").mkdir()
+        (self.root / "coach/weekly/2026-10-19.json").write_text("{}")
+        self.belfort(self.BEL)
+        self.sol()
+        rows = self.c.rows_between("2026-10-19", "2026-10-19")
+        rows[1]["chased"] = 0.95                    # saved when Bolt's hourly prices were fresh
+        (old / "2026-10-19.json").write_text(json.dumps({"day": "2026-10-19", "rows": rows}))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.c.main(["split"])
+        self.assertIn("split the combined journal: 1 day(s)", out.getvalue())
+        bolt = json.loads((self.root / "coach/bolt/journal/2026-10-19.json").read_text())
+        self.assertEqual([(r["agent"], r["chased"]) for r in bolt["rows"]], [("Bolt", 0.95)])
+        self.assertEqual([r["agent"] for r in json.loads(
+            (self.root / "coach/belfort/journal/2026-10-19.json").read_text())["rows"]], ["Belfort"])
+        self.assertFalse(old.exists())
+        self.assertTrue((self.root / "coach/combined-before-split/journal/2026-10-19.json").is_file())
+        self.assertTrue((self.root / "coach/combined-before-split/weekly/2026-10-19.json").is_file())
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.c.main(["split"])
+        self.assertIn("nothing left to split", out.getvalue())
+
+    def test_a_backfill_keeps_what_the_other_book_saved(self):
+        # Bolt's chase reading needs hourly prices only a week old: a backfill
+        # of his news book must not wipe it from his plain book's older days.
+        journal = self.root / "coach/bolt/journal"
+        self.sol("2026-10-14")
+        self.c.run_daily("2026-10-14", "bolt")
+        saved = json.loads((journal / "2026-10-14.json").read_text())
+        saved["rows"][0]["chased"] = 0.95
+        (journal / "2026-10-14.json").write_text(json.dumps(saved))
+        self.bolt([("ETH", "2026-10-14T11:00:00Z", 100.0, "2026-10-14T19:00:00Z", 103.0, 3.0, 5.0, 8,
+                    "trailing stop (8% off its best, +5.0%)")], news=True)
+        with unittest.mock.patch.object(self.c.et_time, "eastern_now", lambda: datetime(2026, 10, 15, 9, 0)):
+            self.assertEqual(self.c.main(["backfill", "--book", "bolt-news", "--since", "2026-10-14"]), 0)
+        saved = json.loads((journal / "2026-10-14.json").read_text())
+        self.assertEqual([(r["agent"], r.get("chased")) for r in saved["rows"]],
+                         [("Bolt", 0.95), ("Bolt + news", None)])
+        self.assertIn("chased", [m["kind"] for m in saved["analysis"]["mistakes"]])
+
+    def test_the_page_switches_between_coaches(self):
+        page = (ROOT / "mission-control-api/public/coach.html").read_text()
+        self.assertIn("data-coach=", page)
+        self.assertIn("['belfort', 'Belfort', 'stocks'], ['bolt', 'Bolt', 'crypto, both books'], ['ace', 'Ace', 'sports bets']",
+                      page)
+        self.assertIn("((D || {}).coaches || {})[coach]", page)
+        self.assertNotIn("D.daily", page)
+        self.assertNotIn("D.weekly", page)
+
+
+def types_ask(ask):
+    import types
+    return types.SimpleNamespace(ask=ask)
 
 
 class WhereItShowsAndWhenItRuns(unittest.TestCase):
@@ -343,7 +450,9 @@ class WhereItShowsAndWhenItRuns(unittest.TestCase):
         self.assertIn("'coach-close'", village)
         self.assertIn("coach.py daily", (ROOT / "deploy" / "coach-daily.service").read_text())
         self.assertIn("OnCalendar=Sun", (ROOT / "deploy" / "coach-weekly.timer").read_text())
-        self.assertIn("coach/journal/", (ROOT / ".gitignore").read_text())
+        self.assertIn("\ncoach/\n", (ROOT / ".gitignore").read_text())
+        self.assertIn("TimeoutStartSec=1200", (ROOT / "deploy" / "coach-weekly.service").read_text(),
+                      "three questions of up to 300 seconds in turn")
 
     def test_the_books_carry_what_the_journal_needs(self):
         self.assertIn('"best_pct": round(pos.get("high_water_pct") or 0.0, 2)', (SCRIPTS / "bolt.py").read_text())

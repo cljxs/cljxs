@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """
-coach.py - the trading journal, a daily analysis, and a weekly review.
+coach.py - three coaches, one each for Belfort, Bolt and Ace: a journal, a
+daily analysis, and a weekly review.
 
-    coach.py journal [--day YYYY-MM-DD] [--json]   the day's trades, every book
-    coach.py daily   [--day YYYY-MM-DD]            journal + analysis, saved (no model)
-    coach.py weekly  [--end YYYY-MM-DD] [--dry]    the week's review and proposals
+    coach.py journal [--coach C] [--day YYYY-MM-DD] [--json]   the day's trades
+    coach.py daily   [--coach C] [--day YYYY-MM-DD]   journal + analysis, saved (no model)
+    coach.py weekly  [--coach C] [--end YYYY-MM-DD] [--dry]   the week's review and proposals
     coach.py backfill --book ace --since YYYY-MM-DD   one book's past days, the rest kept
-    coach.py show --json                           what the Deck draws
+    coach.py split                                    the combined journal, split once
+    coach.py show --json                              what the Deck draws
+
+C is belfort, bolt or ace; without --coach, all three in turn.
 
 Owner, 2026-10-19: "You are my Trading Performance Coach ... DAILY ROUTINE:
 create and maintain a daily trading journal ... Do NOT change any trading
@@ -26,7 +30,7 @@ to. "Mistakes" are the ones a script can see - a loss past the stop, a buy
 under the bar, a buy at the top of the day's range (chasing), a sale the
 price ran on from (an early exit), a gain given back - each with its number.
 
-THE WEEKLY REVIEW asks the owner's Claude plan ONE question (wake.py ask,
+THE WEEKLY REVIEW: each coach asks the owner's Claude plan ONE question (wake.py ask,
 "coach" in tasks/engines.json, Sonnet, no tools): here is the week's
 measured data and the current rules - what to STOP, START, CONTINUE, and the
 rules proposed for next week, each citing a number from the data. Code
@@ -43,7 +47,14 @@ FROZEN_UNTIL, so until then the Sunday review only comments on him, under
 its own heading, and proposes nothing: a rule changed early restarts the
 clock. After it, he is reviewed like the others.
 
-Times are Eastern (et_time). Free apart from one question a week.
+THREE COACHES, NOT ONE (owner, 2026-10-23: "make bolt, belfort and aces
+coach all separate from each other so me and the data [don't] get
+confused"). Each keeps its own files under coach/<belfort|bolt|ace>/ and
+asks its own Sunday question, which sees only its agent's numbers and rules.
+Bolt's two books share his coach: they are one comparison, the same rules
+with and without a news check.
+
+Times are Eastern (et_time). Free apart from one question a week per coach.
 """
 
 import argparse
@@ -61,8 +72,7 @@ sys.path.insert(0, str(SCRIPTS))
 import et_time  # noqa: E402
 
 HOME = ROOT / "coach"
-JOURNAL = HOME / "journal"
-WEEKLY = HOME / "weekly"
+COMBINED = HOME / "combined-before-split"     # the one coach's files, until 2026-10-23
 
 FLAT_PCT = 0.25               # within this of zero, a trade is a scratch, not a win or a loss
 CHASE_TOP = 0.10              # bought in the top 10% of the 24 hours before: chasing
@@ -251,8 +261,27 @@ def ace_rows():
     return rows
 
 
+COACHES = {
+    "belfort": {"name": "Belfort", "what": "a paper stock trader", "books": ("belfort",),
+                "rows": lambda: belfort_rows()},
+    "bolt": {"name": "Bolt", "what": "a paper crypto trader with two books: plain rules, and the same rules "
+                                     "with a news check before each buy", "books": ("bolt", "bolt-news"),
+             "rows": lambda: bolt_rows() + bolt_rows(news=True)},
+    "ace": {"name": "Ace", "what": "a paper sports bettor", "books": ("ace",), "rows": lambda: ace_rows()},
+}
+BOOK_COACH = {b: k for k, c in COACHES.items() for b in c["books"]}
+
+
+def journal_dir(coach):
+    return HOME / coach / "journal"
+
+
+def weekly_dir(coach):
+    return HOME / coach / "weekly"
+
+
 def all_rows():
-    return belfort_rows() + bolt_rows() + bolt_rows(news=True) + ace_rows()
+    return [r for c in COACHES.values() for r in c["rows"]()]
 
 
 def rows_between(start_day, end_day, rows=None):
@@ -379,8 +408,8 @@ def _clip(text, n=90):
     return t if len(t) <= n else t[:n - 1] + "…"
 
 
-def daily_markdown(day, rows, a):
-    L = [f"# Trading journal - {day}", "", f"_{DAILY_ONLY}_", "",
+def daily_markdown(day, rows, a, coach):
+    L = [f"# {COACHES[coach]['name']}'s journal - {day}", "", f"_{DAILY_ONLY}_", "",
          "| Closed | Agent | Asset | Symbol | Side | Entry | Exit | Size | P&L | Setup | Why bought | Why sold | Outcome |",
          "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     L += [journal_line(r) for r in rows] or ["| - | no trades closed today | | | | | | | | | | | |"]
@@ -403,21 +432,55 @@ def daily_markdown(day, rows, a):
     return "\n".join(L) + "\n"
 
 
-def run_daily(day, books=None):
-    """The day's journal and analysis. With `books`, only those books are
-    read again; the other rows are kept from the day's saved journal, so a
-    backfill does not lose what can no longer be worked out (Bolt's chase
-    reading needs hourly prices only a week old)."""
-    rows = rows_between(day, day)
-    saved = JOURNAL / f"{day}.json"
+def write_day(coach, day, rows):
+    a = analyse(rows)
+    folder = journal_dir(coach)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{day}.json").write_text(json.dumps({"day": day, "coach": coach, "rows": rows, "analysis": a},
+                                                   indent=1) + "\n")
+    (folder / f"{day}.md").write_text(daily_markdown(day, rows, a, coach))
+    return a
+
+
+def run_daily(day, coach, books=None):
+    """One coach's journal and analysis for the day. With `books`, only those
+    books are read again; the coach's other rows are kept from the day's
+    saved journal, so a backfill does not lose what can no longer be worked
+    out (Bolt's chase reading needs hourly prices only a week old)."""
+    rows = rows_between(day, day, COACHES[coach]["rows"]())
+    saved = journal_dir(coach) / f"{day}.json"
     if books is not None and saved.is_file():
         kept = [r for r in json.loads(saved.read_text()).get("rows", []) if r.get("book") not in books]
         rows = sorted(kept + [r for r in rows if r["book"] in books], key=lambda r: str(r["closed_utc"]))
-    a = analyse(rows)
-    JOURNAL.mkdir(parents=True, exist_ok=True)
-    (JOURNAL / f"{day}.json").write_text(json.dumps({"day": day, "rows": rows, "analysis": a}, indent=1) + "\n")
-    (JOURNAL / f"{day}.md").write_text(daily_markdown(day, rows, a))
-    return rows, a
+    return rows, write_day(coach, day, rows)
+
+
+def split_combined():
+    """Until 2026-10-23 one coach kept one journal for every agent. Each
+    saved day is split into the three coaches' journals - from what was
+    saved, so Bolt's chase readings, which can no longer be worked out, are
+    kept - and the old folders are moved to coach/combined-before-split/.
+    The combined Sunday review moves there too: it was all three agents
+    together and belongs to none of them. Runs once; after that there is
+    nothing left to split."""
+    old_j, old_w = HOME / "journal", HOME / "weekly"
+    days = 0
+    for f in sorted(old_j.glob("*.json")) if old_j.is_dir() else []:
+        try:
+            doc = json.loads(f.read_text())
+        except Exception:
+            continue
+        for coach in COACHES:
+            if not (journal_dir(coach) / f.name).exists():
+                write_day(coach, doc.get("day") or f.stem,
+                          [r for r in doc.get("rows", []) if BOOK_COACH.get(r.get("book")) == coach])
+        days += 1
+    for d in (old_j, old_w):
+        if d.is_dir():
+            COMBINED.mkdir(parents=True, exist_ok=True)
+            target = COMBINED / d.name
+            d.rename(target if not target.exists() else COMBINED / f"{d.name}-{datetime.now():%Y%m%d%H%M%S}")
+    return days
 
 
 # ------------------------------------------------------------------ weekly
@@ -427,11 +490,17 @@ def week_of(end_day):
     return (end - timedelta(days=6)).strftime("%Y-%m-%d"), end_day
 
 
-def current_rules():
-    """The rules as they stand, from the scripts that own them - what a
-    proposal has to name to change."""
+def rules_for(coach):
+    """One coach's agent's rules as they stand, from the scripts that own
+    them - what a proposal has to name to change. Only its own: a coach
+    shown another agent's rules has proposed for the wrong one."""
     b, bt = _bolt(), _belfort()
     ab, _clv, aj = _ace()
+    key = {"bolt": "Bolt (crypto, both books)", "belfort": "Belfort (stocks)", "ace": "Ace (sports bets)"}[coach]
+    return {key: _rules(b, bt, ab, aj)[key]}
+
+
+def _rules(b, bt, ab, aj):
     return {
         "Bolt (crypto, both books)": {
             "buy": f"best scorer {b.MIN_SCORE}+/10 on the rubric, one buy each {b.CYCLE_HOURS:g}h, "
@@ -458,8 +527,8 @@ def current_rules():
     }
 
 
-ASK = """You are a trading performance coach reviewing one week of paper-trading and paper-betting agents.
-Use ONLY the data below - every number was computed by code from their books. Do not give
+ASK = """You are {name}'s performance coach - {name} is {what} - reviewing one week of {name} alone.
+Use ONLY the data below - every number was computed by code from the books. Do not give
 financial advice; improve the process. Do not invent numbers: cite the data for every claim.
 
 Reply in markdown with exactly these four sections:
@@ -481,8 +550,8 @@ THE WEEK ({start} to {end}, Eastern)
 """
 
 
-def weekly_data(start, end):
-    rows = rows_between(start, end)
+def weekly_data(start, end, coach):
+    rows = rows_between(start, end, COACHES[coach]["rows"]())
     a = analyse(rows)
     kinds = {}
     for m in a["mistakes"]:
@@ -492,64 +561,62 @@ def weekly_data(start, end):
                   "by_weekday": grouped(rows, lambda r: (et_time.to_eastern(r["closed_utc"]) or datetime.min).strftime("%a"))}
 
 
-def week_notes(rows, end):
-    """What the review may do this week, decided here rather than left to the
-    model: who has enough data, and whether Ace's rules are still frozen."""
-    trades = [r for r in rows if r["book"] != "ace"]
-    bets = [r for r in rows if r["book"] == "ace"]
+def week_notes(coach, rows, end):
+    """(notes for the question, why there is no question or None) - decided
+    here rather than left to the model: whether the week has enough data,
+    and whether Ace's rules are still frozen."""
+    if coach != "ace":
+        if len(rows) < MIN_WEEK_TRADES:
+            return [], f"{len(rows)} closed trade(s) this week - fewer than {MIN_WEEK_TRADES}"
+        return (["Bolt and Bolt + news trade the same rules; the news book also needs a cited news catalyst. "
+                 "Say whether the news check helped this week, with the numbers."] if coach == "bolt" else []), None
+    if len(rows) < MIN_WEEK_BETS:
+        return [], f"{len(rows)} settled bet(s) this week - fewer than {MIN_WEEK_BETS}"
     frozen_until = _ace()[2].FROZEN_UNTIL
-    notes = []
-    if len(trades) < MIN_WEEK_TRADES:
-        notes.append(f"Belfort and Bolt closed {len(trades)} trade(s) in all - fewer than {MIN_WEEK_TRADES}: "
-                     f"propose no change for them; write \"no change\".")
-    if len(bets) < MIN_WEEK_BETS:
-        notes.append(f"Ace settled {len(bets)} bet(s) - fewer than {MIN_WEEK_BETS}: say nothing about him "
-                     f"beyond that.")
-    elif end < frozen_until:
-        notes.append(f"ACE'S RULES ARE FROZEN until {frozen_until} by a preregistration: changing one restarts "
-                     f"his experiment. Propose NO change for Ace under UPDATED RULES. Add a fifth section, "
-                     f"## ACE - NOTES FOR THE {frozen_until} READ-OUT, with at most three observations, each "
-                     f"citing a number. Judge him on closing-line value, not wins: a lost bet is not a mistake.")
-    else:
-        notes.append("Ace may be proposed for like the others. Judge him on closing-line value, not wins.")
-    return notes, len(trades) >= MIN_WEEK_TRADES or len(bets) >= MIN_WEEK_BETS
+    judge = "Judge him on closing-line value, not wins: a lost bet is not a mistake."
+    if end < frozen_until:
+        return [f"HIS RULES ARE FROZEN until {frozen_until} by a preregistration: changing one restarts his "
+                f"experiment. Under UPDATED RULES write only \"frozen until {frozen_until}\" and propose NO "
+                f"change. Add a fifth section, ## NOTES FOR THE {frozen_until} READ-OUT, with at most three "
+                f"observations, each citing a number. {judge}"], None
+    return [judge], None
 
 
-def run_weekly(end_day, ask=None, dry=False):
+def run_weekly(end_day, coach, ask=None, dry=False):
     start, end = week_of(end_day)
-    rows, data = weekly_data(start, end)
-    rules = current_rules()
-    notes, enough = week_notes(rows, end)
-    if not enough:
-        bets = sum(1 for r in rows if r["book"] == "ace")
-        review = (f"_{len(rows) - bets} closed trade(s) and {bets} settled bet(s) this week - fewer than "
-                  f"{MIN_WEEK_TRADES} trades and {MIN_WEEK_BETS} bets. Observing only: no rule change is "
-                  f"proposed on this little data._")
+    rows, data = weekly_data(start, end, coach)
+    rules = rules_for(coach)
+    name = COACHES[coach]["name"]
+    notes, too_few = week_notes(coach, rows, end)
+    if too_few:
+        review = f"_{too_few}. Observing only: no rule change is proposed on this little data._"
         asked = False
     elif dry:
         review, asked = "_dry run - the question was not asked_", False
     else:
-        question = ASK.format(rules=json.dumps(rules, indent=1), start=start, end=end,
-                              data=json.dumps(data, indent=1),
-                              notes="THIS WEEK\n" + "\n".join(f"- {n}" for n in notes) + "\n")
+        question = ASK.format(name=name, what=COACHES[coach]["what"], rules=json.dumps(rules, indent=1),
+                              start=start, end=end, data=json.dumps(data, indent=1),
+                              notes=("THIS WEEK\n" + "\n".join(f"- {n}" for n in notes) + "\n") if notes else "")
         ask = ask or _load("wake_coach", "wake.py").ask
         ok, text = ask("coach", question, 300)
         review = text.strip() if ok else f"_the review could not be written: {text}_"
         asked = ok
-    md = [f"# Weekly review - {start} to {end}", "",
+    md = [f"# {name}'s weekly review - {start} to {end}", "",
           "_Proposals only. Nothing here changes a rule until you approve it._", ""]
-    for agent, s in data["summary_by_agent"].items():
-        md.append(f"- **{agent}**: {s['trades']} trades, win rate {s['win_rate']}%, net ${s['net_usd']:+,.2f}, "
-                  f"expectancy {s['expectancy_pct']:+.2f}% a trade, avg hold {s['avg_hold_h']}h")
     if data["ace"]:
         md.append(f"- **Ace**: {ace_line(data['ace'])}")
+    else:
+        for agent, s in data["summary_by_agent"].items():
+            md.append(f"- **{agent}**: {s['trades']} trades, win rate {s['win_rate']}%, net ${s['net_usd']:+,.2f}, "
+                      f"expectancy {s['expectancy_pct']:+.2f}% a trade, avg hold {s['avg_hold_h']}h")
     if data["mistake_counts"]:
         md.append("- mistakes seen: " + ", ".join(f"{k} {v}" for k, v in data["mistake_counts"].items()))
     md += ["", review, ""]
-    WEEKLY.mkdir(parents=True, exist_ok=True)
-    (WEEKLY / f"{end}.md").write_text("\n".join(md))
-    (WEEKLY / f"{end}.json").write_text(json.dumps({"start": start, "end": end, "data": data, "rules": rules,
-                                                    "review": review, "asked": asked,
+    folder = weekly_dir(coach)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{end}.md").write_text("\n".join(md))
+    (folder / f"{end}.json").write_text(json.dumps({"start": start, "end": end, "coach": coach, "data": data,
+                                                    "rules": rules, "review": review, "asked": asked,
                                                     "status": "proposed"}, indent=1) + "\n")
     return review
 
@@ -560,7 +627,9 @@ def show():
     def latest(folder, n):
         files = sorted(folder.glob("*.json"), reverse=True)[:n] if folder.is_dir() else []
         return [json.loads(f.read_text()) for f in files]
-    return {"daily": latest(JOURNAL, 14), "weekly": latest(WEEKLY, 4), "note": DAILY_ONLY}
+    return {"coaches": {k: {"name": c["name"], "what": c["what"], "daily": latest(journal_dir(k), 14),
+                            "weekly": latest(weekly_dir(k), 4)} for k, c in COACHES.items()},
+            "note": DAILY_ONLY}
 
 
 def main(argv):
@@ -574,31 +643,45 @@ def main(argv):
     w = sub.add_parser("weekly")
     w.add_argument("--end", help="the Sunday the week ends on; default today, Eastern")
     w.add_argument("--dry", action="store_true")
+    for x in (j, d, w):
+        x.add_argument("--coach", choices=list(COACHES), help="one coach; all three when left out")
+    sub.add_parser("split", help="split the combined journal into the three coaches (done by itself too)")
     bf = sub.add_parser("backfill", help="one book's past days, every other book's rows kept as saved")
     bf.add_argument("--book", required=True, choices=["ace", "belfort", "bolt", "bolt-news"])
     bf.add_argument("--since", required=True, help="YYYY-MM-DD, Eastern")
     s = sub.add_parser("show")
     s.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
+    split = split_combined()
+    if split and a.cmd != "show":
+        print(f"split the combined journal: {split} day(s) into {', '.join(COACHES)}; the old files are in "
+              f"{COMBINED.relative_to(ROOT)}/")
     today = et_time.day()
+    coaches = [a.coach] if getattr(a, "coach", None) else list(COACHES)
     if a.cmd == "journal":
-        rows = rows_between(a.day or today, a.day or today)
+        rows = [r for c in coaches for r in rows_between(a.day or today, a.day or today, COACHES[c]["rows"]())]
         print(json.dumps(rows) if a.json else "\n".join(journal_line(r) for r in rows) or "no trades closed")
     elif a.cmd == "daily":
         day = a.day or (et_time.eastern_now() - timedelta(days=1)).strftime("%Y-%m-%d")
-        rows, an = run_daily(day)
-        print(f"journal {day}: {len(rows)} trade(s), {len(an['mistakes'])} mistake(s) seen - coach/journal/{day}.md")
+        for c in coaches:
+            rows, an = run_daily(day, c)
+            print(f"{COACHES[c]['name']}'s journal {day}: {len(rows)} closed, {len(an['mistakes'])} mistake(s) "
+                  f"seen - coach/{c}/journal/{day}.md")
     elif a.cmd == "weekly":
-        print(run_weekly(a.end or today, dry=a.dry))
+        for c in coaches:
+            print(f"# {COACHES[c]['name']}\n{run_weekly(a.end or today, c, dry=a.dry)}\n")
+    elif a.cmd == "split":
+        print("nothing left to split" if not split else "done")
     elif a.cmd == "backfill":
         day = datetime.strptime(a.since, "%Y-%m-%d")
         yesterday = (et_time.eastern_now() - timedelta(days=1)).strftime("%Y-%m-%d")
         n = 0
         while day.strftime("%Y-%m-%d") <= yesterday:
-            rows, _an = run_daily(day.strftime("%Y-%m-%d"), books={a.book})
+            rows, _an = run_daily(day.strftime("%Y-%m-%d"), BOOK_COACH[a.book], books={a.book})
             n += sum(1 for r in rows if r["book"] == a.book)
             day += timedelta(days=1)
-        print(f"backfill {a.book} since {a.since}: {n} row(s) journaled; other books kept as saved")
+        print(f"backfill {a.book} since {a.since}: {n} row(s) journaled in coach/{BOOK_COACH[a.book]}/; "
+              f"other books kept as saved")
     elif a.cmd == "show":
         print(json.dumps(show()))
     return 0

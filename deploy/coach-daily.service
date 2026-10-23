@@ -1,5 +1,5 @@
 [Unit]
-Description=Trading coach: yesterday's journal and daily analysis (no AI, costs nothing; changes no rule)
+Description=Three coaches (Belfort, Bolt, Ace): yesterday's journal and daily analysis (no AI, costs nothing; changes no rule)
 Documentation=https://github.com/cljxs/cljxs
 
 [Service]

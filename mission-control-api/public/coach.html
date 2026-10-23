@@ -8,7 +8,9 @@
 <!-- The trading coach (owner, 2026-10-19): a journal of every trade Belfort
      and Bolt close - and every bet Ace settles (2026-10-22) - a daily analysis
      that only observes, and a Sunday review that proposes rule changes for the
-     owner to approve; none for Ace while his preregistration runs. Everything comes
+     owner to approve; none for Ace while his preregistration runs.
+     Three coaches since 2026-10-23, one per agent, never mixed: the switch at
+     the top picks one, and everything below is that coach's alone. Everything comes
      from scripts/coach.py through /api/coach; nothing is worked out here.
      Opened from the village frame's navigation (?embed=1). -->
 <style>
@@ -58,18 +60,23 @@
   .filters{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
   .filters button{font:600 12px var(--sans);color:var(--mute);background:none;border:1px solid var(--line);border-radius:7px;padding:5px 10px;cursor:pointer}
   .filters button.on{color:var(--ink);border-color:var(--violet)}
+  .coaches{display:flex;gap:8px;flex-wrap:wrap;padding:0 22px 12px}
+  .coaches button{font:700 14px var(--sans);color:var(--mute);background:none;border:1px solid var(--line);border-radius:10px;padding:9px 16px;cursor:pointer}
+  .coaches button.on{color:var(--ink);border-color:var(--violet);background:rgba(167,139,250,.12)}
+  .coaches button .what{display:block;font-weight:500;font-size:11.5px;color:var(--dim)}
 </style>
 <script src="/shared/busy.js"></script>
 </head>
 <body>
 <div class="frame">
   <div class="head">
-    <div><h1>Trading Coach</h1><div class="sub">Belfort (stocks) · Bolt and Bolt + news (crypto) · Ace (sports bets) · a journal, a daily look, a Sunday review</div></div>
+    <div><h1>Trading Coach</h1><div class="sub">One coach each for Belfort (stocks), Bolt (crypto) and Ace (sports bets) - a journal, a daily look, a Sunday review</div></div>
     <div class="sp"></div>
     <a class="btn" id="back" href="/dashboard">← Deck</a>
     <button class="btn" id="close" style="display:none">× Close</button>
   </div>
   <div class="rule">Daily: observe, log and analyse only - no rule is ever changed by it. Sunday: the week's numbers are reviewed and changes are <b>proposed</b>; nothing changes until you approve it.</div>
+  <div class="coaches" id="coaches"></div>
   <div class="tabs" id="tabs"></div>
   <div class="body" id="body"><div class="muted">Loading…</div></div>
 </div>
@@ -91,7 +98,10 @@ if (new URLSearchParams(location.search).get('embed') === '1') {
   addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
 }
 
+const COACHES = [['belfort', 'Belfort', 'stocks'], ['bolt', 'Bolt', 'crypto, both books'], ['ace', 'Ace', 'sports bets']];
 let D = null, tab = 'journal', who = 'all';
+let coach = (() => { try { return localStorage.getItem('coach.which') || 'belfort'; } catch (e) { return 'belfort'; } })();
+const C = () => ((D || {}).coaches || {})[coach] || {};
 
 async function load() {
   try { D = await (await fetch('/api/coach', { cache: 'no-store' })).json(); }
@@ -99,21 +109,23 @@ async function load() {
   draw();
 }
 
-function rows() { return (D.daily || []).flatMap(d => d.rows || []); }
+function rows() { return (C().daily || []).flatMap(d => d.rows || []); }
 
 function draw() {
   const all = rows();
-  $('tabs').innerHTML = [['journal', 'Journal', all.length], ['daily', 'Daily analysis', (D.daily || []).length],
-    ['weekly', 'Weekly review', (D.weekly || []).length]]
+  $('coaches').innerHTML = COACHES.map(([k, n, w]) => `<button data-coach="${k}" class="${coach === k ? 'on' : ''}">${n}'s coach<span class="what">${w}</span></button>`).join('');
+  $('tabs').innerHTML = [['journal', 'Journal', all.length], ['daily', 'Daily analysis', (C().daily || []).length],
+    ['weekly', 'Weekly review', (C().weekly || []).length]]
     .map(([k, l, n]) => `<button class="tab ${tab === k ? 'on' : ''}" data-tab="${k}">${l}<span class="n">${n}</span></button>`).join('');
   $('body').innerHTML = tab === 'journal' ? journal(all) : tab === 'daily' ? daily() : weekly();
 }
 
 function journal(all) {
-  if (!all.length) return '<div class="muted">No trades journaled yet. The journal is written each night at 00:20 ET for the day before.</div>';
+  if (!all.length) return `<div class="muted">Nothing in ${esc(C().name || coach)}'s journal yet. It is written each night at 00:20 ET for the day before.</div>`;
+  // Only Bolt's coach has two books (Bolt and Bolt + news) to choose between.
   const agents = [...new Set(all.map(r => r.agent))];
-  const shown = who === 'all' ? all : all.filter(r => r.agent === who);
-  return `<div class="filters">${['all', ...agents].map(a => `<button data-who="${esc(a)}" class="${who === a ? 'on' : ''}">${esc(a === 'all' ? 'Everyone' : a)}</button>`).join('')}</div>
+  const shown = who === 'all' || !agents.includes(who) ? all : all.filter(r => r.agent === who);
+  return `${agents.length > 1 ? `<div class="filters">${['all', ...agents].map(a => `<button data-who="${esc(a)}" class="${who === a ? 'on' : ''}">${esc(a === 'all' ? 'Both books' : a)}</button>`).join('')}</div>` : ''}
   <div class="scroll"><table><tr><th>Closed</th><th>Agent</th><th>Asset</th><th>Side</th><th>Entry</th><th>Exit</th><th>Size</th><th>P&amp;L</th><th>Setup</th><th>Why bought</th><th>Why sold</th><th>Outcome</th></tr>
   ${shown.slice().reverse().map(r => `<tr><td>${esc(when(r.closed_utc))}</td><td>${esc(r.agent)}</td>
     <td><b>${esc(r.symbol)}</b> <span class="muted">${esc(r.asset)}</span></td><td>${esc(r.side)}</td>
@@ -126,7 +138,7 @@ function journal(all) {
 }
 
 function daily() {
-  const days = D.daily || [];
+  const days = C().daily || [];
   if (!days.length) return '<div class="muted">No daily analysis yet - the first is written tonight at 00:20 ET.</div>';
   return days.map(d => { const a = d.analysis || {};
     return `<div class="card"><div class="k">${esc(d.day)}</div>
@@ -154,19 +166,24 @@ function aceCard(s) {
 }
 
 function weekly() {
-  const weeks = D.weekly || [];
+  const weeks = C().weekly || [];
   if (!weeks.length) return '<div class="muted">No weekly review yet - the first is written on Sunday evening.</div>';
   return weeks.map(w => `<div class="card"><div class="k">Week of ${esc(w.start)} to ${esc(w.end)} · proposals only</div>
     <div class="stats">${Object.entries((w.data || {}).summary_by_agent || {}).map(([n, s]) => `<div class="stat"><div class="muted">${esc(n)}</div>
       <div class="v ${cls(s.net_usd)}">${money(s.net_usd)}</div><div class="muted">${s.trades} trades · win ${s.win_rate ?? '—'}% · ${pct(s.expectancy_pct)} a trade</div></div>`).join('')}</div>
+    ${(w.data || {}).ace ? aceCard(w.data.ace) : ''}
     <div class="review">${esc(w.review || '')}</div></div>`).join('');
 }
 
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-tab],[data-who]');
+  const t = e.target.closest('[data-tab],[data-who],[data-coach]');
   if (!t) return;
   if (t.dataset.tab) tab = t.dataset.tab;
   if (t.dataset.who) who = t.dataset.who;
+  if (t.dataset.coach) {
+    coach = t.dataset.coach; who = 'all';
+    try { localStorage.setItem('coach.which', coach); } catch (e) {}
+  }
   draw();
 });
 load();
