@@ -3760,3 +3760,89 @@ class HolesCommand(EndToEnd):
         at = gone["start"] - c["start"]
         self.assertTrue(any(a <= at + 1 and at + (gone["end"] - gone["start"]) - 1 <= b for a, b in spans),
                         f"no stretch covers {at:.1f}s: {said}")
+        # `clipper fill 1 --recut` puts it back and into the clip's captions.
+        lost = [w for k, w in enumerate(json.loads(json.dumps(self.words)))
+                if gone["first"] <= k <= gone["last"]]
+        shown = lambda: Path(c["path"]).with_suffix(".ass").read_text()
+        word = max((w["word"].strip().upper().strip(".,?!") for w in lost), key=len)
+        self.assertEqual(self.cli("recut", str(c["id"]))[0], 0)
+        self.assertNotIn(word, shown(), "the clip as Whisper left it")
+        old = transcribe.listener
+        self.addCleanup(setattr, transcribe, "listener", old)
+        transcribe.listener = lambda src, cfg: (lambda a, b: [w for w in lost if a < w["start"] < b])
+        code, said = self.cli("fill", "1", "--recut")
+        self.assertEqual(code, 0, said)
+        self.assertIn(f"{len(lost)} word(s) put back", said)
+        self.assertIn(f"clip {c['id']}: captions updated", said)
+        self.assertEqual(self.cli("holes", str(c["id"]))[1].split(";")[1], before.split(";")[1],
+                         "the clip is back to the reader's own pauses")
+        self.assertIn(word, shown(), "and the words are in its captions")
+        self.assertIn("already listened to again", self.cli("fill", "1")[1])
+
+
+class TheDroppedSentencesArePutBack(unittest.TestCase):
+    """Clip 106 (2026-10-23): 24 s of talking with no caption - Whisper's
+    voice filter had dropped the crosstalk. Each such stretch is listened to
+    again (relisten, checked by hand on a real live-audience recording: three
+    removed sentences came back near word for word) and the words put in."""
+
+    def setUp(self):
+        t = json.loads((FIXTURES / "clipper-laughs-ourmissbrooks.words.json").read_text())
+        self.words = t["words"]
+        self.frames = json.loads((FIXTURES / "clipper-laughs-ourmissbrooks.frames.json").read_text())
+        s = moments.sentences(self.words, 0.8)[46]      # 102.1-106.3 s, "But if I were the goat ..."
+        self.gone = [w for k, w in enumerate(self.words) if s["first"] <= k <= s["last"]]
+        self.cut = [w for w in self.words if w not in self.gone]
+
+    def listen(self, asked):
+        # What the second listen hears: the words that were really said there.
+        return lambda a, b: asked.append((a, b)) or [dict(w) for w in self.gone if a < w["start"] < b]
+
+    def test_the_missing_sentence_is_back_in_order_and_marked(self):
+        asked = []
+        out, report = transcribe.fill(self.cut, self.frames, "src.mp4", CFG, listen=self.listen(asked),
+                                      start=90.0, end=120.0)
+        self.assertEqual("".join(w["word"] for w in out), "".join(w["word"] for w in self.words),
+                         "the transcript reads as it was said again")
+        self.assertEqual([w["word"] for w in out if w.get("filled")], [w["word"] for w in self.gone],
+                         "and the words put back say so")
+        self.assertEqual(report["words"], len(self.gone))
+        self.assertEqual(len(asked), 1, "one stretch, one second listen")
+
+    def test_a_long_stretch_is_left_alone(self):
+        asked = []
+        loud = [[t, -14.0] for t in [n / 10 for n in range(0, 3000)]]
+        words = [{"start": 1.0, "end": 1.5, "word": " Hi."}, {"start": 200.0, "end": 200.5, "word": " Bye."}]
+        out, report = transcribe.fill(words, loud, "src.mp4", CFG, listen=lambda a, b: asked.append(1) or [])
+        self.assertEqual((asked, report["long_skipped"]), ([], 1), "an intro song or a break, not a sentence")
+
+    def test_what_is_kept_from_a_second_listen(self):
+        W = lambda s, e, word, p: types.SimpleNamespace(start=s, end=e, word=word, probability=p)
+        seg = lambda *ws: types.SimpleNamespace(words=list(ws))
+        got = transcribe.heard([
+            seg(W(0.0, 0.3, " before.", 0.99),                     # the word before the hole, heard again
+                W(1.0, 1.3, " somebody", 0.7), W(1.3, 1.6, " come", 0.4), W(1.6, 2.0, " up", 0.8)),
+            seg(W(3.0, 3.4, " Iceman.", 0.45)),                    # one unsure word over a laugh
+            seg(W(4.0, 4.3, " Yes.", 0.9))], 0.5, 4.6, 0.0)
+        self.assertEqual([w["word"] for w in got], [" somebody", " come", " up", " Yes."],
+                         "a sentence it is fairly sure of whole; a lone word only if sure of it")
+
+    def test_once_per_video_and_only_for_whispers_own_transcripts(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        paths = {"media": tmp}
+        video = {"id": 7, "media_path": str(tmp / "ep.mp4")}
+        (tmp / "7").mkdir()
+        (tmp / "7" / "transcript.json").write_text(json.dumps({"provider": "faster-whisper", "words": self.cut}))
+        (tmp / "7" / "loudness-frames.json").write_text(json.dumps(self.frames))
+        conn = db.connect(tmp / "c.db")
+        self.addCleanup(conn.close)
+        asked = []
+        t = pipeline.fill_transcript(conn, paths, video, CFG, src=str(tmp / "audio.wav"), listen=self.listen(asked))
+        self.assertGreaterEqual(t["filled"]["words"], len(self.gone))
+        self.assertEqual(json.loads((tmp / "7" / "transcript.json").read_text())["filled"]["by"], transcribe.FILLER)
+        n = len(asked)
+        pipeline.fill_transcript(conn, paths, video, CFG, listen=self.listen(asked))
+        self.assertEqual(len(asked), n, "a transcript is listened to again once")
+        said = conn.execute("SELECT msg FROM events WHERE stage = 'transcribe'").fetchone()[0]
+        self.assertIn("word(s) put back", said)

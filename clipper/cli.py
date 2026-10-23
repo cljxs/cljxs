@@ -623,6 +623,35 @@ def cmd_holes(a):
     return 0
 
 
+def cmd_fill(a):
+    """Listen again where a video's transcript has talking with no words, and
+    put the words back - for videos transcribed before Clip did it by itself.
+    --recut: then put the new captions in each of its clips not yet posted."""
+    cfg, paths, conn = open_all()
+    video = conn.execute("SELECT * FROM videos WHERE id = ?", (a.video,)).fetchone()
+    if not video:
+        raise ValueError(f"no video {a.video}")
+    before = json.loads((pipeline.folder(paths, video) / "transcript.json").read_text())
+    t = pipeline.fill_transcript(conn, paths, video, cfg)
+    r = t["filled"]
+    print(f"video {a.video}: " + ("already listened to again - " if before.get("filled") else "")
+          + f"{r['holes']} stretch(es) of talking with no words, {r['seconds']:.0f}s; "
+          f"{r['words']} word(s) put back")
+    if not a.recut:
+        return 0
+    for c in conn.execute("SELECT * FROM clips WHERE video_id = ? AND status IN ('rendered', 'approved') "
+                          "ORDER BY rank", (a.video,)).fetchall():
+        if c["subtitles"]:
+            print(f"  clip {c['id']}: kept as it is - it has your own subtitle fixes")
+            continue
+        try:
+            pipeline.recut(conn, paths, cfg, c["id"])
+            print(f"  clip {c['id']}: captions updated")
+        except (ValueError, RuntimeError, OSError) as exc:
+            print(f"  clip {c['id']}: not updated - {exc}")
+    return 0
+
+
 def cmd_progress(a):
     """How far a clip's remake has got, as JSON - asked by the Fix subtitles
     box every couple of seconds while Update video runs (progress.py)."""
@@ -804,6 +833,11 @@ def main(argv=None):
     x.add_argument("--save-only", dest="save_only", action="store_true",
                    help="with --set-json: save the lines, leave the video until you update it")
     x.set_defaults(fn=cmd_subtitles)
+    x = sub.add_parser("fill", help="listen again where a video's transcript has talking with no words "
+                                    "(--recut: and update its clips' captions)")
+    x.add_argument("video", type=int)
+    x.add_argument("--recut", action="store_true")
+    x.set_defaults(fn=cmd_fill)
     x = sub.add_parser("holes", help="where a clip's captions go quiet while someone is talking "
                                      "(--listen: and what a second listen hears there)")
     x.add_argument("clip", type=int)

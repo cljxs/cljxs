@@ -126,6 +126,18 @@ shows always have (Jordan vs LeBron, rings, this era against back then, the
 hosts' playing days). If the plan cannot answer, the cheap model writes
 them as before, without searching, and the note under the box says which.
 
+## Captions that skip sentences (2026-10-23)
+
+Whisper's voice filter drops crosstalk: on clip 106, 24 seconds of talking
+had no captions. After each transcript Clip now finds every stretch as loud
+as the talking with no word in it, listens to it again on its own (no voice
+filter, not carrying on from the sentence before) and puts back the words
+it is sure of (`transcribe.fill`, `"fill_holes"` in config). Stretches over
+60 s are left (music, a break).
+
+    python -m clipper holes CLIP --listen     where a clip's captions go quiet, and what is said there
+    python -m clipper fill VIDEO --recut      put a video's dropped sentences back, and in its clips
+
 ## Approving and posting
 
 Every clip gets its words when it is rendered: a title, a caption and

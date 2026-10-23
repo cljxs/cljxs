@@ -272,6 +272,10 @@ for framing. `python3 scripts/check-secrets.py` before every push.
   moments run to 90 s and windows cutting into one are skipped. Write hooks
   searches the web on the plan and adds the evergreen debates. The owner
   chose not to re-cut Teague: judge it on the next episodes.
+- 2026-10-23: captions skipped sentences - Whisper's voice filter dropped
+  crosstalk (clip 106: 24 s uncaptioned; `clipper holes 106 --listen` heard
+  it). Each transcript is now filled (`transcribe.fill`); older videos with
+  `clipper fill VIDEO --recut`. Update video shows a progress bar.
 
 ## 8. Links
 

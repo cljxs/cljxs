@@ -78,7 +78,7 @@ generated - edit the header, then `scripts/deploy.sh <name>`).
 | DB schema + migrations | `clipper/db.py` |
 | Rights gate, sources | `clipper/rights.py` |
 | Ingest, Dropbox pickup, link inbox, comments/pins | `clipper/ingest.py`, `clipper/dropbox.py`, `clipper/inbox.py` |
-| Transcribe, spellings | `clipper/transcribe.py` |
+| Transcribe, spellings; sentences Whisper dropped (`holes`, `relisten`, `fill`) | `clipper/transcribe.py` |
 | Moments, scoring, campaign lists | `clipper/moments.py`, `clipper/score.py`, `clipper/campaign.py` |
 | Complete thoughts: where each story/argument starts and ends (Sonnet on the plan) | `clipper/stories.py` (`read`, `apply`, `cuts_into`) |
 | Stages, recut, subtitles (`set_subtitles`, `recut`, `clip_ass`) | `clipper/pipeline.py` |

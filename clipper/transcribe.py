@@ -246,7 +246,64 @@ def relisten(src, a, b, cfg, model=None):
             audio = np.frombuffer(wf.readframes(wf.getnframes()), np.int16).astype(np.float32) / 32768.0
     segments, _info = model.transcribe(audio, language=cfg.get("language"), word_timestamps=True,
                                        vad_filter=False, condition_on_previous_text=False, beam_size=1)
-    return [{"start": round(float(w.start) + t0, 3), "end": round(float(w.end) + t0, 3),
-             "word": w.word, "p": round(float(w.probability), 3)}
-            for seg in segments for w in (seg.words or [])
-            if float(w.probability) >= RELISTEN_MIN_P and a - 0.2 <= float(w.start) + t0 <= b + 0.2]
+    return heard(segments, a, b, t0)
+
+
+# A sentence heard again is kept whole when Whisper is fairly sure of it as a
+# whole: word by word at RELISTEN_MIN_P, crosstalk came back as "somebody to
+# come up. was it? You. I know." (clip 106, 2026-10-23). One or two words
+# alone must clear RELISTEN_MIN_P each - on the live-audience recording that
+# is what kept a laugh from becoming "Iceman."
+WHOLE_MIN_WORDS = 3
+WHOLE_MEAN_P = 0.6
+
+
+def heard(segments, a, b, t0):
+    """The words of Whisper's segments that belong in the hole [a, b]: a
+    word's middle inside it (the words either side are heard again in the
+    padding, and are already in the transcript), and either part of a
+    sentence it is fairly sure of, or a word it is sure of on its own."""
+    out = []
+    for seg in segments:
+        ws = [w for w in (seg.words or []) if a < (float(w.start) + float(w.end)) / 2 + t0 < b]
+        mean = sum(float(w.probability) for w in ws) / len(ws) if ws else 0.0
+        whole = len(ws) >= WHOLE_MIN_WORDS and mean >= WHOLE_MEAN_P
+        out += [{"start": round(float(w.start) + t0, 3), "end": round(float(w.end) + t0, 3),
+                 "word": w.word, "p": round(float(w.probability), 3)}
+                for w in ws if whole or float(w.probability) >= RELISTEN_MIN_P]
+    return out
+
+
+def listener(src, cfg):
+    """listen(a, b) -> words, relisten with one model loaded on first use."""
+    model = []
+
+    def listen(a, b):
+        if not model:
+            from faster_whisper import WhisperModel
+            model.append(WhisperModel(cfg["whisper_model"], device="cpu", compute_type="int8",
+                                      cpu_threads=int(cfg["whisper_threads"])))
+        return relisten(src, a, b, cfg, model=model[0])
+    return listen
+
+
+FILLER = "relisten-v1"
+HOLE_MAX_SECONDS = 60.0      # longer is a jingle, an ad break or the intro, not a dropped sentence
+
+
+def fill(words, frames, src, cfg, listen=None, start=0.0, end=None):
+    """(words with the holes filled, report). Every hole in [start, end] up
+    to HOLE_MAX_SECONDS is listened to again (relisten) and the words heard
+    there are put in, marked "filled": true. One model for all of them."""
+    end = end if end is not None else max((w["end"] for w in words), default=0.0)
+    found = holes(words, frames, start, end)
+    listen = listen or listener(src, cfg)
+    added, long_ones = [], 0
+    for a, b, _share in found:
+        if b - a > HOLE_MAX_SECONDS:
+            long_ones += 1
+            continue
+        added += [dict(w, filled=True) for w in listen(a, b)]
+    out = sorted(words + added, key=lambda w: w["start"])
+    return out, {"by": FILLER, "holes": len(found), "long_skipped": long_ones, "words": len(added),
+                 "seconds": round(sum(b - a for a, b, _ in found if b - a <= HOLE_MAX_SECONDS), 1)}

@@ -69,12 +69,40 @@ def stage_transcribe(conn, paths, cfg, video):
         media.extract_audio(video["media_path"], audio)
     t = transcribe.transcribe(audio, f / "transcript.json", cfg)
     loudness_of(paths, video)
+    if cfg["fill_holes"] and t.get("provider") == "faster-whisper" and not t.get("filled"):
+        t = fill_transcript(conn, paths, video, cfg, src=audio)
     # Everything later reads transcript.json and loudness.json, never the
     # audio: 155 MB for an 81-minute episode, kept for nothing.
     audio.unlink()
     db.event(conn, "transcribe", f"{len(t['words'])} words ({t['provider']} {t['model']})",
              video_id=video["id"])
     return "transcribed"
+
+
+def fill_transcript(conn, paths, video, cfg, src=None, listen=None):
+    """The sentences Whisper's voice filter dropped, heard again and put in
+    the transcript (transcribe.fill) - once: the transcript says it was
+    filled. src: the audio, or the source video when the audio is gone.
+    Owner, 2026-10-23: captions "skipping sentences at a time"; clip 106 had
+    24 s of talking with no caption."""
+    f = folder(paths, video) / "transcript.json"
+    t = json.loads(f.read_text())
+    if t.get("filled"):
+        return t
+    if src is None and not media.is_url(video["media_path"]) and not Path(video["media_path"]).is_file():
+        raise ValueError(f"video {video['id']}'s source was deleted to save space - "
+                         f"its transcript cannot be listened to again")
+    words, report = transcribe.fill(t["words"], frames_of(paths, video), src or video["media_path"], cfg,
+                                    listen=listen)
+    t = dict(t, words=words, filled=report)
+    tmp = f.with_suffix(".tmp")
+    tmp.write_text(json.dumps(t))
+    tmp.replace(f)
+    db.event(conn, "transcribe", f"listened again where the talking had no words: {report['holes']} "
+                                 f"stretch(es), {report['seconds']:.0f}s, {report['words']} word(s) put back"
+             + (f"; {report['long_skipped']} over {transcribe.HOLE_MAX_SECONDS:.0f}s left (music, a break)"
+                if report["long_skipped"] else ""), video_id=video["id"])
+    return t
 
 
 def spellings_of(conn, video):

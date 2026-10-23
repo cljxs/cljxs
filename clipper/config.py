@@ -29,6 +29,10 @@ DEFAULTS = {
     # Transcribed ten minutes at a time: the whole 81-minute Trae Young
     # episode at once peaked at 4.9 GB and was killed on the 2 GB droplet.
     "whisper_chunk_seconds": 600,
+    # Where the talking is loud but Whisper wrote no word - its voice filter
+    # drops crosstalk - each stretch is listened to again and the words put
+    # back (transcribe.fill). Owner, 2026-10-23: captions skipping sentences.
+    "fill_holes": True,
     "language": "en",
 
     # --- finding moments ----------------------------------------------------
