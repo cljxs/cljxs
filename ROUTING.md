@@ -65,7 +65,9 @@ generated - edit the header, then `scripts/deploy.sh <name>`).
   `renderFrame`, `avatarSrc` (character pictures), feed `last_run_utc`,
   `openPanel`, Scout `drawIdeas`, Clip
   `openClipPanel`/`drawClip`/`drawPost`/`clipCard`/`editSubtitles`/`fixSubtitles`,
-  Town Hall `drawHall`. Shared front-end helpers: `mission-control-api/public/shared/`.
+  Town Hall `drawHall`. Shared front-end helpers: `mission-control-api/public/shared/` -
+  `mission-control-api/public/shared/busy.js` is the loading sign every page loads (a
+  button's `data-busy` names a slow job).
 
 ## Clipper (`clipper/`, its own `clipper/DESIGN.md`)
 

@@ -5634,6 +5634,35 @@ class ThePropsHallIsItsOwnBuilding(unittest.TestCase):
         self.assertIn("layPath((PROPS_PLOT.x + 2.5) * T,", self.html)
 
 
+class EveryWaitShowsItIsWorking(unittest.TestCase):
+    """Owner, 2026-10-23: "Can you add a loading function to anything that
+    has to load, like approving Scout's idea" - approving draws the design
+    first, up to three minutes, and the page showed nothing. One helper,
+    shared/busy.js, watches fetch on every page: the tapped button spins and
+    a pill counts the seconds. Checked in a real browser: a GET refresh that
+    fired between Approve's note box closing and its own POST took the tap,
+    and the slow job showed nothing - so only POST/PUT/PATCH/DELETE count."""
+
+    PUBLIC = ROOT / "mission-control-api" / "public"
+
+    def test_every_page_loads_it(self):
+        pages = sorted(self.PUBLIC.glob("*.html"))
+        self.assertGreater(len(pages), 10)
+        missing = [p.name for p in pages if '<script src="/shared/busy.js"></script>' not in p.read_text()]
+        self.assertEqual(missing, [], "a page without it shows nothing while its buttons work")
+
+    def test_it_takes_only_a_request_that_does_something(self):
+        js = (self.PUBLIC / "shared" / "busy.js").read_text()
+        self.assertIn("method(arguments) === 'GET') return p;", js)
+        self.assertIn("window[name] = function", js, "a confirm or prompt keeps the tap fresh")
+
+    def test_the_slow_ones_say_what_they_are_doing(self):
+        village = (self.PUBLIC / "village.html").read_text()
+        self.assertIn("data-busy=\"Approving - Emily's design is being drawn, up to 3 minutes\"", village)
+        self.assertIn('data-busy="Scanning Etsy', village)
+        self.assertIn('data-busy="Researching YouTube', village)
+
+
 class PaulHasAWorkshop(unittest.TestCase):
     """Owner, 2026-10-08: show Paul's builds in the village, from an iPad,
     where the droplet's folders cannot be opened. 2026-10-13: his house
