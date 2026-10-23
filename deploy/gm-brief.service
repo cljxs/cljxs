@@ -1,0 +1,19 @@
+[Unit]
+Description=The GM's morning: proposals from the day's facts (one model call, budget permitting)
+Documentation=https://github.com/cljxs/cljxs
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WorkingDirectory=/root/ecosystem
+# Propose-only: gm.py writes tasks/gm/<date>.json and proposes knowledge. It
+# creates no task and wakes no agent. It asks budget.py first and stays asleep
+# - exit 0, with the reason written down - when today's AI allowance is short.
+# A failed model call or an unreadable reply exits 1, so it shows as failed
+# in systemctl and in Fury's next briefing rather than as a quiet morning.
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/gm.py run
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal

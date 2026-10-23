@@ -1,0 +1,16 @@
+[Unit]
+Description=Hourly, look for Emily builds stuck on placeholder art
+
+# Named redraw-*, not emily-*: Emily is woken by the task dispatcher and has
+# no timer of her own (deploy.sh says so, and tests hold it). This wakes no
+# model - install it with:  scripts/deploy.sh redraw
+
+[Timer]
+# A build lands on the placeholder when the day's image money runs out. Hourly
+# picks it up soon after the money is back; a run with nothing stuck costs
+# nothing, and one still failing stops after a single attempt.
+OnCalendar=*-*-* 08..22:07 America/Chicago
+Persistent=false
+
+[Install]
+WantedBy=timers.target

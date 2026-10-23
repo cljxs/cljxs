@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<title>Coach</title>
+<!-- The trading coach (owner, 2026-10-19): a journal of every trade Belfort
+     and Bolt close - and every bet Ace settles (2026-10-22) - a daily analysis
+     that only observes, and a Sunday review that proposes rule changes for the
+     owner to approve; none for Ace while his preregistration runs.
+     Three coaches since 2026-10-23, one per agent, never mixed: the switch at
+     the top picks one, and everything below is that coach's alone. Everything comes
+     from scripts/coach.py through /api/coach; nothing is worked out here.
+     Opened from the village frame's navigation (?embed=1). -->
+<style>
+  :root{
+    --bg:#0b1020; --panel:#10172a; --card:#131b31; --line:rgba(148,163,184,.16);
+    --ink:#e6e9f2; --mute:#94a0b8; --dim:#5f6b85;
+    --green:#22c55e; --green2:#4ade80; --amber:#f59e0b; --red:#f43f5e; --blue:#38bdf8; --violet:#a78bfa;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink)}
+  body{font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased;padding:16px}
+  body.embed{padding:10px;background:rgba(5,8,16,.94)}
+  a{color:var(--blue)}
+  .frame{max-width:1200px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    box-shadow:0 20px 70px rgba(0,0,0,.5);overflow:hidden}
+  .head{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;padding:20px 22px 14px}
+  .head h1{margin:0;font-size:26px}
+  .head .sub{color:var(--mute);margin-top:2px}
+  .sp{flex:1}
+  .btn{font:600 13px var(--sans);color:var(--ink);background:transparent;border:1px solid var(--line);
+    border-radius:8px;padding:9px 14px;cursor:pointer;text-decoration:none;white-space:nowrap}
+  .k{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute);font-weight:600}
+  .muted{color:var(--mute);font-size:13px}
+  .rule{margin:0 22px 14px;padding:10px 14px;border:1px solid rgba(167,139,250,.35);border-radius:10px;
+    background:rgba(167,139,250,.07);font-size:13px;color:#d8ccff}
+  .tabs{display:flex;gap:6px;padding:0 22px;border-bottom:1px solid var(--line);overflow-x:auto}
+  .tab{font:600 14px var(--sans);color:var(--mute);background:none;border:0;border-bottom:2px solid transparent;padding:12px 10px;cursor:pointer;white-space:nowrap}
+  .tab.on{color:var(--ink);border-bottom-color:var(--violet)}
+  .tab .n{display:inline-block;min-width:20px;padding:0 6px;margin-left:6px;border-radius:10px;font-size:11.5px;background:rgba(148,163,184,.18);color:var(--ink);text-align:center}
+  .body{padding:16px 22px 22px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:12px}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:8px 0 12px}
+  .stat{border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+  .stat .v{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums}
+  .up{color:var(--green2)} .down{color:#fb7185}
+  .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;min-width:980px}
+  th{text-align:left;color:var(--mute);font-weight:600;font-size:11px;letter-spacing:.08em;text-transform:uppercase;padding:6px 6px;border-bottom:1px solid var(--line)}
+  td{padding:7px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+  td.why{max-width:240px;color:var(--mute)}
+  .tag{font-size:11px;padding:2px 7px;border-radius:6px;border:1px solid var(--line);white-space:nowrap}
+  .tag.win{color:var(--green2);border-color:rgba(34,197,94,.45)} .tag.loss{color:#fb7185;border-color:rgba(244,63,94,.45)}
+  ul{margin:6px 0 10px;padding-left:18px} li{margin:3px 0}
+  .mist{color:#fbbf24}
+  .review{white-space:pre-wrap;font-size:13.5px;line-height:1.55}
+  .filters{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+  .filters button{font:600 12px var(--sans);color:var(--mute);background:none;border:1px solid var(--line);border-radius:7px;padding:5px 10px;cursor:pointer}
+  .filters button.on{color:var(--ink);border-color:var(--violet)}
+  .coaches{display:flex;gap:8px;flex-wrap:wrap;padding:0 22px 12px}
+  .coaches button{font:700 14px var(--sans);color:var(--mute);background:none;border:1px solid var(--line);border-radius:10px;padding:9px 16px;cursor:pointer}
+  .coaches button.on{color:var(--ink);border-color:var(--violet);background:rgba(167,139,250,.12)}
+  .coaches button .what{display:block;font-weight:500;font-size:11.5px;color:var(--dim)}
+</style>
+<script src="/shared/busy.js"></script>
+</head>
+<body>
+<div class="frame">
+  <div class="head">
+    <div><h1>Trading Coach</h1><div class="sub">One coach each for Belfort (stocks), Bolt (crypto) and Ace (sports bets) - a journal, a daily look, a Sunday review</div></div>
+    <div class="sp"></div>
+    <a class="btn" id="back" href="/dashboard">← Deck</a>
+    <button class="btn" id="close" style="display:none">× Close</button>
+  </div>
+  <div class="rule">Daily: observe, log and analyse only - no rule is ever changed by it. Sunday: the week's numbers are reviewed and changes are <b>proposed</b>; nothing changes until you approve it.</div>
+  <div class="coaches" id="coaches"></div>
+  <div class="tabs" id="tabs"></div>
+  <div class="body" id="body"><div class="muted">Loading…</div></div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money = v => (v < 0 ? '-' : '+') + '$' + Math.abs(Number(v) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const pct = v => v === null || v === undefined ? '—' : (v > 0 ? '+' : '') + Number(v).toFixed(1) + '%';
+const cls = v => v > 0 ? 'up' : v < 0 ? 'down' : '';
+const when = u => { const d = new Date(String(u || '').replace(' ', 'T') + (/Z$|[+-]\d\d:?\d\d$/.test(u || '') ? '' : 'Z'));
+  return isNaN(d) ? '?' : d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
+
+if (new URLSearchParams(location.search).get('embed') === '1') {
+  document.body.classList.add('embed');
+  $('back').style.display = 'none';
+  $('close').style.display = '';
+  const close = () => parent.postMessage({ type: 'coach-close' }, '*');
+  $('close').onclick = close;
+  addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+}
+
+const COACHES = [['belfort', 'Belfort', 'stocks'], ['bolt', 'Bolt', 'crypto, both books'], ['ace', 'Ace', 'sports bets']];
+let D = null, tab = 'journal', who = 'all';
+let coach = (() => { try { return localStorage.getItem('coach.which') || 'belfort'; } catch (e) { return 'belfort'; } })();
+const C = () => ((D || {}).coaches || {})[coach] || {};
+
+async function load() {
+  try { D = await (await fetch('/api/coach', { cache: 'no-store' })).json(); }
+  catch (e) { $('body').innerHTML = '<div class="muted">Could not reach the Deck - it may be restarting.</div>'; return; }
+  draw();
+}
+
+function rows() { return (C().daily || []).flatMap(d => d.rows || []); }
+
+function draw() {
+  const all = rows();
+  $('coaches').innerHTML = COACHES.map(([k, n, w]) => `<button data-coach="${k}" class="${coach === k ? 'on' : ''}">${n}'s coach<span class="what">${w}</span></button>`).join('');
+  $('tabs').innerHTML = [['journal', 'Journal', all.length], ['daily', 'Daily analysis', (C().daily || []).length],
+    ['weekly', 'Weekly review', (C().weekly || []).length]]
+    .map(([k, l, n]) => `<button class="tab ${tab === k ? 'on' : ''}" data-tab="${k}">${l}<span class="n">${n}</span></button>`).join('');
+  $('body').innerHTML = tab === 'journal' ? journal(all) : tab === 'daily' ? daily() : weekly();
+}
+
+function journal(all) {
+  if (!all.length) return `<div class="muted">Nothing in ${esc(C().name || coach)}'s journal yet. It is written each night at 00:20 ET for the day before.</div>`;
+  // Only Bolt's coach has two books (Bolt and Bolt + news) to choose between.
+  const agents = [...new Set(all.map(r => r.agent))];
+  const shown = who === 'all' || !agents.includes(who) ? all : all.filter(r => r.agent === who);
+  return `${agents.length > 1 ? `<div class="filters">${['all', ...agents].map(a => `<button data-who="${esc(a)}" class="${who === a ? 'on' : ''}">${esc(a === 'all' ? 'Both books' : a)}</button>`).join('')}</div>` : ''}
+  <div class="scroll"><table><tr><th>Closed</th><th>Agent</th><th>Asset</th><th>Side</th><th>Entry</th><th>Exit</th><th>Size</th><th>P&amp;L</th><th>Setup</th><th>Why bought</th><th>Why sold</th><th>Outcome</th></tr>
+  ${shown.slice().reverse().map(r => `<tr><td>${esc(when(r.closed_utc))}</td><td>${esc(r.agent)}</td>
+    <td><b>${esc(r.symbol)}</b> <span class="muted">${esc(r.asset)}</span></td><td>${esc(r.side)}</td>
+    <td>${esc(r.entry_price)}<div class="muted">${esc(when(r.opened_utc))}</div></td><td>${esc(r.exit_price)}</td>
+    <td>$${Math.round(r.size_usd || 0).toLocaleString()}</td>
+    <td class="${cls(r.pnl_usd)}">${money(r.pnl_usd)}<div>${pct(r.pnl_pct)}</div></td>
+    <td>${esc(r.setup || '—')}</td><td class="why">${esc(r.entry_reason)}</td><td class="why">${esc(r.exit_reason)}</td>
+    <td><span class="tag ${Math.abs(r.pnl_pct) < 0.25 ? '' : r.pnl_pct > 0 ? 'win' : 'loss'}">${Math.abs(r.pnl_pct) < 0.25 ? 'scratch' : r.pnl_pct > 0 ? 'win' : 'loss'}</span></td></tr>`).join('')}
+  </table></div>`;
+}
+
+function daily() {
+  const days = C().daily || [];
+  if (!days.length) return '<div class="muted">No daily analysis yet - the first is written tonight at 00:20 ET.</div>';
+  return days.map(d => { const a = d.analysis || {};
+    return `<div class="card"><div class="k">${esc(d.day)}</div>
+      <div class="stats">${Object.entries(a.books || {}).map(([n, s]) => `<div class="stat"><div class="muted">${esc(n)}</div>
+        <div class="v ${cls(s.net_usd)}">${money(s.net_usd)}</div><div class="muted">${s.trades} closed · ${s.wins}W ${s.losses}L</div></div>`).join('')
+        || '<div class="muted">No trades closed.</div>'}</div>
+      <div class="k">What went well</div><ul>${(a.went_well || []).map(x => `<li>${esc(x)}</li>`).join('') || '<li class="muted">nothing closed in profit</li>'}</ul>
+      <div class="k">What went badly</div><ul>${(a.went_badly || []).map(x => `<li>${esc(x)}</li>`).join('') || '<li class="muted">no losing trade</li>'}</ul>
+      <div class="k">Mistakes</div><ul>${(a.mistakes || []).map(m => `<li class="mist">${esc(m.agent)} ${esc(m.symbol)}: ${esc(m.kind)} - ${esc(m.detail)}</li>`).join('') || '<li class="muted">none a script can see</li>'}</ul>
+      <div class="k">Patterns</div><ul>${Object.entries((a.patterns || {})['by exit rule'] || {}).map(([k, g]) => `<li>${esc(k)}: ${g.trades} trade(s), ${g.wins} won, avg ${pct(g.avg_pct)}</li>`).join('') || '<li class="muted">—</li>'}</ul>
+      ${a.ace ? aceCard(a.ace) : ''}
+      <div class="muted">${esc(a.note || '')}</div></div>`; }).join('');
+}
+
+// Ace is measured by closing-line value - did the market move to his price
+// by the start - not by wins; his rules are frozen until the date coach.py
+// gives, so this only reports.
+function aceCard(s) {
+  const groups = ['by sport', 'favourite or underdog', 'by edge'].map(k => `<li>${esc(k)}: ${Object.entries(s[k] || {})
+    .map(([n, g]) => `${esc(n)} ${g.wins}/${g.trades} won, ${money(g.net_usd)}`).join(' · ')}</li>`).join('');
+  const clv = s.with_close ? `closing-line value ${pct(s.avg_clv_pct)} a bet over ${s.with_close}, beat the close on ${s.beat_close}`
+    : 'no closing line kept for these bets';
+  return `<div class="k">Ace</div><ul><li>${s.bets} bet(s) settled · ${esc(clv)}</li>${groups}
+    <li class="muted">Rules frozen until ${esc(s.frozen_until)} - observed only.</li></ul>`;
+}
+
+function weekly() {
+  const weeks = C().weekly || [];
+  if (!weeks.length) return '<div class="muted">No weekly review yet - the first is written on Sunday evening.</div>';
+  return weeks.map(w => `<div class="card"><div class="k">Week of ${esc(w.start)} to ${esc(w.end)} · proposals only</div>
+    <div class="stats">${Object.entries((w.data || {}).summary_by_agent || {}).map(([n, s]) => `<div class="stat"><div class="muted">${esc(n)}</div>
+      <div class="v ${cls(s.net_usd)}">${money(s.net_usd)}</div><div class="muted">${s.trades} trades · win ${s.win_rate ?? '—'}% · ${pct(s.expectancy_pct)} a trade</div></div>`).join('')}</div>
+    ${(w.data || {}).ace ? aceCard(w.data.ace) : ''}
+    <div class="review">${esc(w.review || '')}</div></div>`).join('');
+}
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-tab],[data-who],[data-coach]');
+  if (!t) return;
+  if (t.dataset.tab) tab = t.dataset.tab;
+  if (t.dataset.who) who = t.dataset.who;
+  if (t.dataset.coach) {
+    coach = t.dataset.coach; who = 'all';
+    try { localStorage.setItem('coach.which', coach); } catch (e) {}
+  }
+  draw();
+});
+load();
+</script>
+</body>
+</html>

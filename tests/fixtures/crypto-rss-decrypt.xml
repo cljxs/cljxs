@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- decrypt RSS, captured 2026-10-16 from decrypt.co.xml: the first 12 items, title and pubDate as published; each link cut to the site's home page (article slugs read as tokens to check-secrets.py), no article text. -->
+<rss version="2.0"><channel>
+<title>decrypt</title>
+<item><title>Three Canadian Armed Forces Members Charged in Kidnapping of Crypto Exchange Owner</title><link>https://decrypt.co/</link><pubDate>Fri, 16 Oct 2026 15:43:58 +0000</pubDate></item>
+<item><title>Scammer Lost $4.8M in Bitcoin to Tampered Ledger Wallets: Chainalysis</title><link>https://decrypt.co/</link><pubDate>Fri, 16 Oct 2026 12:22:18 +0000</pubDate></item>
+<item><title>Morning Minute: Google Clears a Major Quantum Hurdle, Bitcoin Still Safe</title><link>https://decrypt.co/</link><pubDate>Fri, 16 Oct 2026 11:46:54 +0000</pubDate></item>
+<item><title>OpenAI Model Used Testnet Ethereum Wallet Without Permission to Finish Coding Task</title><link>https://decrypt.co/</link><pubDate>Fri, 16 Oct 2026 10:39:08 +0000</pubDate></item>
+<item><title>GTA 6 Trailer Features Meme Coin—And Solana Copycat Soars 2,900%</title><link>https://decrypt.co/</link><pubDate>Fri, 16 Oct 2026 10:16:06 +0000</pubDate></item>
+<item><title>What Is a Hardware Wallet? Crypto Cold Storage Explained</title><link>https://decrypt.co/</link><pubDate>Fri, 16 Oct 2026 09:10:48 +0000</pubDate></item>
+<item><title>Hidden Text, a Fake Mailbox: How Researchers Got Rogue AI Agents to Talk</title><link>https://decrypt.co/</link><pubDate>Thu, 15 Oct 2026 22:16:03 +0000</pubDate></item>
+<item><title>Google Says It Just Cracked One of Quantum Computing's Biggest Bottlenecks</title><link>https://decrypt.co/</link><pubDate>Thu, 15 Oct 2026 21:46:04 +0000</pubDate></item>
+<item><title>Russia Will Soon Ban Peer-to-Peer Bitcoin Trading, Central Bank Confirms</title><link>https://decrypt.co/</link><pubDate>Thu, 15 Oct 2026 20:31:04 +0000</pubDate></item>
+<item><title>Boom or Bust, Bitcoin Wins the AI Trade, Bitwise CIO Says</title><link>https://decrypt.co/</link><pubDate>Thu, 15 Oct 2026 19:16:04 +0000</pubDate></item>
+<item><title>BlackRock’s Larry Fink Warns AI Data Center Halt Could Tip US Into Recession</title><link>https://decrypt.co/</link><pubDate>Thu, 15 Oct 2026 18:16:04 +0000</pubDate></item>
+<item><title>Google Says AI Isn't Building Itself Yet—Even Though It Writes 75% of the Code</title><link>https://decrypt.co/</link><pubDate>Thu, 15 Oct 2026 17:36:05 +0000</pubDate></item>
+</channel></rss>

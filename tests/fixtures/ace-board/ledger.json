@@ -1,0 +1,94 @@
+{
+ "day": "2026-10-14",
+ "slot": "afternoon",
+ "verdict": "4 bets from blind estimates; 16 passes - nothing else cleared the bar.",
+ "candidates": [
+  {
+   "selection": "BKN ML",
+   "match": "BKN @ MIA",
+   "sport": "nba",
+   "price": 220,
+   "novig_pct": 30.0,
+   "starts_utc": "2026-10-14T23:30Z",
+   "event_id": "401898404",
+   "side": "away",
+   "sharp_pct": null,
+   "my_pct": 45.0,
+   "edge_pts": 15.0,
+   "p_used": 36.0,
+   "gap_pts": 6.0,
+   "need_pts": 2.0,
+   "ev_pct": 15.2,
+   "clears_bar": true,
+   "why_not": [
+    "math rule: blind estimate 45% counts as 36% vs the market's 30.0% (DraftKings)"
+   ],
+   "status": "bet",
+   "stake": 100.0,
+   "bet_id": "bcd8b11407c"
+  },
+  {
+   "selection": "MOST ML",
+   "match": "KENN @ MOST",
+   "sport": "cfb",
+   "price": 114,
+   "novig_pct": 44.9,
+   "starts_utc": "2026-10-14T23:30Z",
+   "event_id": "401871054",
+   "side": "home",
+   "sharp_pct": null,
+   "my_pct": 62.0,
+   "edge_pts": 17.1,
+   "p_used": 51.7,
+   "gap_pts": 6.8,
+   "need_pts": 2.0,
+   "ev_pct": 10.6,
+   "clears_bar": true,
+   "why_not": [
+    "math rule: blind estimate 62% counts as 51.7% vs the market's 44.9% (DraftKings)"
+   ],
+   "status": "bet",
+   "stake": 100.0,
+   "bet_id": "b0dbe61acee"
+  },
+  {
+   "selection": "MIA ML",
+   "match": "BKN @ MIA",
+   "sport": "nba",
+   "price": -270,
+   "novig_pct": 70.0,
+   "starts_utc": "2026-10-14T23:30Z",
+   "event_id": "401898404",
+   "side": "home",
+   "sharp_pct": null,
+   "my_pct": 68.0,
+   "edge_pts": -2.0,
+   "p_used": 69.2,
+   "gap_pts": -0.8,
+   "need_pts": 2.1,
+   "ev_pct": -5.2,
+   "clears_bar": false,
+   "why_not": [
+    "Heat are right at the market; no news the line missed"
+   ],
+   "status": "passed"
+  },
+  {
+   "selection": "KENN ML",
+   "match": "KENN @ MOST",
+   "sport": "cfb",
+   "price": -135,
+   "novig_pct": 55.1,
+   "starts_utc": "2026-10-14T23:30Z",
+   "event_id": "401871054",
+   "side": "away",
+   "sharp_pct": null,
+   "my_pct": null,
+   "why_not": [
+    "nothing else cleared the EV bar"
+   ],
+   "status": "passed"
+  }
+ ],
+ "asof_utc": "2026-10-14 18:42:49"
+}

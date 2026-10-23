@@ -1,0 +1,23 @@
+{
+ "variants": [
+  {
+   "id": 116088,
+   "title": "XS / Ice Purple",
+   "options": {
+    "size": "XS",
+    "color": "Ice Purple"
+   },
+   "placeholders": [
+    {
+     "position": "front_left_chest",
+     "decoration_method": "embroidery",
+     "width": 1200,
+     "height": 1200
+    }
+   ],
+   "decoration_methods": [
+    "embroidery"
+   ]
+  }
+ ]
+}

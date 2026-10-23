@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<title>Emily's Shop</title>
+<!-- The Shop (owner, 2026-10-13, after two screenshots of another seller's
+     setup): today's ready-to-post TikTok kit, and every build Emily made
+     with what it would earn and what is wrong with it - to approve, send
+     back or kill. The kits come from tiktok-kit.py and the board from
+     store-board.py through /api/shop; Kill is Emily's own
+     DELETE /api/emily/builds/:slug. Nothing is worked out here and nothing
+     here posts or publishes. Opened inside Emily's house (?embed=1). -->
+<style>
+  :root{
+    --bg:#0b1020; --panel:#10172a; --card:#131b31; --line:rgba(148,163,184,.16);
+    --ink:#e6e9f2; --mute:#94a0b8; --dim:#5f6b85;
+    --green:#22c55e; --green2:#4ade80; --amber:#f59e0b; --red:#f43f5e; --blue:#38bdf8; --gray:#94a3b8; --pink:#f472b6;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink)}
+  body{font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased;padding:16px}
+  body.embed{padding:10px;background:rgba(5,8,16,.94)}
+  a{color:inherit}
+  .frame{max-width:1280px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    box-shadow:0 20px 70px rgba(0,0,0,.5);overflow:hidden}
+  .head{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;padding:20px 22px 14px}
+  .head h1{margin:0;font-size:26px;letter-spacing:-.01em}
+  .head .sub{color:var(--mute);margin-top:2px}
+  .pills{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .pill{font-size:12.5px;padding:4px 10px;border-radius:7px;border:1px solid var(--line);color:var(--mute)}
+  .pill.g{color:var(--green2);border-color:rgba(34,197,94,.45);background:rgba(34,197,94,.08)}
+  .pill.r{color:#fb7185;border-color:rgba(244,63,94,.45);background:rgba(244,63,94,.08)}
+  .sp{flex:1}
+  .btn{font:600 13px var(--sans);color:var(--ink);background:transparent;border:1px solid var(--line);
+    border-radius:8px;padding:9px 14px;cursor:pointer;text-decoration:none;white-space:nowrap;display:inline-block}
+  .btn:hover{border-color:var(--mute)}
+  .btn.go{color:var(--green2);border-color:rgba(34,197,94,.55);background:rgba(34,197,94,.08)}
+  .btn.go:hover{background:rgba(34,197,94,.16)}
+  .btn.warn{color:#fb7185;border-color:rgba(244,63,94,.5)}
+  .btn.tt{color:#fff;border-color:rgba(244,114,182,.6);background:rgba(244,114,182,.14)}
+  .btn:disabled{opacity:.5;cursor:default}
+  .status{margin:0 22px 14px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+  .k{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute);font-weight:600}
+  .status .line{font-weight:600;margin-top:3px}
+  .status .muted{color:var(--mute);font-size:13px;margin-top:2px}
+  .tabs{display:flex;gap:6px;padding:0 22px;border-bottom:1px solid var(--line);overflow-x:auto}
+  .tab{font:600 14px var(--sans);color:var(--mute);background:none;border:0;border-bottom:2px solid transparent;
+    padding:12px 12px;cursor:pointer;white-space:nowrap}
+  .tab.on{color:var(--ink);border-bottom-color:var(--pink)}
+  .tab .n{display:inline-block;min-width:20px;padding:0 6px;margin-left:6px;border-radius:10px;font-size:11.5px;
+    background:rgba(148,163,184,.18);color:var(--ink);text-align:center}
+  .body{padding:16px 22px 22px}
+  .sechead{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+  .sechead h2{margin:0;font-size:17px}
+  .muted{color:var(--mute);font-size:13px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+  .card.done{opacity:.72}
+  .ctop{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+  .cname{font-weight:700;font-size:16px;overflow-wrap:anywhere}
+  .cmeta{color:var(--mute);font-size:13px;margin-top:2px}
+  .tag{font-size:11px;font-weight:700;letter-spacing:.06em;padding:3px 9px;border-radius:999px;white-space:nowrap;border:1px solid;display:inline-block}
+  .t-green{color:var(--green2);border-color:rgba(34,197,94,.5);background:rgba(34,197,94,.1)}
+  .t-amber{color:#fbbf24;border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.1)}
+  .t-red{color:#fb7185;border-color:rgba(244,63,94,.5);background:rgba(244,63,94,.1)}
+  .t-blue{color:var(--blue);border-color:rgba(56,189,248,.5);background:rgba(56,189,248,.1)}
+  .t-gray{color:var(--gray);border-color:rgba(148,163,184,.4);background:rgba(148,163,184,.08)}
+  .t-pink{color:var(--pink);border-color:rgba(244,114,182,.5);background:rgba(244,114,182,.1)}
+  .said{font-size:12.5px;color:var(--mute)}
+  .empty{color:var(--mute);padding:26px 4px;text-align:center}
+  .err{color:#fb7185}
+  pre{white-space:pre-wrap;font:13px/1.55 var(--sans);color:#dfe5f1;background:rgba(0,0,0,.25);
+    border:1px solid var(--line);border-radius:8px;padding:12px;margin:0;overflow-wrap:anywhere}
+  .acts{display:flex;gap:8px;flex-wrap:wrap}
+  /* the kit */
+  .kit{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:16px}
+  .strip{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;scroll-snap-type:x mandatory}
+  .strip a{display:block}
+  .strip img{height:300px;aspect-ratio:9/16;object-fit:cover;border-radius:8px;border:1px solid var(--line);display:block;background:#000}
+  video{width:100%;max-height:440px;border-radius:10px;background:#000;border:1px solid var(--line)}
+  .hook{font-weight:700;font-size:15px}
+  .sl{position:relative;flex:0 0 auto;scroll-snap-align:start}
+  .aitag{position:absolute;left:6px;top:6px;font-size:10px;font-weight:700;letter-spacing:.06em;padding:2px 7px;border-radius:999px;
+    background:rgba(11,16,32,.82);color:#fbbf24;border:1px solid rgba(245,158,11,.6)}
+  .btn.drop{position:absolute;right:6px;bottom:6px;padding:8px 14px;font-size:13px;background:rgba(11,16,32,.85)}
+  .rebuild{font-size:12.5px;color:#fbbf24}
+  .old{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+  .oldk{display:flex;gap:10px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px}
+  .oldk img{width:54px;aspect-ratio:9/16;object-fit:cover;border-radius:6px;border:1px solid var(--line)}
+  .oldk .t{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* the board */
+  .lrow{display:flex;gap:12px;align-items:flex-start}
+  .thumb{width:96px;height:96px;flex:0 0 auto;object-fit:contain;border-radius:8px;border:1px solid var(--line);
+    background:repeating-conic-gradient(#1b2440 0 25%,#151d35 0 50%) 0 0/16px 16px}
+  table.money{width:100%;border-collapse:collapse;font-size:13px}
+  table.money td{padding:3px 0;border-bottom:1px solid var(--line)}
+  table.money td.v{text-align:right;font-variant-numeric:tabular-nums}
+  table.money tr.kept td{font-weight:700;border-bottom:0;padding-top:6px}
+  .pos{color:var(--green2)} .neg{color:#fb7185}
+  .concerns{display:flex;flex-direction:column;gap:5px}
+  .con{display:flex;gap:8px;align-items:flex-start;font-size:13px}
+  .con .tag{flex:0 0 auto;min-width:54px;text-align:center}
+  .revise{display:none;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:10px}
+  .revise.on{display:flex}
+  textarea{width:100%;min-height:64px;resize:vertical;font:13.5px var(--sans);color:var(--ink);background:rgba(0,0,0,.25);
+    border:1px solid var(--line);border-radius:8px;padding:9px}
+  .filters{display:flex;gap:6px;flex-wrap:wrap}
+  .filters .btn.on{border-color:var(--pink);color:#fff}
+  .note{font-size:13px;color:#fbbf24;border:1px solid rgba(245,158,11,.35);background:rgba(245,158,11,.06);border-radius:8px;padding:9px 12px;margin-bottom:12px}
+  .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#0f172a;border:1px solid var(--line);
+    color:var(--ink);padding:10px 16px;border-radius:10px;font-size:13.5px;max-width:90vw;display:none;z-index:9}
+  @media (max-width:760px){ body{padding:6px} .grid{grid-template-columns:1fr} .kit{grid-template-columns:1fr}
+    .head,.body{padding-left:14px;padding-right:14px} .status{margin:0 14px 12px} .tabs{padding:0 10px}
+    .strip img{height:250px} }
+</style>
+<script src="/shared/busy.js"></script>
+</head>
+<body>
+<div class="frame">
+  <div class="head">
+    <div>
+      <h1>Emily's Shop</h1>
+      <div class="sub">a TikTok kit a day, and every listing's money before it goes up</div>
+      <div class="pills" id="pills"></div>
+    </div>
+    <div class="sp"></div>
+    <a class="btn" id="back" href="/dashboard">← Deck</a>
+    <button class="btn" id="close" style="display:none">✕ Close</button>
+  </div>
+  <div class="status" id="status"><div class="k">Status</div><div class="line">loading…</div></div>
+  <div class="tabs" id="tabs">
+    <button class="tab on" data-t="tiktok">TikTok<span class="n" id="n-tiktok">0</span></button>
+    <button class="tab" data-t="board">Listings<span class="n" id="n-board">0</span></button>
+  </div>
+  <div class="body" id="body"><div class="empty">loading…</div></div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const enc = encodeURIComponent;
+const usd = x => x == null ? '–' : (x < 0 ? '-$' : '$') + Math.abs(x).toFixed(2);
+
+const EMBED = new URLSearchParams(location.search).has('embed');
+if (EMBED) {
+  document.body.classList.add('embed');
+  $('back').style.display = 'none';
+  $('close').style.display = '';
+  const close = () => parent.postMessage({ type: 'shop-close' }, '*');
+  $('close').onclick = close;
+  addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+}
+
+let T = null, B = null, tab = new URLSearchParams(location.search).get('tab') === 'board' ? 'board' : 'tiktok';
+let filter = 'review', busy = false, open = null;
+// Slides dropped on this page, hidden at once while the server catches up:
+// "kit/02.jpg". A slide's name never changes, so this can only ever hide
+// the slide that was tapped.
+const gone = new Set();
+
+// store-board.py's verdicts and concern levels, as they read on a card.
+const VERDICT = { LOSS: ['LOSES MONEY', 't-red'], FIX: ['NEEDS FIXES', 't-amber'], CHECK: ['CHECK', 't-blue'],
+                  GOOD: ['GOOD', 't-green'], LIVE: ['LIVE ON ETSY', 't-gray'] };
+const LEVEL = { LOSS: 't-red', FIX: 't-amber', CHECK: 't-blue' };
+
+async function getJson(u) {
+  try { return await (await fetch(u, { cache: 'no-store' })).json(); }
+  catch (e) { return { available: false, reason: 'the Deck could not be reached' }; }
+}
+
+async function load() {
+  const was = JSON.stringify([T, B]);
+  [T, B] = await Promise.all([getJson('/api/shop/tiktok'), getJson('/api/shop/board')]);
+  // Not while a revision note is being typed - a redraw would wipe it - and
+  // not when nothing changed, which would restart a video being watched.
+  if (!open && JSON.stringify([T, B]) !== was) draw();
+  const job = (T && T.job) || (B && B.job);
+  const rebuilding = ((T && T.kits) || []).some(k => k.video_stale);
+  clearTimeout(load.h);
+  // While a kit, a revision or a video rebuild runs, look again soon;
+  // otherwise rarely - there is no need to poll.
+  load.h = setTimeout(load, (job && job.state === 'running') || rebuilding ? 5000 : 60000);
+}
+
+function toast(text) {
+  const t = $('toast');
+  t.textContent = text;
+  t.style.display = 'block';
+  clearTimeout(toast.h);
+  toast.h = setTimeout(() => { t.style.display = 'none'; }, 6000);
+}
+
+// Copy that works over the tailnet too: navigator.clipboard needs https,
+// and the Deck is plain http, so fall back to the old select-and-copy.
+async function copy(text, what) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);
+    else {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length);
+      const ok = document.execCommand('copy'); ta.remove();
+      if (!ok) throw new Error('copy refused');
+    }
+    toast(`${what} copied`);
+  } catch { toast('Could not copy - hold the text and copy it by hand'); }
+}
+
+function jobLine() {
+  const job = (T && T.job) || (B && B.job);
+  if (!job) return '';
+  if (job.state === 'running') return `<div class="muted">⏳ ${esc(job.label)}…</div>`;
+  const last = String(job.log || '').trim().split('\n').filter(Boolean).slice(-1)[0] || '';
+  return `<div class="muted ${job.state === 'failed' ? 'err' : ''}">${job.state === 'failed' ? '✕' : '✓'} ${esc(job.label)}: ${esc(last)}</div>`;
+}
+
+function draw() {
+  const kits = (T && T.kits) || [], cards = (B && B.cards) || [];
+  const toPost = kits.filter(k => k.status !== 'posted').length;
+  const review = cards.filter(c => !c.published && !c.approved_utc).length;
+  const today = kits.find(k => k.day === (T && T.today));
+  $('n-tiktok').textContent = toPost;
+  $('n-board').textContent = review;
+  const counts = (B && B.counts) || {};
+  $('pills').innerHTML = [
+    `<span class="pill g">1 kit a day</span>`,
+    counts.LOSS ? `<span class="pill r">${counts.LOSS} losing money</span>` : '',
+    B && B.approved ? `<span class="pill g">${B.approved} approved to publish</span>` : '',
+  ].join('');
+  $('status').innerHTML = `<div class="k">Status</div>
+    <div class="line">${today ? `Today's kit: ${esc(today.title).slice(0, 80)}${today.status === 'posted' ? ' · posted ✓' : today.status === 'needs_review' ? ' · AI scenes to check' : ' · ready to post'}`
+      : T && T.available ? 'No kit yet today - one is made at 9:48 Eastern, or press Make one now' : 'Kits could not be read'}</div>
+    <div class="muted">${toPost} kit${toPost === 1 ? '' : 's'} to post · ${review} listing${review === 1 ? '' : 's'} to review</div>
+    ${jobLine()}`;
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.t === tab));
+  // The strip keeps its place across a redraw: dropping the fourth slide
+  // must not throw the owner back to the first.
+  const strip = document.querySelector('.strip'), sx = strip ? strip.scrollLeft : 0;
+  $('body').innerHTML = tab === 'tiktok' ? tiktok(kits) : board(cards);
+  const again = document.querySelector('.strip');
+  if (again) again.scrollLeft = sx;
+}
+
+// ------------------------------------------------------------ TikTok
+
+// A slide the AI drew the background of (scene.py) is marked, with the
+// lighting checker's verdict and a Drop button while the kit awaits review.
+function slideNames(k) {
+  const names = k.slide_names || Array.from({ length: k.slides || 0 }, (_, i) => String(i + 1).padStart(2, '0') + '.jpg');
+  return names.filter(n => !gone.has(`${k.id}/${n}`));
+}
+
+function slides(k) {
+  const v = enc(k.made_utc || '');
+  const ai = new Set(k.ai_slides || []);
+  const review = k.status === 'needs_review';
+  return slideNames(k).map((n, i) => {
+    const u = `/api/shop/tiktok/${enc(k.id)}/slide/${n}?v=${v}`;
+    const sc = (k.scenes || []).find(x => x.slide === n);
+    const checks = sc && sc.checks ? Object.entries(sc.checks).map(([name, c]) =>
+      `${c.ok ? '✓' : '✕'} ${name}: ${c.said}`).join('\n') : '';
+    return `<div class="sl"><a href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="slide ${i + 1}" loading="lazy"></a>
+      ${ai.has(n) ? `<span class="aitag" ${checks ? `title="${esc(checks)}"` : ''}>AI SCENE${sc ? ' · checked ✓' : ''}</span>` : ''}
+      ${review && ai.has(n) ? `<button class="btn drop" data-drop="${esc(k.id)}" data-slide="${n}">Drop</button>` : ''}</div>`;
+  }).join('');
+}
+
+function tiktok(kits) {
+  if (T && T.available === false) return `<div class="empty err">${esc(T.reason)}</div>`;
+  const running = ((T && T.job) || {}).state === 'running';
+  const head = `<div class="sechead"><div><h2>Ready-to-post kits</h2>
+      <div class="muted">one live listing a day, in turn - every listing gets a go before any gets two</div></div>
+      <button class="btn tt" id="make" ${busy || running ? 'disabled' : ''}>＋ Make one now</button></div>`;
+  if (!kits.length) return head + `<div class="empty">No kits yet. The first is made at 9:48 Eastern - or press Make one now.</div>`;
+  const [k, ...rest] = kits.slice().sort((a, b) => (a.status === 'posted') - (b.status === 'posted')
+    || String(b.made_utc).localeCompare(String(a.made_utc)));
+  const v = enc(k.packed_utc || k.made_utc || '');
+  const base = `/api/shop/tiktok/${enc(k.id)}`;
+  const stale = !!k.video_stale;
+  const shown = slideNames(k).length;
+  const posted = k.status === 'posted', review = k.status === 'needs_review';
+  const dropped = (k.scenes_dropped || []);
+  const main = `<div class="card ${posted ? 'done' : ''}">
+    <div class="ctop"><div><div class="cname">${esc(k.title)}</div>
+      <div class="cmeta">${esc(k.day)} · ${shown} slides · ${stale ? 'video updating' : `${k.video_seconds}s video`}</div></div>
+      <span class="tag ${posted ? 't-gray' : review ? 't-amber' : 't-pink'}">${posted ? 'POSTED' : review ? 'CHECK THE AI SCENES' : 'READY TO POST'}</span></div>
+    ${review ? `<div class="note">The slides marked AI SCENE are AI-made pictures of your product${k.scene_cost ? ` (cost $${Number(k.scene_cost).toFixed(2)})` : ''}. Each was compared with your real photo and passed; look closely at the design and lettering yourself, Drop any you don't like, then Approve.</div>` : ''}
+    ${(k.ai_slides || []).length && !review ? `<div class="said">Has AI backgrounds: in TikTok, More options → turn on "AI-generated content" before posting.</div>` : ''}
+    <div class="hook">“${esc(k.hook)}”</div>
+    <div class="kit">
+      <div><div class="k">Photo carousel</div><div class="strip">${slides(k)}</div>
+        <div class="said">On the iPad: hold a slide → Save to Photos. Post them as a photo carousel in TikTok.</div></div>
+      <div><div class="k">Slideshow video</div>
+        <video src="${base}/file/video.mp4?v=${v}" controls playsinline preload="metadata" muted></video>
+        ${stale ? '<div class="rebuild">⏳ Rebuilding the video and the zip without the dropped slides - this updates by itself.</div>'
+          : '<div class="said">Silent on purpose - add the sound in TikTok.</div>'}</div>
+    </div>
+    <div><div class="k">${k.video_caption ? 'Carousel caption' : 'Caption'}</div><pre id="cap">${esc(k.caption || '')}</pre></div>
+    ${k.video_caption ? `<div><div class="k">Video caption</div><pre id="vcap">${esc(k.video_caption)}</pre></div>` : ''}
+    ${k.audio ? `<details><summary class="said">Sound to add</summary><pre>${esc(k.audio)}</pre></details>` : ''}
+    <div class="acts">
+      <button class="btn" data-copy="cap">Copy ${k.video_caption ? 'carousel ' : ''}caption</button>
+      ${k.video_caption ? '<button class="btn" data-copy="vcap">Copy video caption</button>' : ''}
+      ${stale ? '<span class="said">Downloads return when the video is rebuilt</span>'
+        : `<a class="btn" href="${base}/file/kit.zip">⬇ Download set (.zip)</a>
+      <a class="btn" href="${base}/file/video.mp4?dl=1">⬇ Video</a>`}
+      ${k.url ? `<button class="btn" data-copylink="${esc(k.url)}">Copy listing link (for your bio)</button>` : ''}
+      ${posted ? `<button class="btn" data-unpost="${esc(k.id)}">Not posted after all</button>`
+        : review ? `<button class="btn go" data-kitapprove="${esc(k.id)}" ${busy ? 'disabled' : ''}>✓ Approve the AI scenes</button>`
+        : `<button class="btn go" data-posted="${esc(k.id)}">✓ Posted</button>`}
+      <button class="btn warn" data-kitdel="${esc(k.id)}">🗑 Delete kit</button>
+    </div>
+    ${dropped.length ? `<details><summary class="said">${dropped.length} scene${dropped.length === 1 ? '' : 's'} left out by the checker</summary><pre>${esc(dropped.join('\n'))}</pre></details>` : ''}
+  </div>`;
+  const older = rest.length ? `<div class="sechead" style="margin-top:18px"><h2>Other kits</h2></div><div class="old">${rest.map(o => `
+    <div class="oldk"><img src="/api/shop/tiktok/${enc(o.id)}/slide/${slideNames(o)[0] || '01.jpg'}?v=${enc(o.made_utc || '')}" alt="" loading="lazy">
+      <div style="min-width:0;flex:1"><div class="t">${esc(o.title)}</div>
+        <div class="said">${esc(o.day)} · ${o.status === 'posted' ? 'posted' : 'not posted'}</div>
+        <div class="acts" style="margin-top:4px"><a class="btn" style="padding:5px 9px" href="/api/shop/tiktok/${enc(o.id)}/file/kit.zip">⬇ zip</a>
+        ${o.status === 'posted' || o.status === 'needs_review' ? '' : `<button class="btn go" style="padding:5px 9px" data-posted="${esc(o.id)}">✓ Posted</button>`}
+        <button class="btn warn" style="padding:5px 9px" data-kitdel="${esc(o.id)}">🗑 Delete</button></div></div></div>`).join('')}</div>` : '';
+  return head + main + older;
+}
+
+// ------------------------------------------------------------ the board
+
+function shown(cards) {
+  if (filter === 'approved') return cards.filter(c => c.approved_utc && !c.published);
+  if (filter === 'live') return cards.filter(c => c.published);
+  return cards.filter(c => !c.published && !c.approved_utc);
+}
+
+function board(cards) {
+  if (B && B.available === false) return `<div class="empty err">${esc(B.reason)}</div>`;
+  const n = f => { const s = filter; filter = f; const x = shown(cards).length; filter = s; return x; };
+  const head = `<div class="sechead"><div><h2>Listing review</h2>
+      <div class="muted">what each would earn per sale, and what to fix before it goes up</div></div>
+      <div class="filters">${[['review', 'To review'], ['approved', 'Approved'], ['live', 'Live']].map(([f, l]) =>
+        `<button class="btn ${filter === f ? 'on' : ''}" data-filter="${f}">${l} · ${n(f)}</button>`).join('')}</div></div>`;
+  const notes = ((B && B.notes) || []).map(t => `<div class="note">${esc(t)}</div>`).join('');
+  const list = shown(cards);
+  return head + notes + (list.length ? `<div class="grid">${list.map(card).join('')}</div>`
+    : `<div class="empty">${filter === 'review' ? 'Nothing waiting for review.' : filter === 'approved' ? 'Nothing approved and unpublished.' : 'Nothing live yet.'}</div>`);
+}
+
+function money(m) {
+  if (!m || !m.source) return `<div class="said">Not priced yet - see below.</div>`;
+  const w = m.worst, b = m.best;
+  const row = (l, x, cls = '') => `<tr class="${cls}"><td>${l}</td><td class="v">${x}</td></tr>`;
+  const kept = `<span class="${w.kept < 0 ? 'neg' : 'pos'}">${usd(w.kept)}${w.margin != null ? ` · ${Math.round(w.margin * 100)}%` : ''}</span>`;
+  return `<div><div class="k">Per sale${m.variants > 1 ? ` · worst of ${m.variants}: ${esc(w.label)}` : ''}</div>
+    <table class="money">
+      ${row('Price', usd(w.price))}
+      ${w.ship_charged ? row('Shipping charged', usd(w.ship_charged)) : ''}
+      ${row('Etsy fees', '−' + usd(w.etsy))}
+      ${row('Printify (making)', '−' + usd(w.making))}
+      ${row('Postage', w.postage ? '−' + usd(w.postage) : '$0.00')}
+      ${row('You keep', kept, 'kept')}
+    </table>
+    ${m.variants > 1 && b.kept !== w.kept ? `<div class="said">Best: keeps ${usd(b.kept)} on ${esc(b.label)} (${usd(b.price)})</div>` : ''}
+    <div class="said">${m.source === 'catalogue' ? 'Prices saved in the catalogue' : 'Price range read back from Printify'}</div></div>`;
+}
+
+function card(c) {
+  const v = VERDICT[c.verdict] || [c.verdict, 't-gray'];
+  const art = c.art_v ? `<img class="thumb" src="/api/emily/builds/${enc(c.slug)}/file/design.png?v=${c.art_v}" alt="" loading="lazy">`
+    : `<div class="thumb"></div>`;
+  const rev = c.revision;
+  const revLine = rev ? (rev.finished_utc
+      ? `<div class="said ${rev.ok ? '' : 'err'}">Last revision ${rev.ok ? 'done' : 'did not finish'}: ${esc(rev.said || '')}</div>`
+      : `<div class="said">⏳ Revising since ${esc(rev.requested_utc)} UTC…</div>`) : '';
+  const acts = c.published
+    ? `<div class="acts">${c.etsy_url ? `<a class="btn" href="${esc(c.etsy_url)}" target="_blank" rel="noopener">On Etsy ↗</a>` : ''}
+        ${c.printify_url ? `<a class="btn" href="${esc(c.printify_url)}" target="_blank" rel="noopener">Printify ↗</a>` : ''}</div>`
+    : c.approved_utc
+    ? `<div class="acts">${c.printify_url ? `<a class="btn go" href="${esc(c.printify_url)}" target="_blank" rel="noopener">Publish in Printify ↗</a>` : ''}
+        <button class="btn" data-unapprove="${esc(c.slug)}" ${busy ? 'disabled' : ''}>Undo approve</button></div>
+       <div class="said">Approved ${esc(c.approved_utc)} UTC. Publishing is the Publish button in Printify - nothing here can.</div>`
+    : `<div class="acts"><button class="btn go" data-approve="${esc(c.slug)}" ${busy ? 'disabled' : ''}>✓ Approve</button>
+        <button class="btn" data-revise="${esc(c.slug)}" ${busy ? 'disabled' : ''}>↺ Request revision</button>
+        <button class="btn warn" data-kill="${esc(c.slug)}" ${busy ? 'disabled' : ''}>✕ Kill</button>
+        ${c.printify_url ? `<a class="btn" href="${esc(c.printify_url)}" target="_blank" rel="noopener">Printify ↗</a>` : ''}</div>
+       <div class="revise ${open === c.slug ? 'on' : ''}" id="rev-${esc(c.slug)}">
+         <textarea placeholder="What should change? e.g. bigger lettering, no background, warmer colours" maxlength="300"></textarea>
+         <div class="acts"><button class="btn tt" data-redo="${esc(c.slug)}">Redraw the art (one image call)</button>
+           <button class="btn" data-redraft="${esc(c.slug)}">Redraft the same art (free)</button></div>
+         <div class="said">Your note is added to the brief the art is drawn from. Redraft keeps the art and fixes the placement only.</div>
+       </div>`;
+  return `<div class="card">
+    <div class="lrow">${art}<div style="min-width:0;flex:1">
+      <div class="ctop"><div class="cname">${esc(c.title)}</div><span class="tag ${v[1]}">${v[0]}</span></div>
+      <div class="cmeta">${esc(c.product || '?')}${c.catalogue && c.catalogue !== c.product ? ' → ' + esc(c.catalogue) : ''} · ${c.tags}/13 tags · ${esc(String(c.status).replace(/_/g, ' '))}</div>
+    </div></div>
+    ${money(c.money)}
+    ${c.concerns.length ? `<div class="concerns">${c.concerns.map(x =>
+      `<div class="con"><span class="tag ${LEVEL[x.level] || 't-gray'}">${esc(x.level)}</span><span>${esc(x.text)}</span></div>`).join('')}</div>`
+      : `<div class="said">No concerns.</div>`}
+    ${revLine}
+    ${acts}
+  </div>`;
+}
+
+// ------------------------------------------------------------ actions
+
+async function post(path, body, method = 'POST') {
+  const r = await fetch(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  let j = {};
+  try { j = await r.json(); } catch { /* not JSON */ }
+  return { ok: r.ok, status: r.status, j };
+}
+
+async function act(fn) {
+  if (busy) return;
+  busy = true; draw();
+  try { await fn(); } catch (e) { toast('The Deck could not be reached'); }
+  busy = false;
+  await load();
+}
+
+// Gone from the page the moment it is tapped; the server takes it out in
+// well under a second and rebuilds the video afterwards. Not behind act():
+// a drop never waits for, or blocks, anything else on the page.
+async function dropSlide(kit, slide) {
+  const key = `${kit}/${slide}`;
+  if (gone.has(key)) return;
+  gone.add(key);
+  draw();
+  let r;
+  try { r = await post(`/api/shop/tiktok/${enc(kit)}/drop`, { slide }); }
+  catch { r = { ok: false, j: { said: 'The Deck could not be reached' } }; }
+  if (!r.ok) {
+    gone.delete(key);
+    toast(`Could not drop it: ${r.j.said || r.j.error || 'failed'}`);
+  } else {
+    const fresh = r.j.kit;
+    if (fresh && T && T.kits) T.kits = T.kits.map(k => k.id === kit ? Object.assign(k, fresh, { id: kit }) : k);
+    toast('Dropped - the video catches up in a moment');
+  }
+  draw();
+  clearTimeout(load.h);
+  load.h = setTimeout(load, 3000);
+}
+
+// Gone from the page at once; put back if the server says no.
+async function deleteKit(kit) {
+  const k = ((T && T.kits) || []).find(x => x.id === kit);
+  if (!confirm(`Delete the kit for "${(k && k.title || kit).slice(0, 60)}"? Its slides, video and zip are thrown away.`)) return;
+  if (T && T.kits) T.kits = T.kits.filter(x => x.id !== kit);
+  draw();
+  let r;
+  try { r = await post(`/api/shop/tiktok/${enc(kit)}`, {}, 'DELETE'); }
+  catch { r = { ok: false, j: { said: 'The Deck could not be reached' } }; }
+  toast(r.ok ? 'Kit deleted' : `Could not delete it: ${r.j.said || r.j.error || 'failed'}`);
+  await load();
+}
+
+$('tabs').onclick = e => { const b = e.target.closest('[data-t]'); if (b) { tab = b.dataset.t; draw(); } };
+$('body').onclick = e => {
+  const t = e.target.closest('button,[data-filter]');
+  if (!t) return;
+  const d = t.dataset;
+  if (t.id === 'make') return act(async () => {
+    const r = await post('/api/shop/tiktok/make');
+    toast(r.ok ? 'Making a kit - about half a minute' : (r.j.error || 'could not start'));
+  });
+  if (d.copy) return copy($(d.copy).textContent, 'Caption');
+  if (d.copylink) return copy(d.copylink, 'Listing link');
+  if (d.posted || d.unpost) return act(async () => {
+    const r = await post(`/api/shop/tiktok/${enc(d.posted || d.unpost)}/posted`, { undo: !!d.unpost });
+    toast(r.ok ? (d.posted ? 'Marked posted' : 'Back in the to-post pile') : (r.j.said || r.j.error || 'failed'));
+  });
+  if (d.kitapprove) return act(async () => {
+    const r = await post(`/api/shop/tiktok/${enc(d.kitapprove)}/approve`);
+    toast(r.ok ? 'Approved - ready to post' : (r.j.said || r.j.error || 'failed'));
+  });
+  if (d.drop) return dropSlide(d.drop, d.slide);
+  if (d.kitdel) return deleteKit(d.kitdel);
+  if (d.filter) { filter = d.filter; return draw(); }
+  if (d.approve || d.unapprove) return act(async () => {
+    const r = await post(`/api/shop/board/${enc(d.approve || d.unapprove)}/approve`, { undo: !!d.unapprove });
+    toast(r.ok ? (d.approve ? 'Approved - publish it from Printify' : 'Approval taken back') : (r.j.said || r.j.error || 'failed'));
+  });
+  if (d.revise) { open = open === d.revise ? null : d.revise; return draw(); }
+  if (d.redo || d.redraft) {
+    const slug = d.redo || d.redraft;
+    const note = (document.querySelector(`#rev-${CSS.escape(slug)} textarea`) || {}).value || '';
+    if (d.redo && !confirm('Draw this art again? That is one image call, and the old Printify draft is replaced.')) return;
+    open = null;
+    return act(async () => {
+      const r = await post(`/api/shop/board/${enc(slug)}/revise`, { note, keep_art: !!d.redraft });
+      toast(r.ok ? 'Sent back - the card updates when it is done' : (r.j.error || 'could not start'));
+    });
+  }
+  if (d.kill) {
+    if (!confirm('Kill this build? It is archived (builds/_removed), not deleted, and can be restored from Emily\'s house.')) return;
+    return act(async () => {
+      const r = await post(`/api/emily/builds/${enc(d.kill)}`, {}, 'DELETE');
+      toast(r.ok ? 'Killed - archived in builds/_removed'
+        : r.j.blocked ? 'Not killed: it still has a Printify product. Delete it in Printify first, or remove it from Emily\'s house.'
+        : (r.j.error || 'failed'));
+    });
+  }
+};
+load();
+</script>
+</body>
+</html>

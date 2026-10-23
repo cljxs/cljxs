@@ -1,0 +1,2 @@
+{'name': 'web_search', 'summaryChars': 164, 'schemaChars': 924, 'propertiesCount': 12}, {'name': 'web_fetch', 'summaryChars': 78, 'schemaChars': 401, 'propertiesCount': 3}, {'name': 'view_image', 'summaryChars': 251, 'schemaChars': 348, 'propertiesCount': 5}
+'currentTurn': {'promptChars': 18}, 'livenessState': 'working', 'stopReason': 'stop'

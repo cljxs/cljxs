@@ -1,0 +1,226 @@
+{
+ "names": [
+  "completions",
+  "passingAttempts",
+  "passingYards",
+  "completionPct",
+  "yardsPerPassAttempt",
+  "passingTouchdowns",
+  "interceptions",
+  "longPassing",
+  "sacks",
+  "QBRating",
+  "adjQBR",
+  "rushingAttempts",
+  "rushingYards",
+  "yardsPerRushAttempt",
+  "rushingTouchdowns",
+  "longRushing"
+ ],
+ "events": {
+  "401872976": {
+   "id": "401872976",
+   "week": 4,
+   "atVs": "@",
+   "gameDate": "2026-10-04T20:25:00.000+00:00",
+   "score": "30-27",
+   "homeTeamId": "13",
+   "awayTeamId": "12",
+   "gameResult": "W",
+   "opponent": {
+    "id": "13",
+    "displayName": "Las Vegas Raiders",
+    "abbreviation": "LV"
+   }
+  },
+  "401872952": {
+   "id": "401872952",
+   "week": 3,
+   "atVs": "@",
+   "gameDate": "2026-09-27T17:00:00.000+00:00",
+   "score": "24-10",
+   "homeTeamId": "15",
+   "awayTeamId": "12",
+   "gameResult": "W",
+   "opponent": {
+    "id": "15",
+    "displayName": "Miami Dolphins",
+    "abbreviation": "MIA"
+   }
+  },
+  "401872945": {
+   "id": "401872945",
+   "week": 2,
+   "atVs": "vs",
+   "gameDate": "2026-09-21T00:20:00.000+00:00",
+   "score": "33-30 OT",
+   "homeTeamId": "12",
+   "awayTeamId": "11",
+   "gameResult": "W",
+   "opponent": {
+    "id": "11",
+    "displayName": "Indianapolis Colts",
+    "abbreviation": "IND"
+   }
+  },
+  "401872931": {
+   "id": "401872931",
+   "week": 1,
+   "atVs": "vs",
+   "gameDate": "2026-09-15T00:15:00.000+00:00",
+   "score": "31-10",
+   "homeTeamId": "12",
+   "awayTeamId": "7",
+   "gameResult": "W",
+   "opponent": {
+    "id": "7",
+    "displayName": "Denver Broncos",
+    "abbreviation": "DEN"
+   }
+  }
+ },
+ "seasonTypes": [
+  {
+   "displayName": "2026 Regular Season",
+   "displayTeam": "KC",
+   "categories": [
+    {
+     "displayName": "Regular Season Stats",
+     "type": "event",
+     "splitType": "2",
+     "events": [
+      {
+       "eventId": "401872976",
+       "stats": [
+        "15",
+        "30",
+        "225",
+        "50.0",
+        "7.5",
+        "2",
+        "0",
+        "55",
+        "2",
+        "97.2",
+        "58.2",
+        "2",
+        "0",
+        "0.0",
+        "0",
+        "1"
+       ]
+      },
+      {
+       "eventId": "401872952",
+       "stats": [
+        "20",
+        "24",
+        "246",
+        "83.3",
+        "10.3",
+        "2",
+        "1",
+        "48",
+        "0",
+        "119.8",
+        "61.3",
+        "1",
+        "1",
+        "1.0",
+        "0",
+        "1"
+       ]
+      },
+      {
+       "eventId": "401872945",
+       "stats": [
+        "32",
+        "47",
+        "382",
+        "68.1",
+        "8.1",
+        "3",
+        "0",
+        "45",
+        "2",
+        "114.0",
+        "82.4",
+        "2",
+        "17",
+        "8.5",
+        "0",
+        "13"
+       ]
+      },
+      {
+       "eventId": "401872931",
+       "stats": [
+        "15",
+        "27",
+        "184",
+        "55.6",
+        "6.8",
+        "2",
+        "1",
+        "59",
+        "2",
+        "86.0",
+        "53.2",
+        "7",
+        "23",
+        "3.3",
+        "1",
+        "15"
+       ]
+      }
+     ],
+     "totals": [
+      "82",
+      "128",
+      "1,037",
+      "64.1",
+      "8.1",
+      "9",
+      "2",
+      "59",
+      "6",
+      "106.2",
+      "68.0",
+      "12",
+      "41",
+      "3.4",
+      "1",
+      "15"
+     ]
+    }
+   ],
+   "summary": {
+    "displayName": "Regular Season Stats",
+    "stats": [
+     {
+      "displayName": "Totals",
+      "stats": [
+       "82",
+       "128",
+       "1,037",
+       "64.1",
+       "8.1",
+       "9",
+       "2",
+       "59",
+       "6",
+       "106.2",
+       "68.0",
+       "12",
+       "41",
+       "3.4",
+       "1",
+       "15"
+      ],
+      "type": "total"
+     }
+    ]
+   }
+  }
+ ]
+}

@@ -1,0 +1,15 @@
+[Unit]
+Description=Wake Paul once a day to build one preview site
+
+[Timer]
+# Once a day, one business. Late on purpose: OpenRouter's day - and the daily
+# AI allowance - turns over at midnight UTC (7pm Central in summer, 6pm in
+# winter), and every other scheduled wake falls earlier in that day. Running
+# last, Paul can only spend what the others left and can never starve them;
+# paul.py should-run holds when too little is left to finish a cycle.
+OnCalendar=*-*-* 16:45 America/Chicago
+Persistent=false
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target
