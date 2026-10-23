@@ -176,3 +176,77 @@ def transcribe(audio_path, cache_path, cfg):
     tmp.write_text(json.dumps(result))
     tmp.replace(cache_path)
     return result
+
+
+# ------------------------------------------------------------------ talking with no words
+
+# Owner, 2026-10-23: "The captions aren't ... doing every sentence. It's
+# skipping sentences at a time." A caption is only a word Whisper wrote, so a
+# sentence it skipped is a stretch as loud as the talking with no word in it.
+# holes() finds those stretches (measured: the video's own ten-a-second
+# loudness against its loudness while words are spoken); relisten() listens to
+# one again on its own, without the voice filter and without carrying on from
+# the sentence before - the two settings that make Whisper skip speech. A
+# laugh or a jingle is loud too, so a hole is a question, and the second
+# listen is the answer.
+HOLE_SECONDS = 2.0           # shorter is a breath, a pause, a beat
+HOLE_LOUD_SHARE = 0.5        # this much of the stretch at talking level
+HOLE_BELOW_SPEECH_DB = 6.0   # "talking level": within this of the median while words are said
+RELISTEN_PAD = 0.3           # seconds either side, so a word on the edge is whole
+RELISTEN_MIN_P = 0.5         # Whisper's own confidence; below it, a guess at music or a laugh
+
+
+def holes(words, frames, start, end, min_gap=HOLE_SECONDS):
+    """[(a, b, share)] - stretches of [start, end], at least min_gap long, with
+    no word in them and at least HOLE_LOUD_SHARE of their readings at talking
+    level. frames: [[t, lufs]], ten a second (media.loudness_frames)."""
+    import statistics
+    ws = sorted((w for w in words if w["end"] > start and w["start"] < end), key=lambda w: w["start"])
+    during, k = [], 0
+    for t, v in frames:
+        while k < len(ws) and ws[k]["end"] < t:
+            k += 1
+        if k < len(ws) and ws[k]["start"] <= t <= ws[k]["end"] and v > -70:
+            during.append(v)
+    if not during:
+        return []
+    level = statistics.median(during) - HOLE_BELOW_SPEECH_DB
+    edges = ([start] + [x for w in ws for x in (w["start"], w["end"])] + [end])
+    out = []
+    for a, b in zip(edges[::2], edges[1::2]):
+        if b - a < min_gap:
+            continue
+        # A momentary reading covers the 0.4 s before it: from a + 0.4 it is
+        # the gap's own sound, not the word before it.
+        inside = [v for t, v in frames if a + 0.4 <= t <= b]
+        share = sum(1 for v in inside if v >= level) / len(inside) if inside else 0.0
+        if share >= HOLE_LOUD_SHARE:
+            out.append((round(a, 2), round(b, 2), round(share, 2)))
+    return out
+
+
+def relisten(src, a, b, cfg, model=None):
+    """The words Whisper hears in [a, b] of the source when it listens to that
+    stretch alone, without the voice filter or the sentence before - only
+    those it is at least RELISTEN_MIN_P sure of, in the source's clock."""
+    import tempfile
+    import numpy as np
+    from clipper import media
+    if model is None:
+        from faster_whisper import WhisperModel
+        model = WhisperModel(cfg["whisper_model"], device="cpu", compute_type="int8",
+                             cpu_threads=int(cfg["whisper_threads"]))
+    t0 = max(0.0, a - RELISTEN_PAD)
+    with tempfile.TemporaryDirectory() as d:
+        wav = Path(d) / "hole.wav"
+        media.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", f"{t0:.3f}", *media.input_args(src),
+                   "-t", f"{b + RELISTEN_PAD - t0:.3f}", "-vn", "-ac", "1", "-ar", "16000",
+                   "-c:a", "pcm_s16le", str(wav)])
+        with wave.open(str(wav)) as wf:
+            audio = np.frombuffer(wf.readframes(wf.getnframes()), np.int16).astype(np.float32) / 32768.0
+    segments, _info = model.transcribe(audio, language=cfg.get("language"), word_timestamps=True,
+                                       vad_filter=False, condition_on_previous_text=False, beam_size=1)
+    return [{"start": round(float(w.start) + t0, 3), "end": round(float(w.end) + t0, 3),
+             "word": w.word, "p": round(float(w.probability), 3)}
+            for seg in segments for w in (seg.words or [])
+            if float(w.probability) >= RELISTEN_MIN_P and a - 0.2 <= float(w.start) + t0 <= b + 0.2]

@@ -3690,3 +3690,73 @@ class ProgressReports(unittest.TestCase):
         js = (config.ROOT / "mission-control-api" / "clip.js").read_text()
         self.assertIn("app.get('/api/clip/progress/:id'", js)
         self.assertIn("clipper(['progress', req.params.id]", js)
+
+
+class TalkingWithNoCaptions(unittest.TestCase):
+    """Owner, 2026-10-23: "The captions aren't ... doing every sentence. It's
+    skipping sentences at a time." A caption is a word Whisper wrote, so a
+    skipped sentence is a stretch as loud as the talking with no word in it.
+    On the real "Our Miss Brooks" words and loudness."""
+
+    def setUp(self):
+        t = json.loads((FIXTURES / "clipper-laughs-ourmissbrooks.words.json").read_text())
+        self.words = t["words"]
+        self.frames = json.loads((FIXTURES / "clipper-laughs-ourmissbrooks.frames.json").read_text())
+        self.sents = moments.sentences(self.words, 0.8)
+
+    def test_a_skipped_sentence_is_found_where_it_was(self):
+        s = self.sents[46]          # "But if I were the goat responsible for this concoction, ..." 102.1-106.3 s
+        cut = [w for k, w in enumerate(self.words) if not s["first"] <= k <= s["last"]]
+        found = transcribe.holes(cut, self.frames, 90.0, 120.0)
+        self.assertEqual(len(found), 1, found)
+        a, b, share = found[0]
+        self.assertLessEqual(a, s["start"])
+        self.assertGreaterEqual(b, s["end"])
+        self.assertGreaterEqual(share, transcribe.HOLE_LOUD_SHARE)
+        self.assertEqual(transcribe.holes(self.words, self.frames, 90.0, 120.0), [],
+                         "with the sentence in the transcript, nothing is missing there")
+
+    def test_a_quiet_pause_is_not_a_hole(self):
+        quiet = [[t, -60.0] for t, _v in self.frames]
+        loud = [[t, -14.0] for t, _v in self.frames]
+        gap = [dict(w) for w in self.words if w["end"] < 100 or w["start"] > 110]
+        talk = [[t, (-14.0 if any(w["start"] <= t <= w["end"] for w in gap) else -60.0)] for t, _v in self.frames]
+        self.assertEqual(transcribe.holes(gap, talk, 95.0, 115.0), [], "silence between words is a pause")
+        self.assertTrue(transcribe.holes(gap, loud, 95.0, 115.0))
+        self.assertEqual(transcribe.holes([], quiet, 0.0, 10.0), [], "no words, no talking level to compare")
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class HolesCommand(EndToEnd):
+    """`clipper holes CLIP` names each stretch in the clip's own clock."""
+
+    test_permitted_video_in_captioned_short_out = None
+
+    def test_the_missing_sentence_is_named(self):
+        self.cli("source", "add", "pd", "--rights", "public-domain", "--evidence", "LibriVox")
+        self.cli("ingest", "pd", str(self.video))
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        conn = db.connect(self.home / "clipper.db")
+        self.addCleanup(conn.close)
+        c = conn.execute("SELECT * FROM clips").fetchone()
+        # The test video's sound is a steady tone, so the reader's own pauses
+        # count too: what matters is the one the skipped sentence adds.
+        before = self.cli("holes", str(c["id"]))[1]
+        # Whisper skips a sentence inside the clip: its words are not in the transcript.
+        f = self.home / "media" / "1" / "transcript.json"
+        t = json.loads(f.read_text())
+        sents = moments.sentences(t["words"], 0.8)
+        gone = next(x for x in sents if x["start"] > c["start"] + 2 and x["end"] < c["end"] - 2
+                    and x["end"] - x["start"] >= 3)
+        t["words"] = [w for k, w in enumerate(t["words"]) if not gone["first"] <= k <= gone["last"]]
+        f.write_text(json.dumps(t))
+        code, said = self.cli("holes", str(c["id"]))
+        self.assertEqual(code, 0, said)
+        total = lambda text: int(text.split("s in all)")[0].rsplit("(", 1)[1])
+        self.assertGreaterEqual(total(said) - total(before), int(gone["end"] - gone["start"]) - 1, said)
+        secs = lambda m: int(m.split(":")[0]) * 60 + int(m.split(":")[1])
+        spans = [tuple(secs(x) for x in line.split()[0].split("-")) for line in said.splitlines()[1:]]
+        at = gone["start"] - c["start"]
+        self.assertTrue(any(a <= at + 1 and at + (gone["end"] - gone["start"]) - 1 <= b for a, b in spans),
+                        f"no stretch covers {at:.1f}s: {said}")

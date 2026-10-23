@@ -586,6 +586,43 @@ def cmd_subtitles(a):
     return 0
 
 
+def cmd_holes(a):
+    """Where a clip's captions go quiet while someone is talking: each stretch
+    as loud as the talking with no word in the transcript, and what Whisper
+    hears there when it listens again (transcribe.holes / relisten). Changes
+    nothing. Owner, 2026-10-23: "It's skipping sentences at a time"."""
+    cfg, paths, conn = open_all()
+    clip, video, c = pipeline._clip_parts(conn, a.clip)
+    words = pipeline.clip_words(conn, paths, video, clip)
+    frames = pipeline.frames_of(paths, video)
+    found = transcribe.holes(words, frames, c["start"], c["end"])
+    said = sum(1 for w in words if c["start"] <= w["start"] < c["end"])
+    print(f"clip {a.clip}: {pipeline.clock(c['end'] - c['start'])} long, {said} words captioned; "
+          f"{len(found)} stretch(es) of {transcribe.HOLE_SECONDS:.0f}s or more as loud as the talking "
+          f"with no caption ({sum(b - x for x, b, _ in found):.0f}s in all)")
+    model, heard = None, 0
+    for x, b, share in found:
+        line = (f"  {pipeline.clock(x - c['start'])}-{pipeline.clock(b - c['start'])} "
+                f"({b - x:.1f}s, {share:.0%} at talking level)")
+        if a.listen:
+            try:
+                if model is None:
+                    from faster_whisper import WhisperModel
+                    model = WhisperModel(cfg["whisper_model"], device="cpu", compute_type="int8",
+                                         cpu_threads=int(cfg["whisper_threads"]))
+                got = transcribe.relisten(video["media_path"], x, b, cfg, model=model)
+            except Exception as exc:
+                print(line + f" - could not listen again: {exc}")
+                continue
+            heard += len(got)
+            text = "".join(w["word"] for w in got).strip()
+            line += f" - heard: {text!r}" if text else " - heard nothing sure (a laugh, music, crosstalk?)"
+        print(line)
+    if a.listen and found:
+        print(f"a second listen found {heard} word(s) the transcript is missing")
+    return 0
+
+
 def cmd_progress(a):
     """How far a clip's remake has got, as JSON - asked by the Fix subtitles
     box every couple of seconds while Update video runs (progress.py)."""
@@ -767,6 +804,11 @@ def main(argv=None):
     x.add_argument("--save-only", dest="save_only", action="store_true",
                    help="with --set-json: save the lines, leave the video until you update it")
     x.set_defaults(fn=cmd_subtitles)
+    x = sub.add_parser("holes", help="where a clip's captions go quiet while someone is talking "
+                                     "(--listen: and what a second listen hears there)")
+    x.add_argument("clip", type=int)
+    x.add_argument("--listen", action="store_true")
+    x.set_defaults(fn=cmd_holes)
     x = sub.add_parser("progress", help="how far a clip's remake (Update video) has got, as JSON")
     x.add_argument("clip", type=int)
     x.set_defaults(fn=cmd_progress)
