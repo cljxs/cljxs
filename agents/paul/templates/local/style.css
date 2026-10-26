@@ -36,13 +36,6 @@ h3 { font-size: 1.35rem; }
 p { margin: 0 0 1em; }
 .wrap { width: min(100% - 40px, var(--wrap)); margin-inline: auto; }
 
-.label {
-  font: 600 0.78rem/1 var(--sans);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin-bottom: 14px;
-}
 
 /* ---- the mark: one line drawing, used four times ---- */
 .mark { fill: none; stroke: var(--accent); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
@@ -99,11 +92,6 @@ p { margin: 0 0 1em; }
 
 /* ---- hero, with the mark large and faint behind it ---- */
 .hero { position: relative; overflow: hidden; padding: 64px 0 88px; }
-.hero-bg {
-  position: absolute; left: max(-60px, calc((100% - var(--wrap)) / 2 - 120px)); top: 50%;
-  width: min(58vw, 640px); height: auto; transform: translateY(-50%);
-  stroke-width: 0.6; opacity: 0.06; pointer-events: none;
-}
 .hero-grid { position: relative; display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 56px; align-items: center; }
 .lede { font-size: 1.15rem; color: var(--muted); max-width: 34em; margin-top: 22px; }
 .today { margin-top: 22px; color: var(--muted); }
@@ -177,7 +165,6 @@ p { margin: 0 0 1em; }
 @media (max-width: 860px) {
   .hero { padding: 36px 0 64px; }
   .hero-grid, .about, .visit { grid-template-columns: 1fr; gap: 36px; }
-  .hero-bg { width: 110vw; left: -20vw; top: 22%; }
   .section { padding: 64px 0; }
   .menu { margin-top: 40px; }
 }

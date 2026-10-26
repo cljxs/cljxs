@@ -257,7 +257,22 @@ AI_COPY = ("elevate your", "elevate the", "nestled in", "nestled on", "unlock ",
            "delve", "a testament to", "look no further", "whether you're", "whether you are",
            "in the heart of", "welcome to", "where tradition meets", "where quality meets",
            "experience the difference", "your one-stop", "one-stop shop", "second to none",
-           "passion for excellence", "crafted with love", "elevated", "curated")
+           "passion for excellence", "crafted with love", "elevated", "curated",
+           # Hallmark's list (19), 2026-10-26: one rulebook.
+           "robust", "empower", "supercharge", "effortless", "unleash", "next-generation",
+           "next generation", "world-class", "best-in-class", "industry-leading", "mission-critical",
+           "future-proof")
+# A second button that says nothing: Hallmark's stock actions (19).
+STOCK_ACTIONS = ("learn more", "get started", "book a demo", "read more", "click here", "discover more")
+# The code rules from Hallmark's gates (2026-10-26). Colours and faces live
+# once, as custom properties (48): the pitch promises the business can change
+# the colours, which is then one line. Motion has a calm version (27).
+# Nothing waits for a script to be seen (62).
+COLOR_PROPS = re.compile(r"color|background|border|outline|shadow|fill|stroke|caret|decoration|column-rule", re.I)
+COLOR_LITERAL = re.compile(r"#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|oklch|oklab|lab|lch|hwb)\(|\b(?:white|black)\b", re.I)
+FONT_GENERIC = re.compile(r"[\"']|\b(serif|sans-serif|monospace|system-ui|cursive|ui-sans-serif|ui-serif)\b", re.I)
+MOTION = re.compile(r"@keyframes|\banimation(?:-name)?\s*:\s*(?!none\b)|\btransition\s*:[^;}]*transform", re.I)
+REVEAL = re.compile(r"reveal|fade|animate|appear|\baos\b|in-?view|on-?scroll", re.I)
 EM_DASH = "\u2014"
 EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B50\u2B55\uFE0F]")
 CUSTOM_CURSOR = re.compile(r"cursor\s*:\s*(none|url\()", re.I)
@@ -805,6 +820,7 @@ class _Page(HTMLParser):
         self.no_alt, self.embeds, self.scripts, self.styles = [], [], [], []
         self.icon, self.forms = False, 0
         self.ids, self.hashes, self.media = set(), [], []
+        self.controls, self._ctl = [], []
         self._skip = 0
         self._style = False
 
@@ -820,6 +836,8 @@ class _Page(HTMLParser):
             if name == "robots":
                 self.robots.append(a.get("content", ""))
         rel = a.get("rel", "").lower()
+        if tag in ("a", "button"):
+            self._ctl.append([])
         for k in ("id", "name") if tag == "a" else ("id",):
             if a.get(k):
                 self.ids.add(a[k])
@@ -865,6 +883,10 @@ class _Page(HTMLParser):
             self.css.append(a["style"])
 
     def handle_endtag(self, tag):
+        if tag in ("a", "button") and self._ctl:
+            t = " ".join("".join(self._ctl.pop()).split())
+            if t:
+                self.controls.append(t)
         if tag in ("script", "style") and self._skip:
             self._skip -= 1
             self._style = False
@@ -874,6 +896,8 @@ class _Page(HTMLParser):
             self.css.append(data)
         elif not self._skip:
             self.text.append(data)
+            for c in self._ctl:
+                c.append(data)
 
 
 CSS_URL = re.compile(r"url\(\s*['\"]?([^'\")]+)['\"]?\s*\)", re.I)
@@ -900,7 +924,7 @@ def scan_site(site):
     out = {"pages": [], "errors": [], "text": "", "tel": [], "images": {},
            "external_images": [], "bytes": 0, "viewport": True, "local_refs": [],
            "no_alt": [], "embeds": [], "scripts": [], "styles": [], "forms": 0,
-           "icon": False, "css": [], "media": []}
+           "icon": False, "css": [], "media": [], "controls": []}
     pages = sorted(site.rglob("*.html"))
     out["pages"] = [p.relative_to(site).as_posix() for p in pages]
     texts = []
@@ -921,7 +945,7 @@ def scan_site(site):
             out["viewport"] = False
         if page.name == "index.html" and page.parent == site:
             out["icon"] = pr.icon
-        for k in ("no_alt", "embeds", "scripts", "styles", "media"):
+        for k in ("no_alt", "embeds", "scripts", "styles", "media", "controls"):
             out[k] += getattr(pr, k)
         # A menu item that goes nowhere: the Services drop-down's links are
         # #fades, #beards... and each needs its section on the page
@@ -1487,6 +1511,46 @@ def look_and_law(sc):
                     "policy; the call button is the contact")
     if any(CUSTOM_CURSOR.search(c) for c in sc["css"]):
         errs.append("a custom cursor - leave the visitor's cursor alone")
+    stock = sorted({t for t in sc["controls"] if t.lower().strip(" .!") in STOCK_ACTIONS})
+    if stock:
+        errs.append(f'"{stock[0]}" as a button or link - it says nothing; name what it does '
+                    f'("See the menu", "Call to book")')
+    errs += code_rules(sc["css"])
+    return errs
+
+
+def code_rules(css):
+    """Hallmark's gates that read the code (48, 27, 62), over every
+    stylesheet, <style> block and style attribute of a site."""
+    errs, literal = [], []
+    for chunk in css:
+        body = re.sub(r"(?s)/\*.*?\*/", "", chunk)
+        body = re.sub(r"(?is)@font-face\s*\{[^}]*\}", "", body)
+        for prop, val in re.findall(r"(?<![\w-])(-?[a-zA-Z][\w-]*)\s*:\s*([^;{}]+)", body):
+            if prop.startswith("--"):
+                continue
+            bare = re.sub(r"(?i)url\([^)]*\)", "", val)
+            if COLOR_PROPS.search(prop) and COLOR_LITERAL.search(bare):
+                literal.append(f"{prop}: {val.strip()[:40]}")
+            elif prop.lower() == "font-family" and "var(" not in val and val.strip().lower() not in ("inherit", "initial"):
+                literal.append(f"{prop}: {val.strip()[:40]}")
+            elif prop.lower() == "font" and "var(" not in val and FONT_GENERIC.search(val):
+                literal.append(f"{prop}: {val.strip()[:40]}")
+    if literal:
+        errs.append(f'colours or faces written in place ({len(literal)}, e.g. "{literal[0]}") - declare each '
+                    f"once in :root (--color-ink, --font-body ...) and use var(); the pitch promises "
+                    f"their colours can change, and then that is one line")
+    whole = "\n".join(css)
+    if MOTION.search(whole) and "prefers-reduced-motion" not in whole:
+        errs.append("motion with no calm version - add @media (prefers-reduced-motion: reduce) that "
+                    "stops each animation and transform transition")
+    for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", re.sub(r"(?s)/\*.*?\*/", "", whole)):
+        sel = sel.strip()
+        if (re.search(r"opacity\s*:\s*0(?![.\d])|visibility\s*:\s*hidden", body) and REVEAL.search(sel)
+                and not sel.startswith(".js") and not re.search(r"\.(is-)?(visible|shown|in)\b|:hover|:focus", sel)):
+            errs.append(f'"{sel[:40]}" hides content until a script shows it - visible by default; hide it '
+                        f"only under a .js class the script adds, or animate from visible")
+            break
     return errs
 
 
@@ -1712,7 +1776,7 @@ DESC_JS = r"""function desc(e){var c=(e.getAttribute('class')||'').trim().split(
  return '<'+e.tagName.toLowerCase()+(e.id?' id="'+e.id+'"':'')+(c?' class="'+c+'"':'')+'>';}"""
 # Bump when a probe learns something new, so a site measured before is
 # measured again rather than passed from memory.
-PROBE_V = 5
+PROBE_V = 6
 # Why a sample photo's label was not found on it, as Paul is told.
 SAMPLE_WHY = {
     "none": "no element saying Sample has its middle inside the photo - a ::before/::after "
@@ -1720,6 +1784,182 @@ SAMPLE_WHY = {
     "small": "the Sample label inside it is hidden or under 10px",
     "behind": "the Sample label is behind the photo - give the label position:absolute and a "
               "z-index above the image",
+}
+
+
+# Does it fit: buttons that break onto two lines (counted per run of text -
+# see PHONE_JS), and a page that scrolls sideways with what sticks out. One
+# copy, measured on a phone and, since 2026-10-26, on an iPad and a computer
+# too (Hallmark's 34 and 49a: at every width, not one).
+FIT_JS = r"""function box(n,el){for(var p=n.parentNode;p&&p!==el;p=p.parentNode){if(getComputedStyle(p).display!=='inline')return p;}return el;}
+function lines(rs){var ls=[];rs.sort(function(a,b){return a.top-b.top;});
+ for(var i=0;i<rs.length;i++){var r=rs[i],h=r.bottom-r.top,on=null;
+  for(var j=0;j<ls.length;j++){var l=ls[j],o=Math.min(l.b,r.bottom)-Math.max(l.t,r.top);
+   if(o>=0.5*Math.min(h,l.b-l.t)){on=l;break;}}
+  if(on){on.t=Math.min(on.t,r.top);on.b=Math.max(on.b,r.bottom);}else ls.push({t:r.top,b:r.bottom});}
+ return ls.length;}
+function paulWraps(){var out=[];var els=document.body.querySelectorAll('a,button,[class*="btn"],[class*="button"]');
+for(var n=0;n<els.length;n++){var el=els[n];var t=(el.innerText||'').replace(/\s+/g,' ').trim();
+ if(!t||t.length>40)continue;var s=getComputedStyle(el);
+ if(s.visibility!=='visible'||s.display==='none'||el.getClientRects().length===0)continue;
+ var runs=[],keys=[],w=document.createTreeWalker(el,NodeFilter.SHOW_TEXT,null),tn;
+ while((tn=w.nextNode())){if(!tn.nodeValue.trim())continue;var k=box(tn,el),at=keys.indexOf(k);
+  if(at<0){keys.push(k);runs.push([]);at=runs.length-1;}
+  var rg=document.createRange();rg.selectNodeContents(tn);var rs=rg.getClientRects();
+  for(var i=0;i<rs.length;i++){if(rs[i].width>1)runs[at].push(rs[i]);}}
+ var most=0;for(var i=0;i<runs.length;i++){most=Math.max(most,lines(runs[i]));}
+ if(most>1)out.push({text:t,lines:most});}
+return out;}
+function paulOver(){var wide=document.documentElement.scrollWidth>window.innerWidth+1;
+// What sticks out (Royal Edge, 2026-10-21: "the phone layout scrolls
+// sideways" twice, and Paul could not find what): the outermost elements
+// past the right edge, leaving out what a clipping box or a fixed one hides.
+var over=[];if(wide){var W=window.innerWidth;
+ var past=[].slice.call(document.body.querySelectorAll('*')).filter(function(e){var r=e.getBoundingClientRect();if(!(r.right>W+1&&r.width>0))return false;
+  for(var a=e;a&&a!==document.body;a=a.parentElement){var s=getComputedStyle(a);if(s.position==='fixed')return false;
+   if(a!==e&&s.overflowX!=='visible'&&a.getBoundingClientRect().right<=W+1)return false;}return true;});
+ over=past.filter(function(e){return past.indexOf(e.parentElement)<0;}).slice(0,3).map(function(e){
+  return {el:desc(e),right:Math.round(e.getBoundingClientRect().right+window.scrollX)};});}
+return {wide:wide,over:over};}
+"""
+
+
+# THE LOOK: one rulebook with Hallmark's (owner, 2026-10-26: "combine the
+# best parts of both of them to make one rulebook"). Its gates that fit a
+# local business's site, measured in the page at each IMAGE_SCREENS width;
+# each finding is (rule, detail), its words to Paul in LOOK_SAYS. Hallmark's
+# numbers in brackets. Royal Edge's "ABOUT US" and "621 SYCAMORE ST,
+# WATERLOO" were eyebrows in tracked capitals - from Paul's own template.
+WORDS_PER_SCREEN = 90      # sentences only, in any 900px of a computer screen (58: "about 80")
+PHOTO_WALL = 0.34          # of the page below the first screen, in stock photos (83)
+LOOK_JS = r"""function paulLook(){
+(document.getAnimations?document.getAnimations():[]).forEach(function(a){try{if(a.effect.getTiming().iterations!==Infinity)a.finish();}catch(x){}});
+var out=[],W=innerWidth,H=innerHeight,big=W>=1200;
+function add(k,d){if(out.filter(function(o){return o.k===k;}).length<3)out.push({k:k,d:d});}
+function vis(e){var s=getComputedStyle(e);if(s.display==='none'||s.visibility!=='visible'||parseFloat(s.opacity)===0)return false;
+ var r=e.getBoundingClientRect();return r.width>0&&r.height>0;}
+function own(e){var t='';for(var c=e.firstChild;c;c=c.nextSibling)if(c.nodeType===3)t+=c.nodeValue;return t.replace(/\s+/g,' ').trim();}
+function words(t){return (String(t||'').match(/[A-Za-z0-9À-ɏ']+/g)||[]).length;}
+function txt(e){return (e.innerText||'').replace(/\s+/g,' ').trim();}
+function mine(e){return !!e.closest('#paul-concept,#paul-credits,#paul-images,#paul-phone');}
+// A wordmark is the one place tracked capitals belong (67's legal case).
+function brand(e){for(var a=e;a&&a!==document.body;a=a.parentElement){if(/brand|logo|wordmark/i.test((a.getAttribute('class')||'')+' '+(a.id||'')))return true;
+ var h=a.closest&&a.closest('header');if(a.tagName==='A'&&h&&a===h.querySelector('a'))return true;}return false;}
+var all=[].slice.call(document.body.querySelectorAll('*')).filter(function(e){return !/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|PRE)$/.test(e.tagName)&&!mine(e);});
+var heads=[].slice.call(document.querySelectorAll('h1,h2,h3')).filter(function(h){return vis(h)&&!mine(h);});
+// 54 the eyebrow: short inert type just before a heading, announcing it.
+heads.forEach(function(h){if(h.closest('nav'))return;var p=h.previousElementSibling;while(p&&!vis(p))p=p.previousElementSibling;
+ if(!p||!/^(P|SPAN|DIV|SMALL|STRONG|B|EM|I)$/.test(p.tagName)||p.querySelector('a,time,img,svg,button,input,h1,h2,h3')||p.getAttribute('role')==='status')return;
+ var t=txt(p);if(t&&t.length<=60&&words(t)<=7)add('eyebrow','"'+t.slice(0,40)+'" above "'+txt(h).slice(0,40)+'"');});
+// 67 tracked capitals: small text set uppercase, in small caps or spaced out.
+all.forEach(function(e){var t=own(e);if(!/[a-z]/i.test(t)||!vis(e)||brand(e))return;var s=getComputedStyle(e),fs=parseFloat(s.fontSize);if(fs>15)return;
+ var ls=s.letterSpacing==='normal'?0:parseFloat(s.letterSpacing);
+ if(s.textTransform==='uppercase'||/small-caps/.test(s.fontVariant+' '+(s.fontVariantCaps||''))||ls>0.03*fs+0.01)add('caps','"'+t.slice(0,40)+'"');});
+// 63 template punctuation: "A · B · C", and an arrow stuck to a button.
+all.forEach(function(e){var t=own(e);if(t&&vis(e)&&(t.match(/\s[·•]\s/g)||[]).length>=2)add('dots','"'+t.slice(0,50)+'"');});
+[].slice.call(document.querySelectorAll('a,button')).forEach(function(e){var t=txt(e);
+ if(vis(e)&&(/(→|›|»|->|⟶|➔)$/.test(t)||/^(←|‹|«|<-)/.test(t)))add('arrow','"'+t.slice(0,40)+'"');});
+// 38 one word set apart in a heading: coloured, italic, bolder, marked.
+heads.forEach(function(h){if(brand(h))return;var hs=getComputedStyle(h),ht=txt(h);
+ [].slice.call(h.querySelectorAll('span,em,i,strong,b,mark,u')).forEach(function(x){var t=txt(x),xs=getComputedStyle(x);
+  if(!t||t.length>=ht.length*0.8||xs.display==='block')return;
+  if(xs.color!==hs.color||xs.fontStyle!==hs.fontStyle||xs.backgroundColor!=='rgba(0, 0, 0, 0)'||xs.textDecorationLine!==hs.textDecorationLine
+   ||Math.abs(parseFloat(xs.fontWeight)-parseFloat(hs.fontWeight))>=200)add('accent','"'+t.slice(0,30)+'" in "'+ht.slice(0,50)+'"');});});
+// 2a 2b 29: purple gradients, gradient text, blurred blobs.
+function purple(c){var m=c.match(/oklch\(([\d.]+)%?\s+([\d.]+)\s+([\d.]+)/);if(m)return parseFloat(m[2])>0.06&&parseFloat(m[3])>=280&&parseFloat(m[3])<=335;
+ var n=(c.match(/[\d.]+/g)||[]).map(Number);if(n.length<3)return false;var r=n[0]/255,g=n[1]/255,b=n[2]/255,mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn,l=(mx+mn)/2;
+ if(!d)return false;var sat=d/(1-Math.abs(2*l-1)),h=mx===r?((g-b)/d)%6:mx===g?(b-r)/d+2:(r-g)/d+4;h*=60;if(h<0)h+=360;return sat>0.25&&l>0.12&&l<0.9&&h>=250&&h<=330;}
+all.forEach(function(e){if(!vis(e))return;var s=getComputedStyle(e),bi=s.backgroundImage||'';
+ if(/gradient/.test(bi)){if((bi.match(/(rgba?|oklch)\([^)]*\)/g)||[]).some(purple))add('purple',desc(e));
+  if(/text/.test(s.backgroundClip+' '+(s.webkitBackgroundClip||'')))add('gradtext',desc(e));}
+ var m=(s.filter||'').match(/blur\(([\d.]+)px\)/),r=e.getBoundingClientRect();if(m&&parseFloat(m[1])>=20&&r.width>=150&&r.height>=150)add('blob',desc(e));});
+// 4 a card inside a card.
+function card(e){if(/^(A|BUTTON|INPUT|SUMMARY|IMG|LABEL|SELECT|TEXTAREA|svg)$/i.test(e.tagName))return false;var s=getComputedStyle(e),r=e.getBoundingClientRect();
+ if(r.width<120||r.height<60||!(parseFloat(s.borderTopLeftRadius)>0)||!(parseFloat(s.paddingTop)>0))return false;
+ return (parseFloat(s.borderTopWidth)>0&&s.borderTopStyle!=='none')||(s.boxShadow&&s.boxShadow!=='none')||s.backgroundColor!=='rgba(0, 0, 0, 0)';}
+var cards=all.filter(function(e){return vis(e)&&card(e);});
+cards.forEach(function(c){for(var a=c.parentElement;a&&a!==document.body;a=a.parentElement){if(cards.indexOf(a)>=0){add('nest',desc(c)+' inside '+desc(a));break;}}});
+// 37 more than three type families; 75 text too small to read.
+var fam={};all.forEach(function(e){if(!own(e)||!vis(e))return;fam[getComputedStyle(e).fontFamily.split(',')[0].replace(/["']/g,'').trim().toLowerCase()]=1;});
+var fl=Object.keys(fam);if(fl.length>3)add('fonts',fl.join(', '));
+all.forEach(function(e){var t=own(e);if(!words(t)||!vis(e))return;var fs=parseFloat(getComputedStyle(e).fontSize);
+ if((/^(P|LI|TD|DD|BLOCKQUOTE)$/.test(e.tagName)&&fs<12)||fs<11)add('tiny','"'+t.slice(0,30)+'" at '+Math.round(fs)+'px');});
+// 80 81 a drawing where a photograph belongs; a coloured box with nothing in it.
+[].slice.call(document.querySelectorAll('svg')).forEach(function(v){if(!vis(v)||brand(v)||mine(v))return;var r=v.getBoundingClientRect();
+ if(r.width<120||r.height<120||/map|chart|diagram|logo/i.test((v.getAttribute('aria-label')||'')+' '+(v.getAttribute('class')||''))||v.querySelector('text'))return;
+ if(v.querySelectorAll('path,circle,ellipse,polygon,polyline').length>=3)add('drawing',desc(v)+' '+Math.round(r.width)+'x'+Math.round(r.height));});
+all.forEach(function(e){if(!vis(e))return;var r=e.getBoundingClientRect();if(r.width<300||r.height<200)return;var s=getComputedStyle(e);
+ if(/url\(/.test(s.backgroundImage)||!(/gradient/.test(s.backgroundImage)||s.backgroundColor!=='rgba(0, 0, 0, 0)'))return;
+ if(txt(e)||e.querySelector('img,svg,video,canvas,picture'))return;add('empty',desc(e)+' '+Math.round(r.width)+'x'+Math.round(r.height));});
+if(big){window.scrollTo(0,0);
+ // 44b the hero: headline, its first sentence and the main button on one laptop screen.
+ var h1=document.querySelector('h1');
+ if(h1&&vis(h1)){var after=[].slice.call(document.body.querySelectorAll('p,a,button')).filter(function(e){
+   return vis(e)&&!e.closest('nav')&&(h1.compareDocumentPosition(e)&Node.DOCUMENT_POSITION_FOLLOWING);});
+  function isCta(e){return e.tagName==='BUTTON'||/btn|button|cta/i.test(String(e.className||''))||/^tel:/.test(e.getAttribute('href')||'');}
+  // The hero's own button; a hero with none leaves the call button in the
+  // header to be the main one, and check already wants their call link.
+  var cta=after.filter(function(e){return e.tagName!=='P'&&isCta(e);})[0];
+  var lead=after.filter(function(e){return e.tagName==='P'&&words(txt(e))>=3&&(!cta||(e.compareDocumentPosition(cta)&Node.DOCUMENT_POSITION_FOLLOWING));});
+  var miss=[];if(h1.getBoundingClientRect().bottom>H+1)miss.push('the headline');
+  if(lead[0]&&lead[0].getBoundingClientRect().bottom>H+1)miss.push('its first sentence');
+  if(cta&&cta.getBoundingClientRect().bottom>H+1)miss.push('the main button "'+txt(cta).slice(0,30)+'"');
+  if(miss.length)add('fold',miss.join(', '));
+  if(lead.length>2)add('herotext',lead.length+' paragraphs between the headline and the main button');}
+ // 58 the screen budget, counting sentences only: lists, tables, hours and prices are free.
+ var prose=[].slice.call(document.body.querySelectorAll('p,blockquote,figcaption')).filter(function(e){return vis(e)&&!mine(e)
+  &&!e.closest('li,table,dl,address,footer,nav,[class*=hour],[class*=price],[class*=menu],[id*=hour],[id*=price],[id*=menu]');})
+  .map(function(e){var r=e.getBoundingClientRect();return {y:(r.top+r.bottom)/2+scrollY,n:words(txt(e))};});
+ var most=0,at=0;for(var y=0;y<document.documentElement.scrollHeight;y+=150){var n=0;prose.forEach(function(p){if(p.y>=y&&p.y<y+900)n+=p.n;});if(n>most){most=n;at=y;}}
+ if(most>__WORDS__)add('words',most+' words of sentences in the 900px from '+Math.round(at)+'px down');
+ // 83 the photo wall: stock photos (not the business's own) over a third of the page.
+ var area=0;[].slice.call(document.images).forEach(function(i){if(!vis(i)||/\/yours-/.test(i.src))return;var r=i.getBoundingClientRect();
+  if(r.top+scrollY>=H)area+=r.width*r.height;});
+ var below=Math.max(1,(document.documentElement.scrollHeight-H)*W);if(area/below>__WALL__)add('wall',Math.round(area/below*100)+'%');
+ // 69 the echo: a price or a percentage in four sections or more.
+ var seen={};[].slice.call(document.querySelectorAll('body > *, main > *')).filter(function(e){return vis(e)&&e.tagName!=='MAIN'&&!mine(e);})
+  .forEach(function(sec,i){(txt(sec).match(/\$\s?\d[\d,]*(\.\d\d)?|\b\d+(\.\d+)?%/g)||[]).forEach(function(m){m=m.replace(/\s/g,'');(seen[m]=seen[m]||{})[i]=1;});});
+ for(var m in seen){var k=Object.keys(seen[m]).length;if(k>=4)add('echo',m+' in '+k+' sections');}
+ // 26a a link or button that shows nothing when a keyboard reaches it.
+ var P=['outlineStyle','outlineWidth','boxShadow','textDecorationLine','backgroundColor','borderTopColor','color'],nofocus=[];
+ [].slice.call(document.querySelectorAll('a[href],button,summary')).filter(vis).slice(0,40).forEach(function(e){
+  var a=P.map(function(k){return getComputedStyle(e)[k];}).join('|');e.focus({preventScroll:true});
+  var s1=getComputedStyle(e),b=P.map(function(k){return s1[k];}).join('|');
+  e.blur();if(a===b)nofocus.push(txt(e).slice(0,30)||e.tagName.toLowerCase());});
+ if(nofocus.length)add('focus',nofocus.length+', e.g. "'+nofocus[0]+'"');
+ window.scrollTo(0,0);}
+// 34 49a at this width too: a button breaking onto two lines; sideways scroll.
+paulWraps().forEach(function(w){add('wrap','"'+w.text+'" on '+w.lines+' lines');});
+var fit=paulOver();if(fit.wide)add('wide',fit.over.map(function(o){return o.el+' reaches '+o.right+'px';}).join('; ')||'something is wider than the screen');
+return out;}""".replace("__WORDS__", str(WORDS_PER_SCREEN)).replace("__WALL__", str(PHOTO_WALL))
+# What Paul is told for each, after where and what: one place for the words.
+LOOK_SAYS = {
+    "eyebrow": "a label above a heading (an eyebrow) - open the section with the heading itself; a fact in "
+               "the label moves into the sentence under it",
+    "caps": "small text in capitals or spaced out - set labels, nav and tags in the body face a step "
+            "smaller, sentence case, unspaced (the wordmark may stay)",
+    "dots": "words joined with dots - use line breaks, columns or a short sentence",
+    "arrow": "an arrow stuck to a link or button - the label says what it does; no arrow",
+    "accent": "one word set apart in a heading (colour, italic, weight or a mark) - set the whole heading one way",
+    "purple": "a purple or blue-violet gradient - one solid colour from the business",
+    "gradtext": "gradient-filled text - solid ink",
+    "blob": "a blurred glow or blob - a solid surface; depth from light and dark steps",
+    "nest": "a card inside a card - one box, not two",
+    "fonts": "more than three type families - a display face, a body face, at most one more",
+    "tiny": "text too small to read - body text 16px, labels a step smaller, nothing under 12px",
+    "drawing": "a drawn illustration - their photo, a Commons photo (stock find), or type at size",
+    "empty": "a coloured box with nothing in it - a photo, or remove it",
+    "fold": "not on a laptop screen (1280x800) without scrolling - the headline, one sentence and the main "
+            "button must be; tighten the hero",
+    "herotext": "too much before the main button - the hero is a headline, one sentence and its buttons",
+    "words": "too many words on one screen - about 80 words of sentences per screen; cut, or move detail "
+             "into a list or table",
+    "wall": "of the page below the first screen is stock photos - keep the strongest, show them bigger, "
+            "and carry the rest in type",
+    "echo": "the same figure in many sections - say it once, where it does work",
+    "focus": "link(s) or button(s) show nothing when reached by keyboard - give :focus-visible an outline",
+    "wrap": "a button or link breaks onto two lines - shorten it or let it fit",
+    "wide": "the page scrolls sideways - make it fit (max-width:100%, wrap, or hide it until opened)",
 }
 
 
@@ -1739,34 +1979,7 @@ PHONE_W, PHONE_H = 390, 844
 # or the two words in different sizes, each sit a few pixels higher - and
 # failed Royal Edge's build twice, even after white-space:nowrap.
 PHONE_JS = r"""(function(){
-function box(n,el){for(var p=n.parentNode;p&&p!==el;p=p.parentNode){if(getComputedStyle(p).display!=='inline')return p;}return el;}
-function lines(rs){var ls=[];rs.sort(function(a,b){return a.top-b.top;});
- for(var i=0;i<rs.length;i++){var r=rs[i],h=r.bottom-r.top,on=null;
-  for(var j=0;j<ls.length;j++){var l=ls[j],o=Math.min(l.b,r.bottom)-Math.max(l.t,r.top);
-   if(o>=0.5*Math.min(h,l.b-l.t)){on=l;break;}}
-  if(on){on.t=Math.min(on.t,r.top);on.b=Math.max(on.b,r.bottom);}else ls.push({t:r.top,b:r.bottom});}
- return ls.length;}
-var out=[];var els=document.body.querySelectorAll('a,button,[class*="btn"],[class*="button"]');
-for(var n=0;n<els.length;n++){var el=els[n];var t=(el.innerText||'').replace(/\s+/g,' ').trim();
- if(!t||t.length>40)continue;var s=getComputedStyle(el);
- if(s.visibility!=='visible'||s.display==='none'||el.getClientRects().length===0)continue;
- var runs=[],keys=[],w=document.createTreeWalker(el,NodeFilter.SHOW_TEXT,null),tn;
- while((tn=w.nextNode())){if(!tn.nodeValue.trim())continue;var k=box(tn,el),at=keys.indexOf(k);
-  if(at<0){keys.push(k);runs.push([]);at=runs.length-1;}
-  var rg=document.createRange();rg.selectNodeContents(tn);var rs=rg.getClientRects();
-  for(var i=0;i<rs.length;i++){if(rs[i].width>1)runs[at].push(rs[i]);}}
- var most=0;for(var i=0;i<runs.length;i++){most=Math.max(most,lines(runs[i]));}
- if(most>1)out.push({text:t,lines:most});}
-var wide=document.documentElement.scrollWidth>window.innerWidth+1;
-// What sticks out (Royal Edge, 2026-10-21: "the phone layout scrolls
-// sideways" twice, and Paul could not find what): the outermost elements
-// past the right edge, leaving out what a clipping box or a fixed one hides.
-var over=[];if(wide){var W=window.innerWidth;
- var past=[].slice.call(document.body.querySelectorAll('*')).filter(function(e){var r=e.getBoundingClientRect();if(!(r.right>W+1&&r.width>0))return false;
-  for(var a=e;a&&a!==document.body;a=a.parentElement){var s=getComputedStyle(a);if(s.position==='fixed')return false;
-   if(a!==e&&s.overflowX!=='visible'&&a.getBoundingClientRect().right<=W+1)return false;}return true;});
- over=past.filter(function(e){return past.indexOf(e.parentElement)<0;}).slice(0,3).map(function(e){
-  return {el:desc(e),right:Math.round(e.getBoundingClientRect().right+window.scrollX)};});}
+var out=paulWraps(),fit=paulOver(),wide=fit.wide,over=fit.over;
 // Every finite animation and transition jumped to its end - an intro over
 // the page, a menu sliding open - as a visitor sees it a moment later.
 // Waiting for them does not work: headless Chrome may never play them.
@@ -1796,7 +2009,7 @@ function finish(){var hidden=[];for(var k in names)if(!got[k])hidden.push(names[
 function step(){sweep();var ts=toggles().filter(function(t){return tapped.indexOf(t)<0&&reach(t);});
  if(!ts.length||tapped.length>=12)return finish();tapped.push(ts[0]);ts[0].click();setTimeout(function(){settled(step);},50);}
 settled(step);
-})();""".replace("(function(){", "(function(){" + STYLED_JS + DESC_JS, 1)
+})();""".replace("(function(){", "(function(){" + STYLED_JS + DESC_JS + FIT_JS, 1)
 
 
 def phone_problems(site, browser, run=subprocess.run):
@@ -1949,7 +2162,7 @@ def contrast_problems(site, browser, run=subprocess.run, width=1280, height=900)
 # photos widest.
 IMAGE_SHARP = 1.5
 IMAGE_SKEW = 0.05          # proportions changed by more than this: stretched
-IMAGE_SCREENS = ((1280, 900, "a computer"), (820, 1180, "an iPad"))
+IMAGE_SCREENS = ((1280, 800, "a computer"), (820, 1180, "an iPad"))
 # A photo column running on past the text beside it (the same About: two
 # tall photos beside two paragraphs - "a bunch of blank space"), in
 # screen heights.
@@ -2001,10 +2214,10 @@ function done(){var out=[];imgs.forEach(function(i){
    if(b>=0&&(a<0||b<a))return true;why='behind';return false;});
   if(!on)bare.push({src:i.getAttribute('src')||'',why:why});});
  pe.remove();
- var pre=document.createElement('pre');pre.id='paul-images';pre.textContent=JSON.stringify({images:out,bare:bare,gaps:gaps,styled:paulStyled()});document.body.appendChild(pre);}
+ var pre=document.createElement('pre');pre.id='paul-images';pre.textContent=JSON.stringify({images:out,bare:bare,gaps:gaps,look:paulLook(),styled:paulStyled()});document.body.appendChild(pre);}
 (function wait(){if(imgs.every(function(i){return i.complete;})||Date.now()-t0>3000)done();else setTimeout(wait,50);})();
 })();""".replace("SKEW", str(IMAGE_SKEW)).replace("SHARP", str(IMAGE_SHARP)).replace(
-    "GAP*", f"{GAP_SCREENS}*").replace("(function(){", "(function(){" + STYLED_JS + DESC_JS, 1)
+    "GAP*", f"{GAP_SCREENS}*").replace("(function(){", "(function(){" + STYLED_JS + DESC_JS + FIT_JS + LOOK_JS, 1)
 
 
 def image_problems(site, browser, run=subprocess.run, width=1280, height=900, samples=(),
@@ -2057,6 +2270,9 @@ def image_problems(site, browser, run=subprocess.run, width=1280, height=900, sa
         for b in d.get("bare") or []:
             b = b if isinstance(b, dict) else {"src": b}
             bad.append((rel, b.get("src", ""), "unlabelled", SAMPLE_WHY.get(b.get("why"), SAMPLE_WHY["none"])))
+        for f in d.get("look") or []:
+            if f.get("k") in LOOK_SAYS:
+                bad.append((rel, "", "look:" + f["k"], f"{at} {f.get('d', '')}"))
         if isinstance(d.get("styled"), (int, float)) and d["styled"] < STYLED_MIN:
             bad.append((rel, "", "unstyled", f"{at}: {round(d['styled'] * 100)}% of the page changes "
                                              f"with its stylesheets switched off"))
@@ -2131,7 +2347,10 @@ def browser_problems(t, work, browser):
     pics = measured_images(work / "site", browser, work / "shots" / ".measured.json", samples=samples)
     if pics is None:
         notes.append("photo sizes not measured - the browser gave no answer")
-    for rel, src, kind, detail in (pics or [])[:6]:
+    for rel, src, kind, detail in (pics or [])[:14]:
+        if kind.startswith("look:"):
+            errs.append(f"{rel}: {detail} - {LOOK_SAYS[kind[5:]]}")
+            continue
         errs.append(f"{src} on {rel} is stretched out of its own shape ({detail}) - give it "
                     f"object-fit:cover, or a box with the photo's proportions" if kind == "stretched" else
                     f'{src} on {rel} is a sample photo with no "Sample" on it ({detail}) - put the '

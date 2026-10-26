@@ -2850,8 +2850,11 @@ class SamplePhotosSaySample(unittest.TestCase):
             _page(d, STYLE + css, '<div style="height:1500px"></div><section class="prods">'
                   + '<figure><img src="img/s.png" alt="a"><span class="sample-tag">Sample</span></figure>' * 3
                   + '</section><div style="height:1500px"></div>')
-            (Path(d) / "img" / "s.png").write_bytes(_png(1000, 1000))   # a Pexels download, ?w=1000
-            self.assertEqual(paul.image_problems(d, _a_browser(), samples=["img/s.png"]), [])
+            (Path(d) / "img" / "s.png").write_bytes(_png(1000, 1000))   # a Commons download at 1000px
+            got = paul.image_problems(d, _a_browser(), samples=["img/s.png"])
+        self.assertEqual([x for x in got if x[2] == "unlabelled"], [])
+        # Under the one rulebook (2026-10-26) the tag itself must change: tracked capitals.
+        self.assertEqual({x[2] for x in got}, {"look:caps"})
 
     def test_paul_is_told_why(self):
         with tempfile.TemporaryDirectory() as d:
@@ -3429,3 +3432,121 @@ class StockIsWikimediaCommonsCreditedByCode(PaulCase):
         site = self.work(index=INDEX.replace("img/hero.jpg", "img/other.jpg")) / "site"
         (site / "img" / "other.jpg").write_bytes(self.JPEG)
         self.assertIsNone(paul.credits_line(site))
+
+
+# One rulebook (owner, 2026-10-26: Hallmark's best parts and Paul's, "one
+# rulebook"). A clean local-business page, and each tell put into it.
+LOOK_CSS = (":root{--ink:#1c1a17;--paper:#f6f2ea;--accent:#7a3b12;--line:#d9d0c2;--serif:Georgia,serif;--sans:Arial,sans-serif}"
+            "html,body{overflow-x:clip}body{margin:0;background:var(--paper);color:var(--ink);font:18px/1.6 var(--sans)}"
+            "header{display:flex;justify-content:space-between;align-items:center;padding:16px 32px}nav a{margin-left:20px;color:var(--ink)}"
+            ".wrap{max-width:1100px;margin:0 auto;padding:0 24px}h1{font:700 56px/1.05 var(--serif);margin:24px 0 12px}"
+            "h2{font:700 40px/1.1 var(--serif)}.btn{display:inline-block;background:var(--accent);color:var(--paper);padding:12px 20px;"
+            "border-radius:6px;text-decoration:none;white-space:nowrap}a:focus-visible{outline:3px solid var(--accent);outline-offset:3px}")
+LOOK_BODY = ('<header><a class="brand" href="#top">Royal Edge</a><nav><a href="#services">Services</a><a href="#visit">Visit</a></nav></header>'
+             '<main class="wrap"><section><h1>Fades, beards and designs in Waterloo</h1><p>A barbershop on Sycamore Street, open six days '
+             'a week.</p><a class="btn" href="tel:+13194275796">Call (319) 427-5796</a></section><section id="services"><h2>Services</h2>'
+             '<ul><li>Skin fade $25</li><li>Beard trim $15</li><li>Kids cut $18</li></ul></section><section id="visit"><h2>Visit</h2>'
+             '<address>621 Sycamore St, Waterloo, IA</address><p>Book on Booksy or walk in.</p></section></main>')
+
+
+@unittest.skipUnless(_a_browser(), "needs a headless Chrome")
+class OneRulebookInTheBrowser(unittest.TestCase):
+
+    def look(self, css="", body=LOOK_BODY, base=LOOK_CSS):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "style.css").write_text(base + css)
+            (d / "index.html").write_text('<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                                          '<link rel="stylesheet" href="style.css"></head><body>' + body + "</body></html>")
+            return {k[5:]: det for _p, _s, k, det in paul.measured_images(d, _a_browser(), d / "m.json") or []
+                    if k.startswith("look:")}
+
+    def test_a_clean_page_passes(self):
+        self.assertEqual(self.look(), {})
+
+    def test_the_eyebrow_and_tracked_capitals_from_royal_edge(self):
+        # "ABOUT US" and "621 SYCAMORE ST, WATERLOO": Paul's own template.
+        got = self.look(".label{font-size:12px;letter-spacing:.14em;text-transform:uppercase}",
+                        LOOK_BODY.replace("<h1>", '<p class="label">Barbershop · Waterloo · Iowa</p><h1>'))
+        self.assertEqual(set(got), {"eyebrow", "caps", "dots"})
+        self.assertIn('"BARBERSHOP · WATERLOO · IOWA" above "Fades, beards', got["eyebrow"])
+        for css in ("nav a{text-transform:uppercase;font-size:14px}", "nav a{letter-spacing:.1em;font-size:14px}"):
+            self.assertEqual(set(self.look(css)), {"caps"}, css)
+
+    def test_an_arrow_on_a_button_and_one_word_set_apart(self):
+        got = self.look("h1 em{color:var(--accent)}", LOOK_BODY.replace("Call (319) 427-5796", "Book now →")
+                        .replace("designs in", "<em>designs</em> in"))
+        self.assertEqual(set(got), {"arrow", "accent"})
+
+    def test_a_removed_focus_ring_and_the_browsers_own(self):
+        no_ring = LOOK_CSS.replace("a:focus-visible{outline:3px solid var(--accent);outline-offset:3px}", "")
+        self.assertEqual(self.look(base=no_ring), {}, "the browser's own outline is a focus ring")
+        self.assertEqual(set(self.look("a:focus{outline:none}", base=no_ring)), {"focus"})
+
+    def test_the_hero_on_a_laptop_screen(self):
+        self.assertIn("the headline, its first sentence, the main button", self.look("main>section:first-child{padding-top:700px}")["fold"])
+        header_only = LOOK_BODY.replace('<a class="btn" href="tel:+13194275796">Call (319) 427-5796</a></section>', "</section>") \
+            .replace('<nav>', '<nav><a class="btn" href="tel:+13194275796">Call</a>')
+        self.assertEqual(self.look(body=header_only), {}, "the header's call button is the main button")
+
+    def test_words_per_screen_count_sentences_not_lists(self):
+        long = "We cut hair with care and attention every single day of the week. " * 14
+        self.assertIn("words of sentences", self.look(body=LOOK_BODY.replace("<p>Book on Booksy or walk in.</p>", f"<p>{long}</p>"))["words"])
+        menu = "".join(f"<li><p>Cut number {n} with a hot towel and a line up, ${n + 10}</p></li>" for n in range(30))
+        self.assertEqual(self.look(body=LOOK_BODY.replace("<ul>", "<ul>" + menu)), {}, "a price list is not prose")
+
+    def test_gradients_blobs_nested_cards_drawings_and_empty_boxes(self):
+        got = self.look(".g{background:linear-gradient(90deg,#7b2ff7,#2f80ed);height:50px}.blob{width:300px;height:300px;"
+                        "filter:blur(40px);background:var(--accent)}.c{border:1px solid var(--line);border-radius:8px;padding:16px;"
+                        "min-height:80px}", LOOK_BODY.replace("</main>", '<div class="g">x</div><div class="blob"></div>'
+                                                                          '<div class="c">a<div class="c">b</div></div>'
+                                                                          '<svg width="300" height="300"><circle cx="50" cy="50" r="40"/>'
+                                                                          '<circle cx="90" cy="90" r="40"/><path d="M0 0L90 90"/></svg></main>'))
+        self.assertEqual(set(got), {"purple", "blob", "nest", "empty", "drawing"})
+
+    def test_a_price_said_once_and_said_everywhere(self):
+        echo = LOOK_BODY.replace("</main>", "".join(f"<section><p>Cuts from $25 {n}</p></section>" for n in range(3)) + "</main>")
+        self.assertIn("$25 in 4 sections", self.look(body=echo)["echo"])
+
+    def test_buttons_fit_and_nothing_sticks_out_on_an_ipad_too(self):
+        got = self.look(".btn{white-space:normal;width:90px}.wide{width:1000px;height:9px}", LOOK_BODY.replace("</main>", '<div class="wide"></div></main>'),
+                        base=LOOK_CSS.replace("html,body{overflow-x:clip}", ""))
+        self.assertIn("on an iPad (820px)", got["wide"], "820px is where it sticks out")
+        self.assertIn("Call (319) 427-5796", got["wrap"])
+
+    def test_the_quality_bar_passes_every_rule(self):
+        # Its six labels in tracked capitals and its 640px drawing of a cup
+        # behind the hero went (2026-10-26): the rulebook's first catch.
+        with tempfile.TemporaryDirectory() as d:
+            s = Path(d) / "s"
+            shutil.copytree(ROOT / "agents" / "paul" / "templates" / "local", s)
+            self.assertEqual(paul.measured_images(s, _a_browser(), Path(d) / "m.json"), [])
+            self.assertEqual(paul.code_rules(paul.scan_site(s)["css"]), [])
+
+
+class OneRulebookInTheCode(unittest.TestCase):
+
+    def test_colours_and_faces_live_once(self):
+        self.assertEqual(paul.code_rules([LOOK_CSS]), [])
+        self.assertEqual(paul.code_rules(["@font-face{font-family:'Grenze';src:url(g.woff2)}"
+                                          ".x{background:url('data:image/svg+xml,%23fff#a');white-space:nowrap}"]), [])
+        for css in (".x{color:#fff}", ".x{box-shadow:0 1px 2px rgba(0,0,0,.2)}", ".x{border:1px solid white}",
+                    ".x{font-family:Georgia,serif}", ".x{font:16px/1.5 'Inter',sans-serif}", ".x{background:oklch(90% .02 80)}"):
+            self.assertTrue(any("written in place" in e for e in paul.code_rules([css])), css)
+
+    def test_motion_has_a_calm_version(self):
+        moving = "@keyframes up{from{transform:translateY(8px)}}.x{animation:up .4s}"
+        self.assertTrue(any("calm version" in e for e in paul.code_rules([moving])))
+        self.assertEqual(paul.code_rules([moving + "@media (prefers-reduced-motion: reduce){.x{animation:none}}"]), [])
+
+    def test_nothing_waits_for_a_script_to_be_seen(self):
+        self.assertTrue(any("until a script" in e for e in paul.code_rules([".reveal{opacity:0}"])))
+        self.assertEqual(paul.code_rules([".js .reveal{opacity:0}.reveal.is-visible{opacity:1}"]), [])
+
+    def test_stock_actions_and_buzzwords(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "index.html").write_text(INDEX.replace("Directions</a>", "Directions</a> <a href='#'>Learn more</a> "
+                                                              "World-class fades."))
+            errs = paul.look_and_law(paul.scan_site(d))
+        self.assertTrue(any('"Learn more" as a button' in e for e in errs), errs)
+        self.assertTrue(any("world-class" in e for e in errs), errs)
