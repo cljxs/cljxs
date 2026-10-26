@@ -17,7 +17,8 @@ THE BUDGET. The free plan is 500 credits a month. One call is one sport,
 h2h (moneyline) only, Pinnacle and DraftKings together: 1 credit. So:
 
   * a DECISION snapshot per sport per day, at the first fetch from
-    DECISION_HOUR_ET (2:30pm ET, before the 3pm betting wake);
+    DECISION_HOUR_ET (2:30pm ET) - or EARLY_DECISION's hour for that sport
+    and weekday (college football Saturdays: 10:30 CT, the betting wake);
   * a CLOSE snapshot per sport from the 5-minute close, when a game starts
     within CLOSE_MINUTES and that sport has none in the last CLOSE_GAP_MINUTES;
   * never more than DAILY_CAP a day, and never below RESERVE remaining.
@@ -62,6 +63,18 @@ BOOKS = "pinnacle,draftkings"
 SHARP = "pinnacle"
 TIMEOUT = 20
 DECISION_HOUR_ET = 14.5
+# Owner, 2026-10-26: "It should be fetched at 10:30 central time for college
+# football Saturdays". The betting wake moved to 11:30 ET (10:30 CT) on
+# 2026-10-03, three hours before the 2:30pm snapshot, so a Saturday's college
+# bets were measured against DraftKings, not Pinnacle. ace-cycle.sh runs the
+# fetch before it wakes him, so this price is in place when he bets.
+# (sport, weekday Mon=0) -> hour ET. Still one decision a sport a day.
+EARLY_DECISION = {("cfb", 5): 11.5}
+
+
+def decision_hour(sport, et):
+    """When the day's decision snapshot for a sport is due, in hours ET."""
+    return EARLY_DECISION.get((sport, et.weekday()), DECISION_HOUR_ET)
 CLOSE_MINUTES = 20
 CLOSE_GAP_MINUTES = 25
 DAILY_CAP = 14
@@ -253,7 +266,7 @@ def wanted(contexts, close, now, u):
             last = parse_iso((u.get("last") or {}).get(sport))
             if mins <= CLOSE_MINUTES and (last is None or now - last > timedelta(minutes=CLOSE_GAP_MINUTES)):
                 out[sport] = "close"
-        elif hour >= DECISION_HOUR_ET and sport not in u["decision_done"] and mins <= 12 * 60:
+        elif hour >= decision_hour(sport, et) and sport not in u["decision_done"] and mins <= 12 * 60:
             out[sport] = "decision"
     return out
 

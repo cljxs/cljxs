@@ -119,3 +119,11 @@ fresh-news bettor matches Ace, the model adds nothing.
   the headline falls back to DraftKings' close where that one counts. The same
   rule applies to the no-AI bettors and to the Brier scores' closes. Every
   number in the table above is unchanged.
+* 2026-10-26 — schedule, not a rule (owner's decision): on college football
+  Saturdays Pinnacle's daily decision snapshot is taken at 10:30 CT (11:30
+  ET), the betting wake, instead of 2:30pm ET (`ace-sharp.py EARLY_DECISION`).
+  Since the wake moved to 11:30 ET on 2026-10-03 those bets were measured
+  against DraftKings, because Pinnacle's price came three hours later. The
+  wake now runs the fetch first and waits for it, so the price is in place
+  when he bets. Still one decision snapshot a sport a day; every number in
+  the table above is unchanged.

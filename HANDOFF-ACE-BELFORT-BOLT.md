@@ -153,7 +153,7 @@ Scripts: `ace-judge.py` (blind/list/bet/pass/rest/verdict/mark - Ace's only
 way to record judgements), `ace-book.py` (the money, from `state/bets.jsonl`),
 `ace-clv.py` (CLV and Brier; `closing` decides what counts as a close: the last 60 minutes before the start and after the decision it grades - logged as a bug fix 2026-10-26), `ace-sharp.py` (Pinnacle prices from The Odds
 API; key `ODDS_API_KEY` via `scripts/set-credential.py ace ODDS_API_KEY`;
-`ace-sharp.py budget` shows credits), `ace-baselines.py`. Data: ESPN's public
+`ace-sharp.py budget` shows credits; the daily decision snapshot is 2:30pm ET, but 10:30 CT on college football Saturdays - `EARLY_DECISION`, owner 2026-10-26 - and `ace-cycle.sh` runs the fetch and waits for it before every wake), `ace-baselines.py`. Data: ESPN's public
 API through `site.web.api.espn.com` (the usual `site.api.espn.com` host is
 blocked from datacentre IPs). Rules for the model:
 `agents/ace/_ace-agents-header.md`. Tests: `tests/test_ace_board.py`, and

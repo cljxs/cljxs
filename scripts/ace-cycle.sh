@@ -69,6 +69,18 @@ trap 'rm -f "$LOG"' EXIT
 # Belfort's close run once edited the morning's report instead of writing its
 # own, and Ace has two slots a day as well.
 REPORT="$(python3 "$ROOT/scripts/et_time.py" report-name ace)"
+# The data he bets on, fetched now and waited for (2026-10-26). The fetch
+# timer fires at the same minute as this wake, and a healthy cycle is over in
+# 20-60 seconds - which can be before a college Saturday's fetch has written
+# its files: he would bet on the half-hour-old ones, and the 10:30 CT
+# Pinnacle snapshot (ace-sharp.py EARLY_DECISION) would land after his bets.
+# Under the fetch's own lock, so it waits (up to 4 minutes) for a running
+# fetch rather than racing it. A failure is said and the wake goes on, on
+# the last fetch's data.
+FETCH="$(flock -w 240 /run/ace-fetch.lock python3 "$ROOT/scripts/ace-fetch.py" 2>&1)" \
+  || FETCH="$FETCH
+  !! ace-fetch before the wake failed - he reads the last fetch's data"
+printf '%s\n' "$FETCH" | tail -3
 python3 "$ROOT/scripts/wake.py" --agent ace \
   --message "Scheduled cycle. Do the whole cycle yourself, now, in this session.
 This wake's report is a NEW file: reports/$REPORT - write it there, and do

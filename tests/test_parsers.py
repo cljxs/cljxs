@@ -16758,6 +16758,31 @@ class AcePricesBeforeAndAtTheClose(unittest.TestCase):
         self.assertEqual(self.sharp.wanted(close_ctx, True, now, dict(u, last={"nfl": "2026-10-01T18:30:00Z"})), {},
                          "a close snapshot 10 minutes ago is recent enough")
 
+    def test_college_saturdays_are_priced_when_he_bets(self):
+        # Owner, 2026-10-26: "It should be fetched at 10:30 central time for
+        # college football saturdays" - his betting wake. 2026-10-31 is a
+        # Saturday; 15:30 UTC is 11:30 ET, 10:30 CT.
+        sat = datetime(2026, 10, 31, 15, 30, tzinfo=timezone.utc)
+        u = lambda t: self.sharp._usage(t) | {"decision_done": []}
+        cfb = [self.ctx(4, sport="cfb", now=sat)]
+        self.assertEqual(self.sharp.wanted(cfb, False, sat, u(sat)), {"cfb": "decision"})
+        early = sat - timedelta(minutes=30)
+        self.assertEqual(self.sharp.wanted(cfb, False, early, u(early)), {}, "not before 10:30 CT")
+        self.assertEqual(self.sharp.wanted([self.ctx(4, now=sat)], False, sat, u(sat)), {},
+                         "the NFL on a Saturday keeps 2:30pm ET")
+        thu = datetime(2026, 10, 29, 15, 30, tzinfo=timezone.utc)
+        self.assertEqual(self.sharp.wanted([self.ctx(4, sport="cfb", now=thu)], False, thu, u(thu)), {},
+                         "college football on a Thursday keeps 2:30pm ET")
+
+    def test_his_cycle_waits_for_the_fetch_before_he_bets(self):
+        sh = (ROOT / "scripts" / "ace-cycle.sh").read_text()
+        line = 'FETCH="$(flock -w 240 /run/ace-fetch.lock python3 "$ROOT/scripts/ace-fetch.py" 2>&1)"'
+        self.assertIn(line, sh)
+        self.assertLess(sh.index(line), sh.index('python3 "$ROOT/scripts/wake.py" --agent ace'))
+        self.assertIn("/usr/bin/flock /run/ace-fetch.lock", (ROOT / "deploy" / "ace-fetch.service").read_text(),
+                      "the same lock the fetch timer takes")
+        self.assertIn("ace-fetch before the wake failed", sh, "a failed fetch is said; the wake goes on")
+
     def test_the_key_is_never_in_an_error(self):
         secret = "abc123secretkeyvalue"
         def boom(req, timeout=None, context=None):
