@@ -3326,9 +3326,10 @@ class DeleteThisVersionOnly(PaulCase):
 
 
 # Commons' API answer for one file (formatversion=2), in the shape its docs
-# give (mediawiki.org API:Imageinfo, extmetadata). Not a capture: this
-# session's address is rate-limited by Wikimedia (429), so the parser is
-# believed, not verified, until `paul.py stock find` runs on the droplet.
+# give (mediawiki.org API:Imageinfo, extmetadata). The cloud session's
+# address is rate-limited by Wikimedia (429); on the droplet, 2026-10-26,
+# `stock find barber shop chair` read seven real answers through this parser
+# (titles, sizes, licences, authors) - and showed the two bugs tested below.
 def commons_page(title="File:Old barber shop interior.jpg", lic="CC BY-SA 4.0", artist='<a href="//x">Ann Lee</a>',
                  credit="Own work", mime="image/jpeg", width=4000):
     name = title.removeprefix("File:").replace(" ", "_")
@@ -3369,6 +3370,19 @@ class StockIsWikimediaCommonsCreditedByCode(PaulCase):
         hits = paul.library_find(["bakery", "bread"])
         self.assertTrue(hits and all("bake" in (p["subject"] + " ".join(p["tags"])).lower() or "bread" in p["subject"]
                                      for p in hits[:3]), [p["subject"] for p in hits[:3]])
+
+    def test_library_words_match_whole_and_most_of_them(self):
+        # The droplet's first search: "shop" was found inside "workshop",
+        # and a glassblower answered "barber shop chair".
+        self.assertEqual(paul.library_find(["barber", "shop", "chair"]), [])
+        self.assertTrue(all(re.search(r"\bchairs?\b", p["subject"] + " " + " ".join(p["tags"]))
+                            for p in paul.library_find(["wooden", "chair"])))
+
+    def test_an_unknown_author_is_said_once(self):
+        # Commons' template renders it twice, the second hidden: the droplet
+        # printed "Unknown author Unknown author" for Draper's Barber Shop.
+        page = commons_page(artist='Unknown author<span style="display:none">Unknown author</span>', lic="Public domain")
+        self.assertEqual(paul.commons_info([page])[0]["author"], "Unknown author")
 
     def test_a_library_photo_comes_at_a_standard_width_with_its_credit(self):
         p = paul.library()[0]

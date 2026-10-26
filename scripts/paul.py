@@ -3833,13 +3833,17 @@ def library():
 
 
 def library_find(words, limit=8):
+    """Library photos matching most of the words, each as a whole word (its
+    plural too): on the droplet "barber shop chair" brought a glassblower,
+    "shop" being inside "workshop" (2026-10-26)."""
     want = [w for w in re.findall(r"[a-z0-9]+", " ".join(words).lower()) if len(w) > 2]
+    need = len(want) // 2 + 1
     scored = []
     for p in library():
-        hay = " ".join([p.get("subject", ""), p.get("cat", ""), p.get("id", "")] +
+        hay = " ".join([p.get("subject", ""), p.get("cat", ""), p.get("id", "").replace("_", " ")] +
                        [str(t) for t in p.get("tags") or []]).lower()
-        n = sum(1 for w in want if w in hay)
-        if n:
+        n = sum(1 for w in want if re.search(rf"\b{re.escape(w)}(e?s)?\b", hay))
+        if n >= need:
             scored.append((-n, p["id"], p))
     return [p for _n, _i, p in sorted(scored)[:limit]]
 
@@ -3852,6 +3856,10 @@ def commons_info(pages):
         meta = ii.get("extmetadata") or {}
         val = lambda k: plain((meta.get(k) or {}).get("value"))
         lic, author = val("LicenseShortName"), val("Artist")
+        # Commons' "Unknown author" template says it twice, once hidden.
+        half = author[:len(author) // 2].strip()
+        if half and author == f"{half} {half}":
+            author = half
         said = " ".join([val("Credit"), val("ImageDescription"), author])
         if not (FREE_LICENSE.match(lic) and author and ii.get("url")) or FROM_STOCK_SITES.search(said):
             continue
