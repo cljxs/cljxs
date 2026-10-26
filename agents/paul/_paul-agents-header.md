@@ -215,7 +215,13 @@ think they paid for this.
   anything - the hero first; list each with kind "business" and source
   "saved by the owner from their Facebook" (or wherever FACTS says). Then
   their site, Facebook, Instagram, Google Business Profile owner uploads -
-  then Unsplash or Pexels for gaps. All-stock is a last resort, and `notes` must say where you
+  then **Wikimedia Commons** for gaps, and only through code:
+  `python3 ../../scripts/paul.py stock find <what is in the picture>` lists
+  photos from a vetted library and from Commons; `stock get "File:<name>"
+  --width <the widest you show it, times 1.5>` downloads it and records whose
+  it is. Code writes the credit on every page - you never write one. Code
+  refuses any stock photo not fetched that way (Unsplash and Pexels bar
+  scripts in their terms). All-stock is a last resort, and `notes` must say where you
   looked for theirs. **Stock must pass for a shop like theirs, in their
   town:** close-ups of tools, chairs, hands, food, textures - never a scene
   with identifiable people, another business's signs, or writing in another
@@ -223,12 +229,12 @@ think they paid for this.
   with Thai signs as its hero). Open each photo with view_image and ask
   whether the owner would believe it was taken in Cedar Falls. Never put a caption that implies "this is ours" (today's
   bake, our team, our shop) over a stock photo. Never customer review photos. Never an AI image of their product
-  or place. Download every image into `work/site/img/` (`curl -sL -o`), never
-  hotlink, and list each in `photos`. If their current site has photos,
+  or place. Their own photos go into `work/site/img/` (`curl -sL -o`), never
+  hotlinked; list each in `photos`. If their current site has photos,
   yours must too.
 - **Sample photos** (kind "sample"): when the owner asks for something the
   business has but there is no picture of - Royal Edge's products - use a
-  stock photo from Unsplash or Pexels with no brand, label or price on it,
+  Commons photo (`stock get`) with no brand, label or price on it,
   and write "Sample" over the picture in an element of its own (e.g.
   `<span class="sample-tag">Sample</span>` inside the photo's box). No
   product names, brands or prices under it - that would be a claim. Code

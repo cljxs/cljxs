@@ -96,6 +96,13 @@ change the pictures and colours any time, and later add a button to request a qu
 """
 
 
+# A Commons photo as `paul.py stock get` records it (Hallmark's library, real).
+HERO_PAGE = "https://commons.wikimedia.org/wiki/File:Tailor_at_work.jpg"
+HERO_CREDIT = {"img/hero.jpg": {"title": "Tailor at work.jpg", "page": HERO_PAGE, "author": "Some Photographer",
+                                "license": "CC BY-SA 4.0",
+                                "license_url": "https://creativecommons.org/licenses/by-sa/4.0/"}}
+
+
 def target(**over):
     t = {"status": "built", "name": "Rosa's Tailoring", "category": "tailor", "kind": "trade",
          "address": "1801 E 7th St, Austin, TX 78702", "phone": "(512) 444-0199",
@@ -104,8 +111,7 @@ def target(**over):
          "channel": "email", "contact": "rosa@rosas.test",
          "sources": {k: "https://maps.google.com/?cid=1"
                      for k in ("name", "address", "phone", "hours", "contact")},
-         "photos": [{"file": "img/hero.jpg", "source": "https://images.unsplash.com/photo-1",
-                     "kind": "stock"}],
+         "photos": [{"file": "img/hero.jpg", "source": HERO_PAGE, "kind": "stock"}],
          "claims": [{"text": "by hand since 1998", "source": "https://maps.google.com/?cid=1"}],
          "identity": [{"detail": "Rosa has sewn by hand since 1998",
                        "source": "https://facebook.com/rosastailoring/about", "on_page": "by hand since 1998"},
@@ -182,6 +188,7 @@ class PaulCase(unittest.TestCase):
         (w / "site" / "index.html").write_text(index)
         (w / "site" / "style.css").write_text("body{margin:0}")
         (w / "site" / "img" / "hero.jpg").write_bytes(b"\xff\xd8" + b"0" * 5000)
+        (w / "site" / paul.CREDITS).write_text(json.dumps(HERO_CREDIT))
         (w / "site" / "img" / "icon.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
         (w / "target.json").write_text(json.dumps(t or target()))
         (w / "draft.md").write_text(draft)
@@ -333,10 +340,16 @@ class SiteRules(PaulCase):
         errs = self.errors(t=target(photos=[]))
         self.assertTrue(any("no entry" in e for e in errs), errs)
 
-    def test_stock_only_from_unsplash_or_pexels(self):
-        t = target(photos=[{"file": "img/hero.jpg", "source": "https://images.example/x.jpg",
+    def test_stock_only_from_commons_through_stock_get(self):
+        # Owner, 2026-10-26: "Switch to Wikipedia" - Unsplash's and Pexels'
+        # terms bar the scripts Paul fetched their photos with.
+        for src in ("https://images.unsplash.com/photo-1", "https://images.example/x.jpg"):
+            t = target(photos=[{"file": "img/hero.jpg", "source": src, "kind": "stock"}])
+            self.assertTrue(any("Wikimedia Commons only" in e for e in self.errors(t=t)), src)
+        t = target(photos=[{"file": "img/hero.jpg", "source": "https://commons.wikimedia.org/wiki/File:Other.jpg",
                             "kind": "stock"}])
-        self.assertTrue(any("Unsplash or Pexels" in e for e in self.errors(t=t)))
+        self.assertTrue(any("fetch it with paul.py stock get" in e for e in self.errors(t=t)),
+                        "a Commons link Paul typed is not one code fetched and credited")
 
     def test_no_call_link_is_refused(self):
         errs = self.errors(index=INDEX.replace('href="tel:+15124440199"', 'href="#"'))
@@ -2855,11 +2868,11 @@ class RoyalEdgeAfterManCave(SiteRules):
     """The rules a reader can check without a browser."""
 
     def test_a_sample_is_stock_and_the_pitch_says_so(self):
-        t = target(photos=[{"file": "img/hero.jpg", "source": "https://images.pexels.com/p/1", "kind": "sample"}])
+        t = target(photos=[{"file": "img/hero.jpg", "source": HERO_PAGE, "kind": "sample"}])
         self.assertEqual(self.errors(t), [])
         t["photos"][0]["source"] = "https://www.amazon.com/pomade.jpg"
-        self.assertTrue(any("Unsplash or Pexels only" in e for e in self.errors(t)))
-        t["photos"][0].update(source="https://images.pexels.com/p/1")
+        self.assertTrue(any("Wikimedia Commons only" in e for e in self.errors(t)))
+        t["photos"][0].update(source=HERO_PAGE)
         self.assertTrue(any("product photos are samples" in e for e in paul.check_draft(DRAFT, t)[0]))
         said = DRAFT.replace("The photos are placeholders", "The product photos are samples and the rest placeholders")
         self.assertFalse([e for e in paul.check_draft(said, t)[0] if "sample" in e])
@@ -3307,3 +3320,112 @@ class DeleteThisVersionOnly(PaulCase):
         studio = (ROOT / "mission-control-api" / "public" / "paul.html").read_text()
         self.assertIn("${b.versions > 1 ? `<button class=\"btn del\" data-drop=", studio)
         self.assertNotIn("data-remove", studio)
+
+
+# Commons' API answer for one file (formatversion=2), in the shape its docs
+# give (mediawiki.org API:Imageinfo, extmetadata). Not a capture: this
+# session's address is rate-limited by Wikimedia (429), so the parser is
+# believed, not verified, until `paul.py stock find` runs on the droplet.
+def commons_page(title="File:Old barber shop interior.jpg", lic="CC BY-SA 4.0", artist='<a href="//x">Ann Lee</a>',
+                 credit="Own work", mime="image/jpeg", width=4000):
+    name = title.removeprefix("File:").replace(" ", "_")
+    return {"pageid": 1, "ns": 6, "title": title, "imagerepository": "local",
+            "imageinfo": [{"size": 900000, "width": width, "height": 3000, "mime": mime,
+                           "url": f"https://upload.wikimedia.org/wikipedia/commons/a/ab/{name}",
+                           "descriptionurl": f"https://commons.wikimedia.org/wiki/File:{name}",
+                           "thumburl": f"https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/{name}/1280px-{name}",
+                           "thumbwidth": 1280, "thumbheight": 960,
+                           "extmetadata": {"Artist": {"value": artist, "source": "commons-desc-page"},
+                                           "LicenseShortName": {"value": lic, "source": "commons-desc-page"},
+                                           "Credit": {"value": credit, "source": "commons-desc-page"},
+                                           "ImageDescription": {"value": "<p>A barber shop</p>", "source": "commons-desc-page"}}}]}
+
+
+class StockIsWikimediaCommonsCreditedByCode(PaulCase):
+    """Owner, 2026-10-26: "Switch to Wikipedia." Paul fetched Unsplash and
+    Pexels photos with scripts, which both sites' terms bar. Commons files
+    are openly licensed; `stock get` records whose each one is, and code
+    writes the credit - title, author, source and licence - on every page."""
+
+    JPEG = b"\xff\xd8\xff\xe0" + b"0" * 3000
+
+    def fake(self, pages=None, status=200):
+        calls = []
+
+        def get(url, binary=False, **_k):
+            calls.append(url)
+            if binary:
+                return 200, self.JPEG
+            return status, json.dumps({"batchcomplete": True, "query": {"pages": pages or []}})
+        return get, calls
+
+    def test_the_library_is_there_and_searchable(self):
+        lib = paul.library()
+        self.assertGreater(len(lib), 700)
+        self.assertTrue(all(paul.FREE_LICENSE.match(p["license"]) for p in lib), "every one under a licence we may use")
+        hits = paul.library_find(["bakery", "bread"])
+        self.assertTrue(hits and all("bake" in (p["subject"] + " ".join(p["tags"])).lower() or "bread" in p["subject"]
+                                     for p in hits[:3]), [p["subject"] for p in hits[:3]])
+
+    def test_a_library_photo_comes_at_a_standard_width_with_its_credit(self):
+        p = paul.library()[0]
+        get, calls = self.fake()
+        self.work()
+        rc, out = self.run_quiet(paul.cmd_stock, self.args(action="get", which="File:" + p["id"], width=1100), get=get)
+        self.assertEqual(rc, 0, out)
+        name = p["file"].rsplit("/", 1)[1]
+        # The shape of the 1280px thumbnail downloaded for real on 2026-10-26.
+        self.assertEqual(calls, [p["file"].replace("/commons/", "/commons/thumb/") + f"/1280px-{name}"],
+                         "no API call for a library photo, and the 1280 step for an 1100px need")
+        credits = json.loads(paul.A("work", "site", paul.CREDITS).read_text())
+        [(rel, c)] = [(k, v) for k, v in credits.items() if k.startswith("img/stock-")]
+        self.assertEqual((c["page"], c["author"], c["license"]), (p["page"], p["author"], p["license"]))
+        self.assertEqual(paul.A("work", "site", rel).read_bytes(), self.JPEG)
+        self.assertIn(f'"file": "{rel}", "source": "{p["page"]}", "kind": "stock"', out)
+
+    def test_a_commons_photo_is_checked_before_it_is_taken(self):
+        self.work()
+        for page, why in ((commons_page(lic="CC BY-NC 4.0"), "non-commercial"),
+                          (commons_page(credit="https://unsplash.com/photos/abc"), "a stock site's"),
+                          (commons_page(artist=""), "no author to credit"),
+                          (commons_page(mime="image/tiff"), "not a JPEG or PNG")):
+            get, calls = self.fake([page])
+            rc, out = self.run_quiet(paul.cmd_stock, self.args(action="get", which="File:Old barber shop interior.jpg",
+                                                              width=1280), get=get)
+            self.assertEqual(rc, 1, why)
+            self.assertFalse([c for c in calls if "upload.wikimedia" in c], f"downloaded {why}")
+        get, calls = self.fake([commons_page()])
+        rc, out = self.run_quiet(paul.cmd_stock, self.args(action="get", which="https://commons.wikimedia.org/wiki/"
+                                                          "File:Old_barber_shop_interior.jpg", width=1280), get=get)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("1280px-Old_barber_shop_interior.jpg", calls[-1])
+        c = json.loads(paul.A("work", "site", paul.CREDITS).read_text())["img/stock-old-barber-shop-interior.jpg"]
+        self.assertEqual((c["author"], c["license_url"]), ("Ann Lee", "https://creativecommons.org/licenses/by-sa/4.0/"))
+
+    def test_find_lists_both_and_says_when_commons_cannot_answer(self):
+        get, _ = self.fake([commons_page()])
+        rc, out = self.run_quiet(paul.cmd_stock, self.args(action="find", words=["bakery"], limit=3), get=get)
+        self.assertIn("  lib  File:", out)
+        self.assertIn("  web  File:Old barber shop interior.jpg", out)
+        get, _ = self.fake(status=429)
+        _rc, out = self.run_quiet(paul.cmd_stock, self.args(action="find", words=["bakery"], limit=3), get=get)
+        self.assertIn("Commons answered 429", out)
+
+    def test_the_credit_is_on_every_page_and_comes_off_for_a_revision(self):
+        w = self.work()
+        site = w / "site"
+        (site / "about.html").write_text(INDEX)
+        paul.apply_safeguards(site, "Rosa's Tailoring", "Sam Studio")
+        for page in ("index.html", "about.html"):
+            markup = (site / page).read_text()
+            self.assertIn(f'<p id="{paul.CREDITS_ID}"', markup)
+            self.assertIn(f'<a href="{HERO_PAGE}">Tailor at work.jpg</a> by Some Photographer, '
+                          f'<a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>', markup)
+        self.assertNotIn("Photos from", paul.scan_site(site)["text"], "code's own words are not checked as Paul's copy")
+        paul.strip_safeguards(site)
+        self.assertNotIn(paul.CREDITS_ID, (site / "index.html").read_text())
+
+    def test_a_photo_the_site_no_longer_shows_is_not_credited(self):
+        site = self.work(index=INDEX.replace("img/hero.jpg", "img/other.jpg")) / "site"
+        (site / "img" / "other.jpg").write_bytes(self.JPEG)
+        self.assertIsNone(paul.credits_line(site))

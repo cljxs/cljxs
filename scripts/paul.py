@@ -228,7 +228,12 @@ PARKED_MARKERS = ("domain is for sale", "buy this domain", "this domain may be f
                   "parkingcrew", "afternic", "this domain has expired",
                   "domain has expired", "renew this domain", "is for sale!")
 
-STOCK_HOSTS = ("unsplash.com", "pexels.com")
+# Stock is Wikimedia Commons (owner, 2026-10-26: "Switch to Wikipedia").
+# Unsplash's terms bar reaching it with "bots, spiders, scripts" outside its
+# API, and Pexels' bar "programs or robots for automatic data collection" -
+# which is how Paul fetched them. Commons files are openly licensed and its
+# API is for scripts; each photo is credited on the page by code.
+STOCK_HOSTS = ("commons.wikimedia.org",)
 # "sample": a stock photo standing in for something the business has and the
 # owner has no picture of - Royal Edge's products (owner, 2026-10-21: "just
 # use sample pictures and put 'sample' on the picture"). Code measures the
@@ -886,7 +891,7 @@ def _external(u):
 def strip_note(markup):
     """The page without the footer code adds, so the footer's own words are
     not read as meta copy."""
-    return re.sub(rf'(?is)<p[^>]*id="{CONCEPT_ID}"[^>]*>.*?</p>', "", markup)
+    return re.sub(rf'(?is)<p[^>]*id="({CONCEPT_ID}|{CREDITS_ID})"[^>]*>.*?</p>', "", markup)
 
 
 def scan_site(site):
@@ -1320,7 +1325,7 @@ def check_site(site, t, old_page=None):
     for rel, size in sorted(sc["images"].items()):
         if size > MAX_IMAGE_BYTES:
             errs.append(f"{rel} is {size // 1024} KB - download a smaller size "
-                        f"(Unsplash/Pexels: add ?w=2000&q=75 to the URL)")
+                        f"(paul.py stock get <file> --width 1280)")
     if sc["bytes"] > MAX_SITE_BYTES:
         errs.append(f"the site is {sc['bytes'] // 1024} KB - keep it under "
                     f"{MAX_SITE_BYTES // 1024} KB so it is fast on a phone")
@@ -1373,6 +1378,7 @@ def check_site(site, t, old_page=None):
     photos = {str(p.get("file") or "").lstrip("./").removeprefix("site/"): p
               for p in (t.get("photos") or []) if isinstance(p, dict)}
     rasters = [r for r in sc["images"] if r.lower().endswith(RASTER)]
+    credits = read_json(site / CREDITS, {}) or {}
     for rel in rasters:
         p = photos.get(rel)
         if not p:
@@ -1391,7 +1397,11 @@ def check_site(site, t, old_page=None):
         elif p.get("kind") in ("stock", "sample"):
             host = urllib.parse.urlsplit(src).hostname or ""
             if not any(host == h or host.endswith("." + h) for h in STOCK_HOSTS):
-                errs.append(f"{rel}: stock photos come from Unsplash or Pexels only, not {host}")
+                errs.append(f"{rel}: stock photos come from Wikimedia Commons only, not {host} - "
+                            f'python3 ../../scripts/paul.py stock find <words>')
+            elif (credits.get(rel) or {}).get("page") != src:
+                errs.append(f"{rel}: fetch it with paul.py stock get, so its credit is recorded - "
+                            f"code writes it on the page")
     theirs = sorted(f"img/{x.name}" for x in (site / "img").glob(f"{SUPPLIED_PREFIX}*")) \
         if (site / "img").is_dir() else []
     if theirs and not any(r in rasters for r in theirs):
@@ -2230,10 +2240,11 @@ def apply_safeguards(site, business, studio):
     read a page's source."""
     site = Path(site)
     note = concept_note(business, studio)
+    credit = credits_line(site) or ""
     meta = f'<meta name="robots" content="{NOINDEX}">'
     for page in sorted(site.rglob("*.html")):
         markup = re.sub(r"(?s)<!--.*?-->\n?", "", page.read_text(errors="replace"))
-        markup = re.sub(rf'(?is)<p[^>]*id="{CONCEPT_ID}"[^>]*>.*?</p>', "", markup)
+        markup = re.sub(rf'(?is)<p[^>]*id="({CONCEPT_ID}|{CREDITS_ID})"[^>]*>.*?</p>', "", markup)
         markup = re.sub(r'(?i)<meta[^>]+name=["\']robots["\'][^>]*>', "", markup)
         if re.search(r"(?i)<head[^>]*>", markup):
             markup = re.sub(r"(?i)(<head[^>]*>)", lambda m: m.group(1) + meta, markup, count=1)
@@ -2241,9 +2252,9 @@ def apply_safeguards(site, business, studio):
             markup = meta + markup
         if re.search(r"(?i)</body>", markup):
             idx = [m.start() for m in re.finditer(r"(?i)</body>", markup)][-1]
-            markup = markup[:idx] + note + markup[idx:]
+            markup = markup[:idx] + credit + note + markup[idx:]
         else:
-            markup += note
+            markup += credit + note
         page.write_text(markup)
     (site / "robots.txt").write_text("User-agent: *\nDisallow: /\n")
     (site / "vercel.json").write_text(json.dumps({"headers": [{
@@ -2976,7 +2987,8 @@ def strip_safeguards(site):
     he built, and code adds the notice, noindex and robots again at finish."""
     site = Path(site)
     for page in site.rglob("*.html"):
-        markup = re.sub(rf'(?is)<p[^>]*id="{CONCEPT_ID}"[^>]*>.*?</p>', "", page.read_text(errors="replace"))
+        markup = re.sub(rf'(?is)<p[^>]*id="({CONCEPT_ID}|{CREDITS_ID})"[^>]*>.*?</p>', "",
+                        page.read_text(errors="replace"))
         page.write_text(re.sub(r'(?i)<meta[^>]+name=["\']robots["\'][^>]*>', "", markup))
     for name in ("robots.txt", "vercel.json"):
         (site / name).unlink(missing_ok=True)
@@ -3517,6 +3529,185 @@ def remove_photo(pid, name):
     (d / name).unlink(missing_ok=True)
     write_json(d / "photos.json", [r for r in have if r["file"] != name])
     return True
+
+
+# --------------------------------------------------------------------------
+# stock: Wikimedia Commons, credited by code
+# --------------------------------------------------------------------------
+#
+# `paul.py stock find <words>` lists photos from Hallmark's library of vetted
+# Commons photos (agents/paul/hallmark/photos.json) and from a Commons search;
+# `paul.py stock get <File:...>` downloads one at the width a page needs and
+# records whose it is in site/photo-credits.json. check refuses a stock photo
+# that is not in that file, and finish writes the credits onto every page:
+# Paul never types a licence, so none can be wrong.
+
+HALLMARK = Path(__file__).resolve().parent.parent / "agents" / "paul" / "hallmark"
+COMMONS_API = "https://commons.wikimedia.org/w/api.php"
+COMMONS_FILE = "https://commons.wikimedia.org/wiki/File:"
+# Wikimedia's rule for scripts: say who you are and how to reach you.
+WIKI_UA = "PaulSiteBuilder/1.0 (https://github.com/cljxs/cljxs; local business site previews)"
+CREDITS = "photo-credits.json"
+CREDITS_ID = "paul-credits"
+FREE_LICENSE = re.compile(r"^(cc0|cc-zero|public domain|pd\b.*|cc by(-sa)? [1-4]\.0\b.*)$", re.I)
+# Commons holds re-uploads of stock sites' photos, whose terms we left them for.
+FROM_STOCK_SITES = re.compile(r"unsplash|pexels|pixabay", re.I)
+THUMB_STEPS = (500, 960, 1280, 1920)
+
+
+def wiki_get(url, binary=False, timeout=30, limit=4_000_000):
+    """One GET to Wikimedia with its required User-Agent: (status, body)."""
+    req = urllib.request.Request(url, headers={"User-Agent": WIKI_UA})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = r.read(limit)
+            return r.status, (data if binary else data.decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        return e.code, b"" if binary else ""
+    except Exception as e:
+        return None, str(getattr(e, "reason", e))[:160]
+
+
+def plain(markup):
+    return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", str(markup or ""))).split())
+
+
+def license_url(short):
+    s = str(short or "").strip().lower()
+    m = re.match(r"cc (by(?:-sa)?) ([1-4]\.0)", s)
+    if m:
+        return f"https://creativecommons.org/licenses/{m.group(1)}/{m.group(2)}/"
+    if s in ("cc0", "cc-zero"):
+        return "https://creativecommons.org/publicdomain/zero/1.0/"
+    return None
+
+
+def library():
+    return (read_json(HALLMARK / "photos.json", {}) or {}).get("photos") or []
+
+
+def library_find(words, limit=8):
+    want = [w for w in re.findall(r"[a-z0-9]+", " ".join(words).lower()) if len(w) > 2]
+    scored = []
+    for p in library():
+        hay = " ".join([p.get("subject", ""), p.get("cat", ""), p.get("id", "")] +
+                       [str(t) for t in p.get("tags") or []]).lower()
+        n = sum(1 for w in want if w in hay)
+        if n:
+            scored.append((-n, p["id"], p))
+    return [p for _n, _i, p in sorted(scored)[:limit]]
+
+
+def commons_info(pages):
+    """Commons API pages (formatversion=2) as our rows; unusable ones left out."""
+    out = []
+    for pg in pages or []:
+        ii = (pg.get("imageinfo") or [{}])[0]
+        meta = ii.get("extmetadata") or {}
+        val = lambda k: plain((meta.get(k) or {}).get("value"))
+        lic, author = val("LicenseShortName"), val("Artist")
+        said = " ".join([val("Credit"), val("ImageDescription"), author])
+        if not (FREE_LICENSE.match(lic) and author and ii.get("url")) or FROM_STOCK_SITES.search(said):
+            continue
+        if str(ii.get("mime") or "") not in ("image/jpeg", "image/png"):
+            continue
+        out.append({"id": pg.get("title", "").removeprefix("File:"), "title": pg.get("title"),
+                    "page": ii.get("descriptionurl") or COMMONS_FILE + pg.get("title", "").removeprefix("File:"),
+                    "file": ii["url"], "thumb": ii.get("thumburl"), "w": ii.get("width"), "h": ii.get("height"),
+                    "license": lic, "author": author, "subject": val("ImageDescription")[:120]})
+    return out
+
+
+def commons_query(params, get=wiki_get):
+    q = {"action": "query", "format": "json", "formatversion": "2", "prop": "imageinfo",
+         "iiprop": "url|size|mime|extmetadata", "maxlag": "5",
+         "iiextmetadatafilter": "Artist|LicenseShortName|Credit|ImageDescription", **params}
+    status, body = get(COMMONS_API + "?" + urllib.parse.urlencode(q))
+    if status != 200:
+        return None, f"Commons answered {status}: {str(body)[:120]}"
+    try:
+        return commons_info((json.loads(body).get("query") or {}).get("pages")), ""
+    except ValueError:
+        return None, "Commons did not answer in JSON"
+
+
+def thumb_for(file_url, width):
+    """upload.wikimedia.org's thumbnail of a file at a standard width."""
+    m = re.match(r"(https://upload\.wikimedia\.org/wikipedia/commons)/(\w/\w\w)/([^/?#]+)$", str(file_url or ""))
+    if not m:
+        return None
+    name = m.group(3)
+    return f"{m.group(1)}/thumb/{m.group(2)}/{name}/{width}px-{name}" + (".jpg" if name.lower().endswith((".tif", ".tiff")) else "")
+
+
+def cmd_stock(a, get=wiki_get):
+    if a.action == "find":
+        lib = library_find(a.words, a.limit)
+        for p in lib:
+            print(f"  lib  File:{p['id']}  {p.get('w')}x{p.get('h')}  {p['license']}  {p['author']} - {p.get('subject', '')}")
+        found, why = commons_query({"generator": "search", "gsrnamespace": "6", "gsrlimit": str(a.limit * 2),
+                                    "gsrsearch": " ".join(a.words) + " filetype:bitmap", "iiurlwidth": "960"}, get)
+        for p in (found or [])[:a.limit]:
+            print(f"  web  {p['title']}  {p['w']}x{p['h']}  {p['license']}  {p['author']} - {p['subject']}")
+        if found is None:
+            print(f"  (Commons search: {why})")
+        if not lib and not found:
+            print("nothing found - try other words: what is in the picture, not the business")
+        print("then: python3 ../../scripts/paul.py stock get \"File:<name>\" [--width 1280] - and look at it")
+        return 0
+    title = str(a.which or "").strip()
+    title = urllib.parse.unquote(title.split("/wiki/", 1)[-1]) if "/wiki/" in title else title
+    name = title.removeprefix("File:").replace("_", " ")
+    hit = next((p for p in library() if p["id"].replace("_", " ") == name), None)
+    width = next((w for w in THUMB_STEPS if w >= a.width), THUMB_STEPS[-1])
+    if hit:
+        row = dict(hit, title="File:" + hit["id"])
+        url = thumb_for(hit["file"], width) if (hit.get("w") or 0) > width else hit["file"]
+    else:
+        found, why = commons_query({"titles": "File:" + name, "iiurlwidth": str(width)}, get)
+        if not found:
+            print(f"File:{name}: " + (why or "not on Commons, or not under a licence we may use "
+                                      "(CC0, public domain, CC BY, CC BY-SA), or from a stock site"))
+            return 1
+        row = found[0]
+        url = row["thumb"] if (row.get("w") or 0) > width and row.get("thumb") else row["file"]
+    status, data = get(url, binary=True)
+    if status != 200 or not isinstance(data, bytes) or not (data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n"):
+        print(f"could not download {url} ({status})")
+        return 1
+    site = A("work", "site")
+    stem = re.sub(r"[^a-z0-9]+", "-", unicodedata.normalize("NFKD", name.rsplit(".", 1)[0]).encode("ascii", "ignore")
+                  .decode().lower()).strip("-")[:40] or "photo"
+    rel = f"img/stock-{stem}" + (".png" if data[:4] == b"\x89PNG" else ".jpg")
+    (site / "img").mkdir(parents=True, exist_ok=True)
+    (site / rel).write_bytes(data)
+    credits = read_json(site / CREDITS, {}) or {}
+    page = row.get("page") or COMMONS_FILE + name.replace(" ", "_")
+    credits[rel] = {"title": name, "page": page, "author": row["author"], "license": row["license"],
+                    "license_url": license_url(row["license"])}
+    write_json(site / CREDITS, credits)
+    print(f"saved work/site/{rel} ({len(data) // 1024} KB) - {row['license']}, {row['author']}")
+    print(f'list it in target.json photos: {{"file": "{rel}", "source": "{page}", "kind": "stock"}}'
+          f' (or "sample") - code writes the credit on the page')
+    return 0
+
+
+def credits_line(site):
+    """The credits for the Commons photos a site shows: title, author,
+    source and licence, as CC BY asks. None when it shows none."""
+    site = Path(site)
+    used = set(scan_site(site)["images"])
+    rows = [(rel, c) for rel, c in sorted((read_json(site / CREDITS, {}) or {}).items()) if rel in used]
+    if not rows:
+        return None
+    bits = []
+    for _rel, c in rows:
+        lic = (f'<a href="{html.escape(c["license_url"], quote=True)}">{html.escape(c["license"])}</a>'
+               if c.get("license_url") else html.escape(c.get("license") or ""))
+        bits.append(f'<a href="{html.escape(c["page"], quote=True)}">{html.escape(c["title"])}</a> by '
+                    f'{html.escape(c["author"])}, {lic}')
+    return (f'<p id="{CREDITS_ID}" style="margin:0;padding:0 16px 14px;font:12px/1.5 system-ui,sans-serif;'
+            f'text-align:center;opacity:.75">Photos from Wikimedia Commons: ' + "; ".join(bits) + ".</p>")
 
 
 def place_supplied(pid, site):
@@ -4616,6 +4807,14 @@ def main(argv=None):
     p.add_argument("action", choices=("add", "remove", "list"))
     p.add_argument("file", nargs="?", help="add: the image file; remove: its name (01.jpg)")
     p.add_argument("--from", dest="origin", default="facebook", choices=PHOTO_FROM)
+    p = sub.add_parser("stock", help="(Paul) Wikimedia Commons photos: find, or get one with its credit")
+    sp = p.add_subparsers(dest="action", required=True)
+    q = sp.add_parser("find", help="photos for some words, from the library and Commons")
+    q.add_argument("words", nargs="+")
+    q.add_argument("--limit", type=int, default=6)
+    q = sp.add_parser("get", help="download one into work/site/img/ and record its credit")
+    q.add_argument("which", help='"File:<name>" or its Commons page link')
+    q.add_argument("--width", type=int, default=1280, help="the widest it is shown, in pixels, times 1.5")
     p = sub.add_parser("remove", help="delete every build of one business, for good")
     p.add_argument("who", help="part of the business name, or a slug")
     p.add_argument("--yes", action="store_true", help="really delete (without it, only lists)")
@@ -4648,7 +4847,7 @@ def main(argv=None):
             "teardown": cmd_teardown, "go-live": cmd_go_live, "dry-next": cmd_dry_next,
             "revise": cmd_revise, "measure": cmd_measure, "prospects": cmd_prospects, "approve": cmd_approve,
             "reject": cmd_reject, "build": cmd_build, "restore": cmd_restore, "find": cmd_find, "remove": cmd_remove,
-            "places": cmd_places, "photo": cmd_photo,
+            "places": cmd_places, "photo": cmd_photo, "stock": cmd_stock,
             "focus": cmd_focus, "nearby": cmd_nearby, "leads": cmd_leads, "deck": cmd_deck,
             "should-run": cmd_should_run, "brief": cmd_brief, "finish": cmd_finish,
             "seen": cmd_seen, "check": cmd_check}[a.cmd](a)
