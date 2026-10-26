@@ -19811,7 +19811,10 @@ class BelfortLearnsFromNumbersNotMemory(unittest.TestCase):
         lines = "\n".join(self.learn.wake_lines(self.learn.record()))
         self.assertIn("closed trades: 1, 1 won (100%), average +10.0%", lines)
         self.assertIn("by catalyst: EARNINGS 1 (1 won, +10.0%)", lines)
-        self.assertIn("scored 6: 1 (1 beat it, +4.7%)", lines)
+        # No price kept on this call: it is based on 09-04's close, the last
+        # known at a 09:40 call - not 09-05's, which came after it.
+        # 103 -> 114 is +10.68%, SPY 101.5 -> 107 +5.42%: +5.3 ahead.
+        self.assertIn("scored 6: 1 (1 beat it, +5.3%)", lines)
         self.assertIn("does not change the rules", lines)
 
     def losers(self, n, typ="ANALYST"):
@@ -19830,7 +19833,7 @@ class BelfortLearnsFromNumbersNotMemory(unittest.TestCase):
         self.assertIn("**ANALYST** buys have lost on average", tips[0])
 
     def test_passes_that_keep_winning_say_the_bar_may_be_strict(self):
-        rows = [{"symbol": "NVDA", "utc": f"{d} 13:40:00", "score": 6, "held": False} for d in self.DAYS[:20]]
+        rows = [{"symbol": "NVDA", "utc": f"{d} 13:40:00", "score": 6, "held": False} for d in self.DAYS[1:21]]
         self.DAYS = [f"2026-09-{d:02d}" for d in range(1, 31)] + [f"2026-10-{d:02d}" for d in range(1, 11)]
         self.prices({"NVDA": [100.0 * 1.01 ** i for i in range(40)]}, spy=[100.0] * 40)
         self.calls(rows[:self.learn.MIN_SAMPLE - 1])
@@ -19870,7 +19873,10 @@ class BelfortLearnsFromNumbersNotMemory(unittest.TestCase):
         p = trade.load()
         with contextlib.redirect_stdout(io.StringIO()):
             trade.buy(p, "NVDA", 1, 129.0, "EARNINGS: x", 8, None, ("favorable", "test"))
-        self.assertEqual(p["trades"][-1]["score"], 8)
+        self.assertEqual((p["trades"][-1]["score"], p["trades"][-1]["spy"]), (8, 114.5))
+        with contextlib.redirect_stdout(io.StringIO()):
+            trade.sell(p, "NVDA", "all", 130.0, "judgement")
+        self.assertEqual(p["trades"][-1]["spy"], 114.5, "a sale keeps SPY too: the trade is graded beyond it")
         (self.agent / "data" / "candidates.json").write_text(json.dumps({"candidates": [{"symbol": "NVDA"}]}))
         (self.agent / "state" / ".cycle-started").write_text(f"{int(time.time()) - 60}\n")
         (self.agent / "state" / "calls.txt").write_text("NVDA | 5 | a reason that is long enough to count\n")
@@ -19879,6 +19885,53 @@ class BelfortLearnsFromNumbersNotMemory(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         c = json.loads((self.agent / "state" / "calls.jsonl").read_text().splitlines()[-1])
         self.assertEqual((c["price"], c["spy"]), (129.0, 114.5))
+
+    def test_a_pass_is_measured_only_on_a_final_close(self):
+        # 2026-10-26: quotes.json's last bar is today's price so far, and the
+        # 10-day mark was being read at the 09:35 wake, five minutes into the
+        # tenth day. A horizon now waits for that day's close.
+        self.calls([{"symbol": "NVDA", "utc": "2026-09-05 13:40:00", "score": 6, "price": 104.0, "spy": 102.0,
+                     "held": False}])
+        # 09-05 is bar 4; ten bars on is 09-15, the last bar here is 09-30.
+        early = self.learn.pass_outcomes(now=datetime(2026, 9, 15, 9, 40))["NVDA|2026-09-05"]
+        self.assertIsNotNone(early.get("vs_spy_5"))
+        self.assertIsNone(early.get("vs_spy_10"), "09-15's bar is not a close at 09:40 on 09-15")
+        late = self.learn.pass_outcomes(now=datetime(2026, 9, 15, 16, 30))["NVDA|2026-09-05"]
+        self.assertEqual((late["vs_spy_10"], late["due_10"]), (4.71, "2026-09-15"))
+        # The real chart this rests on, captured at 11:08 ET on 2026-10-01:
+        # its last bar is dated that day and its "close" is the price then.
+        r = json.loads((ROOT / "tests" / "fixtures" / "belfort-yahoo-chart-tsm.json").read_text())["chart"]["result"][0]
+        last = datetime.fromtimestamp(r["timestamp"][-1], timezone.utc).strftime("%Y-%m-%d")
+        self.assertEqual((last, round(r["indicators"]["quote"][0]["close"][-1], 2)),
+                         ("2026-10-01", r["meta"]["regularMarketPrice"]))
+        self.assertEqual(self.learn.et_time.final_bar_day(datetime(2026, 10, 1, 11, 8)), "2026-09-30")
+
+    def test_an_outcome_measured_before_the_fix_is_measured_again(self):
+        self.calls([{"symbol": "NVDA", "utc": "2026-09-05 13:40:00", "score": 6, "price": 104.0, "spy": 102.0,
+                     "held": False}])
+        old = {"symbol": "NVDA", "day": "2026-09-05", "score": 6, "ret_5": 1.0, "spy_5": 0.0, "vs_spy_5": 1.0,
+               "ret_10": 99.0, "spy_10": 0.0, "vs_spy_10": 99.0}
+        self.learn.OUTCOMES.write_text(json.dumps({"NVDA|2026-09-05": old}))
+        self.assertEqual(self.learn.pass_outcomes()["NVDA|2026-09-05"]["vs_spy_10"], 4.71)
+        self.learn.OUTCOMES.write_text(json.dumps({"NVDA|2026-09-05": old}))
+        self.prices({"JPM": [1.0] * 30}, spy=[1.0] * 30)
+        self.assertEqual(self.learn.pass_outcomes()["NVDA|2026-09-05"]["vs_spy_10"], 99.0,
+                         "with its prices gone, the old measurement is all there is - kept")
+
+    def test_a_closed_trade_is_graded_beyond_spy(self):
+        # TradingAgents' idea (2026-10-26): what a trade made beyond the
+        # market over its own days. SPY here runs 100 + 0.5 a day.
+        self.book([self.trade("BUY", "MU", 1, 100.0, "2026-09-02 13:36:00", reason="EARNINGS: x", spy=200.0),
+                   self.trade("SELL", "MU", 1, 110.0, "2026-09-05 19:56:00", realised_pnl=10.0, spy=204.0),
+                   self.trade("BUY", "AMD", 1, 100.0, "2026-09-11 13:36:00", reason="ANALYST: x"),
+                   self.trade("SELL", "AMD", 1, 101.0, "2026-09-21 19:56:00", realised_pnl=1.0)])
+        mu, amd = self.learn.T.closed_trades(self.learn.T.load())
+        self.assertEqual((mu["spy_pct"], mu["vs_spy"]), (2.0, 8.0), "SPY kept on the buy and the sale")
+        # Before SPY was kept: its closes on the two days, 105 and 110.
+        self.assertEqual((amd["spy_pct"], amd["vs_spy"]), (4.76, -3.76))
+        lines = "\n".join(self.learn.wake_lines(self.learn.record()))
+        self.assertIn("against SPY over each trade's own days: 1 of 2 beat it, +2.1% a trade beyond it", lines)
+        self.assertIn("Against SPY over each trade's own days: 1 of 2 beat it", self.learn.review("2026-09"))
 
     def test_it_is_wired_in(self):
         sh = (SCRIPTS / "belfort-cycle.sh").read_text()
@@ -19895,6 +19948,118 @@ class BelfortLearnsFromNumbersNotMemory(unittest.TestCase):
         self.assertIn("const SEEN = 'belfort-review-seen';", (pub / "markets.html").read_text())
         self.assertIn("localStorage.getItem('belfort-review-seen')", (pub / "dashboard.html").read_text())
         self.assertIn("## Your record", (ROOT / "agents" / "belfort" / "_belfort-agents-header.md").read_text())
+
+
+class BelfortsBuysCarryTheCaseAgainst(unittest.TestCase):
+    """Owner, 2026-10-26, from TradingAgents' bull/bear debate: the strongest
+    case against each buy, asked once after his wake with only what was known
+    when he bought, kept on the buy for the Coach. It changes no rule, stops
+    no buy, and he is never shown it."""
+
+    setUp = BelfortLearnsFromNumbersNotMemory.setUp
+    tearDown = BelfortLearnsFromNumbersNotMemory.tearDown
+    book = BelfortLearnsFromNumbersNotMemory.book
+    prices = BelfortLearnsFromNumbersNotMemory.prices
+    trade = staticmethod(BelfortLearnsFromNumbersNotMemory.trade)
+    DAYS = BelfortLearnsFromNumbersNotMemory.DAYS
+
+    def test_the_answer_is_read_by_code(self):
+        read = self.learn.T.read_bear
+        self.assertEqual(read('Sure: {"worry": 4, "risk": "Chasing", "why": "up 9% today, RSI 71"}'),
+                         {"worry": 4, "risk": "chasing", "why": "up 9% today, RSI 71"})
+        self.assertEqual(read('{"worry": 2, "risk": "vibes", "why": "x"}')["risk"], "other")
+        for bad in ('{"worry": 7, "why": "x"}', '{"worry": true, "why": "x"}', '{"worry": 2.5, "why": "x"}',
+                    '{"worry": 3, "why": ""}', "no json at all", None):
+            self.assertIsNone(read(bad), bad)
+
+    def test_the_question_holds_only_what_was_known_at_the_buy(self):
+        news = [{"symbol": "NVDA", "title": "Before the buy", "publisher": "Reuters",
+                 "published": "Fri, 05 Sep 2026 12:00:00 +0000"},
+                {"symbol": "NVDA", "title": "After the buy", "publisher": "Reuters",
+                 "published": "Fri, 05 Sep 2026 18:00:00 +0000"},
+                {"symbol": "AMD", "title": "Another name", "publisher": "Reuters",
+                 "published": "Fri, 05 Sep 2026 12:00:00 +0000"}]
+        t = self.trade("BUY", "NVDA", 2, 104.0, "2026-09-05 13:40:00", reason="EARNINGS: guidance raised",
+                       score=8, regime="favorable", catalyst={"title": "Nvidia raises guidance"})
+        q = self.learn.T.bear_question(t, news=news, dates={"NVDA": "2026-11-19"})
+        self.assertIn("Before the buy", q)
+        self.assertNotIn("After the buy", q, "news from after the buy would be hindsight")
+        self.assertNotIn("Another name", q)
+        for want in ("EARNINGS: guidance raised", "8/10", "Nvidia raises guidance", "favorable", "2026-11-19"):
+            self.assertIn(want, q)
+
+    def test_each_buy_of_this_wake_is_asked_once(self):
+        start = int(datetime(2026, 9, 5, 13, 30, tzinfo=timezone.utc).timestamp())
+        (self.agent / "state" / ".cycle-started").write_text(f"{start}\n")
+        self.book([self.trade("BUY", "MU", 1, 100.0, "2026-09-04 13:36:00"),
+                   self.trade("BUY", "NVDA", 1, 104.0, "2026-09-05 13:40:00"),
+                   self.trade("BUY", "AMD", 1, 50.0, "2026-09-05 13:41:00")])
+        asked = []
+
+        def ask(question, timeout):
+            asked.append(question)
+            return (True, '{"worry": 4, "risk": "chasing", "why": "up 9% today"}') if "NVDA" in question \
+                else (False, "usage limit reached")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.learn.T.cmd_bear(None, ask=ask, clock=lambda: start + 300)
+        self.assertEqual(len(asked), 2, "yesterday's MU is not this wake's")
+        self.assertIn("bear: NVDA worry 4/5", out.getvalue())
+        mu, nvda, amd = json.loads((self.agent / "state" / "portfolio.json").read_text())["trades"]
+        self.assertNotIn("bear", mu)
+        self.assertEqual((nvda["bear"]["worry"], nvda["bear"]["risk"]), (4, "chasing"))
+        self.assertEqual(amd["bear"]["unanswered"], "usage limit reached",
+                         "written down, never asked again later with later news")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.learn.T.cmd_bear(None, ask=lambda q, t: self.fail("asked twice"))
+        before = (self.agent / "state" / "portfolio.json").read_text()
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.learn.T.cmd_bear(types.SimpleNamespace(test=True),
+                                  ask=lambda q, t: (True, '{"worry": 2, "risk": "market", "why": "fine"}'))
+        self.assertIn("AMD bought 2026-09-05 13:41:00 UTC\nworry 2/5", out.getvalue())
+        self.assertEqual((self.agent / "state" / "portfolio.json").read_text(), before, "--test writes nothing")
+
+    def test_no_question_starts_too_late_for_the_verifier(self):
+        # belfort-cycle.service stops the cycle at 900 s; his wake may take
+        # 600. A question that ran past it would kill the verifier with it.
+        unit = (ROOT / "deploy" / "belfort-cycle.service").read_text()
+        self.assertIn("TimeoutStartSec=900", unit)
+        T = self.learn.T
+        self.assertLess(T.BEAR_DEADLINE, 900 - 60, "room left for the verifier")
+        start = int(datetime(2026, 9, 5, 13, 30, tzinfo=timezone.utc).timestamp())
+        (self.agent / "state" / ".cycle-started").write_text(f"{start}\n")
+        self.book([self.trade("BUY", "NVDA", 1, 104.0, "2026-09-05 13:40:00"),
+                   self.trade("BUY", "AMD", 1, 50.0, "2026-09-05 13:41:00")])
+        now, timeouts = [start + T.BEAR_DEADLINE - 40], []
+
+        def ask(question, timeout):
+            timeouts.append(timeout)
+            now[0] += 30
+            return True, '{"worry": 3, "risk": "market", "why": "breadth is thin"}'
+        with contextlib.redirect_stdout(io.StringIO()):
+            T.cmd_bear(None, ask=ask, clock=lambda: now[0])
+        self.assertEqual(timeouts, [40], "the first gets what is left; the second would start too late")
+        nvda, amd = json.loads((self.agent / "state" / "portfolio.json").read_text())["trades"]
+        self.assertEqual(nvda["bear"]["worry"], 3)
+        self.assertEqual(amd["bear"]["unanswered"], "no time left in this cycle")
+
+    def test_the_case_travels_with_the_closed_trade(self):
+        self.book([self.trade("BUY", "MU", 1, 100.0, "2026-09-02 13:36:00", reason="EARNINGS: x",
+                              bear={"worry": 5, "risk": "priced in", "why": "already up 30%"}),
+                   self.trade("SELL", "MU", 1, 95.0, "2026-09-05 19:56:00", realised_pnl=-5.0, reason="STOP LOSS")])
+        r = self.learn.record()
+        self.assertEqual(r["trades"][0]["bear"]["worry"], 5)
+        self.assertEqual(r["by_bear"]["worried 4-5"]["n"], 1)
+        self.assertNotIn("worried", "\n".join(self.learn.wake_lines(r)), "he is never shown it")
+
+    def test_it_runs_after_his_wake_and_never_fails_the_cycle(self):
+        sh = (SCRIPTS / "belfort-cycle.sh").read_text()
+        line = 'python3 "$ROOT/scripts/belfort-trade.py" bear 2>&1 || echo'
+        self.assertIn(line, sh)
+        self.assertLess(sh.index("scripts/wake.py"), sh.index(line), "after he has decided, so it cannot sway him")
+        self.assertLess(sh.index(line), sh.index("exec python3"))
+        r = subprocess.run([sys.executable, str(SCRIPTS / "belfort-trade.py"), "bear"], capture_output=True,
+                           text=True, env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root)))
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "bear: no buy this wake"), r.stderr)
 
 
 class TheMarketsPageIsWiredInOnePlace(unittest.TestCase):

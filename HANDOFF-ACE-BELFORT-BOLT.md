@@ -201,6 +201,29 @@ change - rules change only when the owner changes them.
 held through real daily prices under the sell rules now and before 2026-10-22
 (`--trail N` tries any trail); it changes nothing.
 
+**Three ideas from TradingAgents (owner approved 2026-10-26)**, all for
+grading, none changes a rule:
+* **Beyond SPY.** Every buy, sale and call keeps SPY's price (`spy_now`), and
+  `closed_trades` gives each trade `spy_pct` and `vs_spy` (`spy_move`; older
+  trades use SPY's closes on the two days). His wake record and the monthly
+  review show it.
+* **The case against.** After his wake, `belfort-cycle.sh` runs
+  `belfort-trade.py bear`: each buy of that wake is put to his own model on
+  the plan as one question (worry 1-5, a risk, why), using only what was known
+  when he bought. It's kept on the BUY trade, and he never sees it. Unanswered
+  questions are written down, not retried. `bear --test` asks about his latest
+  buy and writes nothing.
+* **Point in time.** `pass_outcomes` measures only on final closes
+  (`et_time.final_bar_day`): the 10-day marks were being read at the 09:35
+  wake from today's half-formed bar. A call with no saved price is based on
+  the last close before it. Rows measured before the fix are measured again
+  (`MEASURE_VERSION`). The Coach's "early exit" reads the close on the day of
+  the sale, not the price whenever the journal ran.
+The Coach shows all three: vs SPY and the case against on each journal row,
+"Against the market", "Case against" patterns and "Names he passed on" (got
+away / dodged) in the daily analysis. The Sunday question gets `against_spy`
+and `passed_on` too.
+
 Rules for the model: `agents/belfort/_belfort-agents-header.md`. Tests:
 `tests/test_parsers.py` classes starting `Belfort` and `TheMarketsPage`.
 

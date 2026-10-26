@@ -41,10 +41,12 @@ Standard library only.
 
 import argparse
 import fcntl
+import importlib.util
 import json
 import re
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -366,6 +368,15 @@ def benchmark(symbol):
     return (quotes_doc().get("benchmarks") or {}).get(symbol)
 
 
+def spy_now(doc=None):
+    """SPY's price now. Kept on every call, buy and sale, so each decision is
+    measured against the market from the moment it was made - TradingAgents'
+    idea (2026-10-26): grade a call by what it did beyond the market, not by
+    whether the market rose."""
+    doc = doc if doc is not None else quotes_doc()
+    return ((doc.get("benchmarks") or {}).get("SPY") or {}).get("price")
+
+
 def headline_age(h, now_ts=None):
     """Seconds since a news.json headline was published, or None if its date
     cannot be read. The one reading of a headline's age: a buy's catalyst
@@ -623,7 +634,7 @@ def buy(p, symbol, shares, price=None, reason="", score=0, cited=None, state=Non
     p["trades"].append({"cycle": p.get("cycle_count", 0), "side": "BUY", "symbol": sym,
                         "shares": shares, "price": round(float(px), 2),
                         "notional": round(cost, 2), "utc": now(), "reason": reason or "",
-                        "catalyst": cited, "regime": state, "score": score,
+                        "catalyst": cited, "regime": state, "score": score, "spy": spy_now(),
                         # Kept on the trade too: the position goes when it is sold, and
                         # belfort-learn.py's replay needs the stop it was bought with.
                         "risk_pct": r})
@@ -674,7 +685,7 @@ def sell(p, symbol, shares_arg="all", price=None, reason=""):
     p["trades"].append({"cycle": p.get("cycle_count", 0), "side": "SELL", "symbol": sym,
                         "shares": shares, "price": round(float(px), 2),
                         "notional": round(proceeds, 2), "realised_pnl": round(realised, 2),
-                        "utc": now(), "reason": reason or ""})
+                        "utc": now(), "reason": reason or "", "spy": spy_now()})
     if trim:
         # Half at the trim, the rest here - against all of it at the trim.
         p["trades"][-1]["trim_test"] = {
@@ -757,12 +768,35 @@ def catalyst_type(reason):
     return m.group(1).strip() if m else "untagged"
 
 
-def closed_trades(p):
+def spy_move(buy, sale, doc):
+    """SPY's percent move over one trade's own days: from its price kept on
+    the buy to the one kept on the sale. A trade from before they were kept
+    (2026-10-26) uses SPY's closes on the two days instead, the nearest the
+    record has. None when neither is there."""
+    a, b = buy.get("spy"), sale.get("spy")
+    if a is None or b is None:
+        closes = dict(((doc.get("benchmarks") or {}).get("SPY") or {}).get("history") or [])
+        a = a if a is not None else closes.get(str(buy.get("utc") or "")[:10])
+        b = b if b is not None else closes.get(str(sale.get("utc") or "")[:10])
+    try:
+        return round((float(b) / float(a) - 1) * 100, 2)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def closed_trades(p, doc=None):
     """Every sale that realised a profit or loss, with the buy that opened
-    its position: what it was bought on, the score, the regime. The one
-    reading of a closed trade - stats and belfort-learn.py's record both use
-    it. A position added to keeps its first buy."""
+    its position: what it was bought on, the score, the regime, and what it
+    made beyond SPY over the same days. The one reading of a closed trade -
+    stats, coach.py and belfort-learn.py's record all use it. A position
+    added to keeps its first buy."""
     lots, held, out = {}, {}, []
+    market = [doc]
+
+    def spy(entry, t):
+        if (entry.get("spy") is None or t.get("spy") is None) and market[0] is None:
+            market[0] = quotes_doc()
+        return spy_move(entry, t, market[0] or {})
     for t in p.get("trades", []):
         sym, side = str(t.get("symbol", "")).upper(), str(t.get("side", "")).upper()
         if side == "BUY":
@@ -777,7 +811,12 @@ def closed_trades(p):
                     "judgement")
         entry = lots.get(sym) or {}
         shares = float(t.get("shares") or 0)
-        out.append({"symbol": t.get("symbol"), "pnl": pnl, "pct": pnl / cost * 100 if cost else 0.0,
+        pct = pnl / cost * 100 if cost else 0.0
+        spy_pct = spy(entry, t)
+        out.append({"symbol": t.get("symbol"), "pnl": pnl, "pct": pct,
+                    "spy_pct": spy_pct, "vs_spy": None if spy_pct is None else round(pct - spy_pct, 2),
+                    # The case against it, asked when it was bought (cmd_bear).
+                    "bear": entry.get("bear"),
                     "rule": rule, "sold_utc": t.get("utc"), "bought_utc": entry.get("utc"),
                     # For coach.py's journal: the prices, the size and both reasons.
                     "shares": shares, "cost": round(cost, 2), "exit_price": t.get("price"),
@@ -794,7 +833,7 @@ def closed_trades(p):
 def book_stats(p, book, doc=None):
     """The numbers a strategy is judged by, for one book."""
     doc = doc if doc is not None else quotes_doc()
-    closed = closed_trades(p)
+    closed = closed_trades(p, doc)
     wins = [c for c in closed if c["pnl"] > 0]
     losses = [c for c in closed if c["pnl"] < 0]
     start = float(p.get("starting_cash") or 10000)
@@ -1164,7 +1203,7 @@ def cmd_calls(a):
         return 1
     doc = quotes_doc()
     quotes, known = doc.get("quotes") or {}, set(doc.get("quotes") or {})
-    spy = ((doc.get("benchmarks") or {}).get("SPY") or {}).get("price")
+    spy = spy_now(doc)
     got, bad = parse_calls(CALLS_IN.read_text(errors="replace"), known)
     if bad:
         print("nothing recorded:\n  " + "\n  ".join(bad), file=sys.stderr)
@@ -1184,6 +1223,165 @@ def cmd_calls(a):
     print(f"recorded {len(got)} call(s) for {wake}." + (
         f" Still owed: {', '.join(left)} - add a line for each and run this again." if left
         else " Every candidate has a call."))
+    return 0
+
+
+# --- the case against ------------------------------------------------------
+#
+# Owner, 2026-10-26, from TradingAgents' bull/bear debate: before a buy is
+# judged by its result, put on record the strongest case against it, made
+# when it was bought. After his wake, belfort-cycle.sh runs `bear`: each buy
+# of this wake is put to his own model on the plan as ONE question (wake.py
+# ask, no tools) with only what was known when he bought - his reason, the
+# quote, headlines published before the buy. The answer is kept on the buy
+# and travels with the closed trade, so the Coach can count whether the
+# buys it worried about did worse. It changes no rule and stops no buy: he
+# never sees it, and a question the plan does not answer is written down as
+# unanswered, never asked again later with later news.
+
+BEAR_MAX = 3                # buys asked about a wake; he makes one or two
+BEAR_TIMEOUT = 60           # a one-turn answer takes seconds
+# belfort-cycle.service stops the whole cycle at 900 seconds, and his own
+# wake may take 600 of them. No question starts after this many seconds into
+# the cycle, so the verifier after it always gets to run.
+BEAR_DEADLINE = 780
+BEAR_MIN_LEFT = 15
+BEAR_HEADLINES = 6
+BEAR_RISKS = ("chasing", "weak catalyst", "priced in", "earnings", "market", "valuation", "sector", "other")
+BEAR_ASK = """Belfort, a paper stock trader, has just bought {sym} ({cluster}). Make the strongest honest case that this buy is a mistake - the case a sceptical risk manager would put to him. Use only what is below: it is everything that was known when he bought.
+
+His reason: {reason}
+His score: {score}/10 (he buys at 7 or more)
+The catalyst he cited: {catalyst}
+Price ${price}: {change} today, {pct20} from its 20-day average, RSI {rsi}, a typical day's range {atr}% of the price
+Market: {regime}
+Next earnings: {earnings}
+Headlines on {sym} before the buy:
+{heads}
+
+Answer with one JSON object and nothing else:
+{{"worry": <1 to 5, where 5 means this buy is very likely a mistake>, "risk": "<one of: {risks}>", "why": "<the case against, at most 40 words, citing the facts above>"}}"""
+
+
+def _utc_ts(text):
+    try:
+        return datetime.strptime(str(text)[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
+def bear_question(t, doc=None, news=None, dates=None):
+    """The question for one BUY trade, from what was known at its time."""
+    sym = str(t["symbol"]).upper()
+    doc = doc if doc is not None else quotes_doc()
+    q = (doc.get("quotes") or {}).get(sym) or {}
+    if news is None:
+        try:
+            news = json.loads(NEWS.read_text()).get("headlines") or []
+        except Exception:
+            news = []
+    if dates is None:
+        try:
+            dates = json.loads(EARNINGS.read_text()).get("dates") or {}
+        except Exception:
+            dates = {}
+    at = _utc_ts(t.get("utc")) or 0
+    heads = [h for h in news if str(h.get("symbol", "")).upper() == sym
+             and (headline_age(h, at) or -1) >= 0]          # published before the buy, not after
+    heads = sorted(heads, key=lambda h: headline_age(h, at))[:BEAR_HEADLINES]
+    cited = t.get("catalyst") or {}
+    fmt = lambda v, f="{:+.1f}%": "unknown" if v is None else f.format(float(v))
+    return BEAR_ASK.format(
+        sym=sym, cluster=cluster_of(sym), reason=" ".join(str(t.get("reason") or "none given").split())[:400],
+        score=t.get("score") if t.get("score") is not None else "?",
+        catalyst=cited.get("title") or "none cited", price=t.get("price"),
+        change=fmt(q.get("change_pct")), pct20=fmt(q.get("pct_from_sma20")), rsi=fmt(q.get("rsi14"), "{:.0f}"),
+        atr=fmt(q.get("atr_pct"), "{:.1f}"), regime=t.get("regime") or "unknown",
+        earnings=dates.get(sym) or "not in the calendar",
+        heads="\n".join(f"- {h.get('published')} · {h.get('publisher') or '?'} · {h.get('title')}" for h in heads)
+        or "- none in the feed",
+        risks=", ".join(BEAR_RISKS))
+
+
+def read_bear(text):
+    """{"worry", "risk", "why"} from the answer, or None if it cannot be read."""
+    m = re.search(r"\{.*\}", text or "", re.S)
+    try:
+        d = json.loads(m.group(0)) if m else None
+    except ValueError:
+        d = None
+    if not isinstance(d, dict):
+        return None
+    w = d.get("worry")
+    if isinstance(w, bool) or not isinstance(w, (int, float)) or not 1 <= w <= 5 or w != int(w):
+        return None
+    why = " ".join(str(d.get("why") or "").split())
+    if not why:
+        return None
+    risk = str(d.get("risk") or "").strip().lower()
+    return {"worry": int(w), "risk": risk if risk in BEAR_RISKS else "other", "why": why[:300]}
+
+
+def _ask_plan(question, timeout=BEAR_TIMEOUT):
+    spec = importlib.util.spec_from_file_location("wake_belfort_bear", Path(__file__).resolve().parent / "wake.py")
+    w = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(w)
+    return w.ask("belfort", question, timeout)
+
+
+def bears_due(p, started):
+    """This wake's buys with no case against them yet."""
+    if not started:
+        return []
+    return [t for t in p.get("trades", []) if str(t.get("side", "")).upper() == "BUY" and "bear" not in t
+            and (_utc_ts(t.get("utc")) or 0) >= started][:BEAR_MAX]
+
+
+def cmd_bear(a, ask=None, clock=None):
+    """Ask, then write. The questions take a minute or two and run outside
+    the book's lock, so the 10-minute exit check is never held up by them;
+    the lock is taken only to write the answers onto the buys."""
+    ask = ask or _ask_plan
+    if getattr(a, "test", False):
+        # The case against his latest buy, asked now and printed - nothing is
+        # written. To see a real answer from the plan by hand.
+        buys = [t for t in load().get("trades", []) if str(t.get("side", "")).upper() == "BUY"]
+        if not buys:
+            print("bear --test: no buy in the book yet")
+            return 0
+        ok, text = ask(bear_question(buys[-1]), BEAR_TIMEOUT)
+        got = read_bear(text) if ok else None
+        print(f"{buys[-1]['symbol']} bought {buys[-1]['utc']} UTC\n"
+              + (f"worry {got['worry']}/5, {got['risk']} - {got['why']}" if got
+                 else f"not answered - {text[:300]}") + "\n(test only: nothing was written)")
+        return 0 if got else 1
+    started = cycle_started()
+    due = bears_due(load(), started)
+    if not due:
+        print("bear: no buy this wake")
+        return 0
+    doc, answers = quotes_doc(), {}
+    for t in due:
+        left = min(BEAR_TIMEOUT, started + BEAR_DEADLINE - (clock or time.time)())
+        if left < BEAR_MIN_LEFT:
+            ok, text = False, "no time left in this cycle"
+        else:
+            ok, text = ask(bear_question(t, doc), int(left))
+        got = read_bear(text) if ok else None
+        answers[(t["utc"], str(t["symbol"]).upper())] = (
+            dict(got, utc=now()) if got else
+            {"unanswered": (text if not ok else "the answer could not be read")[:160], "utc": now()})
+        b = answers[(t["utc"], str(t["symbol"]).upper())]
+        print(f"bear: {t['symbol']} " + (f"worry {b['worry']}/5, {b['risk']} - {b['why']}" if got
+                                         else f"not answered - {b['unanswered']}"))
+    with open(STATE.parent / ".trade.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        p = load()
+        for t in p.get("trades", []):
+            key = (t.get("utc"), str(t.get("symbol", "")).upper())
+            if str(t.get("side", "")).upper() == "BUY" and key in answers and "bear" not in t:
+                t["bear"] = answers[key]
+        save(p)
     return 0
 
 
@@ -1396,6 +1594,10 @@ def main():
     e.add_argument("--apply", action="store_true", help="sell every position whose exit is due")
     e.set_defaults(fn=cmd_exits)
 
+    bb = sub.add_parser("bear", help="after a wake: the case against each of its buys, on record (one question each)")
+    bb.add_argument("--test", action="store_true", help="ask about his latest buy now, print it, write nothing")
+    bb.set_defaults(fn=cmd_bear, own_lock=True)
+
     s = sub.add_parser("sell")
     s.add_argument("symbol"); s.add_argument("shares", nargs="?", default="all")
     s.add_argument("--price", type=float); s.add_argument("--reason", default="")
@@ -1407,6 +1609,8 @@ def main():
     # Belfort's own wakes, and a sell from his cycle landing between its read
     # and its write would be undone. The kernel's lock: a crash releases it.
     STATE.parent.mkdir(parents=True, exist_ok=True)
+    if getattr(a, "own_lock", False):
+        return a.fn(a) or 0
     with open(STATE.parent / ".trade.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         return a.fn(a) or 0

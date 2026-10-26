@@ -107,4 +107,9 @@ if ! python3 "$ROOT/scripts/check-provider-error.py" "$LOG"; then
   exit 1
 fi
 
+# The case against each buy he made this wake, on record for the Coach -
+# one question each on his own model, asked after he has finished, so it
+# cannot sway him and he is never told. It never fails the cycle.
+python3 "$ROOT/scripts/belfort-trade.py" bear 2>&1 || echo "  !! bear: the case against this wake's buys could not be asked"
+
 exec python3 "$ROOT/scripts/belfort-verify.py" "$MEM_BEFORE" "$CYCLES_BEFORE" "$STARTED"

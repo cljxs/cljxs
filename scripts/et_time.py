@@ -104,6 +104,20 @@ def slot(schedule, now=None):
     return schedule[-1][1]
 
 
+# A US stock's daily bar is final after the 16:00 close; ten minutes for the
+# feed to settle. Before it, the day's "close" in a Yahoo chart is the price
+# right now - and belfort-learn.py measured passes on it, at the 09:35 wake,
+# as if it were the close (found 2026-10-26).
+STOCK_CLOSE = (16, 10)
+
+
+def final_bar_day(now=None):
+    """The last Eastern day whose daily stock bar is final: today after
+    STOCK_CLOSE, otherwise yesterday. A bar dated after it is still moving."""
+    now = now or eastern_now()
+    return day(now) if (now.hour, now.minute) >= STOCK_CLOSE else day(now - timedelta(days=1))
+
+
 def report_name(schedule, now=None):
     now = now or eastern_now()
     return f"{day(now)}-{slot(schedule, now)}.md"

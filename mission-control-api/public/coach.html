@@ -56,6 +56,7 @@
   .tag.win{color:var(--green2);border-color:rgba(34,197,94,.45)} .tag.loss{color:#fb7185;border-color:rgba(244,63,94,.45)}
   ul{margin:6px 0 10px;padding-left:18px} li{margin:3px 0}
   .mist{color:#fbbf24}
+  .bear{margin-top:6px;padding-top:6px;border-top:1px dashed var(--line);color:#fca5a5}
   .review{white-space:pre-wrap;font-size:13.5px;line-height:1.55}
   .filters{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
   .filters button{font:600 12px var(--sans);color:var(--mute);background:none;border:1px solid var(--line);border-radius:7px;padding:5px 10px;cursor:pointer}
@@ -131,8 +132,8 @@ function journal(all) {
     <td><b>${esc(r.symbol)}</b> <span class="muted">${esc(r.asset)}</span></td><td>${esc(r.side)}</td>
     <td>${esc(r.entry_price)}<div class="muted">${esc(when(r.opened_utc))}</div></td><td>${esc(r.exit_price)}</td>
     <td>$${Math.round(r.size_usd || 0).toLocaleString()}</td>
-    <td class="${cls(r.pnl_usd)}">${money(r.pnl_usd)}<div>${pct(r.pnl_pct)}</div></td>
-    <td>${esc(r.setup || '—')}</td><td class="why">${esc(r.entry_reason)}</td><td class="why">${esc(r.exit_reason)}</td>
+    <td class="${cls(r.pnl_usd)}">${money(r.pnl_usd)}<div>${pct(r.pnl_pct)}</div>${r.vs_spy_pct != null ? `<div class="muted">${pct(r.vs_spy_pct)} vs SPY</div>` : ''}</td>
+    <td>${esc(r.setup || '—')}</td><td class="why">${esc(r.entry_reason)}${r.bear_worry ? `<div class="bear"><b>Case against (worry ${r.bear_worry}/5, ${esc(r.bear_risk)}):</b> ${esc(r.bear_why)}</div>` : ''}</td><td class="why">${esc(r.exit_reason)}</td>
     <td><span class="tag ${Math.abs(r.pnl_pct) < 0.25 ? '' : r.pnl_pct > 0 ? 'win' : 'loss'}">${Math.abs(r.pnl_pct) < 0.25 ? 'scratch' : r.pnl_pct > 0 ? 'win' : 'loss'}</span></td></tr>`).join('')}
   </table></div>`;
 }
@@ -148,9 +149,21 @@ function daily() {
       <div class="k">What went well</div><ul>${(a.went_well || []).map(x => `<li>${esc(x)}</li>`).join('') || '<li class="muted">nothing closed in profit</li>'}</ul>
       <div class="k">What went badly</div><ul>${(a.went_badly || []).map(x => `<li>${esc(x)}</li>`).join('') || '<li class="muted">no losing trade</li>'}</ul>
       <div class="k">Mistakes</div><ul>${(a.mistakes || []).map(m => `<li class="mist">${esc(m.agent)} ${esc(m.symbol)}: ${esc(m.kind)} - ${esc(m.detail)}</li>`).join('') || '<li class="muted">none a script can see</li>'}</ul>
-      <div class="k">Patterns</div><ul>${Object.entries((a.patterns || {})['by exit rule'] || {}).map(([k, g]) => `<li>${esc(k)}: ${g.trades} trade(s), ${g.wins} won, avg ${pct(g.avg_pct)}</li>`).join('') || '<li class="muted">—</li>'}</ul>
+      ${a.market ? `<div class="k">Against the market</div><ul><li>${a.market.beat_spy} of ${a.market.trades} beat SPY over their own days · ${pct(a.market.avg_vs_spy_pct)} a trade beyond it</li></ul>` : ''}
+      <div class="k">Patterns</div><ul>${Object.entries((a.patterns || {})['by exit rule'] || {}).map(([k, g]) => `<li>${esc(k)}: ${g.trades} trade(s), ${g.wins} won, avg ${pct(g.avg_pct)}</li>`).join('') || '<li class="muted">—</li>'}
+        ${Object.entries((a.patterns || {})['by the case against it'] || {}).map(([k, g]) => `<li>Case against, ${esc(k)}: ${g.trades} trade(s), ${g.wins} won, avg ${pct(g.avg_pct)}</li>`).join('')}</ul>
+      ${a.passes ? passesCard(a.passes) : ''}
       ${a.ace ? aceCard(a.ace) : ''}
       <div class="muted">${esc(a.note || '')}</div></div>`; }).join('');
+}
+
+// The names Belfort passed on, 10 trading days later against SPY: the
+// trades he did not make, graded like the ones he did.
+function passesCard(p) {
+  const line = r => `${esc(r.symbol)} (scored ${esc(r.score)}, called ${esc(r.day)}) ${pct(r.vs_spy_10)} vs SPY`;
+  return `<div class="k">Names he passed on</div><ul><li>${p.measured} measured 10 trading days on: ${p.beat_spy} beat SPY, ${pct(p.avg_vs_spy_pct)} beyond it on average</li>
+    ${(p['got away'] || []).length ? `<li>Got away: ${p['got away'].map(line).join('; ')}</li>` : ''}
+    ${(p.dodged || []).length ? `<li>Dodged: ${p.dodged.map(line).join('; ')}</li>` : ''}</ul>`;
 }
 
 // Ace is measured by closing-line value - did the market move to his price
@@ -172,6 +185,7 @@ function weekly() {
     <div class="stats">${Object.entries((w.data || {}).summary_by_agent || {}).map(([n, s]) => `<div class="stat"><div class="muted">${esc(n)}</div>
       <div class="v ${cls(s.net_usd)}">${money(s.net_usd)}</div><div class="muted">${s.trades} trades · win ${s.win_rate ?? '—'}% · ${pct(s.expectancy_pct)} a trade</div></div>`).join('')}</div>
     ${(w.data || {}).ace ? aceCard(w.data.ace) : ''}
+    ${(w.data || {}).passed_on ? passesCard(w.data.passed_on) : ''}
     <div class="review">${esc(w.review || '')}</div></div>`).join('');
 }
 

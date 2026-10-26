@@ -437,6 +437,67 @@ def types_ask(ask):
     return types.SimpleNamespace(ask=ask)
 
 
+class BelfortsCoachGradesAgainstTheMarket(CoachCase):
+    """Owner, 2026-10-26, three ideas from TradingAgents: each trade graded by
+    what it made beyond SPY, the names he passed on graded the same way, and
+    the case against each buy kept beside it - all for the Coach to count."""
+
+    def quotes(self, nvda, spy, price=None):
+        days = sorted(nvda)
+        (self.root / "agents/belfort/data/quotes.json").write_text(json.dumps({
+            "quotes": {"NVDA": {"price": price or nvda[days[-1]], "history": [[d, nvda[d]] for d in days]}},
+            "benchmarks": {"SPY": {"price": spy[days[-1]], "history": [[d, spy[d]] for d in days]}}}))
+
+    def test_a_trade_beyond_the_market_and_the_case_against_it(self):
+        bear = {"worry": 4, "risk": "chasing", "why": "up 9% the day he bought"}
+        self.belfort([dict(self.BEL[0], spy=500.0, bear=bear), dict(self.BEL[1], spy=515.0)])
+        r = self.c.belfort_rows()[0]
+        self.assertEqual((r["spy_pct"], r["vs_spy_pct"]), (3.0, 9.0), "+12% while SPY made +3%")
+        self.assertEqual((r["bear_worry"], r["bear_risk"]), (4, "chasing"))
+        a = self.c.analyse([r])
+        self.assertEqual(a["market"], {"trades": 1, "beat_spy": 1, "avg_vs_spy_pct": 9.0})
+        self.assertEqual(a["patterns"]["by the case against it"]["worried 4-5"]["trades"], 1)
+        md = self.c.daily_markdown("2026-10-19", [r], a, "belfort")
+        self.assertIn("**Against SPY** over each trade's own days: 1 of 1 beat it, +9.00% a trade beyond it", md)
+        self.assertIn("the case against it, worried 4-5: 1 trade(s), 1 won", md)
+
+    def test_the_names_he_passed_on_that_came_due(self):
+        rows = {"AMD|2026-10-02": {"symbol": "AMD", "day": "2026-10-02", "score": 6, "ret_10": 14.0,
+                                   "vs_spy_10": 12.0, "due_10": "2026-10-16", "v": 2},
+                "MU|2026-10-03": {"symbol": "MU", "day": "2026-10-03", "score": 5, "ret_10": -6.0,
+                                  "vs_spy_10": -8.0, "due_10": "2026-10-17", "v": 2},
+                "TSM|2026-10-09": {"symbol": "TSM", "day": "2026-10-09", "score": 6, "ret_10": 1.0,
+                                   "vs_spy_10": 0.5, "due_10": "2026-10-23", "v": 2}}
+        (self.root / "agents/belfort/state/pass-outcomes.json").write_text(json.dumps(rows))
+        ps = self.c.belfort_passes("2026-10-12", "2026-10-18")
+        self.assertEqual((ps["measured"], ps["beat_spy"], ps["avg_vs_spy_pct"]), (2, 1, 2.0),
+                         "only those whose 10-day mark fell in the week")
+        self.assertEqual([r["symbol"] for r in ps["got away"]], ["AMD"])
+        self.assertEqual([r["symbol"] for r in ps["dodged"]], ["MU"])
+        self.assertIn("got away: AMD (scored 6, called 2026-10-02) +12.0% vs SPY", self.c.passes_lines(ps))
+        self.assertIsNone(self.c.belfort_passes("2026-11-01", "2026-11-07"))
+        self.c.write_day("belfort", "2026-10-16", [])
+        md = (self.c.journal_dir("belfort") / "2026-10-16.md").read_text()
+        self.assertIn("**Names he passed on**", md)
+        self.assertIsNone(self.c.weekly_data("2026-10-12", "2026-10-18", "bolt")[1]["passed_on"],
+                          "Bolt's coach never sees Belfort's")
+        self.assertEqual(self.c.weekly_data("2026-10-12", "2026-10-18", "belfort")[1]["passed_on"]["measured"], 2)
+
+    def test_an_early_exit_is_read_at_the_close_of_the_day_he_sold(self):
+        # 2026-10-26: it read the price when the journal ran, so a backfill
+        # weeks later graded the sale by a price from weeks later.
+        self.belfort(self.BEL)
+        self.quotes({"2026-10-14": 100.0, "2026-10-19": 115.0, "2026-10-20": 150.0},
+                    {"2026-10-14": 500.0, "2026-10-19": 505.0, "2026-10-20": 510.0})
+        self.assertEqual(self.c.belfort_rows()[0]["after_exit_pct"], round((115 / 112 - 1) * 100, 2))
+
+    def test_the_page_shows_it(self):
+        html = (ROOT / "mission-control-api/public/coach.html").read_text()
+        for want in ("vs SPY</div>", "Case against (worry", "function passesCard(p)", "Got away:",
+                     "(w.data || {}).passed_on ? passesCard(w.data.passed_on)", "Against the market"):
+            self.assertIn(want, html)
+
+
 class WhereItShowsAndWhenItRuns(unittest.TestCase):
 
     def test_page_route_navigation_and_timers(self):

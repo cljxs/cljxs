@@ -77,6 +77,14 @@ def score_band(score):
 BAND_ORDER = ["0-3", "4-5", "6", "7", "8", "9-10", "unscored"]
 
 
+def bear_band(worry):
+    """The case against a buy (belfort-trade.py bear), in three bands."""
+    return "worried 4-5" if worry >= 4 else "worried 3" if worry == 3 else "worried 1-2"
+
+
+BEAR_ORDER = ["worried 1-2", "worried 3", "worried 4-5"]
+
+
 def summary(rows, field):
     vals = [r[field] for r in rows if r.get(field) is not None]
     if not vals:
@@ -104,14 +112,25 @@ def _index_on(hist, day):
     return i
 
 
-def pass_outcomes(doc=None, calls=None):
+MEASURE_VERSION = 2   # 2026-10-26: final closes only, and no close from after the call as its base
+
+
+def pass_outcomes(doc=None, calls=None, now=None):
     """{"SYM|day": outcome} for every name he passed on: what it did over
     HORIZONS trading days from his call, and SPY over the same days. The first
     call of a day stands for that day - he calls the same name at the open and
     the close, and counting both would count one move twice. Held names are
     not passes. Kept in OUTCOMES once measured; quotes.json forgets after 90
-    trading days and the review looks back further."""
+    trading days and the review looks back further.
+
+    Point in time (2026-10-26). A horizon is measured on a FINAL close only
+    (et_time.final_bar_day): quotes.json's last bar is today's price so far,
+    and every 10-day number was being taken at the 09:35 wake, five minutes
+    into the tenth day. And a call with no price kept is based on the last
+    close before it, never the close of its own day, which came after it.
+    Rows measured before then are measured again while the prices last."""
     doc = doc if doc is not None else T.quotes_doc()
+    final = et_time.final_bar_day(now)
     calls = T.calls_log() if calls is None else calls
     try:
         cache = json.loads(OUTCOMES.read_text())
@@ -126,23 +145,32 @@ def pass_outcomes(doc=None, calls=None):
         if c.get("held") or not day or key in seen:
             continue
         seen.add(key)
-        row = dict(cache.get(key) or {"symbol": sym, "day": day, "score": c.get("score"),
-                                 "cluster": T.cluster_of(sym), "wake": c.get("wake")})
-        if all(row.get(f"vs_spy_{k}") is not None for k in HORIZONS):
+        old = cache.get(key) or {}
+        if old.get("v") == MEASURE_VERSION and all(old.get(f"vs_spy_{k}") is not None for k in HORIZONS):
             continue
         hist = [(d, float(v)) for d, v in (quotes.get(sym) or {}).get("history") or []]
         i, j = _index_on(hist, day), _index_on(spy, day)
-        if i is None or j is None:
-            cache.setdefault(key, row)
+        if i is None or j is None:          # its prices are gone: what was measured is kept
+            cache.setdefault(key, {"symbol": sym, "day": day, "score": c.get("score"),
+                                   "cluster": T.cluster_of(sym), "wake": c.get("wake")})
             continue
-        base = float(c.get("price") or hist[i][1])
-        spy_base = float(c.get("spy") or spy[j][1])
+        row = {"symbol": sym, "day": day, "score": c.get("score"), "cluster": T.cluster_of(sym),
+               "wake": c.get("wake"), "v": MEASURE_VERSION}
+
+        def known(series, n):
+            # the last close known when he called: the call day's own close came after
+            n = n - 1 if series[n][0] == day else n
+            return series[n][1] if n >= 0 else None
+        base = float(c.get("price") or known(hist, i) or 0)
+        spy_base = float(c.get("spy") or known(spy, j) or 0)
         for k in HORIZONS:
-            if i + k < len(hist) and j + k < len(spy):
+            if base and spy_base and i + k < len(hist) and j + k < len(spy) \
+                    and max(hist[i + k][0], spy[j + k][0]) <= final:
                 ret = (hist[i + k][1] / base - 1) * 100
                 sret = (spy[j + k][1] / spy_base - 1) * 100
                 row[f"ret_{k}"], row[f"spy_{k}"] = round(ret, 2), round(sret, 2)
                 row[f"vs_spy_{k}"] = round(ret - sret, 2)
+                row[f"due_{k}"] = hist[i + k][0]
         if cache.get(key) != row:
             cache[key], changed = row, True
     if changed:
@@ -161,8 +189,13 @@ def record(p=None, outcomes=None, month=None):
         closed = [c for c in closed if str(c.get("sold_utc") or "").startswith(month)]
         passes = [x for x in passes if str(x.get("day") or "").startswith(month)]
     measured = [x for x in passes if x.get("vs_spy_10") is not None]
+    bears = [c for c in closed if (c.get("bear") or {}).get("worry")]
     return {
         "closed": summary(closed, "pct"),
+        # What each trade made beyond SPY over its own days: a +3% trade in a
+        # week SPY rose 5% was a worse pick than holding the market.
+        "vs_spy": summary(closed, "vs_spy"),
+        "by_bear": grouped(bears, lambda r: bear_band(r["bear"]["worry"]), "pct"),
         "by_catalyst": grouped(closed, lambda r: r["catalyst_type"], "pct"),
         "by_score": grouped(closed, lambda r: score_band(r["score"]), "pct"),
         "by_cluster": grouped(closed, lambda r: r["cluster"], "pct"),
@@ -190,6 +223,10 @@ def wake_lines(r):
         lines.append(f"  closed trades: {c['n']}, {c['won']} won ({c['win_rate']:g}%), average {c['avg_pct']:+.1f}%")
         lines.append("  by catalyst: " + _row(r["by_catalyst"]))
         lines.append("  by your score: " + _row(r["by_score"], BAND_ORDER, lambda k: f"{k}:"))
+        v = r["vs_spy"]
+        if v["n"]:
+            lines.append(f"  against SPY over each trade's own days: {v['won']} of {v['n']} beat it, "
+                         f"{v['avg_pct']:+.1f}% a trade beyond it")
     if ps["measured"]:
         lines.append("  names you passed on, 10 trading days later against SPY: "
                      + _row(ps["by_score"], BAND_ORDER, lambda k: f"scored {k}:", "beat it"))
@@ -306,7 +343,11 @@ def review(month=None):
         (f"{c['n']} closed trade(s), {c['won']} won ({c['win_rate']:g}%), {c['avg_pct']:+.2f}% on average."
          if c["n"] else "No closed trades yet."),
         "",
+        (f"Against SPY over each trade's own days: {whole['vs_spy']['won']} of {whole['vs_spy']['n']} beat it, "
+         f"{whole['vs_spy']['avg_pct']:+.2f}% a trade beyond it." if whole["vs_spy"]["n"] else ""),
+        "",
         _table("By the catalyst he bought on", whole["by_catalyst"]),
+        _table("By the case against it when he bought (how worried, 1-5)", whole["by_bear"], BEAR_ORDER),
         _table("By the score he gave", whole["by_score"], BAND_ORDER),
         _table("By cluster", whole["by_cluster"]),
         _table("By market regime when he bought", whole["by_regime"]),

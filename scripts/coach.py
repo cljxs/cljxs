@@ -136,8 +136,10 @@ def belfort_rows():
     # older positions keep STOP_LOSS, so only a loss past the widest of them
     # is one a script can call past the stop.
     stop = max(abs(bt.STOP_LOSS), bt.STOP_MAX_PCT)
+    doc = bt.quotes_doc()
     rows = []
-    for c in bt.closed_trades(p):
+    for c in bt.closed_trades(p, doc):
+        bear = c.get("bear") or {}
         rows.append({
             "book": "belfort", "agent": "Belfort", "asset": "stock", "symbol": c["symbol"], "side": "long",
             "opened_utc": c.get("bought_utc"), "closed_utc": c.get("sold_utc"),
@@ -149,9 +151,26 @@ def belfort_rows():
             "exit_reason": c.get("exit_reason") or "", "exit_rule": c.get("rule"),
             "stop_pct": stop, "min_score": getattr(bt, "MIN_SCORE", None),
             "best_pct": _best_from_reason(c.get("exit_reason")),
-            "after_exit_pct": _after(bt.last_price(c["symbol"]), c.get("exit_price")),
+            "after_exit_pct": _after(_close_after_sale(bt, doc, c), c.get("exit_price")),
+            # Beyond the market over the trade's own days (belfort-trade.py spy_move).
+            "spy_pct": c.get("spy_pct"), "vs_spy_pct": c.get("vs_spy"),
+            # The case against it, put on record when he bought (belfort-trade.py bear).
+            "bear_worry": bear.get("worry"), "bear_risk": bear.get("risk"), "bear_why": bear.get("why"),
         })
     return rows
+
+
+def _close_after_sale(bt, doc, c):
+    """The close of the day he sold, once that bar is final - so a day's
+    "early exit" reads the same whenever its journal is written. It read the
+    price at the time the journal ran, and a backfill weeks later graded a
+    sale by a price from weeks later (2026-10-26). The price now while the
+    day's bar is still moving."""
+    day = et_day(c.get("sold_utc"))
+    hist = dict(((doc.get("quotes") or {}).get(str(c["symbol"]).upper()) or {}).get("history") or [])
+    if day and day in hist and day <= et_time.final_bar_day():
+        return hist[day]
+    return bt.last_price(c["symbol"])
 
 
 def _best_from_reason(reason):
@@ -361,12 +380,62 @@ def analyse(rows):
     if small:
         well.append(f"{len(small)} loss(es) kept inside the stop")
     trades = [r for r in rows if r["book"] != "ace"]
+    beared = [r for r in trades if r.get("bear_worry")]
+    band = _belfort_learn().bear_band if beared else None
     patterns = {"by exit rule": grouped(rows, lambda r: f"{r['agent']}: {r['exit_rule']}"),
+                "by the case against it": grouped(beared, lambda r: band(r["bear_worry"])),
                 "by setup score": grouped(trades, lambda r: f"{r['agent']}: {r['score'] if r.get('score') is not None else '?'}"),
                 "by asset": grouped(trades, lambda r: r["symbol"])}
     return {"books": {a: summary(v) for a, v in books.items()}, "total": summary(rows),
+            "market": market(trades),
             "went_well": well, "went_badly": badly, "mistakes": slips, "patterns": patterns,
             "ace": ace_summary(rows), "note": DAILY_ONLY}
+
+
+def market(rows):
+    """What the trades made beyond SPY over their own days - None when none
+    carries it (only Belfort's do)."""
+    v = [r["vs_spy_pct"] for r in rows if r.get("vs_spy_pct") is not None]
+    if not v:
+        return None
+    return {"trades": len(v), "beat_spy": sum(1 for x in v if x > 0), "avg_vs_spy_pct": round(sum(v) / len(v), 2)}
+
+
+def _belfort_learn():
+    return _load("belfort_learn_coach", "belfort-learn.py")
+
+
+def belfort_passes(start, end, learn=None):
+    """The names Belfort passed on whose 10-trading-day result came due
+    between start and end, against SPY - the trades he did not make, graded
+    like the ones he did (TradingAgents' idea, 2026-10-26). belfort-learn.py
+    measures them; nothing is restated here."""
+    try:
+        learn = learn or _belfort_learn()
+        rows = [r for r in learn.pass_outcomes().values()
+                if r.get("vs_spy_10") is not None and start <= str(r.get("due_10") or "") <= end]
+    except Exception:
+        return None
+    if not rows:
+        return None
+    rows.sort(key=lambda r: -r["vs_spy_10"])
+    brief = lambda r: {k: r.get(k) for k in ("symbol", "day", "score", "ret_10", "vs_spy_10")}
+    return {"measured": len(rows), "beat_spy": sum(1 for r in rows if r["vs_spy_10"] > 0),
+            "avg_vs_spy_pct": round(sum(r["vs_spy_10"] for r in rows) / len(rows), 2),
+            "by score": learn.grouped(rows, lambda r: learn.score_band(r.get("score")), "vs_spy_10"),
+            "got away": [brief(r) for r in rows[:3] if r["vs_spy_10"] > 0],
+            "dodged": [brief(r) for r in rows[::-1][:3] if r["vs_spy_10"] < 0]}
+
+
+def passes_lines(ps):
+    line = lambda r: f"{r['symbol']} (scored {r['score']}, called {r['day']}) {r['vs_spy_10']:+.1f}% vs SPY"
+    out = [f"{ps['measured']} measured 10 trading days on: {ps['beat_spy']} beat SPY, "
+           f"{ps['avg_vs_spy_pct']:+.2f}% beyond it on average"]
+    if ps["got away"]:
+        out.append("got away: " + "; ".join(line(r) for r in ps["got away"]))
+    if ps["dodged"]:
+        out.append("dodged: " + "; ".join(line(r) for r in ps["dodged"]))
+    return out
 
 
 def ace_summary(rows):
@@ -419,6 +488,10 @@ def daily_markdown(day, rows, a, coach):
     for agent, s in a["books"].items():
         L.append(f"- **{agent}**: {s['trades']} closed, {s['wins']} won / {s['losses']} lost, "
                  f"net ${s['net_usd']:+,.2f}")
+    if a.get("market"):
+        m = a["market"]
+        L.append(f"- **Against SPY** over each trade's own days: {m['beat_spy']} of {m['trades']} beat it, "
+                 f"{m['avg_vs_spy_pct']:+.2f}% a trade beyond it")
     L += ["", "**What went well**", ""] + [f"- {x}" for x in a["went_well"] or ["nothing closed in profit"]]
     L += ["", "**What went badly**", ""] + [f"- {x}" for x in a["went_badly"] or ["no losing trade"]]
     L += ["", "**Mistakes**", ""] + ([f"- {m['agent']} {m['symbol']}: {m['kind']} - {m['detail']}"
@@ -426,6 +499,10 @@ def daily_markdown(day, rows, a, coach):
     L += ["", "**Patterns**", ""]
     for k, g in a["patterns"]["by exit rule"].items():
         L.append(f"- {k}: {g['trades']} trade(s), {g['wins']} won, avg {g['avg_pct']:+.1f}%")
+    for k, g in (a["patterns"].get("by the case against it") or {}).items():
+        L.append(f"- the case against it, {k}: {g['trades']} trade(s), {g['wins']} won, avg {g['avg_pct']:+.1f}%")
+    if a.get("passes"):
+        L += ["", "**Names he passed on**", ""] + [f"- {x}" for x in passes_lines(a["passes"])]
     if a.get("ace"):
         L += ["", "**Ace**", "", f"- {ace_line(a['ace'])}"]
         for k in ("by sport", "favourite or underdog", "by edge"):
@@ -436,6 +513,8 @@ def daily_markdown(day, rows, a, coach):
 
 def write_day(coach, day, rows):
     a = analyse(rows)
+    if coach == "belfort":
+        a["passes"] = belfort_passes(day, day)
     folder = journal_dir(coach)
     folder.mkdir(parents=True, exist_ok=True)
     (folder / f"{day}.json").write_text(json.dumps({"day": day, "coach": coach, "rows": rows, "analysis": a},
@@ -560,6 +639,8 @@ def weekly_data(start, end, coach):
         kinds[m["kind"]] = kinds.get(m["kind"], 0) + 1
     return rows, {"summary_by_agent": a["books"], "total": a["total"], "mistake_counts": kinds,
                   "mistakes": a["mistakes"], "patterns": a["patterns"], "ace": a["ace"],
+                  "against_spy": a["market"],
+                  "passed_on": belfort_passes(start, end) if coach == "belfort" else None,
                   "by_weekday": grouped(rows, lambda r: (et_time.to_eastern(r["closed_utc"]) or datetime.min).strftime("%a"))}
 
 
@@ -570,6 +651,11 @@ def week_notes(coach, rows, end):
     if coach != "ace":
         if len(rows) < MIN_WEEK_TRADES:
             return [], f"{len(rows)} closed trade(s) this week - fewer than {MIN_WEEK_TRADES}"
+        if coach == "belfort":
+            return ["against_spy is what his trades made beyond SPY over their own days; passed_on is the names he "
+                    "skipped, measured 10 trading days on against SPY (got away = skipped and beat it). "
+                    "\"by the case against it\" groups his trades by how worried a sceptic was when he bought. "
+                    "Use these where they are clear; a handful is not a pattern."], None
         return (["Bolt and Bolt + news trade the same rules; the news book also needs a cited news catalyst. "
                  "Say whether the news check helped this week, with the numbers."] if coach == "bolt" else []), None
     if len(rows) < MIN_WEEK_BETS:
