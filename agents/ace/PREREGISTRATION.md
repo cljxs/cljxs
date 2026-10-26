@@ -109,3 +109,13 @@ fresh-news bettor matches Ace, the model adds nothing.
   value, the evidence stop, the no-AI comparison and the fault stop. It has its
   own cap (2 a day) and its own stop ($1,000 of settled losses). Every number in
   the table above is unchanged.
+* 2026-10-26 — a bug fix, not a rule change: a close counts only if it was
+  seen in the last 60 minutes before the start, and after the decision it
+  grades (`ace-clv.py closing`). Pinnacle is fetched on a budget of 14 calls a
+  day. When the close fetches ran out, its 2:30pm snapshot was carried forward
+  and read as Pinnacle's close: hours before kick-off, and for a bet placed
+  after 2:30, a price from before the bet. A bet with no close that counts is
+  listed by `ace-clv.py` and left out of the averages and the evidence stop;
+  the headline falls back to DraftKings' close where that one counts. The same
+  rule applies to the no-AI bettors and to the Brier scores' closes. Every
+  number in the table above is unchanged.

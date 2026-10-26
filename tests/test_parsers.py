@@ -15084,6 +15084,44 @@ class AceIsGradedOnTheClosingLine(unittest.TestCase):
     def test_nothing_is_graded_before_kickoff(self):
         self.assertIsNone(self.clv.grade(self.judged(), self.entry(63.9), self.at(0.1)))
 
+    def test_a_pinnacle_close_carried_forward_from_the_afternoon_is_not_a_close(self):
+        # 2026-10-26: Pinnacle is fetched on a budget of 14 calls a day. When
+        # the close fetches run out, the 2:30pm decision snapshot rides along
+        # on every later DraftKings price - and was read as Pinnacle's close,
+        # here from before the bet it graded.
+        c = self.ctx(65.7)
+        c["sharp"] = {"novig_home_pct": 60.0, "novig_away_pct": 40.0, "at": self.at(5).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        self.clv.record_lines([c], self.at(5), self.lines)
+        late = dict(self.ctx(63.9, -200, 165), sharp=c["sharp"])
+        self.clv.record_lines([late], self.at(0.1), self.lines)
+        entry = json.loads(self.lines.read_text())["cfb|IOWA @ MICH|2026-09-26T19:30Z"]
+        g = self.clv.grade(self.judged(status="bet"), entry, self.start)        # bet 4 hours before
+        self.assertIsNone(g["sharp_clv_pct"])
+        self.assertEqual(g["sharp_note"], "last price 300 min before the start - not a close")
+        self.assertEqual(self.clv.headline_clv(g), (1.1, "DraftKings"), "DraftKings' real close takes over")
+        # Pinnacle fetched 15 minutes before the start does count.
+        fresh = dict(late, sharp=dict(c["sharp"], at=self.at(0.25).strftime("%Y-%m-%dT%H:%M:%SZ")))
+        self.clv.record_lines([fresh], self.at(0.05), self.lines)
+        entry = json.loads(self.lines.read_text())["cfb|IOWA @ MICH|2026-09-26T19:30Z"]
+        g = self.clv.grade(self.judged(status="bet"), entry, self.start)
+        self.assertEqual((g["sharp_close_minutes_before_start"], self.clv.headline_clv(g)[1]), (15, "Pinnacle"))
+
+    def test_a_close_seen_before_the_bet_is_not_its_close(self):
+        bet = self.judged(status="bet", judged_utc=self.at(0.2).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        g = self.clv.grade(bet, self.entry(63.9, close_at_hours_before=0.4), self.start)
+        self.assertIsNone(g["clv_pct"])
+        self.assertIn("before the decision", g["close_note"])
+        self.clv.log_judgements([dict(bet, sport="cfb", starts_utc="2026-09-26T19:30Z")], now=self.at(0.2), path=self.journal)
+        r = self.clv.report(now=self.start, lines_path=self.lines, journal_path=self.journal)
+        self.assertEqual((r["bets"], len(r["bets_without_close"])), (0, 1), "listed, and out of the average")
+        self.assertIn("1 bet(s) have a close that does not count", "\n".join(self.clv.lines_of(r)))
+
+    def test_a_draftkings_price_hours_before_the_start_is_not_a_close(self):
+        g = self.clv.grade(self.judged(status="bet"), self.entry(63.9, close_at_hours_before=2), self.start)
+        self.assertIsNone(g["clv_pct"])
+        self.assertEqual(g["close_note"], "last price 120 min before the start - not a close")
+        self.assertIsNone(g["toward"], "an estimate is graded on the close too")
+
     def test_prices_and_sides(self):
         self.assertAlmostEqual(self.clv.decimal_odds(180), 2.8)
         self.assertAlmostEqual(self.clv.decimal_odds(-200), 1.5)
@@ -16809,9 +16847,12 @@ class TheNoAIBettorsAndTheBlindScore(unittest.TestCase):
         out = self.root / "agents/ace/state/baselines.jsonl"
         self.assertEqual(len(self.bl.run(now=self.now, path=out)), 2)
         self.assertEqual(self.bl.run(now=self.now, path=out), [], "once a game")
+        # The close: 10 minutes before the 23:00 start, after the 19:00 bets.
+        # (It was a price seen at the moment of the bet, which is not a
+        # close - clv.closing refuses it since 2026-10-26.)
         (self.root / "agents/ace/state/lines.json").write_text(json.dumps(
-            {f"nfl|PIT @ CLE|{self.start}": {"start_utc": "2026-09-01T00:00Z", "last": self.snap(0, 60.0),
-                                             "history": [self.snap(0, 60.0)]}}))
+            {f"nfl|PIT @ CLE|{self.start}": {"start_utc": self.start, "last": self.snap(-230, 60.0),
+                                             "history": [self.snap(-230, 60.0)]}}))
         (self.root / "agents/ace/state/results.json").write_text(json.dumps(
             {"nfl|401": {"winner": "home", "status": "STATUS_FINAL"}}))
         r = self.bl.report(path=out)
@@ -16819,6 +16860,11 @@ class TheNoAIBettorsAndTheBlindScore(unittest.TestCase):
         self.assertEqual((fav["bets"], fav["settled"], fav["won"], fav["profit"]), (1, 1, 1, 67.57))
         self.assertEqual(fav["avg_clv_pct"], self.clv.clv_at(-148, 60.0))
         self.assertIn("ace", r)
+        # A price four hours before the start is not a close for them either.
+        (self.root / "agents/ace/state/lines.json").write_text(json.dumps(
+            {f"nfl|PIT @ CLE|{self.start}": {"start_utc": self.start, "last": self.snap(0, 60.0),
+                                             "history": [self.snap(0, 60.0)]}}))
+        self.assertIsNone(self.bl.report(path=out)["favourite"]["avg_clv_pct"])
 
     def test_blind_estimates_are_scored_against_the_market(self):
         st = self.root / "agents/ace/state"
@@ -16835,6 +16881,7 @@ class TheNoAIBettorsAndTheBlindScore(unittest.TestCase):
         # blind: (.3^2 + .4^2 + .45^2)/3 = .1508 ; market: (.4^2 + .45^2 + .5^2)/3 = .2042
         self.assertEqual((c["games"], c["brier_blind"], c["brier_then"]), (3, 0.1508, 0.2042))
         self.assertEqual(c["blind_vs_market_then"], -0.0533)
+        self.assertEqual(c["n_close"], 0, "a last price with no time on it is not a close")
         self.assertIn("Ace is better than the market", "\n".join(self.clv.calibration_lines(c)))
 
     def test_an_estimate_made_after_the_start_does_not_count(self):

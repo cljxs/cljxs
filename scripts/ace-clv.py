@@ -209,12 +209,47 @@ def side_of(selection, entry):
     return None
 
 
-def sharp_close(entry, side):
-    """Pinnacle's last no-vig chance for the side before the start, or None."""
-    for snap in reversed((entry or {}).get("history") or []):
-        if snap.get(f"sharp_{side}_pct") is not None:
-            return float(snap[f"sharp_{side}_pct"])
-    return None
+# A close is the market's price at the start, so it must be from the last
+# CLOSE_MAX_MINUTES before it - and from after the decision it grades: a
+# price seen before a bet is not what the market said after it (2026-10-26).
+# Pinnacle's price is fetched on a budget (ace-sharp.py: 14 calls a day). On
+# a busy slate the close fetches run out, and its "close" was the 2:30pm
+# decision snapshot carried forward - hours before kick-off, and for a bet
+# placed after 2:30, a price from BEFORE the bet, graded as if it came after.
+# DraftKings' close is re-read every 5 minutes and was only ever flagged
+# when old; now neither counts when it is not a close.
+CLOSE_MAX_MINUTES = 60
+
+
+def closing(entry, side, book="draftkings", after=None):
+    """(chance, minutes before the start, why it does not count or None) for
+    one book's last price before the start. The chance is None when it does
+    not count - too long before the start, or seen at or before `after` (the
+    decision being graded, a datetime)."""
+    entry = entry or {}
+    snap, key = None, f"novig_{side}_pct"
+    if book == "pinnacle":
+        key = f"sharp_{side}_pct"
+        snap = next((x for x in reversed(entry.get("history") or []) if x.get(key) is not None), None)
+        seen = parse_start((snap or {}).get("sharp_at") or (snap or {}).get("at"))
+    else:
+        snap = entry.get("last") if (entry.get("last") or {}).get(key) is not None else None
+        seen = parse_start((snap or {}).get("at"))
+    if snap is None:
+        return None, None, "no price"
+    start = parse_start(entry.get("start_utc"))
+    mins = round((start - seen).total_seconds() / 60) if start and seen else None
+    if mins is None or mins > CLOSE_MAX_MINUTES:
+        return None, mins, (f"last price {mins} min before the start - not a close" if mins is not None
+                            else "no time on the last price")
+    if after is not None and seen <= after:
+        return None, mins, "last price seen before the decision - says nothing after it"
+    return float(snap[key]), mins, None
+
+
+def sharp_close(entry, side, after=None):
+    """Pinnacle's close for the side, or None when there is none that counts."""
+    return closing(entry, side, "pinnacle", after)[0]
 
 
 def clv_at(price, close_pct):
@@ -248,6 +283,8 @@ def grade(judgement, entry, now=None):
     judged_at = parse_start(judgement.get("judged_utc"))
     close_at = parse_start(last.get("at"))
     close_pct = float(last[f"novig_{side}_pct"])
+    counts, _m, close_note = closing(entry, side, "draftkings", judged_at)
+    sharp_pct, sharp_mins, sharp_note = closing(entry, side, "pinnacle", judged_at)
     then_pct = judgement.get("novig_pct")
     out = {"match": judgement.get("match"), "selection": judgement.get("selection"),
            "status": judgement.get("status"), "start_utc": entry.get("start_utc"),
@@ -259,13 +296,16 @@ def grade(judgement, entry, now=None):
            # A close seen before the verdict says nothing about the verdict.
            "later_price": bool(judged_at and close_at and close_at > judged_at),
            "clv_pct": None, "moved": None, "toward": None,
-           "sharp_close_pct": sharp_close(entry, side), "sharp_clv_pct": None}
+           # Why a close was not used, when it was not (closing()).
+           "close_note": close_note, "sharp_close_minutes_before_start": sharp_mins,
+           "sharp_note": None if sharp_note == "no price" else sharp_note,
+           "sharp_close_pct": sharp_pct, "sharp_clv_pct": None}
     if then_pct is not None:
         out["moved"] = round(close_pct - float(then_pct), 1)
-    if judgement.get("status") == "bet":
+    if judgement.get("status") == "bet" and counts is not None:
         out["clv_pct"] = clv_at(judgement.get("price"), close_pct)
         out["sharp_clv_pct"] = clv_at(judgement.get("price"), out["sharp_close_pct"])
-    if out["my_pct"] is not None and then_pct is not None and out["later_price"]:
+    if out["my_pct"] is not None and then_pct is not None and counts is not None:
         lean = float(out["my_pct"]) - float(then_pct)
         if lean:
             out["toward"] = round(out["moved"] * (1 if lean > 0 else -1), 1)
@@ -301,6 +341,11 @@ def report(now=None, lines_path=None, journal_path=None):
     bets = [g for g in graded if g["status"] == "bet" and g["clv_pct"] is not None]
     leans = [g for g in graded if g["toward"] is not None]
     return {
+        # Bets with no close that counts, DraftKings' or Pinnacle's: kept out
+        # of every average, and listed so a gap in the closes shows.
+        "bets_without_close": [{k: g[k] for k in ("match", "selection", "start_utc", "close_note", "sharp_note")}
+                               for g in graded if g["status"] == "bet"
+                               and (g["close_note"] or g["sharp_note"])],
         "graded": graded,
         "bets": len(bets),
         "bet_avg_clv_pct": round(sum(g["clv_pct"] for g in bets) / len(bets), 2) if bets else None,
@@ -344,7 +389,7 @@ def calibration(blind_path=None, results_path=None, lines_path=None):
         entry = lines.get(k)
         rows.append({"y": y, "blind": float(j["home_pct"]) / 100,
                      "then": (price_at(entry, "home", parse_start(j["utc"])) if entry else None),
-                     "close": ((entry or {}).get("last") or {}).get("novig_home_pct"),
+                     "close": closing(entry, "home")[0] if entry else None,
                      "sharp": sharp_close(entry, "home")})
 
     def brier(key):
@@ -394,6 +439,9 @@ def lines_of(r):
                    f"average {r['estimates_avg_toward']:+.2f} pts his way")
     else:
         out.append("  Estimates: none graded yet")
+    if r["bets_without_close"]:
+        out.append(f"  {len(r['bets_without_close'])} bet(s) have a close that does not count (too long before "
+                   f"the start, or seen before the bet) - left out of the averages above")
     for g in r["graded"][:30]:
         price = f"{g['price']:+d}" if isinstance(g["price"], int) else str(g["price"])
         close = f"{g['close_price']:+d}" if isinstance(g["close_price"], int) else str(g["close_price"])
@@ -407,8 +455,9 @@ def lines_of(r):
             bit += "  (no estimate)"
         elif not g["later_price"]:
             bit += "  (no price seen after his verdict)"
-        if g["close_minutes_before_start"] is not None and g["close_minutes_before_start"] > 60:
-            bit += f"  [close seen {g['close_minutes_before_start']} min before start]"
+        for who, note in (("DraftKings", g["close_note"]), ("Pinnacle", g["sharp_note"])):
+            if note:
+                bit += f"  [{who} close not counted: {note}]"
         out.append(bit)
     if not r["graded"]:
         out.append("  Nothing to grade yet: a row is graded once its game has started and "

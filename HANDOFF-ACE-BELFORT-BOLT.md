@@ -151,7 +151,7 @@ Logged in the preregistration as not a rule change. `ace-props.py show`.
 
 Scripts: `ace-judge.py` (blind/list/bet/pass/rest/verdict/mark - Ace's only
 way to record judgements), `ace-book.py` (the money, from `state/bets.jsonl`),
-`ace-clv.py` (CLV and Brier), `ace-sharp.py` (Pinnacle prices from The Odds
+`ace-clv.py` (CLV and Brier; `closing` decides what counts as a close: the last 60 minutes before the start and after the decision it grades - logged as a bug fix 2026-10-26), `ace-sharp.py` (Pinnacle prices from The Odds
 API; key `ODDS_API_KEY` via `scripts/set-credential.py ace ODDS_API_KEY`;
 `ace-sharp.py budget` shows credits), `ace-baselines.py`. Data: ESPN's public
 API through `site.web.api.espn.com` (the usual `site.api.espn.com` host is

@@ -181,11 +181,13 @@ def score(rows, lines, results, clv, book):
     for p in rows:
         entry = lines.get(p.get("key"))
         if entry and clv.parse_start(entry.get("start_utc")) and clv.parse_start(entry["start_utc"]) <= datetime.now(timezone.utc):
-            c = clv.clv_at(p.get("price"), ((entry.get("last") or {}).get(f"novig_{p['side']}_pct")))
+            # The same closes Ace is graded on, and only from after this bet (clv.closing).
+            at = clv.parse_start(p.get("utc"))
+            c = clv.clv_at(p.get("price"), clv.closing(entry, p["side"], "draftkings", at)[0])
             if c is not None:
                 out["clv"].append(c)
                 out["beat_close"] += c > 0
-            sc = clv.clv_at(p.get("price"), clv.sharp_close(entry, p["side"]))
+            sc = clv.clv_at(p.get("price"), clv.sharp_close(entry, p["side"], at))
             if sc is not None:
                 out["sharp_clv"].append(sc)
         res = results.get(f"{p.get('sport')}|{p.get('event_id')}")
