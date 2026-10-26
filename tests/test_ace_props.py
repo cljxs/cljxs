@@ -55,7 +55,13 @@ class PropsCase(unittest.TestCase):
         self.addCleanup(env.stop)
         self.p = load(f"ace_props_test_{id(self)}", "ace-props.py")
         self.b = self.p.book()
-        self.p.time.sleep = lambda s: None
+        # Patched for this test only. `self.p.time` is the one `time` module of
+        # the whole run: assigning to it left sleep a no-op for every later
+        # test, and tiktok-kit.py, loaded afterwards, bound that no-op as its
+        # lock wait - so test_shop's OneKitAtATime gave up at once (2026-10-26).
+        nap = unittest.mock.patch.object(self.p.time, "sleep", lambda s: None)
+        nap.start()
+        self.addCleanup(nap.stop)
 
     def store(self, games):
         """games: [(date, [[team, opp, aid, name, pos, minutes, points], ...]), ...]"""
