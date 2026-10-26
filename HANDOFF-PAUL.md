@@ -107,6 +107,23 @@ salon, retail, other). A business qualifies by a problem a person can check
 dead or parked domain, no HTTPS, not mobile, broken, wrong info. Of Google's
 listing only counts, warnings and the place id are kept; its photos stay on Google.
 
+### One rulebook with Hallmark's (2026-10-26)
+
+The owner chose to take [Hallmark](https://github.com/Nutlope/hallmark)'s
+method into Paul and merge its rules with his into **one rulebook**, trimmed
+to what a local business's site needs. Its checker is not run; its gates are
+rewritten in `paul.py` (`LOOK_JS` / `LOOK_SAYS` in the page, `code_rules` in
+the code) and tested on real pages. `agents/paul/hallmark/` holds what was
+taken whole (MIT): 19 themes, dealt three at a time when the owner gives no
+reference (`THEMES_FOR`, `deal_themes`), and its list of Wikimedia Commons
+photos. **Stock is Commons only**, through `paul.py stock find` / `stock get`
+(Unsplash's and Pexels' terms bar the scripts Paul fetched them with); code
+credits every photo on the page. Once per build, when every check passes, a
+**fresh review** asks a model that did not build it to read the screenshots
+(`cold_review`, through `wake.py ask` with Read only); one round, no pass
+used. The Commons API search was not reachable from the cloud session (429),
+so `stock find`'s parser is believed until it runs on the droplet.
+
 ### What code refuses on a site (`run_checks` / `check_site`)
 
 Every fact sourced and shown; the real address and phone with a working call

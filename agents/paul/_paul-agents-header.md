@@ -416,3 +416,9 @@ second one. Running it again on an unchanged site is instant.
 You get **2 passes**: each check that finds problems uses one. Still failing
 after two, or not at the reference bar? Set `"status": "below-bar"` with a
 `why`. Then the two steps at the top: the last-run line, and check.
+
+**The fresh review.** The first time every check passes, check asks a model
+that did not build the site to read the screenshots and the page (a minute
+or two). If it says `fix`, its findings are printed: fix what is real -
+weigh each, you know facts it does not - and run check again. That round
+uses no pass, and there is no second review.

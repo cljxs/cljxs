@@ -3598,3 +3598,83 @@ class AThemeIsDealtWhenThereIsNoReference(PaulCase):
         for bit in ("**A theme, when the owner gave no reference**", "**Build around what the visitor came to do**",
                     "**One rulebook**"):
             self.assertIn(bit, header)
+
+
+class AFreshReviewOncePerBuild(PaulCase):
+    """Hallmark's finish review (owner, 2026-10-26: "4 is fine do it"): when
+    every check passes, a model that did not build the page reads its
+    screenshots, once. Code still judges what it can measure."""
+
+    def setUp(self):
+        super().setUp()
+        self.work()
+        shots = paul.A("work", "shots")
+        shots.mkdir(parents=True, exist_ok=True)
+        for n, _w, _h in paul.SHOTS:
+            (shots / f"{n}.png").write_bytes(_png(10, 10))
+        saved = paul.fresh_shots
+        self.addCleanup(setattr, paul, "fresh_shots", saved)
+        paul.fresh_shots = lambda *_a, **_k: [(n, shots / f"{n}.png") for n, _w, _h in paul.SHOTS]
+        self.asked = []
+
+    def ask(self, answer, ok=True):
+        def ask(agent, question, timeout=150, tools=(), files=()):
+            self.asked.append((agent, question, tools, [Path(f).name for f in files]))
+            return ok, answer
+        return ask
+
+    def test_fix_is_shown_once_and_uses_no_pass(self):
+        a = self.args(ask=self.ask("fix\n1. The headline would fit any barbershop - name the pharaoh windows."))
+        rc, out = self.run_quiet(paul.cmd_check, a, get=offline)
+        self.assertEqual(rc, 1)
+        self.assertIn("The headline would fit any barbershop", out)
+        self.assertEqual(paul.load_cycle()["passes"], 0, "the review round is not a failed pass")
+        (agent, q, tools, files) = self.asked[0]
+        self.assertEqual((agent, tools, files), ("paul", ("Read",), ["mobile.png", "desktop.png", "index.html"]))
+        self.assertIn("Rosa's Tailoring", q)
+        rc, out = self.run_quiet(paul.cmd_check, a, get=offline)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(len(self.asked), 1, "one round, never a second")
+        self.assertIn("CHECK PASSED", out)
+
+    def test_ship_passes_and_a_review_that_cannot_run_never_blocks(self):
+        rc, out = self.run_quiet(paul.cmd_check, self.args(ask=self.ask("ship")), get=offline)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("REVIEW: ship", out)
+        paul.A("work", paul.REVIEW).unlink()
+        rc, out = self.run_quiet(paul.cmd_check, self.args(ask=self.ask("the plan is busy", ok=False)), get=offline)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("REVIEW: not run (the plan is busy)", out)
+
+    def test_the_reviewer_hears_what_the_owner_asked(self):
+        paul.write_json(paul.A("work", "prospect.json"), {"owner_notes": "No video. A row of photos under About us."})
+        self.run_quiet(paul.cmd_check, self.args(ask=self.ask("ship")), get=offline)
+        self.assertIn("The owner asked: No video. A row of photos under About us.", self.asked[0][1])
+
+    def test_it_reaches_the_report(self):
+        self.assertEqual(paul.review_lines({"first": "fix", "review": "fix\n1. a thing"}),
+                         ["", "## Fresh review", "", "- fix", "  1. a thing"])
+
+
+class WakeAskCanBeHandedFiles(unittest.TestCase):
+    """Paul's review reads screenshots; `wake.py ask` runs in an empty folder,
+    so the files are copied into it by name."""
+
+    def test_the_files_are_there_when_the_model_runs(self):
+        spec = importlib.util.spec_from_file_location("wake_t", ROOT / "scripts" / "wake.py")
+        wake = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(wake)
+        wake.setting = lambda agent, doc=None: {"engine": "claude", "model": "sonnet", "max_turns": 10}
+        wake.claude_bin, wake.plan_token = (lambda: "/bin/claude"), (lambda: "tok")
+        seen = {}
+
+        def run(cmd, cwd=None, **_k):
+            seen.update(files=sorted(os.listdir(cwd)), cmd=cmd)
+            return types.SimpleNamespace(returncode=0, stdout=json.dumps({"result": "ship"}), stderr="")
+        with tempfile.TemporaryDirectory() as d:
+            shot = Path(d) / "mobile.png"
+            shot.write_bytes(b"png")
+            ok, text = wake.ask("paul", "review it", run=run, tools=("Read",), files=[str(shot)])
+        self.assertEqual((ok, text), (True, "ship"))
+        self.assertIn("mobile.png", seen["files"])
+        self.assertIn("Read", seen["cmd"][seen["cmd"].index("--tools") + 1])

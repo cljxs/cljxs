@@ -361,8 +361,10 @@ ASK_TOOLS_SYSTEM = ("You answer one question for a script, in exactly the format
                     "You may use the tools you have to look things up first. No preamble and no follow-up.")
 
 
-def ask(agent, question, timeout=150, run=subprocess.run, tools=()):
-    """(answered, text). The agent's engine must be the plan."""
+def ask(agent, question, timeout=150, run=subprocess.run, tools=(), files=()):
+    """(answered, text). The agent's engine must be the plan. `files` are
+    copied into the empty folder the question runs in, by name, for a Read
+    tool to open (2026-10-26, Paul's cold review of his screenshots)."""
     s = setting(agent)
     if s["engine"] != "claude":
         return False, f"{agent} is not on the Claude plan in tasks/engines.json"
@@ -372,6 +374,8 @@ def ask(agent, question, timeout=150, run=subprocess.run, tools=()):
     if not token:
         return False, f"no {TOKEN_KEY} in {PLAN_CREDENTIALS}"
     with tempfile.TemporaryDirectory() as d:
+        for f in files:
+            shutil.copyfile(f, Path(d) / Path(f).name)
         pf = Path(d) / "system.md"
         pf.write_text(ASK_TOOLS_SYSTEM if tools else ASK_SYSTEM)
         use = (["--max-turns", str(int(s["max_turns"])), "--tools", ",".join(tools),

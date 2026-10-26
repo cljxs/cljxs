@@ -4707,6 +4707,72 @@ def check_scout(cyc, get=http_get):
     return 0
 
 
+# THE COLD REVIEW (Hallmark's finish review, owner 2026-10-26: "4 is fine
+# do it"). The thread that built a page is its weakest reviewer: once per
+# build, when every check above passes, a fresh model that did not build it
+# reads the screenshots and the page, on the plan through wake.py ask, with
+# Read and nothing else. One round: Paul fixes what is real, and the next
+# check does not ask again. Code still judges everything it can measure;
+# this asks what it cannot.
+REVIEW = "review.json"
+REVIEW_ASK = """You are reviewing a local business's website that someone else built. You did not build it
+and will not be told why anything is the way it is: judge the page, not the intent.
+
+Read these files in this folder: mobile.png (a 390px phone), desktop.png (a 1440px computer), then
+index.html only to quote its words. Stop reading by your sixth turn and write.
+
+The business: {name}, {kind}{where}. Its theme: {theme}. {notes}
+Code has already measured contrast, photo sharpness, sizes, wrapping, the first screen and the
+banned patterns: those are not findings. Neither is a style you would not have chosen.
+
+Ask:
+- Would the headline, or any section, pass unchanged on a competitor's site? Name it.
+- Does anything read as a template or as machine-made: a screen with nothing worth looking at, a
+  narrow column beside an empty half, a decoration with no job, the same section shape repeated?
+- Do the photos carry this business - is any caption wrong for what it shows, any stock photo
+  that would not pass for a shop like theirs in their town?
+- Does the page lead a visitor to what they came to do - book, visit, order, call - and end on it?
+- Did it do what the owner asked, if the owner asked something?
+
+First line, one word: ship (nothing owed) or fix (findings follow). Then at most six findings,
+worst first, one line each: what, where, what you would do. Do not fix anything."""
+
+
+def review_lines(review):
+    """The cold review, for the build's report."""
+    if not review:
+        return ["", "## Fresh review", "", "- not run"]
+    return ["", "## Fresh review", "", f"- {review.get('first') or 'not run'}"] + \
+        [f"  {ln}" for ln in str(review.get("review") or "").splitlines()[1:] if ln.strip()]
+
+
+def review_needed(work):
+    return not (Path(work) / REVIEW).is_file()
+
+
+def cold_review(t, work, shots, ask=None):
+    """(first word, findings text) of the one review, or (None, why) when it
+    could not be asked - which never blocks a build."""
+    files = [p for _n, p in shots if p] + [Path(work) / "site" / "index.html"]
+    if len(files) < 3:
+        return None, "no screenshots to review"
+    asked = (read_json(Path(work) / "prospect.json", {}) or {}).get("owner_notes")
+    revise = Path(work) / "REVISE.md"
+    if revise.is_file():
+        m = re.search(r"## What the owner wants fixed\n\n(.*?)\n\n", revise.read_text(errors="replace"), re.S)
+        asked = m.group(1).strip() if m else asked
+    q = REVIEW_ASK.format(name=t.get("name"), kind=t.get("category") or t.get("kind") or "",
+                          where=f" in {t['address']}" if t.get("address") else "",
+                          theme=t.get("theme") or "its own", notes=f"The owner asked: {asked}" if asked else "")
+    ask = ask or _load("wake_paul", "wake.py").ask
+    ok, text = ask("paul", q, timeout=300, tools=("Read",), files=[str(f) for f in files])
+    if not ok:
+        return None, text
+    text = str(text or "").strip()
+    first = (re.match(r"\W*(\w+)", text) or [None, ""])[1].lower()
+    return (first if first in ("ship", "fix") else "fix"), text
+
+
 def cmd_check(a, get=http_get):
     cyc = load_cycle()
     if cyc.get("kind") == "scout":
@@ -4754,6 +4820,16 @@ def cmd_check(a, get=http_get):
                   "work/target.json, write state/last-run.txt, and finish.")
         return 1
 
+    if built and any(p for _n, p in shots) and review_needed(A("work")):
+        first, said = cold_review(t, A("work"), shots, getattr(a, "ask", None))
+        write_json(A("work", REVIEW), {"day": today(), "first": first, "review": said})
+        if first == "fix":
+            print("REVIEW - every check passed; one fresh reviewer, who did not build it, says:")
+            print("\n".join("  " + ln for ln in said.splitlines()[1:] if ln.strip()) or "  (no findings given)")
+            print("\nFix what is real, then run check again. This round uses no pass, and there is "
+                  "no second one.")
+            return 1
+        print("REVIEW: ship - a fresh reviewer found nothing owed" if first else f"REVIEW: not run ({said})")
     print("CHECK PASSED")
     if built:
         print(f"TARGET: {t['name']} ({t.get('category')}) - "
@@ -4888,6 +4964,7 @@ def finish_build(a, get=http_get, api=None, browser=None, sleep=time.sleep):
     write_json(box / "target.json", t)
     (box / "draft.md").write_text(compose_draft(head, body, s, dry))
     shots = shoot((site / "index.html").as_uri(), box, browser)
+    review = read_json(A("work", REVIEW), {}) or {}
     shutil.rmtree(A("work"), ignore_errors=True)
 
     rep = [f"# Paul - {day} - {t['name']}{' (DRY RUN)' if dry else ''}", ""]
@@ -4919,6 +4996,7 @@ def finish_build(a, get=http_get, api=None, browser=None, sleep=time.sleep):
 
     if dry:
         tail("not deployed - dry run", "-")
+        rep += review_lines(review)
         rep += ["", "## Notes from Paul", "", str(t.get("notes") or "-"), "",
                 "Dry run: built locally only. Nothing was deployed and the business was not "
                 "recorded as contacted."]
@@ -4986,6 +5064,7 @@ def finish_build(a, get=http_get, api=None, browser=None, sleep=time.sleep):
     rep += [f"- live: {'ok' if ok else 'FAIL'} - {line}" for ok, line in checks]
     for name, p in live_shots:
         rep.append(f"- live {name} screenshot: {('outbox/' + slug + '/' + p.name) if p else 'NOT TAKEN'}")
+    rep += review_lines(review)
     rep += ["", "## Notes from Paul", "", str(t.get("notes") or "-")]
     _report(f"{day}-{slug}.md", rep)
     log_build({"day": day, "mode": "live", "outcome": "built", "slug": slug, "name": t["name"],
