@@ -14,6 +14,7 @@ const clipRoutes = require('./clip');
 const belfortRoutes = require('./belfort');
 const boltRoutes = require('./bolt');
 const coachRoutes = require('./coach');
+const acePropsRoutes = require('./ace-props');
 const paulRoutes = require('./paul');
 const shopRoutes = require('./shop');
 const agentroomRoutes = require('./agentroom');
@@ -321,6 +322,10 @@ app.get('/coach', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'coach.html'));
 });
 
+app.get('/ace-props', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'ace-props.html'));
+});
+
 app.get('/bolt', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'bolt.html'));
 });
@@ -364,6 +369,7 @@ clipRoutes.register(app);
 belfortRoutes.register(app);
 boltRoutes.register(app);
 coachRoutes.register(app);
+acePropsRoutes.register(app);
 paulRoutes.register(app);
 shopRoutes.register(app);
 agentroomRoutes.register(app);

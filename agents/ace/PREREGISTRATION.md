@@ -102,3 +102,10 @@ fresh-news bettor matches Ace, the model adds nothing.
   bets - the 2026-10-20 night sheet held one college game. Gate 1 says every
   game in the next 30 hours; this makes the sheet match it. Every number in
   the table above is unchanged.
+* 2026-10-26 — not a rule change: Ace Props (`scripts/ace-props.py`), NBA
+  player points milestones picked by plain code, is a separate book on the
+  same bankroll (owner's decision). Its bets carry `book: "props"` and are kept
+  out of everything measured here: the 4-bet cap, Gate 1, Gate 2, closing-line
+  value, the evidence stop, the no-AI comparison and the fault stop. It has its
+  own cap (2 a day) and its own stop ($1,000 of settled losses). Every number in
+  the table above is unchanged.

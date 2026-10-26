@@ -283,6 +283,10 @@ function board() {
       // what settled bets have returned. Sums, not a second ledger.
       at_risk: openBets.reduce((t, b) => t + (num(b.stake) || 0), 0),
       settled_profit: allSettled.reduce((t, s) => t + (num(s.profit) || 0), 0),
+      // Ace Props shares this bankroll and is listed apart in it (ace-book.py):
+      // its result is shown beside his, never inside his record.
+      props_profit: ((bank && bank.props_settled_bets) || []).reduce((t, s) => t + (num(s.profit) || 0), 0),
+      props_count: ((bank && bank.props_settled_bets) || []).length + ((bank && bank.props_open_bets) || []).length,
     },
     counts: { games: out.length, bets: out.filter(g => g.verdict === 'bet').length,
               passes: out.filter(g => g.verdict === 'pass').length,

@@ -31,6 +31,13 @@ state/results.json. A bet is:
 
 The words are the ones the Deck's ace.js and ace-verify.py already read.
 
+ACE PROPS (2026-10-26) shares this file and so this bankroll: its bets carry
+book "props" (is_props). They count in the money and nowhere else - not in
+MAX_OPEN_BETS, the same-game check, the fault stop or settle(), which grades
+by the game's winner; scripts/ace-props.py settles them by the player's
+points. bankroll.json lists them apart, as props_open_bets and
+props_settled_bets, so Ace's own lists and record stay his.
+
 Standard library only.
 """
 
@@ -65,6 +72,12 @@ FINAL = "STATUS_FINAL"
 VOIDED = ("STATUS_POSTPONED", "STATUS_CANCELED", "STATUS_CANCELLED")
 KEEP_RESULTS_DAYS = 40
 STAMP = "%Y-%m-%d %H:%M:%S"
+PROPS = "props"
+
+
+def is_props(bet):
+    """A bet of the Ace Props book: Ace's money, none of his measures."""
+    return (bet or {}).get("book") == PROPS
 
 
 def utc_now():
@@ -194,10 +207,12 @@ def rebuild(path=None, bank=None):
     doc.setdefault("currency", "USD")
     doc["starting_bankroll"] = start
     doc["bankroll"] = book["bankroll"]
-    doc["open_bets"] = [_open_row(b) for b in book["open"]]
-    doc["settled_bets"] = [dict(_open_row(s), result=s["result"], profit=s["profit"],
-                                settled_utc=s.get("settled_utc"), detail=s.get("detail"))
-                           for s in book["settled"]]
+    settled = [dict(_open_row(s), result=s["result"], profit=s["profit"], settled_utc=s.get("settled_utc"),
+                    detail=s.get("detail"), book=s.get("book")) for s in book["settled"]]
+    doc["open_bets"] = [_open_row(b) for b in book["open"] if not is_props(b)]
+    doc["settled_bets"] = [s for s in settled if not is_props(s)]
+    doc["props_open_bets"] = [dict(_open_row(b), book=PROPS) for b in book["open"] if is_props(b)]
+    doc["props_settled_bets"] = [s for s in settled if is_props(s)]
     doc["kept_by"] = "ace-book.py from state/bets.jsonl - never edit by hand"
     _write(bank, doc)
     return doc
@@ -370,6 +385,8 @@ def settle(path=None, results_path=None, bank=None, now=None):
     results = _read(results_path or RESULTS, {})
     done = []
     for b in fold(events(path))["open"]:
+        if is_props(b):
+            continue
         got = outcome(b, find_result(results, b), now)
         if not got:
             continue
@@ -389,7 +406,7 @@ def fault_stop(path=None):
     """The reason betting is paused, or None: settled results have lost
     FAULT_STOP_PCT of the starting bankroll."""
     start = starting_bankroll()
-    lost = -fold(events(path), start)["profit"]
+    lost = -sum(s["profit"] for s in fold(events(path), start)["settled"] if not is_props(s))
     if lost >= start * FAULT_STOP_PCT / 100:
         return (f"settled bets have lost ${lost:,.2f}, {lost / start * 100:.1f}% of the "
                 f"${start:,.0f} start - the {FAULT_STOP_PCT:g}% fault stop. Something mechanical "
@@ -400,10 +417,11 @@ def fault_stop(path=None):
 def refusal(sport, event_id, selection, match=None, path=None):
     """Why a bet may not be placed now, or None."""
     book = fold(events(path), starting_bankroll())
-    if len(book["open"]) >= MAX_OPEN_BETS:
-        return (f"{len(book['open'])} bets are already open and the cap is {MAX_OPEN_BETS}. "
+    mine = [b for b in book["open"] if not is_props(b)]
+    if len(mine) >= MAX_OPEN_BETS:
+        return (f"{len(mine)} bets are already open and the cap is {MAX_OPEN_BETS}. "
                 f"They settle by themselves when their games finish")
-    for b in book["open"] + book["settled"]:
+    for b in [x for x in book["open"] + book["settled"] if not is_props(x)]:
         same = (str(b.get("event_id")) == str(event_id) and b.get("sport") == sport) if event_id \
             else (match and b.get("match") == match)
         if same:
@@ -427,13 +445,18 @@ def place(fields, path=None, bank=None, now=None):
 def lines(path=None):
     start = starting_bankroll()
     book = fold(events(path), start)
-    s = book["settled"]
+    props = [x for x in book["open"] + book["settled"] if is_props(x)]
+    book["open"] = [x for x in book["open"] if not is_props(x)]
+    s = [x for x in book["settled"] if not is_props(x)]
     real = [x for x in s if x["result"] in ("won", "lost")]
     won = sum(1 for x in real if x["result"] == "won")
     out = [f"bankroll ${book['bankroll']:,.2f} cash, ${sum(float(b.get('stake') or 0) for b in book['open']):,.2f} "
-           f"in {len(book['open'])} open bet(s); settled profit ${book['profit']:+,.2f} "
+           f"in {len(book['open'])} open bet(s); settled profit ${sum(x['profit'] for x in s):+,.2f} "
            f"({len(s)} settled: {won} won, {len(real) - won} lost, {len(s) - len(real)} push/void)",
            f"stake ${flat_stake():,.2f} a bet, flat; at most {MAX_OPEN_BETS} open"]
+    if props:
+        out.append(f"(Ace Props shares the bankroll: {len(props)} bet(s), "
+                   f"${sum(float(x.get('profit') or 0) for x in props):+,.2f} settled - ace-props.py show)")
     stop = fault_stop(path)
     if stop:
         out.append("STOPPED: " + stop)

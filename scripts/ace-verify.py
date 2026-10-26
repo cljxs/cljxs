@@ -73,11 +73,13 @@ def reconcile(b, problems):
     cannot run, which is itself worth saying out loud rather than passing."""
     start = num(b.get("starting_bankroll"), 10000.0)
     bank = num(b.get("bankroll"))
-    open_stake = sum(num(x.get("stake")) for x in b.get("open_bets") or [])
+    # Ace Props (2026-10-26) shares the bankroll and is listed apart: its
+    # money is in the balance, its bets are not in Ace's lists or his cap.
+    open_stake = sum(num(x.get("stake")) for x in (b.get("open_bets") or []) + (b.get("props_open_bets") or []))
 
     settled_stake = returned = 0.0
     unreadable = []
-    for s in b.get("settled_bets") or []:
+    for s in (b.get("settled_bets") or []) + (b.get("props_settled_bets") or []):
         stake = num(s.get("stake"))
         settled_stake += stake
         if s.get("profit") is not None:

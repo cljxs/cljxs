@@ -147,6 +147,7 @@
     <div class="who">sports bettor · paper $10,000</div>
     <div class="acct" id="acct"></div>
     <div class="sp"></div>
+    <a class="btn" id="props" href="/ace-props">🎯 Props</a>
     <a class="btn" id="back" href="/dashboard">← Deck</a>
     <button class="btn" id="close" style="display:none">✕ Esc</button>
   </div>
@@ -190,6 +191,7 @@ function when(utc) {
 const EMBED = new URLSearchParams(location.search).has('embed');
 if (EMBED) {
   document.body.classList.add('embed');
+  $('props').href = '/ace-props?embed=1';
   $('back').style.display = 'none';
   $('close').style.display = '';
   const close = () => parent.postMessage({ type: 'ace-close' }, '*');
@@ -236,6 +238,9 @@ function drawAcct() {
     ['In play', `<span class="v num">${money(b.at_risk)}</span>`],
     ['Settled P/L', `<span class="v num ${cls(b.settled_profit)}">${signed(b.settled_profit)}</span>`],
     ['Record W-L', `<span class="v num">${rec}</span>`],
+    // Ace Props shares the bankroll (2026-10-26); its bets are not in his record.
+    ...(has(b.props_profit) && (b.props_count || 0) > 0
+      ? [['Props P/L', `<span class="v num ${cls(b.props_profit)}">${signed(b.props_profit)}</span>`]] : []),
   ].map(([l, v]) => `<div><div class="l">${l}</div>${v}</div>`).join('');
 }
 

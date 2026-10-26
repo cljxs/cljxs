@@ -231,6 +231,8 @@ def ace_rows():
     lines = clv._read(clv.LINES, {})
     rows = []
     for b in book.fold(book.events())["settled"]:
+        if book.is_props(b):           # Ace Props: his bankroll, not his record
+            continue
         stake, profit = float(b.get("stake") or 0), float(b.get("profit") or 0)
         entry = lines.get(clv.game_key(b.get("sport"), b.get("match"), b.get("starts_utc")))
         g = clv.grade({"selection": b.get("selection"), "status": "bet", "price": b.get("price"),

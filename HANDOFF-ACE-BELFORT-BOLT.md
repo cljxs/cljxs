@@ -139,6 +139,16 @@ A **focus day** (`scripts/ace-focus.py`) points Ace at one sport and a short sla
 | `ace-close` every 5 min 10:00-23:55 | `ace-fetch.py --close`: re-prices games starting within 2 h (the closing line) | nothing |
 | `ace-cycle` 11:30 and 23:30 | `scripts/ace-cycle.sh` -> wake.py -> Ace, then `scripts/ace-verify.py` | 2 plan wakes a day |
 
+**Ace Props (2026-10-26, owner, from a TikTok - option A):** `scripts/ace-props.py`
+bets NBA player points milestones (DraftKings' 15+/20+/25+ ladder, free through
+ESPN) by plain code: opponent bottom 10 at the player's position (G/F/C, last
+40 games), his hit rate against those defences shrunk 60% toward the price,
+10+ games, -400 to +400, +2 pts. At most 2 a day, $100, page `/ace-props` (a
+button on Ace's page, and in the village menu). Its bets go into Ace's
+`bets.jsonl` as `book: "props"`: his bankroll, none of his measures (cap, fault
+stop, CLV, baselines, coach) - `ace-book.py is_props`. Own stop at -$1,000.
+Logged in the preregistration as not a rule change. `ace-props.py show`.
+
 Scripts: `ace-judge.py` (blind/list/bet/pass/rest/verdict/mark - Ace's only
 way to record judgements), `ace-book.py` (the money, from `state/bets.jsonl`),
 `ace-clv.py` (CLV and Brier), `ace-sharp.py` (Pinnacle prices from The Odds
