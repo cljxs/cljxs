@@ -113,13 +113,23 @@ class CodeReadsTheAnswer(Base):
             def ask(agent, question, timeout, tools=()):
                 seen.update(agent=agent, tools=tools)
                 return True, answer()
-        with unittest.mock.patch.object(self.r, "_load", return_value=W):
+        with unittest.mock.patch.object(self.r, "_load", return_value=W), \
+                unittest.mock.patch.object(self.r, "ENABLED", True):
             self.r.find("x", ["q"])
         self.assertEqual(seen, {"agent": "reddit", "tools": ("WebSearch",)})
         e = json.loads((ROOT / "tasks" / "engines.json").read_text())["agents"]["reddit"]
         self.assertEqual((e["engine"], e["model"], e["fallback"]), ("claude", "haiku", "none"),
                          "the plan, never a bill")
         self.assertLessEqual(e["max_turns"], 8)
+
+    def test_it_asks_nothing_while_off(self):
+        # 2026-10-26: Claude's web search cannot reach reddit.com ("not
+        # accessible to our user agent"), so every real answer was empty.
+        self.assertFalse(self.r.ENABLED)
+        with unittest.mock.patch.object(self.r, "_load", side_effect=AssertionError("asked the plan")):
+            got = self.r.find("x", ["q"])
+        self.assertEqual((got["ok"], got["items"]), (False, []))
+        self.assertIn("cannot reach reddit.com", got["note"])
 
     def test_one_question_a_day_and_a_failed_one_is_asked_again(self):
         path = self.root / "r.json"

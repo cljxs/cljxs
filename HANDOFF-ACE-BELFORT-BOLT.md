@@ -206,6 +206,8 @@ in his wake message - `scripts/reddit_search.py belfort`, the names he holds
 and weighs, read through web search once a day (Reddit's own API is closing).
 Background only: a buy still cites a news.json headline, checked by code. Ace
 gets none until after his 2026-12-01 read-out (his inputs are frozen).
+**OFF since 2026-10-26**: Claude's web search cannot reach reddit.com at all, so
+`reddit_search.ENABLED` is False and nothing is asked until another search is chosen.
 
 **Three ideas from TradingAgents (owner approved 2026-10-26)**, all for
 grading, none changes a rule:

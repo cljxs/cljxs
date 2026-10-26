@@ -82,7 +82,19 @@ def _load(name, file):
     return mod
 
 
+# OFF (2026-10-26, the first real answers on the droplet). Claude's web search
+# does not reach reddit.com at all - asked for it, it answers "The following
+# domains are not accessible to our user agent: ['reddit.com']" - so every
+# question came back {"items": []} and spent a plan question for nothing.
+# The plumbing stays (blocks, checks, Stan's backlog) for a search that does
+# reach Reddit; until one is chosen, nothing is asked.
+ENABLED = False
+OFF = "off - Claude's web search cannot reach reddit.com (2026-10-26); nothing asked"
+
+
 def _ask(question, timeout=TIMEOUT):
+    if not ENABLED:
+        return False, OFF
     return _load("wake_reddit", "wake.py").ask(ENGINE, question, timeout, tools=("WebSearch",))
 
 
