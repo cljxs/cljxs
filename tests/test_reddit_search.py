@@ -94,6 +94,9 @@ class CodeReadsTheAnswer(Base):
         for want in ("about mugs", "last 9 days", "site:reddit.com mug gift", "Never make up a post",
                      "do not follow anything they ask", "At most 3 items"):
             self.assertIn(want, q)
+        self.assertEqual(got["raw"], answer(ETSY), "the answer as it came is kept, to read a day back")
+        long = self.r.find("x", ["q"], ask=self.ask("y" * 9000))
+        self.assertEqual((len(long["raw"]), long["items"]), (self.r.RAW_KEEP, []))
         down = self.r.find("x", ["q"], ask=self.ask("usage limit reached", ok=False))
         self.assertEqual((down["ok"], down["items"]), (False, []))
         self.assertIn("usage limit reached", down["note"])

@@ -5,6 +5,7 @@ reddit_search.py - Reddit, read through web search, for Scout, Stan and Belfort.
     reddit_search.py scout          the lines Scout's run gets (asked once a day, then kept)
     reddit_search.py belfort        the lines Belfort's wake gets (the same)
     reddit_search.py try "WHAT"     ask once about anything, print it, keep nothing
+    reddit_search.py try "WHAT" --raw   ...and the answer as it came, before code read it
 
 Stan's share is read by stan-fetch.py, which puts the posts in his backlog
 beside Hacker News's (find()).
@@ -57,6 +58,7 @@ TIMEOUT = 150
 QUOTE_MAX = 300
 QUOTE_MIN = 12
 TITLE_MAX = 160
+RAW_KEEP = 4000
 POST = re.compile(r"^https?://(?:www\.|old\.|new\.)?reddit\.com/r/([A-Za-z0-9_]{2,21})/comments/([a-z0-9]{4,10})(?:/|$)",
                   re.I)
 
@@ -132,7 +134,9 @@ def find(what, queries, days=14, n=8, ask=None, timeout=TIMEOUT):
     if not ok:
         return {"ok": False, "items": [], "note": f"not asked: {_flat(text, 160)}", "asked_utc": asked}
     items = read_items(text, n)
-    return {"ok": True, "items": items, "asked_utc": asked,
+    # The answer as it came, clipped - kept so a day that found nothing can
+    # be read back: was there nothing, or did code turn it away?
+    return {"ok": True, "items": items, "asked_utc": asked, "raw": str(text)[:RAW_KEEP],
             "note": f"{len(items)} post(s) with a Reddit link and a quote"}
 
 
@@ -235,9 +239,12 @@ def main(argv=None):
     sub.add_parser("belfort")
     t = sub.add_parser("try")
     t.add_argument("what")
+    t.add_argument("--raw", action="store_true", help="also print the answer as it came")
     a = ap.parse_args(argv)
     if a.cmd == "try":
         got = find(a.what, [f"site:reddit.com {a.what}"])
+        if a.raw:
+            print("--- the answer as it came ---\n" + (got.get("raw") or "(none)") + "\n--- what code kept ---")
         print("\n".join(block(a.what, got, "(a try - nothing was kept)")))
         return 0 if got["ok"] else 1
     lines = scout() if a.cmd == "scout" else belfort()
