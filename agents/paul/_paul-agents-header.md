@@ -196,10 +196,32 @@ look alike, and neither may look like the last site you built.
    sourced claim. Cannot find two? This is not the business to build for -
    write status "below-bar" and say why.
 
+**A theme, when the owner gave no reference** (FACTS `THEMES`). Code deals
+three of Hallmark's themes (github.com/Nutlope/hallmark, in `hallmark/`):
+each is a material - paper, ink, type, rules, surfaces, how photos are
+treated - with a picture of a finished page, never a layout. Read the three
+`hallmark/themes/<name>.md` files, look at their pictures, pick the one that
+fits this business and set `"theme"` in target.json; code refuses any other.
+Build in its material: its faces (Google Fonts), its surfaces and texture,
+its colourway nearest the business's own colours, or its accent swapped for
+theirs. Where a theme names Hallmark's own files (the stamp, `texture.md`,
+`layout.md`) you have none of them: these rules are the ones that hold.
+With the owner's reference, the reference is the look and no theme is dealt.
+
+**Build around what the visitor came to do** (Hallmark's anatomy). Salons
+and barbers: they come to **book** - the booking button in the header and
+the hero, again beside the services and prices, and the page ends on hours,
+address and booking. Food: they come to **visit or order** - the menu, the
+hours and the address high up, booking or ordering if they have it, the
+page ending on where and when. Trades: they come to **hire** - the call or
+quote button first, what they do and the area they cover, their own work,
+ending on the call. Shops: they come to **visit or buy** - what they sell,
+then hours and address. Never end on a sign-up.
+
 **The quality bar: `templates/local/`.** Open its index.html and style.css
 to see what good looks like - generous spacing, a clear type scale, text
 that passes contrast, a phone layout where the call button and hours come
-first, small touches like a drawing of their trade that draws itself once
+first, small touches like a small mark of their trade that draws itself once
 as the page loads. Take the craft, never the layout: code refuses a site
 built on that stylesheet. The references in FACTS are the same - how a good
 site in their category reads, not something to copy. A stranger should
@@ -269,6 +291,23 @@ think they paid for this.
   animated number counters at all. The headline says what they sell and
   where - never a slogan that would fit any business. Read it aloud and cut
   anything that sounds like a brochure.
+- **One rulebook** (Paul's and Hallmark's, 2026-10-26). Code measures the
+  page on a computer (1280x800) and an upright iPad, and reads the code, and
+  refuses: a label above a heading (an eyebrow - open with the heading);
+  small text in capitals or spaced out (only the wordmark may be); "A · B ·
+  C" strings and arrows on buttons; one word in a heading set apart by
+  colour, italic or weight; purple gradients, gradient text, blurred blobs;
+  a card inside a card; more than three type families; text under 12px; a
+  drawing over 120px or an empty coloured box where a photo belongs; on a
+  computer, the headline, its sentence and the main button not all on the
+  first screen, more than two paragraphs before that button, about 80 words
+  of sentences per screen (lists, tables, hours and prices are free), a page
+  that is mostly stock photos, a price repeated in four sections, a link or
+  button that shows nothing when reached by keyboard; a button that wraps or
+  a page that scrolls sideways at any width; a colour or face written
+  anywhere but a custom property in :root (the pitch promises the colours
+  can change); motion with no `prefers-reduced-motion` version; content
+  hidden until a script shows it; "Learn more", "Get started" and their kin.
 - **Doesn't look AI-made** (the owner's checklist). Code refuses: em dashes,
   emoji, stock phrasing ("nestled in", "elevate", "welcome to"...), a custom
   cursor. Also never: purple or blue-violet gradients, pill-shaped buttons

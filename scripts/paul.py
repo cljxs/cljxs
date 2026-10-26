@@ -1019,6 +1019,30 @@ KIND_WORDS = {"food": "a restaurant, cafe, bakery, coffee shop or food truck",
               "salon": "a salon, barber or spa", "retail": "a shop", "other": "any other business"}
 
 
+# Hallmark's themes (agents/paul/hallmark/themes/): a material - paper, ink,
+# type, surfaces - never a layout. With no reference from the owner, code
+# deals three for the kind of business, none used in the last three builds
+# (Hallmark's deal; owner, 2026-10-26), and Paul builds in the one he picks.
+THEMES_FOR = {
+    "trade": ("formwork", "furrow", "blueprint", "terrazzo", "brutal", "ink"),
+    "food": ("vellum", "garden", "hedgerow", "solstice", "spore", "squeeze", "halftone", "overprint"),
+    "salon": ("loom", "sport", "darkroom", "brutal", "vellum", "overprint"),
+    "retail": ("vellum", "loom", "sticker", "squeeze", "terrazzo", "garden", "halftone"),
+    "other": ("ink", "broadside", "darkroom", "formwork", "loom", "garden"),
+}
+DEAL = 3
+
+
+def deal_themes(kind, rand=None):
+    """Three themes for this kind, none of the last three builds' own."""
+    rand = rand or secrets.SystemRandom()
+    recent = {b.get("theme") for b in [b for b in builds() if b.get("outcome") == "built"][-3:]}
+    mine = [t for t in THEMES_FOR.get(kind) or () if t not in recent]
+    rest = [t for t in dict.fromkeys(t for ts in THEMES_FOR.values() for t in ts) if t not in recent and t not in mine]
+    pick = rand.sample(mine, min(DEAL, len(mine)))
+    return pick + rand.sample(rest, DEAL - len(pick))
+
+
 def focus_kind():
     try:
         k = A("state", "focus").read_text().strip()
@@ -2412,6 +2436,9 @@ def run_checks(t, get=http_get, work=None):
 
     serrs, sinfo = check_site(work / "site", t, page)
     errs += serrs
+    dealt = (read_json(work / "themes.json", {}) or {}).get("themes")
+    if dealt and t.get("theme") not in dealt:
+        errs.append(f'target.json "theme" must be the one you built in, of those dealt: {", ".join(dealt)}')
     info.update(sinfo)
     ref = own_reference(work)
     if ref and (work / "site" / "index.html").is_file():
@@ -4602,6 +4629,15 @@ def cmd_brief(a, get=http_get):
               "             checked yet. Find it yourself as in scouting: its address, phone",
               "             and hours from its own pages, Google or Facebook, each with the URL.",
               "             Not sure it is the right business, or it closed? below-bar, say why."]
+    themes = A("work", "themes.json")
+    if kind in ("build", "resume") and not A("work", "REVISE.md").is_file() and not mine.get("reference"):
+        dealt = (read_json(themes, {}) or {}).get("themes")
+        if not dealt:
+            dealt = deal_themes(mine.get("kind") or "other")
+            write_json(themes, {"themes": dealt, "kind": mine.get("kind")})
+        L += [f"THEMES       no reference from the owner: build in one of {', '.join(dealt)}.",
+              "             Read hallmark/themes/<name>.md and look at hallmark/themes/<name>.jpg,",
+              "             pick the one that fits them, and set target.json \"theme\" to it."]
     if mine.get("owner_notes"):
         words, line = str(mine["owner_notes"]).split(), ""
         rows_ = []
@@ -4888,7 +4924,7 @@ def finish_build(a, get=http_get, api=None, browser=None, sleep=time.sleep):
                 "recorded as contacted."]
         _report(f"{day}-{slug}.md", rep)
         log_build({"day": day, "mode": "dry", "outcome": "built", "slug": slug,
-                   "name": t["name"], "kind": t.get("kind"), "layout": t.get("layout")})
+                   "name": t["name"], "kind": t.get("kind"), "layout": t.get("layout"), "theme": t.get("theme")})
         record(f"DRY: {t['name']} | built locally, sites/{slug} | {head.get('channel')} | not deployed")
         if was:
             set_revision(was, state="updated", new_slug=slug)
@@ -4953,7 +4989,7 @@ def finish_build(a, get=http_get, api=None, browser=None, sleep=time.sleep):
     rep += ["", "## Notes from Paul", "", str(t.get("notes") or "-")]
     _report(f"{day}-{slug}.md", rep)
     log_build({"day": day, "mode": "live", "outcome": "built", "slug": slug, "name": t["name"],
-               "kind": t.get("kind"), "layout": t.get("layout")})
+               "kind": t.get("kind"), "layout": t.get("layout"), "theme": t.get("theme")})
     record(f"{t['name']} | {url} | {head.get('channel')} | drafted")
     if was:
         set_revision(was, state="updated", new_slug=slug, preview_url=url)

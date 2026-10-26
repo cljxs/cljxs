@@ -3550,3 +3550,51 @@ class OneRulebookInTheCode(unittest.TestCase):
             errs = paul.look_and_law(paul.scan_site(d))
         self.assertTrue(any('"Learn more" as a button' in e for e in errs), errs)
         self.assertTrue(any("world-class" in e for e in errs), errs)
+
+
+class AThemeIsDealtWhenThereIsNoReference(PaulCase):
+    """Hallmark's deal (owner, 2026-10-26): three themes that fit the kind of
+    business, none from the last three builds; the owner's reference, when
+    there is one, is the look instead."""
+
+    def setUp(self):
+        super().setUp()
+        TheOwnerPicksPaulBuilds.seed(self, dict(prospect(kind="salon"), status="approved", decided="x"))
+
+    def test_three_for_the_kind_none_used_lately(self):
+        for n, theme in enumerate(("loom", "sport", "darkroom")):
+            paul.log_build({"day": f"2026-10-1{n}", "outcome": "built", "slug": f"s{n}", "name": "x", "theme": theme})
+        for _ in range(20):
+            got = paul.deal_themes("salon")
+            self.assertEqual(len(set(got)), 3)
+            self.assertFalse({"loom", "sport", "darkroom"} & set(got), got)
+            self.assertTrue(set(got) <= {"brutal", "vellum", "overprint"} | set(paul.THEMES_FOR["other"]), got)
+        for kind, themes in paul.THEMES_FOR.items():
+            for t in themes:
+                self.assertTrue((paul.HALLMARK / "themes" / f"{t}.md").is_file() and
+                                (paul.HALLMARK / "themes" / f"{t}.jpg").is_file(), t)
+
+    def test_the_brief_deals_once_and_check_holds_paul_to_it(self):
+        _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
+        dealt = paul.read_json(paul.A("work", "themes.json"))["themes"]
+        self.assertIn(f"THEMES       no reference from the owner: build in one of {', '.join(dealt)}.", facts)
+        _rc, again = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
+        self.assertEqual(paul.read_json(paul.A("work", "themes.json"))["themes"], dealt, "a resumed build keeps its deal")
+        self.work(t=target(theme="cobalt"))
+        paul.write_json(paul.A("work", "themes.json"), {"themes": dealt})
+        errs, _n, _i = paul.run_checks(target(theme="cobalt"), offline)
+        self.assertTrue(any('"theme" must be the one you built in' in e for e in errs), errs)
+        errs, _n, _i = paul.run_checks(target(theme=dealt[0]), offline)
+        self.assertFalse([e for e in errs if '"theme"' in e])
+
+    def test_the_owners_reference_is_the_look(self):
+        rows = paul.load_prospects()
+        rows[0]["reference"] = "https://mancaveformen.com/"
+        paul.save_prospects(rows)
+        _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
+        self.assertNotIn("THEMES", facts)
+        self.assertFalse(paul.A("work", "themes.json").exists())
+        header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
+        for bit in ("**A theme, when the owner gave no reference**", "**Build around what the visitor came to do**",
+                    "**One rulebook**"):
+            self.assertIn(bit, header)
