@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-stan-fetch.py — Stan's fetcher: Hacker News posts that say a software pain
-out loud. Plain code, no AI, costs nothing.
+stan-fetch.py — Stan's fetcher: Hacker News and Reddit posts that say a
+software pain out loud. Hacker News is plain code and costs nothing; Reddit is
+one question a day on the owner's Claude plan (reddit_search.py).
 
     stan-fetch.py              # new posts since the last fetch, into the backlog
     stan-fetch.py --days 30    # look further back (a first run looks 14 days)
@@ -18,6 +19,14 @@ WRITES, all inside agents/stan/:
     state/seen-posts.json    every post id ever fetched ("hn:<id>"), so a post is
                              fetched once; ids only, pruned after 120 days
 
+REDDIT (owner, 2026-10-26). Reddit's own API is closing and its pages answer
+a server 403, so Reddit is read through web search: one question for posts
+saying one of the watchlist's phrases about software. A post is kept, like a
+Hacker News one, only when its quote really holds a phrase; its quote is what
+the search showed (via "web search"), and stan.py checks Stan's quotes
+against that text as it does for Hacker News. A failed question costs the
+fetch nothing - Hacker News is the fetch, and is what ok means.
+
 RETENTION. The backlog keeps a short excerpt round the phrase, not the whole
 post, and drops anything older than keep_backlog_days. What a surfaced
 problem cites (a link and the quote) is kept with the problem by stan.py.
@@ -31,6 +40,7 @@ Standard library only.
 
 import argparse
 import html
+import importlib.util
 import json
 import os
 import re
@@ -164,7 +174,40 @@ def search(phrase, since, get=None, pause=time.sleep):
     return hits
 
 
-def fetch(days=None, get=None, pause=time.sleep, now=None):
+REDDIT_POSTS = 10          # at most, a day
+REDDIT_QUERIES = 4         # the heaviest phrases, as search queries
+
+
+def _norm(t):
+    return str(t or "").replace("’", "'").replace("‘", "'").lower()
+
+
+def reddit_posts(phrases, since, now, fetched, find=None):
+    """(posts, status) from Reddit through web search, each holding a phrase."""
+    if find is None:
+        spec = importlib.util.spec_from_file_location("reddit_stan", Path(__file__).resolve().parent / "reddit_search.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        find = mod.find
+    top = sorted(phrases, key=lambda p: -p["weight"])[:REDDIT_QUERIES]
+    days = max(1, min(14, (now - since).days or 1))
+    got = find("where someone says, about software, an app or a tool, one of: "
+               + ", ".join(f'"{p["phrase"]}"' for p in phrases),
+               [f'site:reddit.com "{p["phrase"]}" app' for p in top], days=days, n=REDDIT_POSTS)
+    posts = []
+    for x in got["items"]:
+        said = [p for p in phrases if _norm(p["phrase"]) in _norm(x["quote"])]
+        if not said:
+            continue                          # a near-miss, as on Hacker News
+        posts.append({"id": x["id"], "kind": "reddit", "author": "", "via": x["via"],
+                      "created_utc": f"{x['date']}T00:00:00Z" if x.get("date") else None,
+                      "fetched_utc": fetched, "thread": f"r/{x['subreddit']}: {x['title']}".strip(),
+                      "link": x["url"], "points": None, "phrases": [p["phrase"] for p in said],
+                      "weight": max(p["weight"] for p in said), "text": x["quote"]})
+    return posts, {"ok": got["ok"], "found": len(posts), "new": 0, "note": got["note"]}
+
+
+def fetch(days=None, get=None, pause=time.sleep, now=None, reddit=None):
     """One fetch. Returns the status written to data/fetch-status.json."""
     now = now or now_utc()
     a = agent_dir()
@@ -213,6 +256,18 @@ def fetch(days=None, get=None, pause=time.sleep, now=None):
             row["new"] += 1
         rows.append(row)
 
+    try:
+        found, rd = reddit_posts(wl["phrases"], since, now, fetched, find=reddit)
+    except Exception as e:                    # never the fetch's failure
+        found, rd = [], {"ok": False, "found": 0, "new": 0, "note": f"error: {str(e)[:160]}"}
+    for post in found:
+        if post["id"] in by_id or post["id"] in seen:
+            continue
+        seen[post["id"]] = fetched
+        by_id[post["id"]] = post
+        new_ids.append(post["id"])
+        rd["new"] += 1
+
     keep_after = now - timedelta(days=int(wl.get("keep_backlog_days", 21)))
     posts = [p for p in by_id.values() if (parse_stamp(p.get("fetched_utc")) or now) >= keep_after]
     posts.sort(key=lambda p: p.get("created_utc") or "", reverse=True)
@@ -220,13 +275,13 @@ def fetch(days=None, get=None, pause=time.sleep, now=None):
     seen = {k: v for k, v in seen.items() if (parse_stamp(v) or now) >= cut}
 
     ok = any(r["ok"] for r in rows)
-    write_json(a / "data" / "backlog.json", {"source": "Hacker News (hn.algolia.com)", "updated_utc": fetched,
+    write_json(a / "data" / "backlog.json", {"source": "Hacker News (hn.algolia.com) and Reddit (through web search)",
+                                              "updated_utc": fetched,
                                               "posts": posts})
     write_json(a / "state" / "seen-posts.json", seen)
     status = {"utc": fetched, "since_utc": stamp(since), "ok": ok,
               "last_ok_utc": fetched if ok else (stamp(last) if last else None),
-              "new": len(new_ids), "backlog": len(posts), "phrases": rows,
-              "reddit": "off - not used until its terms for this use are confirmed (owner, 2026-10-14)"}
+              "new": len(new_ids), "backlog": len(posts), "phrases": rows, "reddit": rd}
     write_json(status_path, status)
     return status
 
@@ -243,6 +298,8 @@ def main(argv=None):
     for r in st["phrases"]:
         said = f"error: {r['error']}" if r["error"] else f"{r['found']} found, {r['new']} new"
         print(f"  {r['phrase']:<22} {said}")
+    rd = st["reddit"]
+    print(f"  {'Reddit':<22} " + (f"{rd['found']} found, {rd['new']} new" if rd["ok"] else rd["note"]))
     print(f"{st['new']} new post(s); {st['backlog']} in the backlog; since {st['since_utc']}")
     # Every phrase failing is a failed fetch - the timer's unit goes red,
     # health-check.py says so. Some failing is reported above and is not.

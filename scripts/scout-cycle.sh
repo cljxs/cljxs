@@ -67,6 +67,18 @@ MESSAGE="$MESSAGE
 
 $($IDEAS brief)"
 
+# Reddit, read through web search - what people ask for around the phrases
+# above. One question a day on the plan (reddit_search.py), asked only when
+# the run goes ahead. Colour for an angle, never a phrase: the intake still
+# takes measured phrases only. Nothing found, or the plan busy, and the run
+# goes on without it.
+REDDIT="$(python3 "$ROOT/scripts/reddit_search.py" scout)" || REDDIT=""
+if [ -n "$REDDIT" ]; then
+  MESSAGE="$MESSAGE
+
+$REDDIT"
+fi
+
 T=$(stat -c %Y "$LAST" 2>/dev/null || echo 0)
 
 cd "$AGENT" || exit 1

@@ -79,6 +79,11 @@ OWED="$(python3 "$ROOT/scripts/belfort-trade.py" calls --owed 2>/dev/null)" || O
 # score, and what the names he passed on did next. Code's numbers, not his
 # memory of them. Running it also measures any pass that has come due.
 RECORD="$(python3 "$ROOT/scripts/belfort-learn.py" record 2>/dev/null)" || RECORD="(your record could not be worked out this wake)"
+# Reddit chatter on the names he is weighing, read through web search - one
+# question a day on the plan (reddit_search.py), the first wake asks and the
+# rest reuse it. Background only: a buy still cites a news.json headline,
+# checked by code. Nothing found and the line is left out.
+REDDIT="$(python3 "$ROOT/scripts/reddit_search.py" belfort)" || REDDIT=""
 # The wake message names every deliverable, the last one included. On
 # 2026-10-12 the close cycle wrote the report and the calls - the two things
 # this message named - and stopped: no memory line, no signoff, and the
@@ -92,6 +97,7 @@ $EXITS
 Report these sales as they are; do not sell for those rules again. You judge only a broken thesis.
 Candidates owed a call this wake (one line each in state/calls.txt, then belfort-trade.py calls): $OWED
 $RECORD
+$REDDIT
 
 Before you stop: record one line with python3 ../../scripts/remember.py belfort \"<one short line>\" and finish by running python3 ../../scripts/signoff.py belfort - it lists anything MISSING, and the cycle is not done until it lists nothing." \
   --session-id "wake-belfort-$STARTED" \

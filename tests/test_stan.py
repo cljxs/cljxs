@@ -161,6 +161,57 @@ class TheFetcher(Base):
         self.assertFalse(st["ok"], "every phrase failing is a failed fetch")
 
 
+    REDDIT = [{"id": "reddit:1ghk2ab", "subreddit": "smallbusiness", "url": "https://www.reddit.com/r/smallbusiness/comments/1ghk2ab/",
+               "title": "Invoicing", "quote": "I would pay for something that chases late invoices for me",
+               "date": "2026-10-12", "via": "web search"},
+              {"id": "reddit:1zzz111", "subreddit": "SaaS", "url": "https://www.reddit.com/r/SaaS/comments/1zzz111/",
+               "title": "Rant", "quote": "Software these days is all subscriptions and I hate it", "date": None,
+               "via": "web search"}]
+
+    def test_reddit_posts_join_the_backlog_when_they_hold_a_phrase(self):
+        # Owner, 2026-10-26: Reddit for Stan, through web search - its own
+        # API is closing. A post is kept, like a Hacker News one, only when
+        # its quote really holds a phrase.
+        self.write_watchlist([{"phrase": "I would pay for", "weight": 1.0}])
+        asked = []
+
+        def find(what, queries, days, n):
+            asked.append((what, queries))
+            return {"ok": True, "items": self.REDDIT, "note": "2 post(s)"}
+        get = lambda url: fixture("hn-algolia-comments.json")
+        st = self.f.fetch(get=get, pause=lambda s: None, now=NOW, reddit=find)
+        self.assertIn('"I would pay for"', asked[0][0])
+        self.assertEqual(asked[0][1], ['site:reddit.com "I would pay for" app'])
+        posts = {p["id"]: p for p in json.loads(self.A("data", "backlog.json").read_text())["posts"]}
+        r = posts["reddit:1ghk2ab"]
+        self.assertEqual((r["kind"], r["via"], r["weight"], r["link"]),
+                         ("reddit", "web search", 1.0, "https://www.reddit.com/r/smallbusiness/comments/1ghk2ab/"))
+        self.assertNotIn("reddit:1zzz111", posts, "a near-miss, as on Hacker News")
+        self.assertEqual((st["reddit"]["ok"], st["reddit"]["new"]), (True, 1))
+        again = self.f.fetch(get=get, pause=lambda s: None, now=NOW + timedelta(days=1), reddit=find)
+        self.assertEqual(again["reddit"]["new"], 0, "a Reddit post is fetched once too")
+        empty = lambda url: {"hits": [], "nbPages": 0}
+        none = lambda *a, **k: {"ok": True, "items": [], "note": "0"}
+        self.assertEqual(self.f.fetch(get=empty, pause=lambda s: None, now=NOW + timedelta(days=30),
+                                      reddit=none)["backlog"], 0)
+        month = self.f.fetch(get=empty, pause=lambda s: None, now=NOW + timedelta(days=31), reddit=find)
+        self.assertEqual(month["reddit"]["new"], 0, "out of the backlog after 21 days, still known by its id")
+
+    def test_a_reddit_question_that_fails_costs_the_fetch_nothing(self):
+        self.write_watchlist([{"phrase": "I would pay for", "weight": 1.0}])
+        st = self.f.fetch(get=lambda url: fixture("hn-algolia-comments.json"), pause=lambda s: None, now=NOW,
+                          reddit=lambda *a, **k: {"ok": False, "items": [], "note": "not asked: usage limit"})
+        self.assertTrue(st["ok"], "Hacker News is the fetch")
+        self.assertEqual(st["reddit"]["note"], "not asked: usage limit")
+
+        def boom(*a, **k):
+            raise RuntimeError("plan down")
+        st = self.f.fetch(get=lambda url: fixture("hn-algolia-comments.json"), pause=lambda s: None,
+                          now=NOW + timedelta(days=1), reddit=boom)
+        self.assertTrue(st["ok"])
+        self.assertIn("plan down", st["reddit"]["note"])
+
+
 class Judging(Base):
     def test_a_quote_that_is_not_in_the_post_drops_the_problem(self):
         # Guards: the model citing a post that does not say what it claims.
@@ -185,6 +236,25 @@ class Judging(Base):
         self.assertEqual(p["people"], 2)
         self.assertEqual(p["scores"], {"frequency": 6.0, "pay": 8.0, "buildability": 9.0, "gap": 5.0})
         self.assertEqual(p["score"], round(.3 * 6 + .3 * 8 + .25 * 9 + .15 * 5, 1))
+
+    def test_a_reddit_post_is_checked_and_counted_like_any_other(self):
+        # A Reddit post has no author's name: it counts as its own person,
+        # beside a named Hacker News author (2026-10-26).
+        posts = [self.post(1, "I would pay for a tool that chases late invoices.", "ann"),
+                 dict(self.post(2, "I would pay for something that chases late invoices for me"), id="reddit:1ghk2ab",
+                      author="", kind="reddit", link="https://www.reddit.com/r/smallbusiness/comments/1ghk2ab/")]
+        kept, _ = self.s.judge({"problems": [
+            {"title": "Invoice chasing", "problem": "Chasing late invoices by hand.",
+             "evidence": [{"post_id": "hn:1", "quote": "chases late invoices"},
+                          {"post_id": "reddit:1ghk2ab", "quote": "chases late invoices for me"}],
+             "pay_strength": 5, "buildability": 9, "gap": 5}]}, posts)
+        self.assertEqual(kept[0]["people"], 2)
+        self.assertEqual(kept[0]["evidence"][1]["link"], "https://www.reddit.com/r/smallbusiness/comments/1ghk2ab/")
+        kept, dropped = self.s.judge({"problems": [
+            {"title": "Invoice chasing", "problem": "p",
+             "evidence": [{"post_id": "reddit:1ghk2ab", "quote": "I would pay $20 for invoice chasing"}],
+             "pay_strength": 5, "buildability": 9, "gap": 5}]}, posts)
+        self.assertEqual(kept, [], "a Reddit quote is checked against what the search showed")
 
     def test_pay_is_capped_without_a_quote_that_shows_it(self):
         # Guards: a model's "pay 10" standing in for evidence nobody wrote.

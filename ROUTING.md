@@ -51,6 +51,7 @@ generated - edit the header, then `scripts/deploy.sh <name>`).
 | Model slugs, model comparison | `scripts/set-agent-model.sh`, `scripts/model-trial.py` |
 | A Claude plan login | `scripts/new-claude-login.py` |
 | Provider error or agent error | `scripts/check-provider-error.py` |
+| Reddit, read through web search (Scout, Stan, Belfort; not Ace until 2026-12-01) | `scripts/reddit_search.py` (`find`, `read_items`, `once_a_day`); engine `reddit` in `tasks/engines.json` |
 
 ## The Command Deck (Express, port 3001)
 
@@ -121,6 +122,7 @@ in the background. `tests/test_clipper.py` alone is ~20 min; run a class
 | Ace Props | `tests/test_ace_props.py` |
 | Scout scan | `tests/test_scout_scan.py` |
 | Stan | `tests/test_stan.py` |
+| Reddit through web search | `tests/test_reddit_search.py` |
 | Agent Room | `tests/test_agentroom.py`, `tests/test_agentroom_build.py`, `tests/test_app_ai.py`, `tests/test_site.py` |
 | Engines, wake | `tests/test_wake.py`, `tests/test_models.py`, `tests/test_new_claude_login.py` |
 | Deck restarts, attention, village frames | `tests/test_restarts.py`, `tests/test_attention.py`, `tests/test_village_frame.py` |

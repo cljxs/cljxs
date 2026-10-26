@@ -82,7 +82,7 @@
   <div class="head">
     <div>
       <h1>Stan</h1>
-      <div class="sub">Software pains people wrote on Hacker News, judged once a day. Approve one and it goes to the Agent Room.</div>
+      <div class="sub">Software pains people wrote on Hacker News and Reddit, judged once a day. Approve one and it goes to the Agent Room.</div>
       <div class="pills" id="pills"></div>
     </div>
     <div class="sp"></div>
@@ -102,6 +102,8 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 // Links are built by stan.py from a post's number - news.ycombinator.com only.
 const hn = u => /^https:\/\/news\.ycombinator\.com\/item\?id=\d+$/.test(u || '') ? u : null;
+// Reddit posts come through web search (reddit_search.py) as a post's own link, rebuilt by code.
+const rd = u => /^https:\/\/www\.reddit\.com\/r\/[A-Za-z0-9_]{2,21}\/comments\/[a-z0-9]{4,10}\/$/.test(u || '') ? u : null;
 const when = u => { const d = new Date(u); return isNaN(d) ? '' : d.toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); };
 
 if (new URLSearchParams(location.search).get('embed') === '1') {
@@ -128,9 +130,9 @@ async function api(url, opts) {
 }
 
 function quoteHtml(e, label) {
-  const link = hn(e.link);
+  const link = hn(e.link) || rd(e.link), site = rd(e.link) ? 'on Reddit (found by web search)' : 'on Hacker News';
   return `<div class="quote">“${esc(e.quote)}”
-    <div class="src">${label ? esc(label) + ' · ' : ''}${e.author ? esc(e.author) + ' · ' : ''}${link ? `<a href="${link}" target="_blank" rel="noopener noreferrer">on Hacker News</a>` : ''}${e.thread ? ' · in “' + esc(e.thread) + '”' : ''}</div></div>`;
+    <div class="src">${label ? esc(label) + ' · ' : ''}${e.author ? esc(e.author) + ' · ' : ''}${link ? `<a href="${link}" target="_blank" rel="noopener noreferrer">${site}</a>` : ''}${e.thread ? ' · in “' + esc(e.thread) + '”' : ''}</div></div>`;
 }
 
 function bars(s) {
@@ -169,13 +171,16 @@ function render() {
   const f = d.fetch;
   pills.push(f && f.ok ? `<span class="pill g">● Hacker News · ${f.new} new on ${esc(when(f.utc))}</span>`
     : f ? '<span class="pill r">○ Last fetch failed</span>' : '<span class="pill a">○ Not fetched yet</span>');
-  pills.push('<span class="pill">Reddit: off</span>');
+  const r = f && f.reddit && typeof f.reddit === 'object' ? f.reddit : null;
+  pills.push(r ? (r.ok ? `<span class="pill g">● Reddit · ${r.new} new (web search)</span>`
+                       : `<span class="pill a" title="${esc(r.note || '')}">○ Reddit not read today</span>`)
+               : '<span class="pill">Reddit: not fetched yet</span>');
   pills.push(`<span class="pill">${esc(d.model)}</span>`);
   pills.push(`<span class="pill">Today $${Number(d.spent_today).toFixed(4)} of $${Number(d.limits.stan_daily_ai).toFixed(2)}</span>`);
   $('pills').innerHTML = pills.join('');
 
   const c = d.last_cycle, j = d.job;
-  $('status').innerHTML = (j && j.state === 'running') ? '<b>Stan is looking</b> - fetching Hacker News, then one AI read. A minute or two.'
+  $('status').innerHTML = (j && j.state === 'running') ? '<b>Stan is looking</b> - fetching Hacker News and Reddit, then one AI read. A minute or two.'
     : `${c ? `<b>Last look ${esc(when(c.utc))}:</b> ${esc(c.line)}${c.error ? `<div class="err">${esc(c.error)}</div>` : ''}` : '<b>Stan has not looked yet.</b> Press Look now, or wait for 6:22am.'}
        <div class="muted" style="margin-top:4px">${d.unread} post(s) waiting to be read · ${d.backlog} in the backlog · ${d.ledger} problem(s) ever surfaced (never shown twice) · keeps ${esc(d.min_score)}+ and at most ${esc(d.max_surfaced)} a day</div>
        ${j && j.state === 'failed' ? `<pre>${esc(j.log)}</pre>` : ''}`;

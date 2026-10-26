@@ -96,7 +96,7 @@ owner approves. Approving is what creates Emily's task.
 | Timer (Central) | Runs | Costs |
 |---|---|---|
 | `scout-niches` 06:30 | `scripts/niche-scan.py run`: re-measures the oldest niches on Etsy (supply, favourites, price, and **sales** - how many of the top 10 listings had a review in the last year, a floor on purchases), adds new niches from tags selling listings use | nothing (Etsy API) |
-| `scout-cycle` 08:00 | `scripts/scout-cycle.sh` -> wake.py -> Scout | one plan wake |
+| `scout-cycle` 08:00 | `scripts/scout-cycle.sh` -> wake.py -> Scout; first a Reddit block (`scripts/reddit_search.py scout`: what people say around his top 4 phrases, through web search, once a day - colour for an angle, never a phrase; owner 2026-10-26) | one plan wake + one small web-search question |
 
 **The evidence rule.** Each idea line is `phrase | title | product | angle`
 in `state/drafts.txt`. The **phrase must be a measured one** (`state/scans/`):

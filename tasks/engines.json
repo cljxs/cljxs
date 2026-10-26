@@ -21,7 +21,9 @@
     "and it only proposes - nothing it says changes a rule.",
     "clip is Python; only its reading of a transcript (stories.py: where each story",
     "and argument starts and ends, a few questions an episode, no tools) and Write",
-    "hooks (web search, up to max_turns) ask the plan. Neither falls back to a bill."
+    "hooks (web search, up to max_turns) ask the plan. Neither falls back to a bill.",
+    "reddit is scripts/reddit_search.py: Reddit read through web search for Scout,",
+    "Stan and Belfort, one question a day each, web search only, never billed."
   ],
   "agents": {
     "ace": {
@@ -65,6 +67,12 @@
       "engine": "claude",
       "model": "sonnet",
       "max_turns": 8,
+      "fallback": "none"
+    },
+    "reddit": {
+      "engine": "claude",
+      "model": "haiku",
+      "max_turns": 6,
       "fallback": "none"
     }
   }

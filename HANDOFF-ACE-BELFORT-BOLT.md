@@ -201,6 +201,12 @@ change - rules change only when the owner changes them.
 held through real daily prices under the sell rules now and before 2026-10-22
 (`--trail N` tries any trail); it changes nothing.
 
+**Reddit chatter (owner, 2026-10-26)**: `belfort-cycle.sh` puts a REDDIT block
+in his wake message - `scripts/reddit_search.py belfort`, the names he holds
+and weighs, read through web search once a day (Reddit's own API is closing).
+Background only: a buy still cites a news.json headline, checked by code. Ace
+gets none until after his 2026-12-01 read-out (his inputs are frozen).
+
 **Three ideas from TradingAgents (owner approved 2026-10-26)**, all for
 grading, none changes a rule:
 * **Beyond SPY.** Every buy, sale and call keeps SPY's price (`spy_now`), and

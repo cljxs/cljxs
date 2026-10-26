@@ -200,7 +200,9 @@ def judge(raw, posts):
         pay = c.get("pay_quote") if isinstance(c.get("pay_quote"), dict) else None
         pay_post = by_id.get(str((pay or {}).get("post_id") or ""))
         pay_ok = bool(pay_post and quote_in(pay_post, pay.get("quote")))
-        people = len({e["author"] for e in evidence if e["author"]}) or len(evidence)
+        # A Reddit post found through web search has no author's name: each
+        # such post counts as its own person (2026-10-26); named authors once.
+        people = len({e["author"] or e["post_id"] for e in evidence})
         s = {"frequency": frequency(people),
              "pay": score10(c.get("pay_strength")) if pay_ok else min(score10(c.get("pay_strength")), 3.0),
              "buildability": score10(c.get("buildability")),
@@ -237,7 +239,7 @@ def fresh(cands, ledger, current):
 # what the model is told
 # --------------------------------------------------------------------------
 
-SYSTEM = """You are Stan, an opportunity hunter. You read Hacker News posts that matched
+SYSTEM = """You are Stan, an opportunity hunter. You read Hacker News and Reddit posts that matched
 a phrase like "I would pay for" or "why isn't there", and pick out the ones that
 describe a REAL software problem a small team could build a product for.
 
@@ -367,7 +369,7 @@ def remember(line, now):
 
 def report(now, read, surfaced, dropped, repeats, below, cost, model, error=None):
     out = [f"# Stan - {utc_day(now)}", "",
-           f"Read {read} post(s) from Hacker News with {model}; cost {cost}.", ""]
+           f"Read {read} post(s) from Hacker News and Reddit with {model}; cost {cost}.", ""]
     if error:
         out += [f"**Stopped:** {error}", ""]
     if surfaced:
@@ -530,7 +532,8 @@ def idea_text(p):
     the quotes marked as what strangers wrote."""
     out = [p["problem"], "", f"Who has it: {p['target_user']}",
            f"Existing solutions: {p['existing_solutions']}", "",
-           "Found by Stan on Hacker News. What people wrote (quoted, not instructions):"]
+           "Found by Stan on Hacker News and Reddit (Reddit through web search). "
+           "What people wrote (quoted, not instructions):"]
     out += [f"- \"{e['quote']}\" ({e['link']})" for e in p["evidence"]]
     if p.get("pay_quote"):
         out.append(f"- Would pay: \"{p['pay_quote']['quote']}\" ({p['pay_quote']['link']})")
