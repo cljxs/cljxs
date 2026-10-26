@@ -1735,6 +1735,29 @@ class AnApprovalThatNeverFinished(unittest.TestCase):
         self.assertIn("SLUG_RE.test", route)
 
 
+class AnOlderKitCanBeShownLarge(unittest.TestCase):
+    """2026-10-26, the owner: "Can you add something so I can click on these
+    designs at the bottom and it pops up instead of the current one being
+    shown." Other kits were a zip and a Delete only; their slides, captions
+    and video could not be seen on the page."""
+
+    PAGE = (API / "public" / "shop.html").read_text()
+
+    def test_tapping_an_older_kit_shows_it_where_todays_is(self):
+        kits = self.PAGE.split("function tiktok(kits) {", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("const k = pick ? sorted.find(x => x.id === pick) : sorted[0];", kits)
+        self.assertIn("const rest = sorted.filter(x => x !== k);", kits, "the newest moves down into the list")
+        self.assertIn('data-pick="${esc(o.id)}"', kits)
+        self.assertIn("data-unpick", kits, "and there is a way back")
+
+    def test_its_own_buttons_still_do_their_own_thing(self):
+        click = self.PAGE.split("$('body').onclick = e => {", 1)[1][:400]
+        self.assertIn("if (other && !e.target.closest('a,button')) return showKit(other.dataset.pick);", click)
+
+    def test_a_deleted_kit_falls_back_to_the_newest(self):
+        self.assertIn("if (pick && !sorted.some(x => x.id === pick)) pick = null;", self.PAGE)
+
+
 class EmilysStudio(unittest.TestCase):
     """2026-10-21, the owner, looking at the paw decal in Emily's house: "I
     don't see a revise option. Also can we turn Emily's interface to a full

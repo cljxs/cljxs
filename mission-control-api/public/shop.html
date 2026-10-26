@@ -88,7 +88,9 @@
   .btn.drop{position:absolute;right:6px;bottom:6px;padding:8px 14px;font-size:13px;background:rgba(11,16,32,.85)}
   .rebuild{font-size:12.5px;color:#fbbf24}
   .old{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
-  .oldk{display:flex;gap:10px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px}
+  .oldk{display:flex;gap:10px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px;cursor:pointer}
+  .oldk:hover{border-color:var(--pink)}
+  .note.picked{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
   .oldk img{width:54px;aspect-ratio:9/16;object-fit:cover;border-radius:6px;border:1px solid var(--line)}
   .oldk .t{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   /* the board */
@@ -157,6 +159,9 @@ if (EMBED) {
 
 let T = null, B = null, tab = new URLSearchParams(location.search).get('tab') === 'board' ? 'board' : 'tiktok';
 let filter = 'review', busy = false, open = null;
+// The kit shown large. null is the newest unposted one; tapping a kit under
+// "Other kits" shows that one instead (owner, 2026-10-26).
+let pick = null;
 // Slides dropped on this page, hidden at once while the server catches up:
 // "kit/02.jpg". A slide's name never changes, so this can only ever hide
 // the slide that was tapped.
@@ -276,15 +281,19 @@ function tiktok(kits) {
       <div class="muted">one live listing a day, in turn - every listing gets a go before any gets two</div></div>
       <button class="btn tt" id="make" ${busy || running ? 'disabled' : ''}>＋ Make one now</button></div>`;
   if (!kits.length) return head + `<div class="empty">No kits yet. The first is made at 9:48 Eastern - or press Make one now.</div>`;
-  const [k, ...rest] = kits.slice().sort((a, b) => (a.status === 'posted') - (b.status === 'posted')
+  const sorted = kits.slice().sort((a, b) => (a.status === 'posted') - (b.status === 'posted')
     || String(b.made_utc).localeCompare(String(a.made_utc)));
+  if (pick && !sorted.some(x => x.id === pick)) pick = null;       // deleted, or pruned
+  const k = pick ? sorted.find(x => x.id === pick) : sorted[0];
+  const rest = sorted.filter(x => x !== k);
   const v = enc(k.packed_utc || k.made_utc || '');
   const base = `/api/shop/tiktok/${enc(k.id)}`;
   const stale = !!k.video_stale;
   const shown = slideNames(k).length;
   const posted = k.status === 'posted', review = k.status === 'needs_review';
   const dropped = (k.scenes_dropped || []);
-  const main = `<div class="card ${posted ? 'done' : ''}">
+  const main = `${pick ? `<div class="note picked">Showing an older kit. <button class="btn" data-unpick="1">← Back to the newest</button></div>` : ''}
+  <div class="card ${posted ? 'done' : ''}" id="mainkit">
     <div class="ctop"><div><div class="cname">${esc(k.title)}</div>
       <div class="cmeta">${esc(k.day)} · ${shown} slides · ${stale ? 'video updating' : `${k.video_seconds}s video`}</div></div>
       <span class="tag ${posted ? 't-gray' : review ? 't-amber' : 't-pink'}">${posted ? 'POSTED' : review ? 'CHECK THE AI SCENES' : 'READY TO POST'}</span></div>
@@ -317,7 +326,7 @@ function tiktok(kits) {
     ${dropped.length ? `<details><summary class="said">${dropped.length} scene${dropped.length === 1 ? '' : 's'} left out by the checker</summary><pre>${esc(dropped.join('\n'))}</pre></details>` : ''}
   </div>`;
   const older = rest.length ? `<div class="sechead" style="margin-top:18px"><h2>Other kits</h2></div><div class="old">${rest.map(o => `
-    <div class="oldk"><img src="/api/shop/tiktok/${enc(o.id)}/slide/${slideNames(o)[0] || '01.jpg'}?v=${enc(o.made_utc || '')}" alt="" loading="lazy">
+    <div class="oldk" data-pick="${esc(o.id)}" title="Show this kit"><img src="/api/shop/tiktok/${enc(o.id)}/slide/${slideNames(o)[0] || '01.jpg'}?v=${enc(o.made_utc || '')}" alt="" loading="lazy">
       <div style="min-width:0;flex:1"><div class="t">${esc(o.title)}</div>
         <div class="said">${esc(o.day)} · ${o.status === 'posted' ? 'posted' : 'not posted'}</div>
         <div class="acts" style="margin-top:4px"><a class="btn" style="padding:5px 9px" href="/api/shop/tiktok/${enc(o.id)}/file/kit.zip">⬇ zip</a>
@@ -459,7 +468,22 @@ async function deleteKit(kit) {
 }
 
 $('tabs').onclick = e => { const b = e.target.closest('[data-t]'); if (b) { tab = b.dataset.t; draw(); } };
+// Show a kit large. The strip and the page go back to its start.
+function showKit(id) {
+  pick = id;
+  draw();
+  const strip = document.querySelector('.strip');
+  if (strip) strip.scrollLeft = 0;
+  const m = $('mainkit');
+  if (m) m.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 $('body').onclick = e => {
+  // A tap on an older kit's card - not on its own zip, Posted or Delete -
+  // shows that kit where today's is.
+  const other = e.target.closest('[data-pick]');
+  if (other && !e.target.closest('a,button')) return showKit(other.dataset.pick);
+  if (e.target.closest('[data-unpick]')) return showKit(null);
   const t = e.target.closest('button,[data-filter]');
   if (!t) return;
   const d = t.dataset;
