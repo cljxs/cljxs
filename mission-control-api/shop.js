@@ -217,6 +217,32 @@ function register(app) {
     res.status(202).json({ job: startJob('revise', `revising ${req.params.slug}`, 'store-board.py', args) });
   });
 
+  // ---- Fix listings: the audit of every live listing, with what to write
+  // instead (store-report.py). Nothing here edits Etsy; the owner copies the
+  // words into the listing.
+  app.get('/api/shop/listings', async (req, res) => {
+    asJson(await python('store-report.py', ['audit', '--json']), res, 'the listing audit');
+  });
+
+  // The audit of a rewrite, asked as the owner types in the box.
+  app.post('/api/shop/listings/check', async (req, res) => {
+    const b = req.body || {};
+    const want = { listing_id: Number(b.listing_id) };
+    if (!Number.isSafeInteger(want.listing_id)) return res.status(400).json({ error: 'bad listing' });
+    if (typeof b.title === 'string') want.title = b.title.slice(0, 300);
+    if (Array.isArray(b.tags)) want.tags = b.tags.slice(0, 30).map(t => String(t).slice(0, 60));
+    if (typeof b.opening === 'string') want.opening = b.opening.slice(0, 400);
+    const r = await python('store-report.py', ['check', JSON.stringify(want)]);
+    if (!r.ok) return res.status(404).json({ error: tail(r.stderr || r.stdout, 3) });
+    try { res.json(JSON.parse(r.stdout)); } catch { res.status(500).json({ error: 'unreadable' }); }
+  });
+
+  // Read the listings from Etsy again, after fixing some (free - Etsy's API).
+  app.post('/api/shop/listings/refresh', (req, res) => {
+    if (busy(res)) return;
+    res.status(202).json({ job: startJob('fetch', 'reading your listings from Etsy', 'store-report.py', ['fetch']) });
+  });
+
   app.get('/api/shop/job', (req, res) => res.json({ job }));
 }
 

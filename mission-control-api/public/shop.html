@@ -111,6 +111,7 @@
     border:1px solid var(--line);border-radius:8px;padding:9px}
   .filters{display:flex;gap:6px;flex-wrap:wrap}
   .filters .btn.on{border-color:var(--pink);color:#fff}
+  .fixbox{margin:4px 0 6px}
   .note{font-size:13px;color:#fbbf24;border:1px solid rgba(245,158,11,.35);background:rgba(245,158,11,.06);border-radius:8px;padding:9px 12px;margin-bottom:12px}
   .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#0f172a;border:1px solid var(--line);
     color:var(--ink);padding:10px 16px;border-radius:10px;font-size:13.5px;max-width:90vw;display:none;z-index:9}
@@ -136,6 +137,7 @@
   <div class="tabs" id="tabs">
     <button class="tab on" data-t="tiktok">TikTok<span class="n" id="n-tiktok">0</span></button>
     <button class="tab" data-t="board">Listings<span class="n" id="n-board">0</span></button>
+    <button class="tab" data-t="fix">Fix listings<span class="n" id="n-fix">0</span></button>
   </div>
   <div class="body" id="body"><div class="empty">loading…</div></div>
 </div>
@@ -157,7 +159,12 @@ if (EMBED) {
   addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
 }
 
-let T = null, B = null, tab = new URLSearchParams(location.search).get('tab') === 'board' ? 'board' : 'tiktok';
+let T = null, B = null, F = null;
+let tab = ['board', 'fix'].includes(new URLSearchParams(location.search).get('tab'))
+  ? new URLSearchParams(location.search).get('tab') : 'tiktok';
+// Fix listings: what the owner has typed in each listing's boxes, and the
+// audit's verdict on it - kept across redraws, so a refresh never wipes them.
+const drafts = {}, verdicts = {};
 let filter = 'review', busy = false, open = null;
 // The kit shown large. null is the newest unposted one; tapping a kit under
 // "Other kits" shows that one instead (owner, 2026-10-26).
@@ -178,12 +185,14 @@ async function getJson(u) {
 }
 
 async function load() {
-  const was = JSON.stringify([T, B]);
-  [T, B] = await Promise.all([getJson('/api/shop/tiktok'), getJson('/api/shop/board')]);
-  // Not while a revision note is being typed - a redraw would wipe it - and
-  // not when nothing changed, which would restart a video being watched.
-  if (!open && JSON.stringify([T, B]) !== was) draw();
-  const job = (T && T.job) || (B && B.job);
+  const was = JSON.stringify([T, B, F]);
+  [T, B, F] = await Promise.all([getJson('/api/shop/tiktok'), getJson('/api/shop/board'),
+                                 getJson('/api/shop/listings')]);
+  // Not while a revision note or a fix is being typed - a redraw would wipe
+  // it - and not when nothing changed, which would restart a video.
+  const typing = document.activeElement && /^(TEXTAREA|INPUT)$/.test(document.activeElement.tagName);
+  if (!open && !typing && JSON.stringify([T, B, F]) !== was) draw();
+  const job = (T && T.job) || (B && B.job) || (F && F.job);
   const rebuilding = ((T && T.kits) || []).some(k => k.video_stale);
   clearTimeout(load.h);
   // While a kit, a revision or a video rebuild runs, look again soon;
@@ -230,6 +239,7 @@ function draw() {
   const today = kits.find(k => k.day === (T && T.today));
   $('n-tiktok').textContent = toPost;
   $('n-board').textContent = review;
+  $('n-fix').textContent = fixable().length;
   const counts = (B && B.counts) || {};
   $('pills').innerHTML = [
     `<span class="pill g">1 kit a day</span>`,
@@ -245,7 +255,7 @@ function draw() {
   // The strip keeps its place across a redraw: dropping the fourth slide
   // must not throw the owner back to the first.
   const strip = document.querySelector('.strip'), sx = strip ? strip.scrollLeft : 0;
-  $('body').innerHTML = tab === 'tiktok' ? tiktok(kits) : board(cards);
+  $('body').innerHTML = tab === 'tiktok' ? tiktok(kits) : tab === 'fix' ? fixes() : board(cards);
   const again = document.querySelector('.strip');
   if (again) again.scrollLeft = sx;
 }
@@ -341,6 +351,94 @@ function shown(cards) {
   if (filter === 'approved') return cards.filter(c => c.approved_utc && !c.published);
   if (filter === 'live') return cards.filter(c => c.published);
   return cards.filter(c => !c.published && !c.approved_utc);
+}
+
+// ------------------------------------------------------------ fix listings
+//
+// store-report.py's audit of every live listing, and what to write instead
+// (owner, 2026-10-27). The suggestion is code's, from the listing's own words;
+// each box is re-audited as it is typed in, by the same audit. Nothing here
+// edits Etsy: Copy, then paste into the listing on Etsy.
+
+const ETSY_EDIT = id => `https://www.etsy.com/your/shops/me/listing-editor/edit/${enc(id)}`;
+const fixable = () => ((F && F.listings) || []).filter(r => r.issues.length);
+const tagList = text => String(text || '').split(',').map(t => t.trim()).filter(Boolean);
+
+function draftOf(r) {
+  if (!drafts[r.listing_id]) {
+    const sg = r.suggest || {};
+    drafts[r.listing_id] = { title: sg.title || r.title, tags: (sg.tags || r.tags || []).join(', '),
+                             opening: sg.opening || '' };
+  }
+  return drafts[r.listing_id];
+}
+
+function issueList(issues) {
+  return issues.length ? `<div class="concerns">${issues.map(([k, m]) =>
+      `<div class="con"><span class="tag ${k === 'LIMIT' ? 't-red' : 't-amber'}">${k === 'LIMIT' ? 'MUST' : 'FIX'}</span><span>${esc(m)}</span></div>`).join('')}</div>`
+    : `<div class="said pos">✓ Nothing left to fix.</div>`;
+}
+
+function counts(id) {
+  const d = drafts[id], tags = tagList(d.tags), long = tags.filter(t => t.length > 20);
+  return { title: `${d.title.length} / 140 characters${d.title.length > 140 ? ' - too long for Etsy' : ''}`,
+           tags: `${tags.length} / 13 tags${long.length ? ` · over 20 characters: ${long.join(', ')}` : ''}` };
+}
+
+function fixCard(r) {
+  const d = draftOf(r), id = r.listing_id, v = verdicts[id], c = counts(id);
+  const changed = sg => sg ? '' : ' (no change suggested)';
+  const sg = r.suggest || {};
+  return `<div class="card" data-listing="${esc(id)}">
+    <div class="ctop"><div><div class="cname">${esc(r.title)}</div>
+      <div class="cmeta">${r.views ?? '?'} views · ${r.favs ?? '?'} favourites</div></div>
+      <a class="btn" href="${ETSY_EDIT(id)}" target="_blank" rel="noopener">Edit on Etsy ↗</a></div>
+    <div><div class="k">What to fix</div>${issueList(r.issues)}</div>
+    <div class="k">Write this instead</div>
+    <div><div class="said">Title${changed(sg.title)} · <span id="tc-${esc(id)}">${esc(c.title)}</span></div>
+      <textarea class="fixbox" data-field="title" data-id="${esc(id)}" rows="2">${esc(d.title)}</textarea>
+      <button class="btn" data-copyfix="title" data-id="${esc(id)}">Copy title</button></div>
+    <div><div class="said">Tags, separated by commas${changed(sg.tags)} · <span id="gc-${esc(id)}">${esc(c.tags)}</span></div>
+      <textarea class="fixbox" data-field="tags" data-id="${esc(id)}" rows="3">${esc(d.tags)}</textarea>
+      <button class="btn" data-copyfix="tags" data-id="${esc(id)}">Copy tags</button></div>
+    ${d.opening || sg.opening ? `<div><div class="said">Put this at the very start of the description</div>
+      <textarea class="fixbox" data-field="opening" data-id="${esc(id)}" rows="2">${esc(d.opening)}</textarea>
+      <button class="btn" data-copyfix="opening" data-id="${esc(id)}">Copy</button></div>` : ''}
+    <div><div class="k">With these words</div><div id="v-${esc(id)}">${v ? issueList(v) : r.suggest
+      ? issueList(r.suggest.left) : '<div class="said">Type in a box to check it.</div>'}</div></div>
+  </div>`;
+}
+
+function fixes() {
+  if (!F || F.available === false) return `<div class="empty err">${esc((F && F.reason) || 'The audit could not be read')}</div>`;
+  const rows = fixable();
+  const running = ((F && F.job) || {}).state === 'running';
+  const head = `<div class="sechead"><div><h2>Fix listings</h2>
+      <div class="muted">${rows.length} of ${(F.listings || []).length} live listings have something to fix · from Etsy on ${esc(F.day || '?')}</div></div>
+      <button class="btn" id="refetch" ${busy || running ? 'disabled' : ''}>↻ Read my listings from Etsy again</button></div>
+    <div class="note">Each box starts with a suggestion made from the listing's own title and tags - change anything a shopper wouldn't type.
+      Copy it, tap <b>Edit on Etsy</b>, paste it in and save. Nothing here changes Etsy by itself.
+      If you later re-publish a product from Printify, Printify may put its own title and tags back - change them there too.</div>`;
+  return head + (rows.length ? `<div class="grid">${rows.map(fixCard).join('')}</div>`
+    : '<div class="empty">Every listing passes. ✓</div>');
+}
+
+// As the owner types: the counters at once, the audit's verdict shortly after.
+function onFixInput(box) {
+  const id = box.dataset.id;
+  drafts[id][box.dataset.field] = box.value;
+  const c = counts(id);
+  $(`tc-${id}`).textContent = c.title;
+  $(`gc-${id}`).textContent = c.tags;
+  clearTimeout(onFixInput[id]);
+  onFixInput[id] = setTimeout(async () => {
+    const d = drafts[id];
+    try {
+      const r = await post('/api/shop/listings/check', { listing_id: Number(id), title: d.title,
+                                                         tags: tagList(d.tags), opening: d.opening });
+      if (r.ok) { verdicts[id] = r.j.issues; const el = $(`v-${id}`); if (el) el.innerHTML = issueList(r.j.issues); }
+    } catch { /* the next keystroke asks again */ }
+  }, 600);
 }
 
 function board(cards) {
@@ -468,6 +566,7 @@ async function deleteKit(kit) {
 }
 
 $('tabs').onclick = e => { const b = e.target.closest('[data-t]'); if (b) { tab = b.dataset.t; draw(); } };
+$('body').addEventListener('input', e => { if (e.target.classList.contains('fixbox')) onFixInput(e.target); });
 // Show a kit large. The strip and the page go back to its start.
 function showKit(id) {
   pick = id;
@@ -492,6 +591,14 @@ $('body').onclick = e => {
     toast(r.ok ? 'Making a kit - about half a minute' : (r.j.error || 'could not start'));
   });
   if (d.copy) return copy($(d.copy).textContent, 'Caption');
+  if (d.copyfix) {
+    const v = drafts[d.id][d.copyfix];
+    return copy(d.copyfix === 'tags' ? tagList(v).join(', ') : v.trim(), d.copyfix === 'tags' ? 'Tags' : d.copyfix === 'title' ? 'Title' : 'Opening');
+  }
+  if (t.id === 'refetch') return act(async () => {
+    const r = await post('/api/shop/listings/refresh');
+    toast(r.ok ? 'Reading your listings from Etsy - about a minute' : (r.j.error || 'could not start'));
+  });
   if (d.copylink) return copy(d.copylink, 'Listing link');
   if (d.posted || d.unpost) return act(async () => {
     const r = await post(`/api/shop/tiktok/${enc(d.posted || d.unpost)}/posted`, { undo: !!d.unpost });

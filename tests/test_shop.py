@@ -1839,6 +1839,101 @@ class DeleteAsksPrintifyNotTheBuild(unittest.TestCase):
             self.assertNotIn("Kill", html, page)
 
 
+class WriteThisInstead(unittest.TestCase):
+    """2026-10-27, the owner, reading store-report.py audit: "On the ones that
+    say fix can we build something in the village that says what to fix and
+    give me a text box to fix it. Put something like: Write this instead."
+    The Shop page's Fix listings tab: the audit's issues, and boxes filled
+    with a suggestion made by code from the listing's own title and tags,
+    re-audited as the owner types. Titles below are the shop's own, from
+    that day's audit."""
+
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("store_report_fix", SCRIPTS / "store-report.py")
+        self.m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.m)
+
+    TOWN = {"title": "Town Landmark Pattern Tote", "description": "Your town on a bag. " * 12,
+            "tags": ["town tote", "landmark bag", "city map tote", "travel tote", "souvenir bag",
+                     "hometown gift", "market tote", "canvas bag", "book bag", "shopping bag",
+                     "gift for her", "teacher tote", "reusable tote"]}
+    MUG = {"title": "Dog Mom Coffee Mug, Leash and Latte Morning Walk Gift for Dog Lovers", "tags": [],
+           "description": "Dog mom coffee mug for morning walks with your pup and a latte. " * 6}
+    DAD = {"title": "Dad's Boss T-Shirt | Circle Logo, Kids Heart Design", "description": "Celebrate the guy in charge. " * 8,
+           "tags": ["fathers day shirt", "dad shirt", "gift for dad", "funny dad tee", "new dad gift", "boss dad",
+                    "family shirt", "heart logo tee", "dad birthday", "kids heart", "papa shirt", "daddy tee",
+                    "husband gift"]}
+
+    def test_every_suggestion_leaves_less_to_fix_and_keeps_etsys_limits(self):
+        for row in (self.TOWN, self.MUG, self.DAD):
+            sg = self.m.suggest(row)
+            self.assertIsNotNone(sg, row["title"])
+            title = sg["title"] or row["title"]
+            tags = sg["tags"] or row["tags"]
+            self.assertLessEqual(len(title), 140)
+            self.assertLessEqual(len(tags), 13)
+            self.assertTrue(all(len(t) <= 20 for t in tags), tags)
+            self.assertEqual(len({self.m._tag_key(t) for t in tags}), len(tags), "no tag twice")
+            self.assertLess(len(sg["left"]), len(self.m.audit_listing(row)) + (1 if not row["tags"] else 0))
+
+    def test_a_short_title_is_filled_from_its_own_tags_without_saying_a_word_three_times(self):
+        sg = self.m.suggest(self.TOWN)
+        self.assertTrue(sg["title"].startswith("Town Landmark Pattern Tote | "))
+        self.assertEqual(sg["left"], [], "both issues fixed")
+        words = self.m._words(sg["title"])
+        self.assertTrue(all(words.count(w) < 3 for w in self.m._keywords(sg["title"])))
+
+    def test_a_tag_search_shows_comes_from_the_start_of_the_title(self):
+        sg = self.m.suggest(self.DAD)
+        self.assertEqual(sg["tags"][0], "dad's boss t-shirt", "a hyphenated word stays whole")
+        self.assertIn(sg["tags"][0], self.DAD["title"][:40].lower())
+
+    def test_a_listing_with_no_tags_gets_them_from_its_title(self):
+        sg = self.m.suggest(self.MUG)
+        self.assertGreaterEqual(len(sg["tags"]), 6)
+        self.assertNotIn("coffee mug", sg["tags"], "already said by 'mom coffee mug'")
+        self.assertTrue(all(p.lower() in self.MUG["title"].lower() for p in sg["tags"]),
+                        "nothing the listing does not already say")
+
+    def test_a_clean_listing_gets_no_suggestion(self):
+        clean = {"title": "Crying Cat Sticker | Funny Sad Cat Decal", "description": "Crying cat sticker. " * 20,
+                 "tags": ["crying cat sticker", "funny cat sticker", "sad cat decal", "cat meme sticker",
+                          "laptop sticker", "water bottle decal", "cat lover gift", "vinyl cat sticker",
+                          "sad cat sticker", "cute cat decal", "funny decal", "gift for coworker", "meme decal"]}
+        self.assertEqual(self.m.audit_listing(clean), [])
+        self.assertIsNone(self.m.suggest(clean))
+
+    def test_check_audits_a_rewrite_against_the_latest_snapshot(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        store = tmp / "agents" / "emily" / "state" / "store"
+        store.mkdir(parents=True)
+        (store / "2026-10-27.json").write_text(json.dumps(
+            {"day": "2026-10-27", "listings": [dict(self.TOWN, listing_id=4581852588)]}))
+        run = lambda want: subprocess.run([sys.executable, str(SCRIPTS / "store-report.py"), "check", json.dumps(want)],
+                                          capture_output=True, text=True, env=dict(os.environ, ECOSYSTEM_ROOT=str(tmp)))
+        r = run({"listing_id": 4581852588, "title": "Town"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        said = [m for _k, m in json.loads(r.stdout)["issues"]]
+        self.assertTrue(any("uses 4 of 140" in m for m in said), said)
+        sg = self.m.suggest(self.TOWN)
+        r = run({"listing_id": 4581852588, "title": sg["title"], "tags": sg["tags"]})
+        self.assertEqual(json.loads(r.stdout)["issues"], [], "the box agrees with the suggestion")
+        self.assertEqual(run({"listing_id": 1, "title": "x"}).returncode, 1, "not a listing of ours")
+
+    def test_the_page_offers_it_and_never_edits_etsy(self):
+        page = (API / "public" / "shop.html").read_text()
+        self.assertIn('data-t="fix"', page)
+        self.assertIn("Write this instead", page)
+        self.assertIn("post('/api/shop/listings/check'", page)
+        self.assertIn("if (!open && !typing &&", page, "a refresh never wipes what is being typed")
+        js = (API / "shop.js").read_text()
+        self.assertIn("python('store-report.py', ['audit', '--json'])", js)
+        self.assertIn("python('store-report.py', ['check', JSON.stringify(want)])", js)
+        for word in ("openapi.etsy.com", "listings/'", "method: 'PUT'", "method: 'PATCH'"):
+            self.assertNotIn(word, page + js)
+
+
 class EmilysStudio(unittest.TestCase):
     """2026-10-21, the owner, looking at the paw decal in Emily's house: "I
     don't see a revise option. Also can we turn Emily's interface to a full

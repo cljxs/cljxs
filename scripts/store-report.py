@@ -6,7 +6,9 @@ store-report.py — how the shop's own listings are doing, from Etsy.
     store-report.py fetch                        snapshot every active listing today
     store-report.py show                         the report: today against the last snapshot
     store-report.py pins                         a Pinterest pin for every listing, and its board
-    store-report.py audit                        what to fix in each listing's title, tags and description
+    store-report.py audit                        what to fix in each listing's title, tags and description,
+                                                 and what to write instead
+    store-report.py check '{"listing_id": ...}'  the audit of a rewrite, as JSON (the Fix listings box)
 
 Nothing in the system looked at the store itself. Scout measures other
 people's listings and Emily makes new ones; which of OURS get looked at, and
@@ -392,13 +394,156 @@ def audit_listing(r):
     return sorted(out, key=lambda x: x[0] != "LIMIT")
 
 
+# ------------------------------------------------------- write this instead
+#
+# The audit says what is wrong; the Shop page's Fix listings tab also offers
+# what to write instead, in a box the owner edits and copies into Etsy
+# (owner, 2026-10-27: "give me a text box to fix it ... Write this instead").
+# Built from the listing's own title and tags - no model, so nothing is
+# claimed that the listing does not already say - and audited again: a
+# suggestion is offered only when it leaves fewer issues than there are now.
+
+TITLE_FILL = 60           # a short title is filled with tag phrases to about here
+# Words a search phrase does not start or end on ("you frog sticker").
+_EDGE = _STOP | {"you", "i", "me", "we", "us", "its", "it's", "i'm", "im", "so", "just", "very"}
+SEPARATORS = re.compile(r"\s*[|,;:–—]\s*|\s+-\s+")
+
+
+def _cap(phrase):
+    """Title case, leaving words that already carry capitals (POV, iPad) alone."""
+    return " ".join(w if any(c.isupper() for c in w[1:]) else w[:1].upper() + w[1:]
+                    for w in str(phrase).split())
+
+
+def _phrases(text, longest=TAG_MAX):
+    """Two- and three-word search phrases from text, in reading order, within
+    one part of a title (never across a | or a comma), no stop word at
+    either end, short enough to be a tag."""
+    out = []
+    for part in SEPARATORS.split(str(text or "")):
+        words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'-]*[A-Za-z0-9]|[A-Za-z0-9]", part)
+        for n in (3, 2):
+            for i in range(len(words) - n + 1):
+                chunk = [w.lower() for w in words[i:i + n]]
+                if chunk[0] in _EDGE or chunk[-1] in _EDGE:
+                    continue
+                p = " ".join(chunk)
+                if len(p) <= longest and p not in out:
+                    out.append(p)
+    return out
+
+
+def _stray(tag, title):
+    return not ({_stem(w) for w in _keywords(tag)} & {_stem(w) for w in _keywords(title)}) \
+        and not OCCASION_RE.search(tag)
+
+
+def suggest_tags(title, tags):
+    """The listing's tags, fixed: none too long, none twice, one that search
+    shows in the title's first 40 characters, and every empty slot filled
+    with a phrase from the title."""
+    keep, seen = [], set()
+    for t in tags or []:
+        t = " ".join(str(t).split())
+        words = t.split()
+        while words and len(" ".join(words)) > TAG_MAX:
+            words.pop()
+        t = " ".join(words)
+        k = _tag_key(t)
+        if t and k not in seen:
+            seen.add(k)
+            keep.append(t)
+    shown = title[:TITLE_SEEN].lower()
+    if not any(t.lower() in shown for t in keep):
+        lead = next((p for p in _phrases(title[:TITLE_SEEN]) if p in shown
+                     and _tag_key(p) not in seen), None)
+        if lead:
+            if len(keep) >= TAG_SLOTS:
+                # Out goes a tag that says nothing the title says; failing
+                # that, the last one.
+                out = next((t for t in reversed(keep) if _stray(t, title)), keep[-1])
+                keep.remove(out)
+                seen.discard(_tag_key(out))
+            keep.insert(0, lead)
+            seen.add(_tag_key(lead))
+    for p in _phrases(title):
+        if len(keep) >= TAG_SLOTS:
+            break
+        # "coffee mug" says nothing "mom coffee mug" did not.
+        inside = any(set(_words(p)) <= set(_words(k)) for k in keep)
+        if _tag_key(p) not in seen and not inside:
+            seen.add(_tag_key(p))
+            keep.append(p)
+    return keep[:TAG_SLOTS]
+
+
+def suggest_title(title, tags):
+    """A short title, or one whose tags say other things, lengthened with the
+    tag phrases it does not say yet. A title that is neither is left alone."""
+    head = " ".join(str(title or "").split())
+    stray = [t for t in tags if _stray(t, head)]
+    if len(head) >= TITLE_SHORT and len(stray) <= STRAY_SHARE * max(len(tags), 1):
+        return head
+    goal = TITLE_FILL if len(head) < TITLE_SHORT else min(TITLE_MAX, len(head) + 45)
+    added = 0
+    for t in sorted(tags, key=lambda t: not _stray(t, head)):
+        if len(head) >= goal:
+            break
+        new = {_stem(w) for w in _keywords(t)} - {_stem(w) for w in _keywords(head)}
+        if not new or t.lower() in head.lower():
+            continue
+        cand = head + (", " if added else " | ") + _cap(t)
+        # Never a word three times - the audit's own "repeats" rule.
+        if len(cand) <= TITLE_MAX and max(_words(cand).count(w) for w in _keywords(cand)) < 3:
+            head, added = cand, added + 1
+    return head
+
+
+def suggest(r):
+    """{"title", "tags", "opening", "left"} for one snapshot row - each None
+    when the listing's own is as good - or None when nothing would improve.
+    "left" is what the audit would still say with every suggestion taken."""
+    title = str(r.get("title") or "")
+    tags = [str(t).strip() for t in (r.get("tags") or []) if str(t).strip()]
+    desc = str(r.get("description") or "")
+    now = audit_listing(r)
+    if not now:
+        return None
+    new_tags = suggest_tags(title, tags)
+    new_title = suggest_title(title, new_tags)
+    opening = None
+    if desc and not ({_stem(w) for w in _keywords(desc[:DESCRIPTION_OPENING])}
+                     & {_stem(w) for w in _keywords(new_title)}):
+        opening = _cap(SEPARATORS.split(new_title)[0]) + "."
+    left = audit_listing({"title": new_title, "tags": new_tags,
+                          "description": (opening + " " + desc) if opening else desc})
+    # Better is fewer issues - or as many, with more of the 13 slots used: 7
+    # tags where there were none still leaves "uses 7 of 13", and is better.
+    score = lambda issues, t: len(issues) + (TAG_SLOTS - min(len(t), TAG_SLOTS)) / TAG_SLOTS
+    if score(left, new_tags) >= score(now, tags):
+        return None
+    return {"title": new_title if new_title != title else None,
+            "tags": new_tags if new_tags != tags else None,
+            "opening": opening,
+            "left": [list(x) for x in left]}
+
+
+def check(row, title=None, tags=None, opening=None):
+    """What the audit says about a listing as the owner is rewriting it."""
+    desc = str(row.get("description") or "")
+    return audit_listing({"title": row.get("title") if title is None else title,
+                          "tags": row.get("tags") if tags is None else tags,
+                          "description": (opening.strip() + " " + desc) if opening else desc})
+
+
 def audit(latest):
     """Every listing in a snapshot with what to fix, most to fix first."""
     rows = []
     for r in (latest or {}).get("listings") or []:
         rows.append({"listing_id": r.get("listing_id"), "title": r.get("title") or "?",
                      "views": r.get("views"), "favs": r.get("favs"), "url": r.get("url"),
-                     "issues": audit_listing(r)})
+                     "tags": r.get("tags") or [],
+                     "issues": audit_listing(r), "suggest": suggest(r)})
     rows.sort(key=lambda x: (-len(x["issues"]), x["views"] if isinstance(x["views"], int) else 0))
     return rows
 
@@ -433,6 +578,13 @@ def cmd_audit(args):
             print(f"  listing {r['listing_id']}")
         for kind, msg in r["issues"] or [("OK", "nothing to fix")]:
             print(f"  {kind:<6} {msg}")
+        sg = r.get("suggest")
+        if sg and sg["title"]:
+            print(f"  WRITE  title: {sg['title']}")
+        if sg and sg["tags"]:
+            print(f"  WRITE  tags:  {', '.join(sg['tags'])}")
+        if sg and sg["opening"]:
+            print(f"  WRITE  start the description with: {sg['opening']}")
         print()
     print(audit_line(rows))
     return 0
@@ -533,10 +685,37 @@ def cmd_show(_args):
     return 0
 
 
+def cmd_check(args):
+    """store-report.py check '{"listing_id": .., "title": .., "tags": [..], "opening": ..}'
+    - the audit of a listing as the owner is rewriting it, as JSON. The Fix
+    listings box asks this as they type, so its verdict is the audit's own."""
+    try:
+        want = json.loads(args[0])
+        lid = int(want["listing_id"])
+    except (IndexError, ValueError, KeyError, TypeError):
+        print("usage: store-report.py check '{\"listing_id\": 123, \"title\": \"...\"}'",
+              file=sys.stderr)
+        return 2
+    snaps = snapshots()
+    row = next((r for r in (snaps[-1].get("listings") if snaps else []) or []
+                if r.get("listing_id") == lid), None)
+    if row is None:
+        print(f"listing {lid} is not in the latest snapshot", file=sys.stderr)
+        return 1
+    tags = want.get("tags")
+    if tags is not None:
+        tags = [" ".join(str(t).split()) for t in tags if str(t).strip()]
+    title = want.get("title")
+    issues = check(row, None if title is None else " ".join(str(title).split()),
+                   tags, want.get("opening") or None)
+    print(json.dumps({"listing_id": lid, "issues": [list(x) for x in issues]}))
+    return 0
+
+
 def main():
     cmd, args = (sys.argv[1] if len(sys.argv) > 1 else ""), sys.argv[2:]
     fn = {"setup": cmd_setup, "fetch": cmd_fetch, "show": cmd_show,
-          "pins": cmd_pins, "audit": cmd_audit}.get(cmd)
+          "pins": cmd_pins, "audit": cmd_audit, "check": cmd_check}.get(cmd)
     if not fn:
         print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
         return 2
