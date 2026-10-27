@@ -8,8 +8,8 @@
 <!-- The Shop (owner, 2026-10-13, after two screenshots of another seller's
      setup): today's ready-to-post TikTok kit, and every build Emily made
      with what it would earn and what is wrong with it - to approve, send
-     back or kill. The kits come from tiktok-kit.py and the board from
-     store-board.py through /api/shop; Kill is Emily's own
+     back or delete. The kits come from tiktok-kit.py and the board from
+     store-board.py through /api/shop; Delete is Emily's own
      DELETE /api/emily/builds/:slug. Nothing is worked out here and nothing
      here posts or publishes. Opened inside Emily's house (?embed=1). -->
 <style>
@@ -391,7 +391,7 @@ function card(c) {
        <div class="said">Approved ${esc(c.approved_utc)} UTC. Publishing is the Publish button in Printify - nothing here can.</div>`
     : `<div class="acts"><button class="btn go" data-approve="${esc(c.slug)}" ${busy ? 'disabled' : ''}>✓ Approve</button>
         <button class="btn" data-revise="${esc(c.slug)}" ${busy ? 'disabled' : ''}>↺ Request revision</button>
-        <button class="btn warn" data-kill="${esc(c.slug)}" ${busy ? 'disabled' : ''}>✕ Kill</button>
+        <button class="btn warn" data-delete="${esc(c.slug)}" ${busy ? 'disabled' : ''}>🗑 Delete</button>
         ${c.printify_url ? `<a class="btn" href="${esc(c.printify_url)}" target="_blank" rel="noopener">Printify ↗</a>` : ''}</div>
        <div class="revise ${open === c.slug ? 'on' : ''}" id="rev-${esc(c.slug)}">
          <textarea placeholder="What should change? e.g. bigger lettering, no background, warmer colours" maxlength="300"></textarea>
@@ -519,13 +519,11 @@ $('body').onclick = e => {
       toast(r.ok ? 'Sent back - the card updates when it is done' : (r.j.error || 'could not start'));
     });
   }
-  if (d.kill) {
-    if (!confirm('Kill this build? It is archived (builds/_removed), not deleted, and can be restored from Emily\'s house.')) return;
+  if (d.delete) {
+    if (!confirm('Delete this design? Its unpublished draft in Printify is deleted too, if it is still there. Anything on sale on Etsy is never deleted.')) return;
     return act(async () => {
-      const r = await post(`/api/emily/builds/${enc(d.kill)}`, {}, 'DELETE');
-      toast(r.ok ? 'Killed - archived in builds/_removed'
-        : r.j.blocked ? 'Not killed: it still has a Printify product. Delete it in Printify first, or remove it from Emily\'s house.'
-        : (r.j.error || 'failed'));
+      const r = await post(`/api/emily/builds/${enc(d.delete)}`, {}, 'DELETE');
+      toast(r.ok ? 'Deleted' : `Not deleted: ${r.j.error || 'failed'}`);
     });
   }
 };

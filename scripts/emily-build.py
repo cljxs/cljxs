@@ -11,14 +11,17 @@ deleting it: the artwork cost a model call, the gallery reads the folder name,
 and "I did not like it" and "destroy it" are different intentions. `restore`
 puts one back. Empty builds/_removed/ by hand when you are sure.
 
-It refuses to archive a build that has a Printify product unless you pass
---force, because removing the folder does not remove the product. Printify
-would still hold it, the Deck would stop showing it, and nothing would ever
-mention it again.
+A build with a Printify draft has the draft deleted first, asked of Printify
+itself (emily-finish.py drop_drafts): already gone there is fine, an
+unpublished draft is deleted, and one on sale on Etsy is never touched - the
+build is then not archived either. Archiving the folder alone would leave the
+product in Printify with nothing here pointing at it. --force archives
+without asking Printify.
 
 Standard library only.
 """
 
+import importlib.util
 import json
 import os
 import shutil
@@ -66,14 +69,13 @@ def cmd_remove(slug, force):
         print(f"no build called {slug!r}. emily-build.py list", file=sys.stderr)
         return 1
     b = read(d)
-    pid = b.get("printify_product_id")
-    if pid and not force:
-        print(f"{slug} has Printify product {pid}.\n"
-              f"  Archiving the folder does NOT remove it from Printify - the\n"
-              f"  product would stay there with nothing here pointing at it.\n"
-              f"  Delete it in Printify first, then:\n"
-              f"    emily-build.py remove {slug} --force", file=sys.stderr)
-        return 1
+    if b.get("printify_product_id") and not force:
+        said = []
+        if not _finish().drop_drafts(b, say=said.append):
+            print("\n".join(said) + f"\n  {slug} was not deleted.", file=sys.stderr)
+            return 1
+        for line in said:
+            print(line.strip())
 
     REMOVED.mkdir(parents=True, exist_ok=True)
     dest = REMOVED / slug
@@ -87,6 +89,15 @@ def cmd_remove(slug, force):
     print(f"  the gallery will stop showing it. Restore with:\n"
           f"    emily-build.py restore {dest.name}")
     return 0
+
+
+def _finish():
+    """emily-finish.py as a module - it owns deleting a build's drafts."""
+    spec = importlib.util.spec_from_file_location(
+        "emily_finish_build", Path(__file__).resolve().parent / "emily-finish.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def cmd_restore(slug):

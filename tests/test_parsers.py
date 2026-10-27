@@ -1904,9 +1904,10 @@ class RemovingABuildDoesNotDestroyIt(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue((self.builds / "dislike-this" / "design.png").is_file())
 
-    def test_a_build_with_a_printify_product_is_refused(self):
+    def test_a_build_whose_product_printify_cannot_confirm_is_refused(self):
         # Archiving the folder does not remove the product. Printify would
-        # still hold it with nothing here pointing at it.
+        # still hold it with nothing here pointing at it. With no Printify to
+        # ask (no token here), nothing is deleted blind.
         self.build("has-a-product", printify_product_id="abc123")
         r = self.run_build("remove", "has-a-product")
         self.assertEqual(r.returncode, 1)

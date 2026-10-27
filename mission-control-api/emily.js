@@ -249,7 +249,8 @@ function listBuilds() {
 // even if the regex above is ever loosened.
 function runBuildScript(args) {
   return new Promise(resolve => {
-    execFile('python3', [BUILD_SCRIPT, ...args], { cwd: ROOT, timeout: 30000 },
+    // Room for asking Printify about, and deleting, a build's drafts.
+    execFile('python3', [BUILD_SCRIPT, ...args], { cwd: ROOT, timeout: 90000 },
       (err, stdout, stderr) => resolve({
         ok: !err,
         code: err ? (err.code ?? 1) : 0,
@@ -329,7 +330,7 @@ function register(app, db) {
     // 409 is the owner's to act on, 404 is a stale page asking to remove
     // something already gone, 500 is genuinely ours. One status for all three
     // tells the dashboard nothing it can respond to differently.
-    const blocked = /printify product/i.test(why);
+    const blocked = /live on Etsy|not deleting blind|could not delete/i.test(why);
     const missing = /no build called/i.test(why);
     res.status(blocked ? 409 : missing ? 404 : 500).json({ error: why, blocked, slug });
   });

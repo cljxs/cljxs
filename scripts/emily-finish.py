@@ -109,6 +109,48 @@ def find_build(raw):
 # A draft is made once, so nothing ever re-made them. This deletes the old
 # UNPUBLISHED draft, draws the art again through today's pipeline, and drafts
 # again. Anything Printify says is live on Etsy is refused, never deleted.
+# A build's Printify drafts, deleted - never one that is on sale. Asked of
+# Printify itself, not of build.json: the owner deletes drafts in Printify by
+# hand, and Delete in Emily's Studio refused for a draft already gone there
+# (2026-10-27) because the build still named it. A 404 is "already gone".
+# Shared by redo (a redraw replaces the draft) and emily-build.py remove.
+def drop_drafts(build, say=print):
+    """True when no draft of this build is left in Printify."""
+    pids = [p for p in dict.fromkeys([build.get("printify_product_id")] +
+            [x.get("product_id") for x in build.get("printify_drafts") or []
+             if isinstance(x, dict)]) if p]
+    if not pids:
+        return True
+    ep = _module("emily_printify_drop", "emily-printify.py")
+    ep.load_credentials()
+    shop = build.get("printify_shop_id") or os.environ.get("PRINTIFY_SHOP_ID")
+    live = {}
+    for pid in pids:
+        try:
+            live[pid] = ep._live_state(shop, pid)
+        except ep.ApiError as exc:
+            if getattr(exc, "code", None) == 404:
+                continue                                 # already gone
+            say(f"emily-finish: could not read product {pid} ({exc}) - not deleting blind")
+            return False
+        except (Exception, SystemExit) as exc:           # no token, no network
+            say(f"emily-finish: could not ask Printify about product {pid} "
+                f"({type(exc).__name__}: {exc}) - not deleting blind")
+            return False
+        if live[pid]["published"] or live[pid]["locked"]:
+            say(f"emily-finish: product {pid} is live on Etsy - refusing to delete it")
+            return False
+    for pid in live:
+        try:
+            ep.call(f"/shops/{shop}/products/{pid}.json", method="DELETE", soft=True)
+            say(f"  deleted the draft {pid} in Printify")
+        except ep.ApiError as exc:
+            if getattr(exc, "code", None) != 404:
+                say(f"emily-finish: could not delete {pid} ({exc})")
+                return False
+    return True
+
+
 def redo(raw, product=None, keep_art=False):
     d = find_build(raw)
     if d is None:
@@ -118,30 +160,8 @@ def redo(raw, product=None, keep_art=False):
     if build.get("published"):
         print(f"emily-finish: {d.name} is published - not touching a live listing")
         return 1
-    ep = _module("emily_printify_redo", "emily-printify.py")
-    ep.load_credentials()
-    shop = build.get("printify_shop_id") or os.environ.get("PRINTIFY_SHOP_ID")
-    pids = [p for p in dict.fromkeys([build.get("printify_product_id")] +
-            [x.get("product_id") for x in build.get("printify_drafts") or []]) if p]
-    for pid in pids:
-        try:
-            live = ep._live_state(shop, pid)
-        except ep.ApiError as exc:
-            if getattr(exc, "code", None) == 404:
-                continue                                 # already gone
-            print(f"emily-finish: could not read product {pid} ({exc}) - not deleting blind")
-            return 1
-        if live["published"] or live["locked"]:
-            print(f"emily-finish: product {pid} is live on Etsy - refusing to delete it")
-            return 1
-    for pid in pids:
-        try:
-            ep.call(f"/shops/{shop}/products/{pid}.json", method="DELETE", soft=True)
-            print(f"  deleted the old draft {pid}")
-        except ep.ApiError as exc:
-            if getattr(exc, "code", None) != 404:
-                print(f"emily-finish: could not delete {pid} ({exc})")
-                return 1
+    if not drop_drafts(build):
+        return 1
     for k in ("printify_product_id", "printify_url", "printify_drafts", "published",
               "drafted_at", "draft_blocked", "printify_shop_id"):
         build.pop(k, None)
@@ -353,8 +373,10 @@ REDRAW_PER_RUN = 3
 
 
 def _module(name, file):
+    # Beside this file, not under ECOSYSTEM_ROOT: the data may live elsewhere,
+    # the code is this checkout's (emily-build.py remove, run with a test root).
     import importlib.util
-    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / file)
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / file)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

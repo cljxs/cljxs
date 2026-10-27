@@ -1554,9 +1554,9 @@ class TheShopIsWiredIn(unittest.TestCase):
         for word in ("0.065", "0.03", "transaction_pct", "net_of"):
             self.assertNotIn(word, page)
 
-    def test_kill_is_emilys_existing_remove(self):
+    def test_delete_is_emilys_existing_remove(self):
         page = (API / "public" / "shop.html").read_text()
-        self.assertIn("/api/emily/builds/${enc(d.kill)}", page)
+        self.assertIn("/api/emily/builds/${enc(d.delete)}", page)
         self.assertNotIn("remove", (API / "shop.js").read_text().split("module.exports")[0]
                          .replace("emily-build.py remove", ""))
 
@@ -1756,6 +1756,87 @@ class AnOlderKitCanBeShownLarge(unittest.TestCase):
 
     def test_a_deleted_kit_falls_back_to_the_newest(self):
         self.assertIn("if (pick && !sorted.some(x => x.id === pick)) pick = null;", self.PAGE)
+
+
+class DeleteAsksPrintifyNotTheBuild(unittest.TestCase):
+    """2026-10-27, the owner: "The kill button isn't working I've deleted the
+    draft in printify. Just make it a delete button". Kill refused whenever
+    build.json named a Printify product, so a draft deleted by hand in
+    Printify kept its build undeletable. Delete now asks Printify: gone is
+    fine, an unpublished draft is deleted there too, and anything on sale on
+    Etsy is never touched."""
+
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("emily_finish_drop", SCRIPTS / "emily-finish.py")
+        self.m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.m)
+        self.deleted = []
+
+    def printify(self, states):
+        """A stand-in for emily-printify: states maps product id to its live
+        state, or to an HTTP code it answers with."""
+        test = self
+
+        class ApiError(Exception):
+            def __init__(self, code):
+                super().__init__(f"HTTP {code}")
+                self.code = code
+
+        def live(shop, pid):
+            st = states[pid]
+            if isinstance(st, int):
+                raise ApiError(st)
+            return st
+
+        def call(path, method=None, soft=False):
+            test.deleted.append(path.split("/")[-1].replace(".json", ""))
+            return {}
+        ep = types.SimpleNamespace(ApiError=ApiError, _live_state=live, call=call,
+                                   load_credentials=lambda: None)
+        self.m._module = lambda name, file: ep
+
+    def drop(self, build):
+        said = []
+        return self.m.drop_drafts(build, say=said.append), said
+
+    def test_a_draft_already_deleted_in_printify_is_fine(self):
+        self.printify({"abc": 404})
+        ok, _ = self.drop({"printify_product_id": "abc"})
+        self.assertTrue(ok)
+        self.assertEqual(self.deleted, [], "nothing left to delete")
+
+    def test_an_unpublished_draft_is_deleted_there_too(self):
+        self.printify({"abc": {"published": False, "locked": False}})
+        ok, _ = self.drop({"printify_product_id": "abc", "printify_drafts": [{"product_id": "abc"}]})
+        self.assertTrue(ok)
+        self.assertEqual(self.deleted, ["abc"], "once, though named twice")
+
+    def test_one_on_sale_is_never_deleted(self):
+        self.printify({"abc": {"published": True, "locked": False}})
+        ok, said = self.drop({"printify_product_id": "abc"})
+        self.assertFalse(ok)
+        self.assertEqual(self.deleted, [])
+        self.assertIn("live on Etsy", said[0])
+
+    def test_printify_unreachable_deletes_nothing(self):
+        self.printify({"abc": 500})
+        ok, said = self.drop({"printify_product_id": "abc"})
+        self.assertFalse(ok)
+        self.assertIn("not deleting blind", said[0])
+
+    def test_the_build_script_asks_before_archiving(self):
+        src = (SCRIPTS / "emily-build.py").read_text()
+        body = src.split("def cmd_remove(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("_finish().drop_drafts(b, say=said.append)", body)
+        self.assertLess(body.index("drop_drafts"), body.index("shutil.move"))
+        self.assertIn("if not drop_drafts(build):", (SCRIPTS / "emily-finish.py").read_text(),
+                      "a redraw replaces its draft the same way - one place")
+
+    def test_the_button_says_delete(self):
+        for page in ("emily.html", "shop.html"):
+            html = (API / "public" / page).read_text()
+            self.assertIn("🗑 Delete</button>", html, page)
+            self.assertNotIn("Kill", html, page)
 
 
 class EmilysStudio(unittest.TestCase):

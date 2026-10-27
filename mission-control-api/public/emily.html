@@ -11,7 +11,7 @@
      the Shop board, so the owner looking at a bad design in her house had no
      way to send it back. Every card comes from /api/emily/builds; Try again
      is emily-finish.py --retry, Request revision is the Shop board's own
-     store-board.py revise, Kill is DELETE /api/emily/builds/:slug. Nothing is
+     store-board.py revise, Delete is DELETE /api/emily/builds/:slug. Nothing is
      decided here and nothing here publishes. Opened from her house (?embed=1). -->
 <style>
   :root{
@@ -226,7 +226,7 @@ function acts(b) {
       ${needsRetry(b) ? `<button class="btn go" data-retry="${esc(b.slug)}" ${dis}>↻ Try again</button>` : ''}
       <button class="btn" data-revise="${esc(b.slug)}" ${dis}>↺ Request revision</button>
       ${b.printify_url ? `<a class="btn" href="${esc(b.printify_url)}" target="_blank" rel="noopener">Printify ↗</a>` : ''}
-      <button class="btn warn" data-kill="${esc(b.slug)}" ${dis}>✕ Kill</button></div>
+      <button class="btn warn" data-delete="${esc(b.slug)}" ${dis}>🗑 Delete</button></div>
     <div class="revise ${open === b.slug ? 'on' : ''}" id="rev-${esc(b.slug)}">
       <textarea placeholder="What should change? e.g. dark colours, bigger lettering, no white" maxlength="300"></textarea>
       <div class="acts"><button class="btn tt" data-redo="${esc(b.slug)}">Redraw the art (one image call)</button>
@@ -363,13 +363,11 @@ $('body').onclick = e => {
       toast(r.ok ? 'Sent back - the card updates when it is done' : (r.j.error || 'could not start'));
     });
   }
-  if (d.kill) {
-    if (!confirm('Kill this build? It is archived (builds/_removed), not deleted.')) return;
+  if (d.delete) {
+    if (!confirm('Delete this design? Its unpublished draft in Printify is deleted too, if it is still there. Anything on sale on Etsy is never deleted.')) return;
     return act(async () => {
-      const r = await post(`/api/emily/builds/${enc(d.kill)}`, {}, 'DELETE');
-      toast(r.ok ? 'Killed - archived in builds/_removed'
-        : r.j.blocked ? 'Not killed: it still has a Printify product. Delete it in Printify first.'
-        : (r.j.error || 'failed'));
+      const r = await post(`/api/emily/builds/${enc(d.delete)}`, {}, 'DELETE');
+      toast(r.ok ? 'Deleted' : `Not deleted: ${r.j.error || 'failed'}`);
     });
   }
 };
