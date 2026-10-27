@@ -441,6 +441,20 @@ class TheNight(Base):
         with self.assertRaises(ValueError, msg="a run stopped before building has nothing to resume"):
             self.m.resume_build(self.conn, planning)
 
+    def test_the_page_is_told_the_same_window_the_runner_uses(self):
+        # Guards: a "Build now" button and chip that disagree with the runner -
+        # showing a window open while the runner waits, or the reverse.
+        v = self.m.build_window_view(self.conn, DAY)
+        self.assertFalse(v["open"])
+        self.m.open_build_now(self.conn, 1, now=DAY)
+        v = self.m.build_window_view(self.conn, DAY)
+        self.assertTrue(v["open"] and v["daytime"])
+        self.assertEqual(v["until_local"], "1:00 PM", "noon in Chicago plus one hour")
+        self.assertFalse(self.m.build_window_view(self.conn, DAY + timedelta(minutes=61))["open"])
+        night = self.m.build_window_view(self.conn, NOW)
+        self.assertTrue(night["open"])
+        self.assertFalse(night["daytime"], "the night's own window: no button needed")
+
     def test_at_most_n_phases_a_night_then_the_owner(self):
         self.set_roles(phases_per_night=1)
         rid = self.approved_run()

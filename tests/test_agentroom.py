@@ -385,6 +385,11 @@ class TheApi(unittest.TestCase):
                 "out.early=await go('POST','/api/agentroom/runs/1/approve',{});"
                 "out.stop=await go('POST','/api/agentroom/runs/1/stop',{});"
                 "out.retry=await go('POST','/api/agentroom/runs/1/retry',{});"
+                "out.bnbad=await go('POST','/api/agentroom/build-now',{hours:9});"
+                "out.bnopen=await go('POST','/api/agentroom/build-now',{hours:1});"
+                "out.deck2=await go('GET','/api/agentroom');"
+                "out.bnoff=await go('POST','/api/agentroom/build-now',{off:true});"
+                "out.deck3=await go('GET','/api/agentroom');"
                 "process.stdout.write(JSON.stringify(out));srv.close();});")
             r = subprocess.run([self.NODE, "-e", js], capture_output=True, text=True, timeout=120,
                                env=dict(os.environ, AGENTROOM_HOME=str(home),
@@ -404,6 +409,13 @@ class TheApi(unittest.TestCase):
             self.assertEqual(out["early"][0], 409, "approve before there is a plan is refused")
             self.assertEqual(out["stop"][0], 200)
             self.assertEqual(out["retry"][0], 409, "a run that has not failed is not retried")
+            # The page's "Build now (1 hour)" button (owner, 2026-10-27).
+            self.assertEqual(out["bnbad"][0], 400, "more than 4 hours is refused")
+            self.assertEqual(out["bnopen"][0], 200, out["bnopen"])
+            w = json.loads(out["deck2"][1])["build_window"]
+            self.assertTrue(w["open"] and w["until_local"], w)
+            self.assertEqual(out["bnoff"][0], 200)
+            self.assertFalse(json.loads(out["deck3"][1])["build_window"]["daytime"], "closed again")
 
 
 class TheOwnersDevice(unittest.TestCase):

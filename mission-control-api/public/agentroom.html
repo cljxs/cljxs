@@ -140,6 +140,7 @@
     </div>
     <div class="sp"></div>
     <div class="acts" style="margin-top:0">
+      <button class="btn" id="bnbtn" style="display:none">⏱ Build now (1 hour)</button>
       <button class="btn new" id="newbtn">+ New run</button>
       <a class="btn" id="back" href="/dashboard">← Deck</a>
       <button class="btn" id="close" style="display:none">✕ Close</button>
@@ -239,7 +240,17 @@ function renderTop() {
     const cls = b.apps_today >= b.apps_cap ? 'r' : (b.apps_today > b.apps_cap * 0.75 ? 'a' : '');
     pills.push(`<span class="pill ${cls}" title="What the built apps' AI helper spent today (resets 8pm Eastern)">Apps' AI ${dollars(b.apps_today)} of ${dollars(b.apps_cap)}</span>`);
   }
+  const w = d.build_window;
+  if (w && w.open) {
+    pills.push(`<span class="pill a" title="The builder may work now">⏱ Build window open until ${esc(w.until_local)}</span>`);
+  }
   $('pills').innerHTML = pills.join('');
+  const bn = $('bnbtn');
+  if (w) {
+    bn.style.display = w.open && !w.daytime ? 'none' : '';      // the night's window needs no button
+    bn.textContent = w.open ? '⏹ Close build window' : '⏱ Build now (1 hour)';
+    bn.dataset.open = w.open ? '1' : '';
+  }
 
   const notes = [];
   if (!d.runner.alive) notes.push(`<b>The runner is not running</b>, so new runs wait. On the server: <code>systemctl enable --now agentroom-runner.service</code>`);
@@ -506,6 +517,19 @@ async function refresh() {
     lastShown = '';
   } finally { busy = false; }
 }
+
+// Build now (1 hour) / Close build window
+$('bnbtn').onclick = async () => {
+  const closing = $('bnbtn').dataset.open === '1';
+  if (!closing && !confirm('Let the builder work for the next hour? It uses your Claude plan\'s limits while you are using it too - at most a night\'s 3 phases and $5 of plan use. A build that is building starts within a minute; an approved one needs Start building.')) return;
+  if (closing && !confirm('Close the build window? A phase being built now is stopped and carries on next time.')) return;
+  $('bnbtn').disabled = true;
+  try {
+    await api('/api/agentroom/build-now', { method: 'POST', body: JSON.stringify(closing ? { off: true } : { hours: 1 }) });
+  } catch (e) { alert(e.message); }
+  $('bnbtn').disabled = false;
+  await refresh();
+};
 
 // New run
 $('newbtn').onclick = () => {

@@ -84,6 +84,17 @@ function register(app) {
     asJson(await room(args), res);
   });
 
+  // The page's "Build now (1 hour)" button (owner, 2026-10-27): the same
+  // `agentroom.py build-now` the owner types; it checks the hours.
+  app.post('/api/agentroom/build-now', async (req, res) => {
+    const b = req.body || {};
+    const hours = Number(b.hours);
+    if (!b.off && !(hours > 0 && hours <= 4)) return res.status(400).json({ ok: false, error: 'hours must be 0-4' });
+    const r = await room(b.off ? ['build-now', '--off'] : ['build-now', `--hours=${hours}`]);
+    if (!r.ok) return res.status(409).json({ ok: false, error: said(r) || 'agentroom.py failed' });
+    res.json({ ok: true, message: r.stdout.trim() });
+  });
+
   app.post('/api/agentroom/runs/:id/:action', async (req, res) => {
     const { id, action } = req.params;
     if (!ID_RE.test(id)) return res.status(400).json({ error: 'bad id' });

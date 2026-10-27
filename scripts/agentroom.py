@@ -1495,6 +1495,20 @@ def build_window(conn, cfg, now=None):
     return is_open, left, key
 
 
+def build_window_view(conn, now=None):
+    """For the page: may the builder work now, and until when (local time).
+    The same build_window() the runner asks, so the two cannot disagree."""
+    from zoneinfo import ZoneInfo
+    b = roles()["builder"]
+    now = now or datetime.now(timezone.utc)
+    night_open = window(b, now)[0]
+    is_open, left, _ = build_window(conn, b, now)
+    until = now + timedelta(minutes=left) if is_open else None
+    return {"open": is_open, "daytime": bool(is_open and not night_open),
+            "until_local": until.astimezone(ZoneInfo(b["window"]["tz"])).strftime("%-I:%M %p") if until else None,
+            "night": f"{b['window']['start']}-{b['window']['end']}", "tz": b["window"]["tz"]}
+
+
 def open_build_now(conn, hours, now=None):
     """The owner opens (hours > 0) or closes (0) a daytime build window."""
     if hours <= 0:
@@ -2584,6 +2598,10 @@ def deck(conn):
         "FROM messages m JOIN runs r ON r.id = m.run_id "
         "WHERE m.kind != 'owner' ORDER BY m.id DESC LIMIT 12")]
     states = [r["state"] for r in runs]
+    try:
+        window_view = build_window_view(conn)
+    except Exception:
+        window_view = None                      # roles.json is wrong; roles_error says why
     return {
         "runner": {"alive": age is not None and age < RUNNER_FRESH, "beat_utc": beat},
         "key": {"present": bool(key), "problem": key_problem(key)},
@@ -2597,6 +2615,7 @@ def deck(conn):
         "runs": [run_view(conn, r) for r in runs],
         "activity": activity,
         "builds_dir": str(builds()),
+        "build_window": window_view,
     }
 
 
