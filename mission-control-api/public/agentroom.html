@@ -37,6 +37,10 @@
   .btn{font:600 13px var(--sans);color:var(--ink);background:transparent;border:1px solid var(--line);
     border-radius:8px;padding:9px 14px;cursor:pointer;text-decoration:none;white-space:nowrap;display:inline-block}
   .btn:hover{border-color:var(--mute)}
+  #appview{position:fixed;inset:0;z-index:100;display:flex;flex-direction:column;background:var(--bg,#0b0f17)}
+  #appview .appbar{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line)}
+  #appview .appbar .sp{flex:1}
+  #appview iframe{flex:1;width:100%;border:0;background:#fff}
   .btn.go{color:var(--green2);border-color:rgba(34,197,94,.55);background:rgba(34,197,94,.08)}
   .btn.warn{color:#fb7185;border-color:rgba(244,63,94,.5)}
   .btn.new{color:#fff;border-color:rgba(167,139,250,.6);background:rgba(167,139,250,.16)}
@@ -336,10 +340,41 @@ function renderPlan() {
     ${p.questions && p.questions.length ? `<h3>Questions for you</h3>${list(p.questions)}` : ''}`;
 }
 
+function appUrl(r) {
+  return `${location.protocol}//${location.hostname}:${deck.sites_port}/${encodeURIComponent(r.slug)}/`;
+}
+
+// Opened over this page, with a Close bar (owner, 2026-10-27): a new tab
+// replaced the village when it runs full-screen from the home screen, with
+// no way back but closing it.
 function appLink(r) {
   if (!r.site || !deck) return '';
-  const url = `${location.protocol}//${location.hostname}:${deck.sites_port}/${encodeURIComponent(r.slug)}/`;
-  return `<a class="btn go" href="${esc(url)}" target="_blank" rel="noopener">Open the app ↗</a>`;
+  return `<button class="btn go" data-app="${esc(appUrl(r))}" data-title="${esc(r.title)}">Open the app</button>`;
+}
+
+function openApp(url, title) {
+  closeApp();
+  const o = document.createElement('div');
+  o.id = 'appview';
+  o.innerHTML = `<div class="appbar"><button class="btn" id="appclose">✕ Close app</button>
+    <b>${esc(title || 'App')}</b><span class="sp"></span>
+    <a class="btn" href="${esc(url)}" target="_blank" rel="noopener">Open in Safari ↗</a></div>
+    <iframe src="${esc(url)}" title="${esc(title || 'App')}"></iframe>`;
+  document.body.appendChild(o);
+  $('appclose').onclick = closeApp;
+}
+
+function closeApp() {
+  const o = $('appview');
+  if (o) o.remove();
+}
+
+// The address an Apple Shortcut sends a prompt to (the apps' AI helper).
+function shortcutBox(r) {
+  if (!r.site || !deck) return '';
+  return `<div class="muted" style="margin-top:10px">Shortcut address (for an Apple Shortcut using this app's AI):</div>
+    <div class="acts" style="margin-top:4px"><input id="aiurl" readonly value="${esc(appUrl(r) + '_ai')}" style="flex:1;min-width:0">
+    <button class="btn" id="aicopy">Copy</button></div>`;
 }
 
 function renderBuild() {
@@ -421,6 +456,7 @@ function renderDetail() {
     <div class="gate">
       <b>Every phase is built and passing its tests.</b>
       <div class="acts">${appLink(r)}<button class="btn" id="fxtoggle">Send the last phase back…</button></div>
+      ${shortcutBox(r)}
       <div id="fx" style="display:none">
         <textarea id="fxnote" maxlength="2000" placeholder="What should the builder change?" style="min-height:90px"></textarea>
         <div class="acts"><button class="btn go" data-act="fixphase">Send it back</button></div>
@@ -462,6 +498,17 @@ function renderDetail() {
       : tab === 'idea' ? `<div class="body" style="white-space:pre-wrap">${esc(detail.idea)}</div>` : renderRoom()}</div>`;
   el.querySelectorAll('.tab').forEach(b => b.onclick = () => { tab = b.dataset.tab; renderDetail(); });
   el.querySelectorAll('[data-act]').forEach(b => b.onclick = () => act(b.dataset.act, b));
+  el.querySelectorAll('[data-app]').forEach(b => b.onclick = () => openApp(b.dataset.app, b.dataset.title));
+  const ac = el.querySelector('#aicopy');
+  if (ac) ac.onclick = () => {
+    // Plain http over Tailscale is not a "secure" page, where the clipboard
+    // API is missing - so select the text and use the older copy command.
+    const i = $('aiurl');
+    i.focus(); i.select(); i.setSelectionRange(0, i.value.length);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    ac.textContent = ok ? 'Copied' : 'Selected - tap Copy';
+  };
   const t = $('sbtoggle');
   if (t) t.onclick = () => { const s = $('sb'); s.style.display = s.style.display === 'none' ? 'block' : 'none'; };
   const f = $('fxtoggle');

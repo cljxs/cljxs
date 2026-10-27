@@ -418,6 +418,19 @@ class TheApi(unittest.TestCase):
             self.assertFalse(json.loads(out["deck3"][1])["build_window"]["daytime"], "closed again")
 
 
+class OpeningAnApp(unittest.TestCase):
+    def test_an_app_opens_over_the_page_with_a_way_back(self):
+        # Guards: "Open the app" as a new tab, which replaced the village when
+        # it runs full-screen from the home screen - no way back but closing
+        # the village (owner, 2026-10-27).
+        page = (API / "public" / "agentroom.html").read_text()
+        body = page[page.index("function appLink(r)"):page.index("function openApp(")]
+        self.assertIn("data-app=", body)
+        self.assertNotIn("target=\"_blank\"", body, "the main button opens over the page")
+        self.assertIn('id="appclose"', page)
+        self.assertIn("Close app", page)
+
+
 class TheOwnersDevice(unittest.TestCase):
     def test_every_ai_that_shapes_a_build_knows_the_owner_has_only_an_ipad(self):
         # Guards: a plan for something the owner cannot try - a Firefox
