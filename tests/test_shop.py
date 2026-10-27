@@ -1921,6 +1921,36 @@ class WriteThisInstead(unittest.TestCase):
         self.assertEqual(json.loads(r.stdout)["issues"], [], "the box agrees with the suggestion")
         self.assertEqual(run({"listing_id": 1, "title": "x"}).returncode, 1, "not a listing of ours")
 
+    def test_done_ticks_a_listing_off_and_undo_puts_it_back(self):
+        # Owner, 2026-10-27: "Add a done button so I can check them off after
+        # i do them." Kept on the server, so a reload or the other device
+        # agrees; the audit beside it still says what Etsy showed.
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        store = tmp / "agents" / "emily" / "state" / "store"
+        store.mkdir(parents=True)
+        (store / "2026-10-27.json").write_text(json.dumps(
+            {"day": "2026-10-27", "listings": [dict(self.TOWN, listing_id=4581852588)]}))
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(tmp))
+        run = lambda *a: subprocess.run([sys.executable, str(SCRIPTS / "store-report.py"), *a],
+                                        capture_output=True, text=True, env=env)
+        audit = lambda: json.loads(run("audit", "--json").stdout)["listings"][0]
+        self.assertIsNone(audit()["done_utc"])
+        self.assertEqual(run("done", "4581852588").returncode, 0)
+        row = audit()
+        self.assertTrue(row["done_utc"])
+        self.assertTrue(row["issues"], "ticked is the owner's word - Etsy's issues still shown")
+        self.assertEqual(run("done", "4581852588", "--undo").returncode, 0)
+        self.assertIsNone(audit()["done_utc"])
+        self.assertEqual(run("done", "1").returncode, 1, "not a listing of ours")
+
+    def test_the_page_hides_done_ones_from_the_list_and_shows_them_below(self):
+        page = (API / "public" / "shop.html").read_text()
+        self.assertIn("filter(r => r.issues.length && !r.done_utc)", page)
+        self.assertIn("data-fixdone=", page)
+        self.assertIn("data-fixundo=", page)
+        self.assertIn("python('store-report.py', ['done', req.params.id]", (API / "shop.js").read_text())
+
     def test_the_page_offers_it_and_never_edits_etsy(self):
         page = (API / "public" / "shop.html").read_text()
         self.assertIn('data-t="fix"', page)

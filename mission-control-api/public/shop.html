@@ -361,7 +361,8 @@ function shown(cards) {
 // edits Etsy: Copy, then paste into the listing on Etsy.
 
 const ETSY_EDIT = id => `https://www.etsy.com/your/shops/me/listing-editor/edit/${enc(id)}`;
-const fixable = () => ((F && F.listings) || []).filter(r => r.issues.length);
+const fixable = () => ((F && F.listings) || []).filter(r => r.issues.length && !r.done_utc);
+const ticked = () => ((F && F.listings) || []).filter(r => r.done_utc);
 const tagList = text => String(text || '').split(',').map(t => t.trim()).filter(Boolean);
 
 function draftOf(r) {
@@ -392,7 +393,8 @@ function fixCard(r) {
   return `<div class="card" data-listing="${esc(id)}">
     <div class="ctop"><div><div class="cname">${esc(r.title)}</div>
       <div class="cmeta">${r.views ?? '?'} views · ${r.favs ?? '?'} favourites</div></div>
-      <a class="btn" href="${ETSY_EDIT(id)}" target="_blank" rel="noopener">Edit on Etsy ↗</a></div>
+      <div class="acts"><a class="btn" href="${ETSY_EDIT(id)}" target="_blank" rel="noopener">Edit on Etsy ↗</a>
+        <button class="btn go" data-fixdone="${esc(id)}" ${busy ? 'disabled' : ''}>✓ Done</button></div></div>
     <div><div class="k">What to fix</div>${issueList(r.issues)}</div>
     <div class="k">Write this instead</div>
     <div><div class="said">Title${changed(sg.title)} · <span id="tc-${esc(id)}">${esc(c.title)}</span></div>
@@ -419,8 +421,20 @@ function fixes() {
     <div class="note">Each box starts with a suggestion made from the listing's own title and tags - change anything a shopper wouldn't type.
       Copy it, tap <b>Edit on Etsy</b>, paste it in and save. Nothing here changes Etsy by itself.
       If you later re-publish a product from Printify, Printify may put its own title and tags back - change them there too.</div>`;
+  // Ticked off: the owner's word, with what Etsy showed at the last read
+  // beside it - so a fix that did not take is seen, not forgotten.
+  const done = ticked();
+  const doneList = done.length ? `<div class="sechead" style="margin-top:18px"><h2>Done · ${done.length}</h2></div>
+    <div class="old">${done.map(r => `<div class="oldk" style="cursor:default"><div style="min-width:0;flex:1">
+      <div class="t">${esc(r.title)}</div>
+      <div class="said">ticked ${esc(String(r.done_utc).slice(0, 10))} · ${r.issues.length
+        ? `<span style="color:#fbbf24">Etsy still showed ${r.issues.length} to fix at the last read</span>`
+        : '<span class="pos">✓ passes on Etsy</span>'}</div>
+      <div class="acts" style="margin-top:4px"><button class="btn" style="padding:5px 9px" data-fixundo="${esc(r.listing_id)}">Undo</button></div>
+    </div></div>`).join('')}</div>
+    <div class="said" style="margin-top:6px">Press <b>Read my listings from Etsy again</b> after saving on Etsy, and each one here says whether Etsy has it.</div>` : '';
   return head + (rows.length ? `<div class="grid">${rows.map(fixCard).join('')}</div>`
-    : '<div class="empty">Every listing passes. ✓</div>');
+    : '<div class="empty">Nothing left to fix. ✓</div>') + doneList;
 }
 
 // As the owner types: the counters at once, the audit's verdict shortly after.
@@ -595,6 +609,10 @@ $('body').onclick = e => {
     const v = drafts[d.id][d.copyfix];
     return copy(d.copyfix === 'tags' ? tagList(v).join(', ') : v.trim(), d.copyfix === 'tags' ? 'Tags' : d.copyfix === 'title' ? 'Title' : 'Opening');
   }
+  if (d.fixdone || d.fixundo) return act(async () => {
+    const r = await post(`/api/shop/listings/${enc(d.fixdone || d.fixundo)}/done`, { undo: !!d.fixundo });
+    toast(r.ok ? (d.fixdone ? 'Done - moved to the Done list' : 'Back on the list') : (r.j.said || r.j.error || 'failed'));
+  });
   if (t.id === 'refetch') return act(async () => {
     const r = await post('/api/shop/listings/refresh');
     toast(r.ok ? 'Reading your listings from Etsy - about a minute' : (r.j.error || 'could not start'));

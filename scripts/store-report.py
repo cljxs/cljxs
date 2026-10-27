@@ -9,6 +9,7 @@ store-report.py — how the shop's own listings are doing, from Etsy.
     store-report.py audit                        what to fix in each listing's title, tags and description,
                                                  and what to write instead
     store-report.py check '{"listing_id": ...}'  the audit of a rewrite, as JSON (the Fix listings box)
+    store-report.py done 4581852588 [--undo]     you fixed it on Etsy - it leaves the Fix listings tab
 
 Nothing in the system looked at the store itself. Scout measures other
 people's listings and Emily makes new ones; which of OURS get looked at, and
@@ -45,6 +46,8 @@ import et_time  # noqa: E402
 ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", SCRIPTS.parent))
 STORE = ROOT / "agents" / "emily" / "state" / "store"
 SHOP = STORE / "shop.json"
+# Listings the owner has fixed on Etsy and ticked off: {listing id: when}.
+DONE = STORE / "fixed.json"
 
 PAGE = 100                  # Etsy's largest page for a shop's listings
 QUIET_AFTER_DAYS = 7        # a listing this old with no views is worth a look
@@ -536,13 +539,38 @@ def check(row, title=None, tags=None, opening=None):
                           "description": (opening.strip() + " " + desc) if opening else desc})
 
 
+def done_marks():
+    """{listing id (str): when it was ticked off} - the owner's word, kept
+    until taken back; the audit beside it still says what Etsy shows."""
+    try:
+        d = json.loads(DONE.read_text())
+        return {str(k): v for k, v in d.items()} if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def mark_done(listing_id, undo=False):
+    marks = done_marks()
+    if undo:
+        marks.pop(str(listing_id), None)
+    else:
+        marks[str(listing_id)] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    STORE.mkdir(parents=True, exist_ok=True)
+    tmp = DONE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(marks, indent=1) + "\n")
+    tmp.replace(DONE)
+    return marks
+
+
 def audit(latest):
     """Every listing in a snapshot with what to fix, most to fix first."""
+    marks = done_marks()
     rows = []
     for r in (latest or {}).get("listings") or []:
         rows.append({"listing_id": r.get("listing_id"), "title": r.get("title") or "?",
                      "views": r.get("views"), "favs": r.get("favs"), "url": r.get("url"),
                      "tags": r.get("tags") or [],
+                     "done_utc": marks.get(str(r.get("listing_id"))),
                      "issues": audit_listing(r), "suggest": suggest(r)})
     rows.sort(key=lambda x: (-len(x["issues"]), x["views"] if isinstance(x["views"], int) else 0))
     return rows
@@ -712,10 +740,27 @@ def cmd_check(args):
     return 0
 
 
+def cmd_done(args):
+    """You fixed it on Etsy: ticked off, or taken back with --undo."""
+    try:
+        lid = int(args[0])
+    except (IndexError, ValueError):
+        print("usage: store-report.py done <listing id> [--undo]", file=sys.stderr)
+        return 2
+    snaps = snapshots()
+    if not any(r.get("listing_id") == lid for r in (snaps[-1].get("listings") if snaps else []) or []):
+        print(f"listing {lid} is not in the latest snapshot", file=sys.stderr)
+        return 1
+    mark_done(lid, undo="--undo" in args)
+    print(f"listing {lid}: " + ("back on the list" if "--undo" in args else "done"))
+    return 0
+
+
 def main():
     cmd, args = (sys.argv[1] if len(sys.argv) > 1 else ""), sys.argv[2:]
     fn = {"setup": cmd_setup, "fetch": cmd_fetch, "show": cmd_show,
-          "pins": cmd_pins, "audit": cmd_audit, "check": cmd_check}.get(cmd)
+          "pins": cmd_pins, "audit": cmd_audit, "check": cmd_check,
+          "done": cmd_done}.get(cmd)
     if not fn:
         print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
         return 2

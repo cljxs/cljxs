@@ -237,6 +237,14 @@ function register(app) {
     try { res.json(JSON.parse(r.stdout)); } catch { res.status(500).json({ error: 'unreadable' }); }
   });
 
+  // The owner fixed it on Etsy and ticks it off (or takes the tick back).
+  app.post('/api/shop/listings/:id/done', async (req, res) => {
+    if (!/^\d{1,15}$/.test(req.params.id || '')) return res.status(400).json({ error: 'bad listing' });
+    const undo = (req.body || {}).undo === true;
+    const r = await python('store-report.py', ['done', req.params.id].concat(undo ? ['--undo'] : []));
+    res.status(r.ok ? 200 : 404).json({ ok: r.ok, said: (r.stdout + r.stderr).trim() });
+  });
+
   // Read the listings from Etsy again, after fixing some (free - Etsy's API).
   app.post('/api/shop/listings/refresh', (req, res) => {
     if (busy(res)) return;
