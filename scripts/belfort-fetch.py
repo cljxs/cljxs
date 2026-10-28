@@ -54,6 +54,9 @@ CANDIDATES_PER_CLUSTER = 3
 # Not traded - read by belfort-trade.py's regime() and stats: the market
 # Belfort's universe lives in, and what holding it instead would have made.
 BENCHMARKS = ["QQQ", "SPY"]
+# Not traded either: the eleven sector funds regime() measures breadth on
+# (2026-10-28). The list is belfort-trade.py's.
+SECTORS = list(_trade().SECTOR_FUNDS)
 
 UA = "Mozilla/5.0 (compatible; belfort-fetch/1.0)"
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=1y&interval=1d"
@@ -433,6 +436,20 @@ def main():
             failures.append({"symbol": sym, "error": str(exc)[:120]})
             log(f"{sym}: FAILED — {exc}")
 
+    # Only what regime() and the blocked-buys report read: price, the 50-day
+    # average and the closes. A fund that fails is missing, and regime() says
+    # how many it judged.
+    sectors = {}
+    for sym in SECTORS:
+        time.sleep(REQUEST_GAP)
+        try:
+            q = fetch_one(sym)
+        except Exception as exc:
+            failures.append({"symbol": sym, "error": str(exc)[:120]})
+            log(f"{sym}: FAILED — {exc}")
+            continue
+        sectors[sym] = {k: q.get(k) for k in ("symbol", "price", "sma50", "change_pct", "last_bar", "history")}
+
     # Pre-screen in plain code so the agent reasons over a short list.
     candidates, left_out = shortlist([q for q in quotes.values() if not q.get("stale")])
 
@@ -449,6 +466,7 @@ def main():
         "count": len(quotes),
         "quotes": quotes,
         "benchmarks": benchmarks,
+        "sectors": sectors,
     }, indent=1) + "\n")
 
     (DATA_DIR / "candidates.json").write_text(json.dumps({
@@ -520,7 +538,7 @@ FAIL_WARN_SHARE = 0.10
 
 def health(size, failures):
     """None when the run was healthy, else one sentence saying what went wrong."""
-    names = [f for f in failures if f.get("symbol") not in BENCHMARKS]
+    names = [f for f in failures if f.get("symbol") not in BENCHMARKS + SECTORS]
     if not size or len(names) <= FAIL_WARN_SHARE * size:
         return None
     limited = sum(1 for f in names if "429" in str(f.get("error")) or "Too Many" in str(f.get("error")))

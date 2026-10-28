@@ -5,6 +5,7 @@ belfort-learn.py - what Belfort's own results say, worked out in code.
     belfort-learn.py record [--json]           # his record, and what the names he passed on did next
     belfort-learn.py review [--month YYYY-MM] [--write]   # the monthly review for the owner
     belfort-learn.py replay [--trail 7] [--shadow] [--json]   # his trades under the sell rules now and before
+    belfort-learn.py blocked [--json]          # what the names did while the market check blocked buys
 
 Owner, 2026-10-07: "Does it learn from its wins and losses?" It did not.
 Every wake is a new conversation, MEMORY.md holds a week of his own notes,
@@ -609,6 +610,133 @@ def cmd_replay(a):
     return 0
 
 
+# --- the market check's cost -------------------------------------------------
+#
+# Owner, 2026-10-28: "a lot of trades are being blocked by an unfavorable
+# regime" - is the check protecting him or keeping him out, and which
+# breadth should it use? Every name he was shown passed the three screens
+# and has a measured outcome (pass_outcomes: 5 and 10 trading days on,
+# against SPY). This puts each one beside what the market check said at the
+# last close before his call, under each of belfort-trade.py's BREADTHS -
+# worked out by regime() itself on the closes as they stood then.
+
+
+def _upto(hist, day):
+    return [(d, float(c)) for d, c in hist or [] if d < day]
+
+
+def _sma50(closes):
+    return sum(c for _d, c in closes[-50:]) / 50 if len(closes) >= 50 else None
+
+
+def sector_history(doc, fetch=None):
+    """{fund: [[day, close], ...]} from quotes.json, or read once from the
+    price service while quotes.json does not carry them yet."""
+    have = doc.get("sectors") or {}
+    if all((have.get(s) or {}).get("history") for s in T.SECTOR_FUNDS):
+        return {s: have[s]["history"] for s in T.SECTOR_FUNDS}
+    if fetch is None:
+        spec = importlib.util.spec_from_file_location("belfort_fetch_blocked",
+                                                      Path(__file__).resolve().parent / "belfort-fetch.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        fetch = mod.fetch_one
+    out = {}
+    for sym in T.SECTOR_FUNDS:
+        try:
+            out[sym] = fetch(sym)["history"]
+        except Exception as exc:
+            print(f"blocked: no prices for {sym} - {exc}", file=sys.stderr)
+        time.sleep(0.5)
+    return out
+
+
+def check_on(day, doc, sectors):
+    """{breadth: (state, why)} - what the market check said at the last close
+    before `day` under each breadth. None when QQQ's closes do not reach back."""
+    qqq = _upto(((doc.get("benchmarks") or {}).get("QQQ") or {}).get("history"), day)
+    if len(qqq) < 60:
+        return None
+    then = {"benchmarks": {"QQQ": {"price": qqq[-1][1], "history": [[d, c] for d, c in qqq]}},
+            "sectors": {}, "quotes": {}}
+    for key, series in (("sectors", sectors), ("quotes", {s: q.get("history") for s, q in
+                                                          (doc.get("quotes") or {}).items()})):
+        for sym, hist in series.items():
+            closes = _upto(hist, day)
+            if _sma50(closes):
+                then[key][sym] = {"price": closes[-1][1], "sma50": _sma50(closes)}
+    return {b: T.regime(then, breadth=b) for b in T.BREADTHS}
+
+
+def blocked(doc=None, sectors=None, days=None):
+    doc = doc if doc is not None else T.quotes_doc()
+    sectors = sectors if sectors is not None else sector_history(doc)
+    rows = []
+    for o in pass_outcomes(doc).values():
+        if o.get("vs_spy_10") is None and o.get("vs_spy_5") is None:
+            continue
+        got = check_on(o["day"], doc, sectors)
+        if got:
+            rows.append(dict(o, check={b: got[b][0] for b in got}))
+
+    def stats(group):
+        out = {"names": len(group)}
+        for k in HORIZONS:
+            done = [r for r in group if r.get(f"vs_spy_{k}") is not None]
+            out[f"n_{k}"] = len(done)
+            out[f"ret_{k}"] = round(sum(r[f"ret_{k}"] for r in done) / len(done), 2) if done else None
+            out[f"vs_spy_{k}"] = round(sum(r[f"vs_spy_{k}"] for r in done) / len(done), 2) if done else None
+            out[f"beat_{k}"] = round(100 * sum(1 for r in done if r[f"vs_spy_{k}"] > 0) / len(done)) if done else None
+        return out
+    by = {}
+    for b in T.BREADTHS:
+        shut = [r for r in rows if r["check"][b] == "unfavorable"]
+        by[b] = {"blocked": stats(shut), "allowed": stats([r for r in rows if r["check"][b] != "unfavorable"]),
+                 "blocked_days": sorted({r["day"] for r in shut}),
+                 "blocked_by_score": {band: stats([r for r in shut if score_band(r.get("score")) == band])
+                                      for band in BAND_ORDER if any(score_band(r.get("score")) == band for r in shut)}}
+    # Days, not only call days: how often each breadth shut the door.
+    calendar = {}
+    for d in days or sorted({d for d, _ in ((doc.get("benchmarks") or {}).get("QQQ") or {}).get("history") or []})[-45:]:
+        got = check_on(d, doc, sectors)
+        if got:
+            for b in T.BREADTHS:
+                calendar.setdefault(b, []).append(got[b][0] == "unfavorable")
+    return {"days": sorted({r["day"] for r in rows}), "live": T.BREADTH, "by": by,
+            "calendar": {b: {"blocked": sum(v), "days": len(v)} for b, v in calendar.items()}}
+
+
+def blocked_text(r):
+    def line(label, st):
+        if not st or not (st.get("n_10") or st.get("n_5")):
+            return f"{label:<26} -"
+        bits = [f"{k}d {st[f'ret_{k}']:+.1f}% ({st[f'vs_spy_{k}']:+.1f} vs SPY, beat it {st[f'beat_{k}']}%, n={st[f'n_{k}']})"
+                for k in HORIZONS if st.get(f"n_{k}")]
+        return f"{label:<26} " + " | ".join(bits)
+    names = {"names": "his own names (live now)" if r["live"] == "names" else "his own names",
+             "sectors": "the 11 sectors" + (" (live now)" if r["live"] == "sectors" else ""),
+             "none": "QQQ alone" + (" (live now)" if r["live"] == "none" else "")}
+    out = [f"The market check and the names he passed on, {r['days'][0] if r['days'] else '-'} to "
+           f"{r['days'][-1] if r['days'] else '-'}.",
+           "Each name passed his three screens; its return is from his call, against SPY over the same days.", ""]
+    for b in ("names", "sectors", "none"):
+        c, x = r["calendar"].get(b) or {}, r["by"][b]
+        out += [f"Breadth = {names[b]}: blocked {c.get('blocked', 0)} of the last {c.get('days', 0)} trading days",
+                line("  names it blocked", x["blocked"]), line("  names it allowed", x["allowed"])]
+        out += [line(f"    blocked, scored {band}", st) for band, st in x["blocked_by_score"].items()]
+        out.append("")
+    out += ["A check earns its keep when the names it blocked did worse than the ones it allowed.",
+            "A pass is not a trade: no stops or exits are applied, and a few weeks is a small sample.",
+            "Nothing here changes a rule."]
+    return "\n".join(out)
+
+
+def cmd_blocked(a):
+    r = blocked()
+    print(json.dumps(r, indent=1) if a.json else blocked_text(r))
+    return 0
+
+
 def reviews():
     files = sorted(REVIEWS.glob("*.md"), reverse=True) if REVIEWS.is_dir() else []
     return [{"name": f.name, "text": f.read_text(errors="replace")} for f in files[:24]]
@@ -654,6 +782,9 @@ def main():
     x.add_argument("--shadow", action="store_true", help="the no-AI book instead of Belfort's")
     x.add_argument("--json", action="store_true")
     x.set_defaults(fn=cmd_replay)
+    bl = sub.add_parser("blocked", help="what the names did while the market check blocked buys")
+    bl.add_argument("--json", action="store_true")
+    bl.set_defaults(fn=cmd_blocked)
     a = ap.parse_args()
     return a.fn(a) or 0
 

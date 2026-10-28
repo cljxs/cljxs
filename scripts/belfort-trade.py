@@ -159,7 +159,27 @@ MAX_POSITIONS = 8
 # The market regime (regime()). Mixed: a new buy may bring the position to
 # this much of the portfolio - half the usual ~20%. Unfavourable: none.
 NEUTRAL_POSITION_PCT = 10.0
-BREADTH_MIN = 0.5           # share of the names above their own 50-day average
+# Breadth: how much of the MARKET is in an uptrend - the share of the eleven
+# sector funds above their own 50-day average. It was the share of his own
+# names, and the owner (2026-10-28) put the flaw plainly: the names are the
+# ones he chose, so adding or dropping one moved the gate, and every buy
+# already needs its own stock in an uptrend. On 2026-10-28 his names read
+# 42% while nine of eleven sectors were above their averages.
+SECTOR_FUNDS = {"XLK": "technology", "XLF": "financials", "XLE": "energy", "XLV": "health care",
+                "XLY": "consumer discretionary", "XLP": "consumer staples", "XLI": "industrials",
+                "XLB": "materials", "XLU": "utilities", "XLRE": "real estate",
+                "XLC": "communication services"}
+BREADTH_MIN = 0.5           # fewer than half above their average: no buys (6 of 11 sectors)
+SECTORS_NEEDED = 6          # fewer sectors with a price than this: breadth is not judged
+# Which breadth the check uses: "names" (his own list, until 2026-10-28),
+# "sectors" or "none" (QQQ alone). One word, so the owner's choice is one
+# edit, and belfort-learn.py's `blocked` report runs all three through
+# regime() itself. Owner, 2026-10-28: QQQ alone. Over the 45 trading days to
+# then, his names blocked buys on 27, the sectors would have on 37 (a market
+# led by tech while most sectors lagged), QQQ alone on 10 - and every buy
+# still needs its own stock above its 20- and 50-day averages.
+BREADTH = "none"
+BREADTHS = ("names", "sectors", "none")
 
 HEADLINE_MAX_AGE_DAYS = 7
 SHADOW_POSITION_PCT = 20.0
@@ -195,11 +215,14 @@ def quotes_doc():
         return {}
 
 
-def regime(doc=None):
+def regime(doc=None, breadth=None):
     """(state, why) - "favorable", "neutral", "unfavorable", or "unknown"
     (no QQQ data yet: treated as neutral). From QQQ against its own 50-day
-    average and that average's direction over 10 days, and breadth: the share
-    of the names above their own 50-day average."""
+    average and that average's direction over 10 days, and breadth (BREADTH,
+    or `breadth`): the share of his names, or of the market's sector funds
+    (SECTOR_FUNDS, quotes.json "sectors"), above their own 50-day average -
+    or none."""
+    mode = breadth or BREADTH
     doc = doc if doc is not None else quotes_doc()
     qqq = (doc.get("benchmarks") or {}).get("QQQ") or {}
     closes = [float(c) for _, c in qqq.get("history") or []]
@@ -207,10 +230,19 @@ def regime(doc=None):
         return "unknown", "no QQQ history yet - treated as mixed"
     sma_now, sma_then = sum(closes[-50:]) / 50, sum(closes[-60:-10]) / 50
     above, rising = float(qqq["price"]) > sma_now, sma_now >= sma_then
-    names = [q for q in (doc.get("quotes") or {}).values() if q.get("sma50") and q.get("price")]
-    breadth = (sum(1 for q in names if float(q["price"]) > float(q["sma50"])) / len(names)) if names else None
-    why = (f"QQQ {'above' if above else 'below'} its {'rising' if rising else 'falling'} 50-day average"
-           + (f"; {breadth:.0%} of the names above theirs" if breadth is not None else ""))
+    why = f"QQQ {'above' if above else 'below'} its {'rising' if rising else 'falling'} 50-day average"
+    breadth = None
+    if mode == "sectors":
+        funds = [q for sym, q in (doc.get("sectors") or {}).items()
+                 if sym in SECTOR_FUNDS and q.get("sma50") and q.get("price")]
+        up = sum(1 for q in funds if float(q["price"]) > float(q["sma50"]))
+        breadth = up / len(funds) if len(funds) >= SECTORS_NEEDED else None
+        why += (f"; {up} of {len(funds)} market sectors above theirs" if breadth is not None
+                else "; sector funds not fetched yet, so breadth is not judged")
+    elif mode == "names":
+        names = [q for q in (doc.get("quotes") or {}).values() if q.get("sma50") and q.get("price")]
+        breadth = (sum(1 for q in names if float(q["price"]) > float(q["sma50"])) / len(names)) if names else None
+        why += f"; {breadth:.0%} of the names above theirs" if breadth is not None else ""
     if (not above and not rising) or (breadth is not None and breadth < BREADTH_MIN):
         return "unfavorable", why
     if not above or not rising:

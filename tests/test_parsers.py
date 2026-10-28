@@ -15915,18 +15915,57 @@ class BelfortGuardrailsFromTheReview(unittest.TestCase):
     def qqq(self, closes, price):
         return {"price": price, "history": [[f"2026-07-{1 + i // 3:02d}", c] for i, c in enumerate(closes)]}
 
+    def sectors(self, up):
+        """The eleven sector funds, the first `up` above their 50-day average."""
+        t = self.mod()
+        return {sym: {"price": 100.0 if i < up else 90.0, "sma50": 95.0} for i, sym in enumerate(t.SECTOR_FUNDS)}
+
     def test_regime_states(self):
         t = self.mod()
         rising, falling = [400.0 + i for i in range(70)], [470.0 - i for i in range(70)]
-        names = {"quotes": {s: {"price": 100.0, "sma50": 95.0} for s in "ABCD"}}
-        self.assertEqual(t.regime(dict(names, benchmarks={"QQQ": self.qqq(rising, 500)}))[0], "favorable")
-        self.assertEqual(t.regime(dict(names, benchmarks={"QQQ": self.qqq(rising, 440)}))[0], "neutral",
-                         "below a rising average: mixed")
-        self.assertEqual(t.regime(dict(names, benchmarks={"QQQ": self.qqq(falling, 380)}))[0], "unfavorable")
-        weak = {"quotes": {s: {"price": 90.0, "sma50": 95.0} for s in "ABC"} | {"D": {"price": 100.0, "sma50": 95.0}}}
-        self.assertEqual(t.regime(dict(weak, benchmarks={"QQQ": self.qqq(rising, 500)}))[0], "unfavorable",
-                         "QQQ fine but only a quarter of the names above their average")
-        self.assertEqual(t.regime(names)[0], "unknown")
+        market = {"sectors": self.sectors(11), "quotes": {s: {"price": 100.0, "sma50": 95.0} for s in "ABCD"}}
+        for b in t.BREADTHS:
+            self.assertEqual(t.regime(dict(market, benchmarks={"QQQ": self.qqq(rising, 500)}), b)[0], "favorable", b)
+            self.assertEqual(t.regime(dict(market, benchmarks={"QQQ": self.qqq(rising, 440)}), b)[0], "neutral",
+                             "below a rising average: mixed")
+            self.assertEqual(t.regime(dict(market, benchmarks={"QQQ": self.qqq(falling, 380)}), b)[0], "unfavorable")
+            self.assertEqual(t.regime(market, b)[0], "unknown")
+        state, why = t.regime({"sectors": self.sectors(5), "benchmarks": {"QQQ": self.qqq(rising, 500)}}, "sectors")
+        self.assertEqual(state, "unfavorable", "QQQ fine but only 5 of 11 sectors above their average")
+        self.assertIn("5 of 11 market sectors above theirs", why)
+        self.assertEqual(t.regime({"sectors": self.sectors(6), "benchmarks": {"QQQ": self.qqq(rising, 500)}},
+                                  "sectors")[0], "favorable", "6 of 11 is more than half")
+
+    def test_breadth_on_his_own_names_and_none(self):
+        t = self.mod()
+        rising = [400.0 + i for i in range(70)]
+        weak = {"quotes": {s: {"price": 90.0, "sma50": 95.0} for s in "ABC"} | {"D": {"price": 100.0, "sma50": 95.0}},
+                "benchmarks": {"QQQ": self.qqq(rising, 500)}}
+        self.assertEqual(t.regime(weak, "names"), ("unfavorable", "QQQ above its rising 50-day average; "
+                                                                  "25% of the names above theirs"))
+        self.assertEqual(t.regime(weak, "none"), ("favorable", "QQQ above its rising 50-day average"))
+        self.assertEqual(t.BREADTH, "none", "owner, 2026-10-28: QQQ alone - one edit moves it")
+        flat = {"quotes": weak["quotes"], "benchmarks": weak["benchmarks"]}
+        self.assertEqual(t.regime(flat)[0], "favorable", "his weak names no longer block a buy")
+
+    def test_breadth_is_the_markets_not_his_own_names(self):
+        # Owner, 2026-10-28: "the stocks im picking ... shouldn't really
+        # affect what he trades". That day his names read 42% above their
+        # averages while nine of eleven sectors were above theirs.
+        t = self.mod()
+        weak_names = {s: {"price": 90.0, "sma50": 95.0} for s in "ABCDEFG"}
+        doc = {"quotes": weak_names, "sectors": self.sectors(9),
+               "benchmarks": {"QQQ": self.qqq([400.0 + i for i in range(70)], 500)}}
+        self.assertEqual(t.regime(doc, "sectors")[0], "favorable")
+        self.assertNotIn("of the names", t.regime(doc, "sectors")[1])
+
+    def test_too_few_sector_prices_and_breadth_is_not_judged(self):
+        t = self.mod()
+        few = dict(list(self.sectors(0).items())[:5])
+        state, why = t.regime({"sectors": few, "benchmarks": {"QQQ": self.qqq([400.0 + i for i in range(70)], 500)}},
+                              "sectors")
+        self.assertEqual(state, "favorable", "five funds below is not the market - too few to judge")
+        self.assertIn("breadth is not judged", why)
 
     def test_unfavourable_means_no_buys_and_mixed_means_small_ones(self):
         self.prices({"NVDA": 100.0}, qqq=self.qqq([470.0 - i for i in range(70)], 380))
@@ -15960,7 +15999,10 @@ class BelfortGuardrailsFromTheReview(unittest.TestCase):
         doc = json.loads((self.data / "quotes.json").read_text())
         self.assertEqual(sorted(doc["benchmarks"]), ["QQQ", "SPY"])
         self.assertEqual(len(doc["benchmarks"]["QQQ"]["history"]), fetch.HISTORY_BARS)
+        self.assertEqual(sorted(doc["sectors"]), sorted(self.mod().SECTOR_FUNDS), "the eleven sector funds")
+        self.assertEqual(set(doc["sectors"]["XLK"]), {"symbol", "price", "sma50", "change_pct", "last_bar", "history"})
         self.assertIn(self.mod().regime(doc)[0], ("favorable", "neutral", "unfavorable"))
+        self.assertIn("of 11 market sectors above theirs", self.mod().regime(doc, "sectors")[1])
 
     # --- 2. clusters ------------------------------------------------------------
 
@@ -20340,6 +20382,62 @@ class BelfortsSellRulesReplayOnRealPrices(unittest.TestCase):
         self.assertIn("Nothing here", text)
         self.assertIn("half sold at +20%", text)
         self.assertLessEqual(max(len(line) for line in text.splitlines()), 90)
+
+
+class TheMarketCheckMeasuredOnHisPasses(unittest.TestCase):
+    """Owner, 2026-10-28: "a lot of trades are being blocked by an unfavorable
+    regime" - and should its breadth be his own names, the market's sectors,
+    or none? `belfort-learn.py blocked` runs every name he passed on through
+    regime() as it stood the close before his call, under each breadth. The
+    closes are Yahoo's real daily ones."""
+
+    FX = json.loads((FIXTURES / "yahoo-daily-closes-market-check-2026-10-28.json").read_text())
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        (root / "agents/belfort/state").mkdir(parents=True)
+        (root / "agents/belfort/data").mkdir(parents=True)
+        old = os.environ.get("ECOSYSTEM_ROOT")
+        os.environ["ECOSYSTEM_ROOT"] = str(root)
+        self.addCleanup(lambda: os.environ.__setitem__("ECOSYSTEM_ROOT", old) if old
+                        else os.environ.pop("ECOSYSTEM_ROOT", None))
+        self.learn = load(f"belfort_learn_blocked_{time.time_ns()}", "belfort-learn.py")
+        self.state = root / "agents/belfort/state"
+        fx = self.FX
+        self.doc = {"benchmarks": {"QQQ": {"history": fx["QQQ"]}, "SPY": {"history": fx["SPY"]}},
+                    "quotes": {s: {"history": fx[s]} for s in ("NVDA", "V", "TSLA", "XOM")}}
+        self.sectors = {s: fx[s] for s in self.learn.T.SECTOR_FUNDS}
+        self.days = [d for d, _ in fx["QQQ"]][-45:]
+
+    def test_the_sector_rule_would_have_blocked_more_of_the_autumn(self):
+        # Measured on 2026-10-28 for the owner: a tech-led market - QQQ rising
+        # while 2 to 5 of the 11 sectors were above their averages.
+        r = self.learn.blocked(self.doc, self.sectors, days=self.days)
+        self.assertEqual(r["calendar"]["sectors"], {"blocked": 37, "days": 45})
+        self.assertEqual(r["calendar"]["none"], {"blocked": 10, "days": 45})
+
+    def test_the_day_of_the_question(self):
+        got = self.learn.check_on("2026-10-28", self.doc, self.sectors)
+        self.assertEqual(got["none"], ("unfavorable", "QQQ below its falling 50-day average"))
+        self.assertEqual(got["sectors"], ("unfavorable", "QQQ below its falling 50-day average; "
+                                                         "6 of 11 market sectors above theirs"))
+
+    def test_each_pass_is_measured_against_each_breadth(self):
+        calls = [{"symbol": "NVDA", "utc": "2026-10-05 13:40:00", "score": 6, "wake": "2026-10-05-open"},
+                 {"symbol": "XOM", "utc": "2026-10-13 13:40:00", "score": 4, "wake": "2026-10-13-open"},
+                 {"symbol": "V", "utc": "2026-09-30 13:40:00", "score": 5, "wake": "2026-09-30-open"}]
+        (self.state / "calls.jsonl").write_text("".join(json.dumps(c) + "\n" for c in calls))
+        with unittest.mock.patch.object(self.learn.et_time, "final_bar_day", lambda now=None: "2026-10-28"):
+            r = self.learn.blocked(self.doc, self.sectors, days=self.days[-5:])
+        self.assertEqual(r["by"]["sectors"]["blocked"]["names"], 3, "the sectors blocked all three days")
+        self.assertEqual(r["by"]["none"]["blocked"]["names"], 0, "QQQ alone allowed all three")
+        self.assertEqual(r["by"]["none"]["allowed"]["n_10"], 3)
+        text = self.learn.blocked_text(r)
+        self.assertIn("Breadth = QQQ alone (live now)", text)
+        self.assertIn("Breadth = his own names: blocked", text)
+        self.assertIn("Nothing here changes a rule.", text)
 
 
 class BelfortsLatestReportIsTheLatestWake(unittest.TestCase):

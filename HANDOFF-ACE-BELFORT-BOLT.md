@@ -187,8 +187,9 @@ sold. Only a **broken thesis** is the model's own exit.
 40-65 with MACD positive, a **catalyst cited by headline id** from that
 name's news under 7 days old, written as `TYPE: fact`, and a score of 7+/10.
 Code refuses: over 25% in one name, under 5% cash, over 40% in a cluster,
-more than 8 names, buying in an unfavourable market regime (QQQ vs its 50-day
-and breadth), a name reporting earnings within 5 trading days, or more than a
+more than 8 names, buying in an unfavourable market regime (QQQ below its falling 50-day
+average - QQQ alone since 2026-10-28; `BREADTH` in belfort-trade.py, and
+`belfort-learn.py blocked` measures each breadth on his passes), a name reporting earnings within 5 trading days, or more than a
 1% portfolio risk at the stop (`belfort-trade.py size SYMBOL` gives the most
 allowed). He also writes a score and reason for every candidate he passed on
 (`state/calls.txt` -> `belfort-trade.py calls`) - the owner reads those on

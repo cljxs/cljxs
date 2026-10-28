@@ -150,9 +150,10 @@ you never sell to dodge one or hold past one.
   who reports soon; `data/earnings.json` has the dates)
 - **At most 40%** in one cluster of names that move together - chips,
   software, space, quantum and so on; `show` prints the groups and yours
-- **Market regime** (QQQ against its 50-day average, and how many of the names
-  are above theirs): favourable = normal sizing; mixed = at most 10% in a
-  new buy; unfavourable = no buys
+- **Market regime** (QQQ against its 50-day average and that average's
+  direction - nothing else since 2026-10-28): favourable = QQQ above a rising
+  average, normal sizing; mixed = one of the two, at most 10% in a new buy;
+  unfavourable = QQQ below a falling average, no buys
 - **Keep at least 5% cash**
 - **Day 1** (`cycle_count` 0): open **3 to 5** starters, roughly equal weight
 
