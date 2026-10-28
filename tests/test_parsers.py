@@ -19462,7 +19462,7 @@ class BelfortsListIsOneTableAndARefusedFetchIsLoud(unittest.TestCase):
         for sym, group in want.items():
             self.assertIn(sym, fetch.UNIVERSE, sym)
             self.assertEqual(self.trade.cluster_of(sym), group, sym)
-        self.assertEqual(len(fetch.UNIVERSE), 71)
+        self.assertGreaterEqual(len(fetch.UNIVERSE), 71)    # 79 since 2026-10-28, pinned there
         self.assertNotIn("ORCK", fetch.UNIVERSE, "no such symbol")
 
     def test_a_name_or_two_failing_is_not_an_alarm(self):
@@ -19703,6 +19703,14 @@ class BelfortWatchesMoreThanChips(unittest.TestCase):
         self.assertEqual(self.trade.cluster_of("HIMS"), "healthcare")
         for group in ("healthcare", "financials", "industrials and energy", "consumer and retail"):
             self.assertGreaterEqual(len(self.trade.CLUSTERS[group]), 4, group)
+
+    def test_the_ai_power_and_defence_names_of_2026_10_28(self):
+        # Owner, 2026-10-28: "Yes let's add them all" - each passed check.
+        for sym in ("VST", "CEG", "GEV", "VRT", "ANET", "CRWV"):
+            self.assertEqual(self.trade.cluster_of(sym), "AI infrastructure and power", sym)
+        for sym in ("KTOS", "AVAV"):
+            self.assertEqual(self.trade.cluster_of(sym), "drones and defense", sym)
+        self.assertEqual(len(self.fetch.UNIVERSE), 79)
 
     def test_space_is_its_own_group_with_spacex(self):
         # Owner, 2026-10-08: "Can we add the space sector to it?"

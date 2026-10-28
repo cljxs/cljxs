@@ -142,10 +142,16 @@ CLUSTERS = {
     # which rise and fall on the same data-centre spending news.
     # ORCL (2026-10-13) too: Oracle trades on its GPU-cloud contracts now,
     # not on database software, so it moves with these.
-    "AI infrastructure and power": ["NBIS", "IREN", "BE", "OKLO", "ORCL"],
+    # Owner, 2026-10-28, each checked with `belfort-fetch.py check` (252
+    # trading days): the power producers selling to data centres (VST, CEG),
+    # their grid and cooling equipment (GEV, VRT), the network inside them
+    # (ANET) and another rented-GPU cloud (CRWV). Same news, same moves - so
+    # one cluster, and the 40% cap still holds them all.
+    "AI infrastructure and power": ["NBIS", "IREN", "BE", "OKLO", "ORCL",
+                                    "VST", "CEG", "GEV", "VRT", "ANET", "CRWV"],
     "quantum": ["IONQ", "INFQ"],            # INFQ: 165 trading days by then
     "fintech": ["SOFI", "PYPL", "LMND"],
-    "drones and defense": ["ONDS"],
+    "drones and defense": ["ONDS", "KTOS", "AVAV"],   # KTOS, AVAV: owner, 2026-10-28
 }
 CLUSTER_CAP_PCT = 40.0
 MAX_POSITIONS = 8

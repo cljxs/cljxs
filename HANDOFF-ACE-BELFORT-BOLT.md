@@ -163,7 +163,7 @@ blocked from datacentre IPs). Rules for the model:
 
 ## 4. Belfort - paper swing trader (stocks)
 
-$10,000 paper portfolio, a watchlist of about 30 names (chips, software,
+$10,000 paper portfolio, a watchlist of 79 names in 14 groups (chips, software,
 space, quantum...). The model decides *what* and *why*; **every change to
 the book goes through `scripts/belfort-trade.py`**, which does all the money.
 This exists because a hand-kept book once read **-41%** when the real loss
