@@ -177,6 +177,38 @@ class TheScanAlwaysMeasuresSomething(unittest.TestCase):
         self.run_scan()
         self.assertNotIn("dog mom mug", self.m.load().get("retired") or {})
 
+    def test_a_full_list_swaps_its_weakest_for_new_niches(self):
+        # Owner, 2026-10-28, after "no new niches · 80 of 80": every niche
+        # sold a little, none retired, nothing new got in.
+        self.m.MAX_NICHES = 3
+        self.m.STARTER = ["frog sticker", "dog mom mug", "cat mug"]
+        self.tags = []
+        self.run_scan(n=3)                                  # all three measured, list full
+        weak = self.m.SCANS / f"{self.m.slug('cat mug')}.json"
+        doc = json.loads(weak.read_text())
+        doc["rows"][0].update(selling=1, reviews=1)        # sells, barely
+        weak.write_text(json.dumps(doc))
+        # A selling listing elsewhere tags two niches the list has not got.
+        (self.m.SCANS / "totes.json").write_text(json.dumps({"seed": "book tote", "rows": [
+            row("book tote", 900, 40, 8, tags=["library book tote", "reading tote bag"])]}))
+        self.run_scan(n=0)
+        d = self.m.load()
+        last = json.loads(self.m.LAST.read_text())
+        out = [x["niche"] for x in last["swapped"]]
+        self.assertEqual(len(out), 2, "as many out as there are new ones waiting")
+        self.assertIn("cat mug", out, "the weakest goes first")
+        self.assertEqual(sorted(last["new_niches"]), ["library book tote", "reading tote bag"])
+        self.assertEqual(len(self.m.niches(d)), 3, "still within the limit")
+        self.assertTrue(set(out) <= set(d["retired"]), "and never brought back")
+
+    def test_no_swap_without_a_new_niche_waiting(self):
+        self.m.MAX_NICHES = 2
+        self.tags = []
+        self.run_scan(n=2)
+        self.run_scan(n=0)
+        self.assertEqual(json.loads(self.m.LAST.read_text())["swapped"], [])
+        self.assertFalse(self.m.load().get("retired"))
+
     def test_the_house_shows_what_the_run_did(self):
         page = (API / "public" / "village.html").read_text()
         self.assertIn("${scanResult(s.result)}", page)

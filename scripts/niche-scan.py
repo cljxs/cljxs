@@ -69,6 +69,13 @@ DISCOVER_PER_RUN = 4      # new niches added from tags per run, at most
 # discovery goes on finding new ones instead of the list going round in a
 # circle of the same 80. Kept in niches.json under "retired", never re-added.
 RETIRE_AFTER = 2
+# THE SWAP (owner, 2026-10-28). Retiring only the dead was not enough: on the
+# first run all 80 niches sold a little, so none retired, no new niche got
+# in ("no new niches · 80 of 80"), and the scan went round the same markets.
+# When the list is full and selling listings' tags name new niches, this
+# many of the weakest measured niches - the lowest opening, scout-ideas.py's
+# own ranking - make way for them, each run.
+SWAP_PER_RUN = 3
 
 # Evergreen, gift-driven niches on products Emily can make (emily-printify's
 # product words). Starting points, not conclusions: each is measured, and a
@@ -178,10 +185,13 @@ def same(phrase):
                     for w in str(phrase or "").lower().split())
 
 
-def discover(d, now=None):
+def discover(d, now=None, dry=False, cap=None, most=None):
     """New niches from the tags of phrases that are SELLING: the words sellers
     who are making sales use for their own work. A tag with no product word
-    takes its scan's product ("dog mom gift" in a mug scan -> "dog mom mug")."""
+    takes its scan's product ("dog mom gift" in a mug scan -> "dog mom mug").
+    dry: only say which would be added, and add nothing."""
+    cap = MAX_NICHES if cap is None else cap
+    most = DISCOVER_PER_RUN if most is None else most
     known = {same(s) for s, _src, _age in niches(d, now)}
     active = len(known)
     known |= {same(r) for r in d.get("retired") or {}}      # never brought back
@@ -203,13 +213,46 @@ def discover(d, now=None):
                                                     if product else None)
                 if not seed or same(seed) in known or blocked(seed):
                     continue
-                if active + len(added) >= MAX_NICHES or len(added) >= DISCOVER_PER_RUN:
+                if active + len(added) >= cap or len(added) >= most:
                     return added
                 known.add(same(seed))
-                d["niches"][seed] = {"source": f"tag on {row.get('phrase')}",
-                                     "added": (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d")}
+                if not dry:
+                    d["niches"][seed] = {"source": f"tag on {row.get('phrase')}",
+                                         "added": (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d")}
                 added.append(seed)
     return added
+
+
+def strength(seed, opening):
+    """A measured niche's best opening (scout-ideas.py's ranking, passed in),
+    or None when it has no scan to judge it by."""
+    _when, doc = scan_of(seed)
+    if doc is None:
+        return None
+    return max((opening(r.get("phrase"), r) for r in doc.get("rows") or []), default=0.0)
+
+
+def swap(d, now=None, keep=(), n=None):
+    """When the list is full: retire up to n of the weakest measured niches,
+    as many as there are new ones waiting to take their places. Never one
+    found or measured this run (keep), never one with no scan to judge.
+    Returns [(seed, its opening)] retired."""
+    n = SWAP_PER_RUN if n is None else n
+    active = niches(d, now)
+    if len(active) < MAX_NICHES:
+        return []
+    waiting = discover(d, now, dry=True, cap=MAX_NICHES + n, most=n)
+    if not waiting:
+        return []
+    opening = _load("scout_ideas_open", "scout-ideas.py").opening      # loaded once
+    judged = [(s, strength(s, opening)) for s, _src, age in active if age is not None and s not in keep]
+    weakest = sorted([(s, v) for s, v in judged if v is not None], key=lambda sv: sv[1])[:len(waiting)]
+    day = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d")
+    for seed, _v in weakest:
+        d.setdefault("retired", {})[seed] = day
+        d["niches"].pop(seed, None)
+        (d.get("dead") or {}).pop(seed, None)
+    return weakest
 
 
 def scan(seed):
@@ -279,6 +322,10 @@ def cmd_run(a):
         if judge(d, seed, now):
             retired.append(seed)
             log(f"  retired '{seed}' - no selling phrase in {RETIRE_AFTER} scans in a row")
+    # A full list makes room: the weakest measured niches for new ones.
+    swapped = swap(d, now, keep=set(todo) | set(added))
+    for seed, v in swapped:
+        log(f"  swapped out '{seed}' (opening {v:g}) to make room for a new niche")
     more = discover(d, now)
     for seed in more:
         log(f"new niche from what sells: '{seed}' ({d['niches'][seed]['source']})")
@@ -287,6 +334,7 @@ def cmd_run(a):
     LAST.write_text(json.dumps({
         "finished_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "note": note,
         "scanned": scanned, "new_niches": added + more, "retired": retired,
+        "swapped": [{"niche": s, "opening": v} for s, v in swapped],
         "niches": len(niches(d, now)), "max_niches": MAX_NICHES,
     }, indent=1) + "\n")
     for g in gaps():
