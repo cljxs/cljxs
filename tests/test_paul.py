@@ -3692,3 +3692,44 @@ class WakeAskCanBeHandedFiles(unittest.TestCase):
         self.assertEqual((ok, text), (True, "ship"))
         self.assertIn("mobile.png", seen["files"])
         self.assertIn("Read", seen["cmd"][seen["cmd"].index("--tools") + 1])
+
+
+class TheOwnersSavedPhotosAreASource(SiteRules):
+    """Bear Creek Landscapes (owner, 2026-10-28): not built - "could not
+    source two business-specific identity details": its Facebook behind a
+    login, Angi, Yelp, BBB and the rest returning 403. The owner had saved
+    five of its photos, and then a screenshot of its Facebook bio: "making
+    yards beautiful in the Cedar Valley for 25 years"."""
+
+    BIO = "img/yours-06.png"
+
+    def built(self, t, extra=""):
+        index = INDEX.replace("by hand since 1998", "making yards beautiful in the Cedar Valley for 25 years"
+                              ).replace("wedding dresses", "retaining walls" + extra)
+        self.work(t, index)
+        site = paul.A("work", "site")
+        for name in ("yours-01.jpg", "yours-06.png"):
+            (site / "img" / name).write_bytes(b"\xff\xd8" + b"0" * 900)
+        errs, _ = paul.check_site(site, t)
+        return errs
+
+    def target(self, bio_source):
+        return target(claims=[], identity=[
+            {"detail": "25 years in the Cedar Valley", "source": bio_source,
+             "on_page": "making yards beautiful in the Cedar Valley for 25 years"},
+            {"detail": "builds stone retaining walls", "source": "img/yours-01.jpg", "on_page": "retaining walls"}])
+
+    def test_a_detail_and_a_claim_can_cite_the_owners_photo(self):
+        errs = self.built(self.target(self.BIO))
+        self.assertFalse([e for e in errs if "identity" in e or "claim" in e or "detail(s)" in e], errs)
+
+    def test_only_a_photo_the_owner_saved_and_code_placed(self):
+        for src in ("img/yours-09.png", "img/hero.jpg", "their facebook"):
+            errs = self.built(self.target(src))
+            self.assertTrue(any("owner's saved photo that shows it" in e for e in errs), (src, errs))
+            self.assertTrue(any('"25 years" is a claim with no source' in e for e in errs), (src, errs))
+
+    def test_paul_is_told(self):
+        header = (ROOT / "agents" / "paul" / "_paul-agents-header.md").read_text()
+        self.assertIn("**The owner's saved photos are a source too**", header)
+        self.assertIn("**Sites that turn you away**", header)

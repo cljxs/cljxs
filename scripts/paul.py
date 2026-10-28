@@ -1082,7 +1082,7 @@ TEMPLATE_MARK = "Paul's site template"
 MIN_IDENTITY = 2
 
 
-def identity_problems(text, t):
+def identity_problems(text, t, saved=()):
     """target.json "identity": at least MIN_IDENTITY details from their
     Facebook, their own pages or their history, each sourced and each shown
     on the page in the words given."""
@@ -1093,9 +1093,10 @@ def identity_problems(text, t):
     for r in rows:
         what = str(r.get("detail") or "").strip() or "(no detail)"
         shown = re.sub(r"\s+", " ", str(r.get("on_page") or "")).strip()
-        if not re.match(r"^https?://\S+$", str(r.get("source") or "").strip()):
+        if not sourced(r.get("source"), saved):
             errs.append(f'identity: "{what}" needs the URL it came from (their Facebook, their '
-                        f"site, a news story)")
+                        f"site, a news story), or the owner's saved photo that shows it "
+                        f"(img/yours-..., one in work/site/img/)")
         elif not shown:
             errs.append(f'identity: "{what}" needs "on_page" - the words on the site that show it')
         elif shown.lower() not in page:
@@ -1417,8 +1418,9 @@ def check_site(site, t, old_page=None):
 
     errs += look_and_law(sc)
     errs += seo_problems(site, t)
-    errs += claim_problems(sc["text"], t)
-    errs += identity_problems(sc["text"], t)
+    saved = owner_saved(site)
+    errs += claim_problems(sc["text"], t, saved)
+    errs += identity_problems(sc["text"], t, saved)
     if any(TEMPLATE_MARK in c for c in sc["css"]):
         errs.append("this site is built on templates/local - that is an example of the quality "
                     "bar, not a layout. Design this one for them, from what is only true of them")
@@ -1468,18 +1470,33 @@ def _claimkey(x):
     return re.sub(r"[\s-]+", " ", str(x).lower()).strip()
 
 
-def claim_problems(text, t):
+def sourced(src, saved=()):
+    """A source code accepts: a web address, or a photo the owner saved for
+    this business and code placed in the site (owner, 2026-10-28, Bear Creek
+    Landscapes: not built, its Facebook behind a login and every directory
+    returning 403 - while the owner had saved its photos, and a screenshot
+    of its Facebook bio: "25 years in the Cedar Valley")."""
+    src = str(src or "").strip()
+    return bool(re.match(r"^https?://\S+$", src)) or src in saved
+
+
+def owner_saved(site):
+    """The owner's saved photos in a site, as a source is written: img/yours-01.jpg."""
+    img = Path(site) / "img"
+    return {f"img/{x.name}" for x in img.glob(f"{SUPPLIED_PREFIX}*")} if img.is_dir() else set()
+
+
+def claim_problems(text, t, saved=()):
     """Claim words on the page with no sourced entry in target.json "claims"."""
     claims = [c for c in (t or {}).get("claims") or [] if isinstance(c, dict)]
     # An identity detail is sourced the same way: "since 1911" shown because
     # their Facebook says so needs no second entry.
     claims += [{"text": r.get("on_page"), "source": r.get("source")}
                for r in (t or {}).get("identity") or [] if isinstance(r, dict) and r.get("on_page")
-               and re.match(r"^https?://", str(r.get("source") or ""))]
-    errs = [f'claims: "{c.get("text", "")}" needs the URL it came from' for c in claims
-            if not re.match(r"^https?://\S+$", str(c.get("source") or "").strip())]
-    backed = " | ".join(_claimkey(c.get("text") or "") for c in claims
-                        if re.match(r"^https?://", str(c.get("source") or "")))
+               and sourced(r.get("source"), saved)]
+    errs = [f'claims: "{c.get("text", "")}" needs the URL it came from, or the owner\'s saved photo '
+            f"that shows it (img/yours-...)" for c in claims if not sourced(c.get("source"), saved)]
+    backed = " | ".join(_claimkey(c.get("text") or "") for c in claims if sourced(c.get("source"), saved))
     missing = []
     for pat in CLAIM_PATTERNS:
         for m in re.finditer(pat, text, re.I):

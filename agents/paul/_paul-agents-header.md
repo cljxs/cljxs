@@ -131,6 +131,10 @@ again before you build: if it closed, or now has a good site, write
 `"status": "below-bar"` with a `why` in `work/target.json` and stop.
 Otherwise it is your target - sections 2 to 5.
 
+**Sites that turn you away** - Facebook and Instagram (a login wall), Angi,
+HomeAdvisor, Yelp, Yellow Pages, BBB, Superpages, Nextdoor (403): do not
+spend turns on them. What the owner saved from them is in FACTS `photos`.
+
 **The owner may name the business** (FACTS `named`): nothing about it is
 checked yet, so find its address, phone and hours yourself, from its own
 pages, Google or Facebook, each with the URL - exactly as in scouting.
@@ -192,6 +196,13 @@ look alike, and neither may look like the last site you built.
    section, captions on their own photos.
 3. **List at least two of those details in target.json "identity"**, each
    with the URL it came from and the exact words on the site that show it.
+   **The owner's saved photos are a source too** (FACTS `photos`,
+   `work/site/img/yours-*`; 2026-10-28, Bear Creek Landscapes): a detail one
+   plainly shows - what they build, their sign, their van - or that one says
+   in writing, like a screenshot of their Facebook bio ("25 years in the
+   Cedar Valley"), may give `"source": "img/yours-03.jpg"`, for a claim as
+   well. Open it with view_image first; only what it plainly shows or says.
+   A screenshot of text is a source, never a picture on the site.
    Code checks every one is sourced and on the page, and treats it as a
    sourced claim. Cannot find two? This is not the business to build for -
    write status "below-bar" and say why.
