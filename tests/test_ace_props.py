@@ -188,7 +188,7 @@ class TheBookItKeeps(PropsCase):
         self.assertEqual([b["athlete"] for b in bets], ["P0", "P1"])
         self.assertEqual({b["book"] for b in bets}, {"props"})
         for b in bets:
-            self.b.place(b)
+            self.b.place(b, now=self.NOW)       # stamped on the test's day, not the day it runs
         open_bets, settled, _ = self.p.props_bets(self.b)
         bets, why = self.p.pick(self.boards(3), open_bets, settled, "2026-10-26", self.NOW)
         self.assertEqual(bets, [])
