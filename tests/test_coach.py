@@ -268,6 +268,13 @@ class AceHasACoach(CoachCase):
         self.assertEqual(set(s["favourite or underdog"]), {"underdog"})
         md = (self.root / "coach/ace/journal/2026-10-14.md").read_text()
         self.assertIn("closing-line value +2.70% a bet over 1, beat the close on 1", md)
+        # Owner, 2026-10-28: the close beside each group, and what matching the
+        # market grades - the close here is BKN +200 / MIA -245, a 4.35% book.
+        self.assertIn("(matching the market grades -4.17% - the book's cut)", md)
+        self.assertEqual({k: s["by sport"]["NBA"][k] for k in ("with_close", "beat_close", "avg_clv_pct")},
+                         {"with_close": 1, "beat_close": 1, "avg_clv_pct": 2.7})
+        self.assertEqual(s["by sport"]["CFB"]["with_close"], 0, "no closing line kept for that game")
+        self.assertIn("NBA 1/1 won, $+220.00, CLV +2.7% (1/1 beat)", md)
         self.assertIn("Rules frozen until 2026-12-01", md)
 
     def week_of_bets(self, n):

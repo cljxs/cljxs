@@ -257,6 +257,12 @@ def ace_rows():
         g = clv.grade({"selection": b.get("selection"), "status": "bet", "price": b.get("price"),
                        "novig_pct": b.get("novig_pct"), "my_pct": b.get("my_pct")}, entry) if entry else None
         close, whose = clv.headline_clv(g) if g else (None, None)
+        # What a bet at the closing price grades with no move at all: the
+        # book's cut, from both closing moneylines (owner, 2026-10-28 - "-5.6%"
+        # reads very differently beside the -4% that matching the market gives).
+        last = (entry or {}).get("last") or {}
+        dh, da = clv.decimal_odds(last.get("moneyline_home")), clv.decimal_odds(last.get("moneyline_away"))
+        cut = round((1 / (1 / dh + 1 / da) - 1) * 100, 2) if dh and da else None
         bar = judge.bar(b.get("my_pct"), b) if b.get("my_pct") is not None else None
         sport = str(b.get("sport") or "").upper()
         why_sold = f"{b.get('result')}: {b.get('detail') or ''}".strip()
@@ -277,7 +283,7 @@ def ace_rows():
             "sport": sport, "market_pct": bar["q"] if bar else b.get("novig_pct"),
             "edge_pts": bar["gap_pts"] if bar else None,
             "under_bar": (bar["why"] if bar and bar["gap_pts"] is not None and not bar["clears"] else None),
-            "clv_pct": close, "clv_book": whose,
+            "clv_pct": close, "clv_book": whose, "close_cut_pct": cut,
         })
     return rows
 
@@ -445,6 +451,16 @@ def ace_summary(rows):
     if not bets:
         return None
     closed = [r for r in bets if r.get("clv_pct") is not None]
+    cuts = [r["close_cut_pct"] for r in bets if r.get("close_cut_pct") is not None]
+
+    def by(key):
+        """grouped(), with each group's closing-line value beside its wins."""
+        out = grouped(bets, key)
+        for name, g in out.items():
+            mine = [r for r in closed if str(key(r)) == name]
+            g.update(with_close=len(mine), beat_close=sum(1 for r in mine if r["clv_pct"] > 0),
+                     avg_clv_pct=round(sum(r["clv_pct"] for r in mine) / len(mine), 2) if mine else None)
+        return out
 
     def band(r):
         e = r.get("edge_pts")
@@ -452,17 +468,25 @@ def ace_summary(rows):
     return {"bets": len(bets), "with_close": len(closed),
             "avg_clv_pct": round(sum(r["clv_pct"] for r in closed) / len(closed), 2) if closed else None,
             "beat_close": sum(1 for r in closed if r["clv_pct"] > 0),
+            "avg_cut_pct": round(sum(cuts) / len(cuts), 2) if cuts else None,
             "frozen_until": _ace()[2].FROZEN_UNTIL,
-            "by sport": grouped(bets, lambda r: r["sport"]),
-            "favourite or underdog": grouped(bets, lambda r: "unknown" if r.get("market_pct") is None
-                                             else "favourite" if float(r["market_pct"]) >= 50 else "underdog"),
-            "by edge": grouped(bets, band)}
+            "by sport": by(lambda r: r["sport"]),
+            "favourite or underdog": by(lambda r: "unknown" if r.get("market_pct") is None
+                                        else "favourite" if float(r["market_pct"]) >= 50 else "underdog"),
+            "by edge": by(band)}
 
 
 def ace_line(s):
     clv = (f"closing-line value {s['avg_clv_pct']:+.2f}% a bet over {s['with_close']}, beat the close on "
            f"{s['beat_close']}" if s["with_close"] else "no closing line kept for these bets")
+    if s.get("avg_cut_pct") is not None:
+        clv += f" (matching the market grades {s['avg_cut_pct']:+.2f}% - the book's cut)"
     return f"{s['bets']} bet(s) settled; {clv}. Rules frozen until {s['frozen_until']}."
+
+
+def ace_group(name, g):
+    clv = f", CLV {g['avg_clv_pct']:+.1f}% ({g['beat_close']}/{g['with_close']} beat)" if g.get("with_close") else ""
+    return f"{name} {g['wins']}/{g['trades']} won, ${g['net_usd']:+,.2f}{clv}"
 
 
 # ------------------------------------------------------------------ daily
@@ -506,8 +530,7 @@ def daily_markdown(day, rows, a, coach):
     if a.get("ace"):
         L += ["", "**Ace**", "", f"- {ace_line(a['ace'])}"]
         for k in ("by sport", "favourite or underdog", "by edge"):
-            L += [f"- {k}: " + ", ".join(f"{n} {g['wins']}/{g['trades']} won, ${g['net_usd']:+,.2f}"
-                                         for n, g in a["ace"][k].items())]
+            L += [f"- {k}: " + ", ".join(ace_group(n, g) for n, g in a["ace"][k].items())]
     return "\n".join(L) + "\n"
 
 

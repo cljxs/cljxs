@@ -171,9 +171,9 @@ function passesCard(p) {
 // gives, so this only reports.
 function aceCard(s) {
   const groups = ['by sport', 'favourite or underdog', 'by edge'].map(k => `<li>${esc(k)}: ${Object.entries(s[k] || {})
-    .map(([n, g]) => `${esc(n)} ${g.wins}/${g.trades} won, ${money(g.net_usd)}`).join(' · ')}</li>`).join('');
-  const clv = s.with_close ? `closing-line value ${pct(s.avg_clv_pct)} a bet over ${s.with_close}, beat the close on ${s.beat_close}`
-    : 'no closing line kept for these bets';
+    .map(([n, g]) => `${esc(n)} ${g.wins}/${g.trades} won, ${money(g.net_usd)}${g.with_close ? `, CLV ${pct(g.avg_clv_pct)} (${g.beat_close}/${g.with_close} beat)` : ''}`).join(' · ')}</li>`).join('');
+  const clv = (s.with_close ? `closing-line value ${pct(s.avg_clv_pct)} a bet over ${s.with_close}, beat the close on ${s.beat_close}`
+    : 'no closing line kept for these bets') + (s.avg_cut_pct != null ? ` (matching the market grades ${pct(s.avg_cut_pct)} - the book's cut)` : '');
   return `<div class="k">Ace</div><ul><li>${s.bets} bet(s) settled · ${esc(clv)}</li>${groups}
     <li class="muted">Rules frozen until ${esc(s.frozen_until)} - observed only.</li></ul>`;
 }
