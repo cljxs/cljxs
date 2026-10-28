@@ -64,6 +64,7 @@ esac
             scans.mkdir(parents=True)
             (scans / "s.json").write_text("{}")
             (scans.parent / "last-scan.json").write_text(json.dumps({"scanned": [], "new_niches": ["x mug"]}))
+            (scans.parent / "last-run.txt").write_text("2026-10-28 13:00 UTC | held by code - 5 ideas waiting\n")
             js = (
                 f"const express=require({json.dumps(str(API / 'node_modules' / 'express'))});"
                 f"const scout=require({json.dumps(str(API / 'scout.js'))});"
@@ -82,18 +83,28 @@ esac
             self.assertFalse(out["idle"][1]["running"])
             self.assertTrue(out["idle"][1]["last_scan_utc"], "the newest scan file's time")
             self.assertEqual(out["idle"][1]["result"]["new_niches"], ["x mug"], "what the last run found")
+            self.assertIn("held by code", out["idle"][1]["scout"]["line"], "and what Scout itself said")
             self.assertEqual((out["start"][0], out["start"][1]["running"]), (202, True))
             self.assertEqual(out["busy"][0], 409, "a second press while it runs starts nothing")
             self.assertTrue(out["state"][1]["running"])
             starts = [l for l in calls.read_text().splitlines() if l.startswith("start")]
-            self.assertEqual(starts, ["start --no-block scout-niches.service"], "the timer's own unit, once")
+            # Owner, 2026-10-28: "I thought the run market scan was a get ideas
+            # now button." The scan, then the idea run - once.
+            self.assertEqual(starts, ["start --no-block scout-ideas-now.service"], "once")
 
     def test_the_house_has_the_button(self):
         page = (API / "public" / "village.html").read_text()
         self.assertIn('<div id="scoutScan"></div>', page)
         self.assertIn("fetch('/api/scout/scan', { method: 'POST' })", page)
-        self.assertIn("ExecStart=/usr/bin/python3 /root/ecosystem/scripts/niche-scan.py run",
-                      (ROOT / "deploy" / "scout-niches.service").read_text(), "the button runs what the timer runs")
+        unit = (ROOT / "deploy" / "scout-ideas-now.service").read_text()
+        execs = [l for l in unit.splitlines() if l.startswith("ExecStart=")]
+        # The two timers' own commands, scan first, so the ideas use it.
+        self.assertEqual(execs, [l for l in (ROOT / "deploy" / "scout-niches.service").read_text().splitlines()
+                                 if l.startswith("ExecStart=")]
+                         + [l for l in (ROOT / "deploy" / "scout-cycle.service").read_text().splitlines()
+                            if l.startswith("ExecStart=")])
+        self.assertIn("Find new ideas now", page)
+        self.assertIn("else if (started) loadScoutIdeas();", page, "the new ideas are shown when it finishes")
 
 
 class TheScanAlwaysMeasuresSomething(unittest.TestCase):

@@ -365,7 +365,7 @@
   <div class="fsec"><div class="fh">Navigation</div><div id="fNav"></div></div>
   <div class="fsec"><div class="fh">Quick actions</div>
     <button class="qa" data-qa="kit">＋ Make a TikTok kit</button>
-    <button class="qa" data-qa="scan">🔭 Run a market scan</button>
+    <button class="qa" data-qa="scan">💡 Find new Scout ideas</button>
     <button class="qa" data-qa="find">🧭 Find Paul prospects</button>
   </div>
   <div class="fsec"><div class="fh">System status</div><div id="fSys"></div></div>
@@ -2772,13 +2772,18 @@ async function loadScoutScan(started) {
   try { s = await (await fetch('/api/scout/scan', { cache: 'no-store' })).json(); }
   catch { host.innerHTML = '<div class="muted">Could not ask about the scan.</div>'; return; }
   const last = s.last_scan_utc ? new Date(s.last_scan_utc).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'never';
+  // The button scans Etsy and then asks Scout for ideas (owner, 2026-10-28:
+  // "I thought the run market scan was a get ideas now button").
+  const scoutAt = s.scout && s.scout.at ? new Date(s.scout.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : null;
   host.innerHTML = s.running
-    ? `<button class="shopbtn" disabled>⏳ Scanning Etsy now - this takes a few minutes, up to an hour</button>
-       <div class="muted">Last scan landed ${esc(last)}. New niches and ideas show up after it finishes.</div>`
-    : `<button class="shopbtn" data-busy="Scanning Etsy - about a minute" onclick="runScoutScan(this)">🔭 Run a market scan now</button>
-       <div class="muted">Last scan ${esc(last)} · it also runs every morning at 6:30 Central · no AI, nothing to pay${started ? ' · <b>finished</b>' : ''}</div>
-       ${scanResult(s.result)}`;
+    ? `<button class="shopbtn" disabled>⏳ ${(s.busy || []).includes('scout-cycle.service') ? 'Scout is writing ideas' : 'Scanning Etsy, then Scout writes ideas'} - this takes a few minutes</button>
+       <div class="muted">New ideas appear below when it finishes.</div>`
+    : `<button class="shopbtn" data-busy="Scanning Etsy, then Scout writes ideas - a few minutes" onclick="runScoutScan(this)">💡 Find new ideas now</button>
+       <div class="muted">Scans Etsy, then Scout writes ideas from what is selling - your Claude plan, no money. Last scan ${esc(last)} · it also runs every morning (scan 6:30, ideas 8:00 Central)${started ? ' · <b>finished</b>' : ''}</div>
+       ${scanResult(s.result)}
+       ${s.scout && s.scout.line ? `<div class="muted" style="margin-top:4px">Scout's last idea run${scoutAt ? ` (${esc(scoutAt)})` : ''}: ${esc(s.scout.line)}</div>` : ''}`;
   if (s.running) scanPoll = setTimeout(() => loadScoutScan(true), 15000);
+  else if (started) loadScoutIdeas();
 }
 // What the last scan found, as niche-scan.py recorded it: measured, selling,
 // the best of it, new niches and retired ones.
@@ -4042,7 +4047,7 @@ function frameClick(e) {
 
 const QA = {
   kit: ['/api/shop/tiktok/make', 'Make a new TikTok kit now? It draws up to five AI pictures (about $0.20).', 'Making a kit - about a minute'],
-  scan: ['/api/scout/scan', 'Run a market scan on Etsy now? No AI, nothing to pay.', 'Scan started'],
+  scan: ['/api/scout/scan', 'Find new ideas now? Scout scans Etsy, then writes ideas from what is selling - your Claude plan, no money.', 'Started - new ideas appear in Scout\'s house in a few minutes'],
   find: ['/api/paul/find', "Start Paul's next cycle now? It runs on your Claude plan.", "Paul's cycle started"],
 };
 async function quickAction(btn) {
@@ -4056,7 +4061,7 @@ async function quickAction(btn) {
   } catch { btn.textContent = '✕ the Deck could not be reached'; }
   setTimeout(() => { btn.disabled = false; renderQA(); }, 6000);
 }
-const QA_LABEL = { kit: '＋ Make a TikTok kit', scan: '🔭 Run a market scan', find: '🧭 Find Paul prospects' };
+const QA_LABEL = { kit: '＋ Make a TikTok kit', scan: '💡 Find new Scout ideas', find: '🧭 Find Paul prospects' };
 function renderQA() { document.querySelectorAll('[data-qa]').forEach(b => { if (!b.disabled) b.textContent = QA_LABEL[b.dataset.qa]; }); }
 
 function drawer(cls) {

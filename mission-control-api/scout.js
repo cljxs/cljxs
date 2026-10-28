@@ -52,16 +52,19 @@ function readFocus() {
   try { return fs.readFileSync(FOCUS, 'utf8').trim() || null; } catch { return null; }
 }
 
-// THE SCAN BUTTON (owner, 2026-10-16: "add a run scan option inside scouts
-// house"). It starts the unit the 06:30 timer starts - scout-niches.service,
-// niche-scan.py run: no model, the same Etsy budget and the same hour's
-// limit, and systemd never runs it twice at once. The house reads back
-// whether it is running and when a scan last landed in state/scans/.
-const SCAN_UNIT = 'scout-niches.service';
+// THE IDEAS BUTTON. First (owner, 2026-10-16: "add a run scan option inside
+// scouts house") it started scout-niches.service, the 06:30 scan - which
+// measures markets and writes no ideas, so pressing it "did nothing" (owner,
+// 2026-10-28: "I thought the run market scan was a get ideas now button").
+// It now starts scout-ideas-now.service: that scan, then the 08:00 idea run,
+// each the timer's own command. Never while any of the three is running.
+const IDEAS_UNIT = 'scout-ideas-now.service';
+const UNITS = [IDEAS_UNIT, 'scout-niches.service', 'scout-cycle.service'];
 const SCANS = path.join(AGENTS_DIR, 'scout', 'state', 'scans');
-// What the last run did, written by niche-scan.py (owner, 2026-10-28: a scan
-// "returned no results" - what it had done was only in a log).
+// What the last scan did, written by niche-scan.py, and Scout's own line from
+// its last idea run (scout-cycle.sh writes it, held runs included).
 const LAST = path.join(AGENTS_DIR, 'scout', 'state', 'last-scan.json');
+const LAST_RUN = path.join(AGENTS_DIR, 'scout', 'state', 'last-run.txt');
 
 function systemctl(args) {
   return new Promise(resolve => execFile('systemctl', args, { timeout: 20000 },
@@ -79,11 +82,16 @@ function lastScan() {
 }
 
 async function scanState() {
-  const r = await systemctl(['is-active', SCAN_UNIT]);
   // "activating" is a oneshot at work; anything else is not running.
-  let result = null;
+  const busy = [];
+  for (const u of UNITS) if ((await systemctl(['is-active', u])).out === 'activating') busy.push(u);
+  let result = null, scout = null;
   try { result = JSON.parse(fs.readFileSync(LAST, 'utf8')); } catch { /* not run since this existed */ }
-  return { running: r.out === 'activating', unit: SCAN_UNIT, last_scan_utc: lastScan(), result };
+  try {
+    const st = fs.statSync(LAST_RUN);
+    scout = { line: fs.readFileSync(LAST_RUN, 'utf8').trim().slice(0, 400), at: st.mtime.toISOString() };
+  } catch { /* Scout has not run */ }
+  return { running: busy.length > 0, busy, unit: IDEAS_UNIT, last_scan_utc: lastScan(), result, scout };
 }
 
 function register(app, port) {
@@ -91,8 +99,8 @@ function register(app, port) {
 
   app.post('/api/scout/scan', async (req, res) => {
     const now = await scanState();
-    if (now.running) return res.status(409).json(Object.assign({ error: 'a scan is already running' }, now));
-    const r = await systemctl(['start', '--no-block', SCAN_UNIT]);
+    if (now.running) return res.status(409).json(Object.assign({ error: 'Scout is already scanning or writing ideas' }, now));
+    const r = await systemctl(['start', '--no-block', IDEAS_UNIT]);
     if (!r.ok) return res.status(500).json({ error: `could not start the scan: ${r.err || 'systemctl failed'}` });
     res.status(202).json(Object.assign({ started: true }, await scanState()));
   });
