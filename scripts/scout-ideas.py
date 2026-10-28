@@ -29,6 +29,7 @@ import functools
 import importlib.util
 import io
 import json
+import math
 import re
 import os
 import sys
@@ -229,11 +230,12 @@ def proposable():
             if problem or not (best or {}).get("score"):
                 continue
             out.append((phrase, best))
-    # Most money first. What Scout reads first is what it proposes into, and
-    # by count of sales alone the cheapest product always won: on 2026-10-08
-    # every phrase in the brief had 10 of 10 top listings selling, reviews
-    # decided the order, and 24 of the top 25 were stickers and decals.
-    out.sort(key=lambda pr: (-sales_value(pr[1]), -(pr[1].get("selling") or 0)))
+    # Best opening first: where a new shop can be found, not where the most
+    # money already goes (owner, 2026-10-28: "maximize traffic"). Ranked by
+    # money, Scout proposed into the biggest, most crowded markets, and the
+    # shop's 35 listings averaged two views each. The mix across products is
+    # by_product's and the per-run cap's, as before.
+    out.sort(key=lambda pr: (-opening(pr[0], pr[1]), -(pr[1].get("selling") or 0)))
     return out
 
 
@@ -244,11 +246,111 @@ PER_PRODUCT = 3
 MAX_PER_PRODUCT = 2
 
 
-def sales_value(row):
-    """Reviews x the typical price: dollars of sales the top listings were
-    reviewed for in the window. A floor, like the reviews it is made of -
-    but it weighs a $35 sweatshirt sale as more than a $4 sticker sale."""
-    return round((row.get("reviews") or 0) * (row.get("price") or 0))
+# THE OPENING (owner, 2026-10-28). How likely a new shop is to be found in a
+# market and to sell there, from numbers market-scan.py already measured, on
+# a 0-10ish scale:
+#
+#   selling    the share of its top listings with a review in the last year
+#   demand     log of those reviews - purchases, a floor. A log, because raw
+#              counts let the biggest market win whatever else is true:
+#              "funny dad shirt" (377 reviews, 300,000 listings, nine of ten
+#              top spots held by big shops) out-ranked "dad joke fishing
+#              shirt" (40 reviews, 6,000 listings, page one open)
+#   crowd      log10 of the competing listings, as market-scan's own score has it
+#   held       the share of those top listings with ESTABLISHED reviews or more
+#              ever - shops years ahead; scans from before 2026-10-28 do not
+#              say, and an unknown is not counted against a market
+#   specific   a phrase of three words or more is what most buyers type, and
+#              where a small shop can reach page one
+HELD_WEIGHT = 0.6
+LONG_TAIL_WORDS = 3
+LONG_TAIL_BONUS = 1.25
+
+
+def opening(phrase, row):
+    demand, n = row.get("reviews") or 0, row.get("sales_n") or 0
+    if not demand or not n:
+        return 0.0
+    score = 10 * (row.get("selling") or 0) / n * math.log1p(demand) / math.log10(max(row.get("supply") or 10, 10))
+    held = row.get("established")
+    if isinstance(held, int):
+        score *= 1 - HELD_WEIGHT * min(held, n) / n
+    if len(str(phrase or "").split()) >= LONG_TAIL_WORDS:
+        score *= LONG_TAIL_BONUS
+    return round(score, 1)
+
+
+def opening_line(phrase, row):
+    """What the opening is made of, said plainly for the brief and the owner."""
+    held, n = row.get("established"), row.get("sales_n")
+    bits = [f"opening {opening(phrase, row):g}"]
+    if isinstance(held, int) and n:
+        bits.append(f"{held} of top {n} held by shops with {ESTABLISHED_REVIEWS}+ reviews")
+    if len(str(phrase or "").split()) >= LONG_TAIL_WORDS:
+        bits.append("specific phrase")
+    return "; ".join(bits)
+
+
+ESTABLISHED_REVIEWS = 50      # market-scan.py's, restated only for the words above
+
+
+# YOUR OWN SHOP (owner, 2026-10-28). Scout measured other people's listings
+# and never looked at ours. The live listings, from store-report.py's latest
+# snapshot: how many of each product and design style, and their views. A
+# product or style that is already a big share of the shop is HELD - more of
+# it only adds a door beside one that is already there; a different product
+# or design is a new search the shop can be found in. 20 of the 35 listings
+# on 2026-10-27 were pattern totes.
+HELD_SHARE = 0.4              # of the live listings
+HELD_MIN = 6                  # listings, before a share means anything
+# A design style, read from an idea's or a listing's own words. One idea of
+# a style a run, and none of a style that is held.
+STYLES = {
+    "pattern": re.compile(r"\b(pattern|all[- ]?over|repeat|seamless|plaid|gingham|checker\w*|"
+                          r"patchwork|colorblock|geometric|stripes?)\b", re.I),
+}
+
+
+def style_of(text):
+    return next((name for name, rx in STYLES.items() if rx.search(str(text or ""))), None)
+
+
+@functools.lru_cache(maxsize=1)
+def shop():
+    """{"listings", "views", "kinds": {kind: {n, views, favs}}, "styles": {style: n},
+    "held": {kind or style: why}} from the latest store snapshot, or None."""
+    try:
+        sr = _module("store_report", "store-report.py")
+        snaps = sr.snapshots()
+    except Exception:
+        return None
+    rows = (snaps[-1].get("listings") if snaps else None) or []
+    if not rows:
+        return None
+    kinds, styles = {}, {}
+    for r in rows:
+        title = str(r.get("title") or "")
+        word = product_word_of(title)
+        kind = product_kind(emily_key(word) or word) if word else "other"
+        k = kinds.setdefault(kind, {"n": 0, "views": 0, "favs": 0})
+        k["n"] += 1
+        k["views"] += r.get("views") or 0
+        k["favs"] += r.get("favs") or 0
+        st = style_of(title)
+        if st:
+            styles[st] = styles.get(st, 0) + 1
+    total = len(rows)
+    held = {}
+    for name, n in [(k, v["n"]) for k, v in kinds.items()] + list(styles.items()):
+        if name != "other" and n >= HELD_MIN and n >= HELD_SHARE * total:
+            held[name] = f"{n} of the shop's {total} live listings already are"
+    return {"listings": total, "views": sum(r.get("views") or 0 for r in rows),
+            "day": snaps[-1].get("day"), "kinds": kinds, "styles": styles, "held": held}
+
+
+def held():
+    """{kind or style: why} the shop already has enough of - {} when unknown."""
+    return (shop() or {}).get("held") or {}
 
 
 @functools.lru_cache(maxsize=None)
@@ -289,13 +391,13 @@ def product_kind(product):
 
 
 def by_product(rows):
-    """[(product, [(phrase, row), ...])] - each product's phrases, the ones
-    no idea has used yet first, then by money; products by their best."""
+    """[(product, [(phrase, row), ...])] - each product's phrases, products
+    by their best opening."""
     groups = {}
     for phrase, row in rows:
         key = product_of_phrase(phrase)
         groups.setdefault(product_kind(key) if key else "any product", []).append((phrase, row))
-    return sorted(groups.items(), key=lambda g: -max(sales_value(r) for _p, r in g[1]))
+    return sorted(groups.items(), key=lambda g: -max(opening(p, r) for p, r in g[1]))
 
 
 def emily_key(product):
@@ -712,7 +814,8 @@ def cmd_intake(_argv):
     # At most MAX_PER_PRODUCT ideas of one product a run, when there is a
     # measured market for another one. Asked of the brief's own grouping,
     # once, and only when the cap is about to bite.
-    per_product, kinds = {}, None
+    per_product, kinds, per_style = {}, None, {}
+    hold = held()
     for where, raw in lines:
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -747,6 +850,30 @@ def cmd_intake(_argv):
                 continue
         angle = parts[3] if len(parts) > 3 else ""
         brief = parts[4] if len(parts) > 4 else ""
+        # The shop already has plenty of this product - when there is a
+        # measured market for one it has less of. Never under a focus: a
+        # focus is the owner choosing the product.
+        if not want and kind in hold:
+            if kinds is None:
+                kinds = {k for k, _rows in by_product(proposable())}
+            if kinds - set(hold):
+                bad.append((n, title or line[:40],
+                            f"the shop has enough {kind} for now - {hold[kind]}. A different "
+                            f"product is a new search the shop can be found in. Propose another "
+                            f"product from the brief."))
+                continue
+        # One design of a style a run, and none of a style the shop is full of.
+        style = style_of(f"{title} {angle} {brief}")
+        if style and style in hold:
+            bad.append((n, title or line[:40],
+                        f"a {style} design - {hold[style]} {style} designs. Propose a "
+                        f"different kind of design: lettering, a character, an illustration."))
+            continue
+        if style and per_style.get(style, 0) >= 1:
+            bad.append((n, title or line[:40],
+                        f"already one {style} design this run - one of a style a run, so the "
+                        f"shop gets different kinds of design."))
+            continue
         argv = ["--phrase", phrase, "--title", title, "--product", product]
         if angle:
             argv += ["--angle", angle]
@@ -758,6 +885,8 @@ def cmd_intake(_argv):
         if code == 0:
             filed += 1
             per_product[kind] = per_product.get(kind, 0) + 1
+            if style:
+                per_style[style] = per_style.get(style, 0) + 1
             print(f"  + {n}: {title}")
         else:
             bad.append((n, title, buf.getvalue().strip().splitlines()[0]
@@ -1017,23 +1146,44 @@ def cmd_brief(_argv):
     if have:
         print(f"- products Emily can make (anything else is refused): {', '.join(have)}")
     groups = by_product(proposable())
+    hold = held()
+    sh = shop()
+    if sh:
+        # The owner's own shop, from store-report.py's latest read of Etsy.
+        print(f"- YOUR SHOP (Etsy, {sh['day']}): {sh['listings']} live listings, {sh['views']} views in all.")
+        for kind, k in sorted(sh["kinds"].items(), key=lambda kv: -kv[1]["n"]):
+            print(f"    {kind}: {k['n']} listing{'s' if k['n'] != 1 else ''}, "
+                  f"{k['views'] / k['n']:.1f} views each, {k['favs']} favourite{'s' if k['favs'] != 1 else ''}")
+        for name, why in hold.items():
+            print(f"  HELD: {name} - {why}. Code refuses more of it while other markets are open.")
     print("- measured phrases you may use" + (f" ({want} only)" if want else "")
           + f", fresh and above zero - the best {PER_PRODUCT} for each product:")
     for product, rows in groups:
-        rows = sorted(rows, key=lambda pr: (bool(used.get(pr[0].lower())), -sales_value(pr[1])))
-        print(f"  {product.upper()} ({len(rows)} phrase{'s' if len(rows) != 1 else ''} measured):")
+        rows = sorted(rows, key=lambda pr: (bool(used.get(pr[0].lower())), -opening(pr[0], pr[1])))
+        print(f"  {product.upper()} ({len(rows)} phrase{'s' if len(rows) != 1 else ''} measured)"
+              + (" - HELD, see above" if product in hold and not want else "") + ":")
         for phrase, row in rows[:PER_PRODUCT]:
             have = used.get(phrase.lower())
             tail = f"  - already has: {'; '.join(have)[:90]}" if have else ""
-            price = row.get("price")
-            money = (f"; x ${price:,.2f} = ${sales_value(row):,} of sales" if price else "")
             # The product to propose it as, by its catalogue name - the name is
             # what tells Emily printed or stitched, all the way to the draft.
             key = product_of_phrase(phrase)
             as_ = f"  -> --product {key}" if key else ""
-            print(f"    {phrase}  ({row.get('supply') or 0:,} listings; {sales_line(row)}{money}){as_}{tail}")
-    print("- Most money first: reviews x the typical price. 'sold' counts top listings with a\n"
-          "  review in the window - a review is a purchase, so it is a floor on sales, never a forecast.")
+            print(f"    {phrase}  ({row.get('supply') or 0:,} listings; {sales_line(row)}; "
+                  f"{opening_line(phrase, row)}){as_}{tail}")
+            # How it is found: the phrase is what a shopper types, and Emily's
+            # title and tags must carry it (emily-listing.py checks).
+            tags = [t for t in (row.get("tags") or []) if t.lower() != phrase.lower()][:6]
+            if tags:
+                print(f"        top sellers tag it: {', '.join(tags)}")
+    print("- Best opening first: sales per decade of competition, less when page one is held by\n"
+          "  shops with years of reviews, more for a specific phrase of three words or more -\n"
+          "  where a new shop can be seen. 'sold' counts top listings with a review in the window;\n"
+          "  a review is a purchase, so it is a floor on sales, never a forecast.")
+    print("- The phrase is the search the idea is for: Emily's title starts with it and it is one\n"
+          "  of her tags. Say in the angle who types it and what they want that page one lacks -\n"
+          "  from the tags above, never from a particular listing.")
+    print("- One design of a style a run (a pattern, say), and none of a HELD style.")
     if len(groups) > 1:
         print(f"- Spread the run across products. Code files at most {MAX_PER_PRODUCT} ideas of one "
               f"product a run;\n  the rest of that product is refused.")

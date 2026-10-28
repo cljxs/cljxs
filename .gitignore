@@ -97,6 +97,7 @@ agents/scout/state/last-run.txt
 # every morning by niche-scan.py.
 agents/scout/state/scans/
 agents/scout/state/niches.json
+agents/scout/state/last-scan.json
 agents/scout/state/niches.tmp
 agents/scout/state/blank-gaps.json
 agents/emily/state/printify-blueprints.json

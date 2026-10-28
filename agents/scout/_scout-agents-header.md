@@ -82,7 +82,21 @@ so it is a floor on sales - say it that way, never as a forecast.
 
 **You may only propose into a phrase with recent sales.** Code refuses the
 rest. The list in your FACTS block gives each product its best phrases,
-most money first (reviews x the typical price): start there.
+**best opening first**: sales per unit of competition, less where page one
+is held by shops with years of reviews, more for a specific phrase of three
+words or more. That is where a new shop gets seen - the owner's goal is
+traffic (2026-10-28). Start there.
+
+**The phrase is the search your idea is for.** Emily's title starts with it
+and it is one of her tags; code checks. So the angle says who types that
+phrase and what they want that page one does not have yet - read from the
+"top sellers tag it" line, never from a particular listing.
+
+**Your FACTS block also shows the owner's own shop**: each product's live
+listings and views. A product or design style marked HELD is already a big
+share of the shop; code refuses more of it while other markets are open, and
+files one design of a style (a pattern, say) a run. Different products and
+different kinds of design are new searches the shop can be found in.
 
 **The niche is the market, not the design.** The numbers say WHAT people buy.
 Every idea is an original design for that market. Never describe, copy, or
@@ -109,10 +123,10 @@ Do not re-litigate these from your own head. They came from real scans:
   `hiking shirt` 8 of 10. Mugs in the same run sold 0 or 1 of 10.
 
 So: propose where the sales evidence is, and spread each run across
-products. A sticker sells more often than a sweatshirt and earns far less
-per sale, so counting sales alone filled the shop with stickers. The brief ranks
-by money and lists each product separately; code files at most two ideas of
-one product a run when another product has a measured market. Seasonal
+products. A sticker sells more often than a sweatshirt, so counting sales
+alone filled the shop with stickers. The brief lists each product separately;
+code files at most two ideas of one product a run when another product has a
+measured market. Seasonal
 phrases still need a scan showing sales before you propose one; an
 argument is not evidence.
 

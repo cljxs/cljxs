@@ -59,6 +59,9 @@ function readFocus() {
 // whether it is running and when a scan last landed in state/scans/.
 const SCAN_UNIT = 'scout-niches.service';
 const SCANS = path.join(AGENTS_DIR, 'scout', 'state', 'scans');
+// What the last run did, written by niche-scan.py (owner, 2026-10-28: a scan
+// "returned no results" - what it had done was only in a log).
+const LAST = path.join(AGENTS_DIR, 'scout', 'state', 'last-scan.json');
 
 function systemctl(args) {
   return new Promise(resolve => execFile('systemctl', args, { timeout: 20000 },
@@ -78,7 +81,9 @@ function lastScan() {
 async function scanState() {
   const r = await systemctl(['is-active', SCAN_UNIT]);
   // "activating" is a oneshot at work; anything else is not running.
-  return { running: r.out === 'activating', unit: SCAN_UNIT, last_scan_utc: lastScan() };
+  let result = null;
+  try { result = JSON.parse(fs.readFileSync(LAST, 'utf8')); } catch { /* not run since this existed */ }
+  return { running: r.out === 'activating', unit: SCAN_UNIT, last_scan_utc: lastScan(), result };
 }
 
 function register(app, port) {

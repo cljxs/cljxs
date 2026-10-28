@@ -2776,8 +2776,22 @@ async function loadScoutScan(started) {
     ? `<button class="shopbtn" disabled>⏳ Scanning Etsy now - this takes a few minutes, up to an hour</button>
        <div class="muted">Last scan landed ${esc(last)}. New niches and ideas show up after it finishes.</div>`
     : `<button class="shopbtn" data-busy="Scanning Etsy - about a minute" onclick="runScoutScan(this)">🔭 Run a market scan now</button>
-       <div class="muted">Last scan ${esc(last)} · it also runs every morning at 6:30 Central · no AI, nothing to pay${started ? ' · <b>finished</b>' : ''}</div>`;
+       <div class="muted">Last scan ${esc(last)} · it also runs every morning at 6:30 Central · no AI, nothing to pay${started ? ' · <b>finished</b>' : ''}</div>
+       ${scanResult(s.result)}`;
   if (s.running) scanPoll = setTimeout(() => loadScoutScan(true), 15000);
+}
+// What the last scan found, as niche-scan.py recorded it: measured, selling,
+// the best of it, new niches and retired ones.
+function scanResult(r) {
+  if (!r || !Array.isArray(r.scanned)) return '';
+  const ok = r.scanned.filter(x => !x.failed), sold = ok.filter(x => x.selling_phrases > 0);
+  const best = sold.map(x => x.best).filter(Boolean).sort((a, b) => (b.sold - a.sold) || (b.reviews - a.reviews))[0];
+  const bits = [`measured ${ok.length} niche${ok.length === 1 ? '' : 's'}, ${sold.length} selling`];
+  if (best) bits.push(`best: “${esc(best.phrase)}”, ${best.sold} of top ${best.of} sold`);
+  bits.push(r.new_niches && r.new_niches.length ? `${r.new_niches.length} new niche${r.new_niches.length === 1 ? '' : 's'}: ${r.new_niches.map(esc).join(', ')}` : 'no new niches');
+  if (r.retired && r.retired.length) bits.push(`retired (nothing selling twice): ${r.retired.map(esc).join(', ')}`);
+  if (r.scanned.length > ok.length) bits.push(`${r.scanned.length - ok.length} failed`);
+  return `<div class="muted" style="margin-top:4px">Last run: ${bits.join(' · ')} · ${r.niches} of ${r.max_niches} niches${r.note ? ` · ${esc(r.note)}` : ''}</div>`;
 }
 async function runScoutScan(btn) {
   btn.disabled = true;

@@ -122,6 +122,45 @@ def stitch_problems(listing):
     return []
 
 
+# THE SEARCH THIS DESIGN IS FOR (owner, 2026-10-28: traffic). Scout's idea
+# names a measured phrase - what shoppers type - saved with the build as
+# evidence.json. A listing that never says it cannot be found for it; the
+# shop's first 35 listings averaged two views each. So the title starts with
+# it and it is a tag. What "starts" and "a tag" mean is store-report.py's
+# audit - where search shows a title, plurals as one search - imported.
+def _audit():
+    spec = importlib.util.spec_from_file_location("store_report_listing", SCRIPTS / "store-report.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def target_of(d):
+    """The measured phrase this build is for, or None (a build with no evidence)."""
+    try:
+        phrase = json.loads((d / "evidence.json").read_text()).get("phrase")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return " ".join(str(phrase or "").lower().split()) or None
+
+
+def search_problems(d, listing):
+    phrase = target_of(d)
+    if not phrase:
+        return []
+    sr = _audit()
+    norm = lambda text: " ".join(sr._stem(w) for w in sr._words(text))
+    out = []
+    lead = str(listing.get("title") or "")[:max(sr.TITLE_SEEN, len(phrase) + 10)]
+    if norm(phrase) not in norm(lead):
+        out.append(f"the title must start with {phrase!r} - the search this design is for, within "
+                   f"the first {sr.TITLE_SEEN} characters, which is what Etsy search shows. "
+                   f"For example: \"{sr._cap(phrase)} | ...\"")
+    if len(phrase) <= sr.TAG_MAX and not any(norm(t) == norm(phrase) for t in listing.get("tags") or []):
+        out.append(f"{phrase!r} must be one of the tags - it is the search this design is for")
+    return out
+
+
 def cmd_listing(a):
     d = build_dir(a.build_dir)
     if d is None:
@@ -145,7 +184,7 @@ def cmd_listing(a):
 
     # Checked with the verifier's own function, before anything is written. A
     # file that exists and fails is worse than no file: it looks like work.
-    problems = ev.listing_problems(listing) + stitch_problems(listing)
+    problems = ev.listing_problems(listing) + stitch_problems(listing) + search_problems(d, listing)
     if problems:
         print("not written - this listing would fail the build:", file=sys.stderr)
         for p in problems:
@@ -158,6 +197,14 @@ def cmd_listing(a):
     print(f"  title       {listing['title']}")
     print(f"  product     {listing['product_type']}")
     print(f"  tags        {len(a.tag)}: {', '.join(a.tag)}")
+    # The shop's listing audit, as advice: the same words the owner's Fix
+    # listings tab would show for this listing once it is live.
+    try:
+        advice = _audit().audit_listing(listing)
+    except Exception:
+        advice = []
+    for kind, msg in advice:
+        print(f"  audit {kind.lower():<7}{msg}")
     return 0
 
 

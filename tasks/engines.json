@@ -38,7 +38,7 @@
     },
     "scout": {
       "engine": "claude",
-      "model": "haiku",
+      "model": "sonnet",
       "max_turns": 40
     },
     "emily": {

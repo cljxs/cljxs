@@ -97,6 +97,11 @@ LOOSE = 0.5                       # below this share of matching titles,
 SALES_DAYS = 365
 SALES_LISTINGS = 10
 SALES_PHRASES = 5
+# HOW HELD A MARKET IS (owner, 2026-10-28: Scout's ideas went where a new
+# shop is not seen). A top listing with this many reviews ever belongs to a
+# shop that has been selling it for years; a page one made of them is hard
+# to get onto. Counted from the same review calls the sales already make.
+ESTABLISHED_REVIEWS = 50
 
 
 def age_days(row, now=None):
@@ -384,7 +389,7 @@ def sales(key, ids, now=None, call=None):
     """
     call = call or ep.call
     since = int((now if now is not None else time.time()) - SALES_DAYS * 86400)
-    reviews = selling = asked = 0
+    reviews = selling = asked = established = 0
     sold = []
     for lid in ids or []:
         got = review_stats(key, lid, since, call)
@@ -394,12 +399,14 @@ def sales(key, ids, now=None, call=None):
         asked += 1
         reviews += n
         selling += n > 0
+        established += isinstance(got[1], int) and got[1] >= ESTABLISHED_REVIEWS
         if n > 0:
             sold.append(lid)
         time.sleep(0.25 if call is ep.call else 0)
     if not asked:
         return None
-    return {"reviews": reviews, "selling": selling, "sales_n": asked, "sold_ids": sold}
+    return {"reviews": reviews, "selling": selling, "sales_n": asked, "sold_ids": sold,
+            "established": established}
 
 
 def sales_check(key, phrase, call=None, now=None, by_favs=False):
@@ -767,6 +774,7 @@ def save_scan(seed, ranked, loose):
                   "tags": m.get("tags") or [],
                   **({"reviews": m["reviews"], "selling": m["selling"],
                       "sales_n": m["sales_n"], "sales_days": SALES_DAYS,
+                      "established": m.get("established"),
                       "blanks": [{k: b[k] for k in ("blank", "brand", "model", "attrs", "selling", "mentions")}
                                  for b in m.get("blanks") or []]}
                      if "sales_n" in m else {})}

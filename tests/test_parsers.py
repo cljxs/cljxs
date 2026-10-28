@@ -16991,7 +16991,8 @@ class AWellSellingNicheIsMeasuredInSales(unittest.TestCase):
             asked.append(path)
             return replies[int(path.split("/")[2])]
         got = self.ms.sales("k", [11, 12, 13, 14], now=now, call=call)
-        self.assertEqual(got, {"reviews": 6, "selling": 2, "sales_n": 3, "sold_ids": [11, 14]},
+        self.assertEqual(got, {"reviews": 6, "selling": 2, "sales_n": 3, "sold_ids": [11, 14],
+                               "established": 0},
                          "counted from the review dates; the failed call is not a zero")
         self.assertEqual(asked[0], "/listings/11/reviews?limit=100", "no min_created: it read 0 on the droplet")
         self.assertIsNone(self.ms.sales("k", [13], call=lambda p, k: (None, {}, "HTTP 500")))
@@ -17023,23 +17024,27 @@ class AWellSellingNicheIsMeasuredInSales(unittest.TestCase):
         self.assertIn("its sales were never measured", si.measured("frog sticker pack")[2])
         self.assertEqual([p for p, _ in si.proposable()], ["frog sticker"])
 
-    def test_the_brief_is_most_money_first_and_says_original(self):
+    def test_the_brief_is_best_opening_first_and_says_original(self):
         # 2026-10-08: every phrase had 10 of 10 selling, reviews decided the
-        # order, and the cheapest product filled the top 25. Money decides now.
+        # order, and the cheapest product filled the top 25 - which the
+        # per-product grouping and cap now prevent. Since 2026-10-28 the order
+        # is the opening (owner: traffic), where the share of top listings
+        # selling counts as well as how many reviews.
         self.scan("mug", [self.row("cat lover mug", selling=3, reviews=50),
                           self.row("teacher gift mug", selling=8, reviews=12),
                           self.row("nurse gift mug", selling=8, reviews=40)])
         self.scan("sticker", [dict(self.row("cat sticker", selling=10, reviews=600), price=4.0)])
         self.scan("sweatshirt", [dict(self.row("book sweatshirt", selling=10, reviews=227), price=38.0)])
         si = load("scout_ideas_brief", "scout-ideas.py")
-        self.assertEqual([p for p, _ in si.proposable()],
-                         ["book sweatshirt", "cat sticker", "cat lover mug", "nurse gift mug", "teacher gift mug"],
-                         "227 sales at $38 outrank 600 at $4")
+        order = [p for p, _ in si.proposable()]
+        self.assertEqual(order, sorted(order, key=lambda p: -si.opening(p, si.measured(p)[0])))
+        self.assertLess(order.index("nurse gift mug"), order.index("cat lover mug"),
+                        "8 of 10 selling with 40 reviews beats 3 of 10 with 50")
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             si.cmd_brief([])
         self.assertIn("nurse gift mug  (5,000 listings; 8 of top 10 sold in 90 days, 40 reviews; "
-                      "x $18.00 = $720 of sales)", out.getvalue())
+                      "opening ", out.getvalue())
         self.assertIn("never describe, copy or\n  imitate a particular listing", out.getvalue())
 
     def test_the_brief_gives_each_product_its_own_best(self):
@@ -17057,8 +17062,10 @@ class AWellSellingNicheIsMeasuredInSales(unittest.TestCase):
         self.assertIn("crow shirt", text, "the shirt was 16th by reviews and used to fall off the top")
         self.assertEqual(text.count("    sticker idea "), si.PER_PRODUCT)
         self.assertIn(f"at most {si.MAX_PER_PRODUCT} ideas of one product", text)
-        self.assertLess(text.index("TSHIRT ("), text.index("STICKER ("),
-                        "products by their best phrase: 200 x $25 beats 900 x $4")
+        # Products are ordered by their best opening since 2026-10-28 (traffic,
+        # not money); what this guards is that the shirt still reaches Scout.
+        self.assertLess(text.index("STICKER ("), text.index("TSHIRT ("),
+                        "products by their best opening: 900 reviews beat 200 at the same supply")
 
     def catalogue(self, *keys):
         cat = self.root / "agents/emily/state/printify-catalog.json"

@@ -68,7 +68,7 @@ websites), Clip (video clips), Stan, the Agent Room, Fury and the GM.
 ROUTING.md has a row for each.
 
 **Which engine wakes a model** is `tasks/engines.json`, read only by
-`scripts/wake.py`. **Scout and Emily run on Haiku on the owner's Claude plan**
+`scripts/wake.py`. **Scout runs on Sonnet (since 2026-10-28) and Emily on Haiku, on the owner's Claude plan**
 (`claude -p`; Scout up to 40 turns, Emily 60), so their thinking spends no
 OpenRouter money; if the plan refuses a wake before it starts, wake.py falls
 back to OpenClaw on OpenRouter. (The agents' READMEs still name older

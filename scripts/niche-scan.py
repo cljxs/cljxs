@@ -53,6 +53,10 @@ SCANS = STATE / "scans"
 # THE SIGNAL (owner, 2026-10-02): when the sellers who sell print on a blank
 # Emily is not set up for, say so, and say the closest thing Printify has.
 GAPS = STATE / "blank-gaps.json"
+# What the last run did, for the Deck under the scan button (owner,
+# 2026-10-28: "I recently ran a scan that returned no results" - the result
+# was only in a log nobody sees).
+LAST = STATE / "last-scan.json"
 BLUEPRINTS = ROOT / "agents" / "emily" / "state" / "printify-blueprints.json"
 BLUEPRINTS_DAYS = 7      # Printify's catalogue changes slowly; one read a week
 
@@ -60,6 +64,11 @@ RUN_N = 6                 # scans a morning: MAX_NICHES at 6/day is ~13 days, in
 FRESH_DAYS = 7            # a niche scanned this recently is not re-scanned
 MAX_NICHES = 80           # the list stops growing here; old ones keep refreshing
 DISCOVER_PER_RUN = 4      # new niches added from tags per run, at most
+# A niche whose scan showed no selling phrase this many times in a row is
+# retired: it stops being measured and frees its place under MAX_NICHES, so
+# discovery goes on finding new ones instead of the list going round in a
+# circle of the same 80. Kept in niches.json under "retired", never re-added.
+RETIRE_AFTER = 2
 
 # Evergreen, gift-driven niches on products Emily can make (emily-printify's
 # product words). Starting points, not conclusions: each is measured, and a
@@ -128,12 +137,13 @@ def scan_of(seed):
 
 
 def niches(d=None, now=None):
-    """[(seed, source, age_days or None)], oldest first, never-scanned first."""
+    """[(seed, source, age_days or None)], oldest first, never-scanned first.
+    Retired niches are not in it."""
     d = d or load()
     now = now or datetime.now(timezone.utc)
     seeds = dict.fromkeys(STARTER, "starter")
     seeds.update({k: v.get("source", "found") for k, v in d["niches"].items()})
-    out, seen = [], set()
+    out, seen = [], {same(r) for r in d.get("retired") or {}}
     for seed, source in seeds.items():
         # Plurals are one niche: 'cute cat stickers', 'cute cats sticker' and
         # 'cute cat sticker' were all added before same() existed. The first
@@ -173,6 +183,8 @@ def discover(d, now=None):
     who are making sales use for their own work. A tag with no product word
     takes its scan's product ("dog mom gift" in a mug scan -> "dog mom mug")."""
     known = {same(s) for s, _src, _age in niches(d, now)}
+    active = len(known)
+    known |= {same(r) for r in d.get("retired") or {}}      # never brought back
     added = []
     for f in sorted(SCANS.glob("*.json")) if SCANS.is_dir() else []:
         try:
@@ -191,7 +203,7 @@ def discover(d, now=None):
                                                     if product else None)
                 if not seed or same(seed) in known or blocked(seed):
                     continue
-                if len(known) >= MAX_NICHES or len(added) >= DISCOVER_PER_RUN:
+                if active + len(added) >= MAX_NICHES or len(added) >= DISCOVER_PER_RUN:
                     return added
                 known.add(same(seed))
                 d["niches"][seed] = {"source": f"tag on {row.get('phrase')}",
@@ -209,11 +221,47 @@ def scan(seed):
     return r.returncode, tail
 
 
+def selling_rows(doc):
+    """The phrases in a scan whose top listings sold, best first."""
+    rows = [r for r in (doc or {}).get("rows") or [] if r.get("selling")]
+    return sorted(rows, key=lambda r: (-(r.get("selling") or 0), -(r.get("reviews") or 0)))
+
+
+def judge(d, seed, now=None):
+    """After a scan: count a run of scans with nothing selling, and retire
+    the niche at RETIRE_AFTER. Returns True when it was retired."""
+    _when, doc = scan_of(seed)
+    if doc is None:
+        return False
+    dead = d.setdefault("dead", {})
+    if selling_rows(doc):
+        dead.pop(seed, None)
+        return False
+    dead[seed] = dead.get(seed, 0) + 1
+    if dead[seed] < RETIRE_AFTER:
+        return False
+    d.setdefault("retired", {})[seed] = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d")
+    d["niches"].pop(seed, None)
+    dead.pop(seed, None)
+    return True
+
+
 def cmd_run(a):
     d = load()
+    now = datetime.now(timezone.utc)
+    # New niches first, so a run can measure what it has just found.
+    added = discover(d, now)
+    for seed in added:
+        log(f"new niche from what sells: '{seed}' ({d['niches'][seed]['source']})")
     todo = due(d, a.n, force=a.force)
+    note = None
     if not todo:
-        log("every niche was scanned within the last week - nothing due")
+        # Nothing is a week old. A press of the button still measures
+        # something: the oldest niches, early, rather than nothing at all.
+        todo = due(d, a.n, force=True)
+        note = "every niche was measured within the last week - re-measured the oldest early"
+        log(note)
+    scanned, retired = [], []
     for seed in todo:
         log(f"scanning '{seed}'")
         code, tail = scan(seed)
@@ -221,10 +269,26 @@ def cmd_run(a):
             log(f"  {line.strip()}")
         if code:
             log(f"  '{seed}' FAILED (exit {code})")
-    added = discover(d)
-    for seed in added:
+            scanned.append({"niche": seed, "failed": True})
+            continue
+        _w, doc = scan_of(seed)
+        best = (selling_rows(doc) or [None])[0]
+        scanned.append({"niche": seed, "selling_phrases": len(selling_rows(doc)),
+                        "best": best and {"phrase": best.get("phrase"), "sold": best.get("selling"),
+                                          "of": best.get("sales_n"), "reviews": best.get("reviews")}})
+        if judge(d, seed, now):
+            retired.append(seed)
+            log(f"  retired '{seed}' - no selling phrase in {RETIRE_AFTER} scans in a row")
+    more = discover(d, now)
+    for seed in more:
         log(f"new niche from what sells: '{seed}' ({d['niches'][seed]['source']})")
     save(d)
+    LAST.parent.mkdir(parents=True, exist_ok=True)
+    LAST.write_text(json.dumps({
+        "finished_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "note": note,
+        "scanned": scanned, "new_niches": added + more, "retired": retired,
+        "niches": len(niches(d, now)), "max_niches": MAX_NICHES,
+    }, indent=1) + "\n")
     for g in gaps():
         for line in gap_lines(g):
             log(line)
