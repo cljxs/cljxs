@@ -114,9 +114,12 @@ method into Paul and merge its rules with his into **one rulebook**, trimmed
 to what a local business's site needs. Its checker is not run; its gates are
 rewritten in `paul.py` (`LOOK_JS` / `LOOK_SAYS` in the page, `code_rules` in
 the code) and tested on real pages. `agents/paul/hallmark/` holds what was
-taken whole (MIT): 19 themes, dealt three at a time when the owner gives no
-reference (`THEMES_FOR`, `deal_themes`), and its list of Wikimedia Commons
-photos. **Stock is Commons only**, through `paul.py stock find` / `stock get`
+taken whole (MIT): 11 full-colour themes, dealt three at a time when the owner
+gives no reference (`THEMES_FOR`, `deal_themes`; green ones for landscapers,
+`GREEN_THEMES`), and its list of Wikimedia Commons
+photos. The eight black-and-white, two-colour and toned-down themes were
+removed after Bear Creek's lawns came out grey (2026-10-29), and the `drained`
+rule refuses any photo shown out of its own colours. **Stock is Commons only**, through `paul.py stock find` / `stock get`
 (Unsplash's and Pexels' terms bar the scripts Paul fetched them with); code
 credits every photo on the page. Once per build, when every check passes, a
 **fresh review** asks a model that did not build it to read the screenshots

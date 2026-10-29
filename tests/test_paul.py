@@ -3466,9 +3466,11 @@ LOOK_BODY = ('<header><a class="brand" href="#top">Royal Edge</a><nav><a href="#
 @unittest.skipUnless(_a_browser(), "needs a headless Chrome")
 class OneRulebookInTheBrowser(unittest.TestCase):
 
-    def look(self, css="", body=LOOK_BODY, base=LOOK_CSS):
+    def look(self, css="", body=LOOK_BODY, base=LOOK_CSS, files=None):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
+            for name, data in (files or {}).items():
+                (d / name).write_bytes(data)
             (d / "style.css").write_text(base + css)
             (d / "index.html").write_text('<!doctype html><html><head><meta name="viewport" content="width=device-width">'
                                           '<link rel="stylesheet" href="style.css"></head><body>' + body + "</body></html>")
@@ -3528,6 +3530,30 @@ class OneRulebookInTheBrowser(unittest.TestCase):
         self.assertIn("on an iPad (820px)", got["wide"], "820px is where it sticks out")
         self.assertIn("Call (319) 427-5796", got["wrap"])
 
+    def test_a_photo_drained_of_its_colour_from_bear_creek(self):
+        # Formwork's black-and-white treatment turned a landscaper's lawns
+        # grey (2026-10-29). On the photo, on a box around it, or faded.
+        photo = {"lawn.png": _png(400, 300)}
+        body = LOOK_BODY.replace("</h1>", '</h1><figure class="shot"><img src="lawn.png" width="400" height="300" alt="A lawn"></figure>')
+        for css in ("img{filter:grayscale(1)}", "img{filter:grayscale(100%) contrast(1.1)}", ".shot{filter:saturate(.3)}",
+                    "img{filter:sepia(60%)}", "img{mix-blend-mode:luminosity}", "img{opacity:.4}",
+                    "img{filter:url(#duotone)}"):
+            got = self.look(css, body, files=photo)
+            self.assertEqual(set(got), {"drained"}, css)
+            self.assertIn('<img>', got["drained"], css)
+        bg = LOOK_BODY.replace("</h1>", '</h1><div class="hero-photo"></div>')
+        got = self.look(".hero-photo{height:300px;background:url(lawn.png) center/cover;filter:grayscale(1)}", bg, files=photo)
+        self.assertIn('<div class="hero-photo"> grayscale(1)', got["drained"])
+
+    def test_a_light_touch_and_a_scrim_keep_the_colour(self):
+        # The themes' own photo lines (sat=-12 at most) and a dark scrim
+        # beside the photo for type on it are not a drained photo.
+        photo = {"lawn.png": _png(400, 300)}
+        body = LOOK_BODY.replace("</h1>", '</h1><figure class="shot"><img src="lawn.png" width="400" height="300" alt="A lawn"></figure>')
+        for css in ("", "img{filter:saturate(.88) contrast(1.06)}", "img{filter:brightness(.92) saturate(1.1)}",
+                    ".shot{position:relative}.shot::after{content:'';position:absolute;inset:0;background:var(--ink);opacity:.5}"):
+            self.assertEqual(self.look(css, body, files=photo), {}, css)
+
     def test_the_quality_bar_passes_every_rule(self):
         # Its six labels in tracked capitals and its 640px drawing of a cup
         # behind the hero went (2026-10-26): the rulebook's first catch.
@@ -3576,17 +3602,40 @@ class AThemeIsDealtWhenThereIsNoReference(PaulCase):
         TheOwnerPicksPaulBuilds.seed(self, dict(prospect(kind="salon"), status="approved", decided="x"))
 
     def test_three_for_the_kind_none_used_lately(self):
-        for n, theme in enumerate(("loom", "sport", "darkroom")):
+        for n, theme in enumerate(("loom", "vellum", "spore")):
             paul.log_build({"day": f"2026-10-1{n}", "outcome": "built", "slug": f"s{n}", "name": "x", "theme": theme})
         for _ in range(20):
             got = paul.deal_themes("salon")
             self.assertEqual(len(set(got)), 3)
-            self.assertFalse({"loom", "sport", "darkroom"} & set(got), got)
-            self.assertTrue(set(got) <= {"brutal", "vellum", "overprint"} | set(paul.THEMES_FOR["other"]), got)
+            self.assertFalse({"loom", "vellum", "spore"} & set(got), got)
+            self.assertTrue(set(got) <= set(sum(paul.THEMES_FOR.values(), ())), got)
+            self.assertTrue({"terrazzo", "halftone"} <= set(got), "the kind's own come first")
         for kind, themes in paul.THEMES_FOR.items():
             for t in themes:
                 self.assertTrue((paul.HALLMARK / "themes" / f"{t}.md").is_file() and
                                 (paul.HALLMARK / "themes" / f"{t}.jpg").is_file(), t)
+
+    def test_a_landscaper_is_dealt_green_themes(self):
+        # Bear Creek Landscapes (2026-10-29) was a "trade" and was dealt
+        # Formwork: concrete and black-and-white photos of their lawns.
+        for _ in range(20):
+            got = paul.deal_themes("trade", "landscaping company Bear Creek Landscapes")
+            self.assertEqual(len(set(got)), 3)
+            self.assertTrue(set(got) <= set(paul.GREEN_THEMES), got)
+        for what in ("Lawn care", "tree service", "Cedar Valley Sod", "garden centre", "Mowing and yard work", "florist"):
+            self.assertTrue(paul.GREEN.search(what), what)
+        for what in ("bakery Main Street Bakery", "barber Royal Edge", "plumber Treeline Plumbing", "plantation shutters"):
+            self.assertFalse(paul.GREEN.search(what), what)
+
+    def test_every_dealt_theme_shows_photos_in_colour(self):
+        # The eight that drained or toned photos were removed (2026-10-29);
+        # a theme's photo line is at most a light touch.
+        for t in set(sum(paul.THEMES_FOR.values(), ())) | set(paul.GREEN_THEMES):
+            text = (paul.HALLMARK / "themes" / f"{t}.md").read_text()
+            line = re.search(r"^photo: (.*)$", text, re.M).group(1)
+            self.assertFalse(re.search(r"mono|duotone|gray|grey|sepia|muted|bw\b", line), (t, line))
+            sat = re.search(r"sat=(-?\d+)", line)
+            self.assertGreaterEqual(int(sat.group(1)) if sat else 0, -15, (t, line))
 
     def test_the_brief_deals_once_and_check_holds_paul_to_it(self):
         _rc, facts = self.run_quiet(paul.cmd_brief, self.args(dry=True), get=offline)
@@ -3664,6 +3713,11 @@ class AFreshReviewOncePerBuild(PaulCase):
         paul.write_json(paul.A("work", "prospect.json"), {"owner_notes": "No video. A row of photos under About us."})
         self.run_quiet(paul.cmd_check, self.args(ask=self.ask("ship")), get=offline)
         self.assertIn("The owner asked: No video. A row of photos under About us.", self.asked[0][1])
+
+    def test_the_reviewer_is_asked_about_colour(self):
+        # Bear Creek's grey page passed every measured check (2026-10-29).
+        self.run_quiet(paul.cmd_check, self.args(ask=self.ask("ship")), get=offline)
+        self.assertIn("carry the business's own colours, or does it look washed out", self.asked[0][1])
 
     def test_it_reaches_the_report(self):
         self.assertEqual(paul.review_lines({"first": "fix", "review": "fix\n1. a thing"}),

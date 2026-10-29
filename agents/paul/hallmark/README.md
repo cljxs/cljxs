@@ -3,9 +3,12 @@
 Taken from [Hallmark](https://github.com/Nutlope/hallmark) (MIT, see `LICENSE`),
 commit `7ec868225c6caa040558c321ee0fefa0e73f83a8`, on 2026-10-26, for Paul.
 
-- `themes/` - 19 of its 48 themes, the ones that suit a local business and
-  load their faces from Google Fonts (Atelier and Kiln use Fontshare and were
-  left out). Each is a material - paper, ink, type, surfaces - with a picture
+- `themes/` - 11 of its 48 themes: the full-colour ones that suit a local
+  business and load their faces from Google Fonts (Atelier and Kiln use
+  Fontshare and were left out). Blueprint, Broadside, Brutal, Darkroom,
+  Formwork, Ink, Overprint and Sport were taken at first and removed on
+  2026-10-29: they show photos in black and white, two colours or with the
+  colour turned down, and a local business's photos keep their own colours. Each is a material - paper, ink, type, surfaces - with a picture
   of a finished page. Untouched; where a theme names Hallmark's own files
   (the stamp, `texture.md`, `layout.md`) Paul has none of them and goes by
   his own rules. `paul.py brief` deals three when the owner gave no reference.

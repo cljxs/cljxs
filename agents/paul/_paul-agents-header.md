@@ -209,14 +209,21 @@ look alike, and neither may look like the last site you built.
 
 **A theme, when the owner gave no reference** (FACTS `THEMES`). Code deals
 three of Hallmark's themes (github.com/Nutlope/hallmark, in `hallmark/`):
-each is a material - paper, ink, type, rules, surfaces, how photos are
-treated - with a picture of a finished page, never a layout. Read the three
+each is a material - paper, ink, type, rules, surfaces - with a picture of a
+finished page, never a layout. Landscapers, lawn and garden businesses are
+dealt the green and natural ones. Read the three
 `hallmark/themes/<name>.md` files, look at their pictures, pick the one that
 fits this business and set `"theme"` in target.json; code refuses any other.
 Build in its material: its faces (Google Fonts), its surfaces and texture,
 its colourway nearest the business's own colours, or its accent swapped for
 theirs. Where a theme names Hallmark's own files (the stamp, `texture.md`,
 `layout.md`) you have none of them: these rules are the ones that hold.
+**Their photos are always in their own colours** (Bear Creek, 2026-10-29: a
+black-and-white theme drained a landscaper's green lawns to grey). No
+grayscale, sepia, desaturating or SVG filter, no blend mode, no fading on a
+photo - check refuses it. A theme's photo line is at most a light touch;
+the page's colours come from the business - its signs, its trucks, its
+work - never from a theme's mood.
 With the owner's reference, the reference is the look and no theme is dealt.
 
 **Build around what the visitor came to do** (Hallmark's anatomy). Salons

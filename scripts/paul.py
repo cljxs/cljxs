@@ -1023,21 +1023,32 @@ KIND_WORDS = {"food": "a restaurant, cafe, bakery, coffee shop or food truck",
 # type, surfaces - never a layout. With no reference from the owner, code
 # deals three for the kind of business, none used in the last three builds
 # (Hallmark's deal; owner, 2026-10-26), and Paul builds in the one he picks.
+# Only themes that show photos in their own colours (owner, 2026-10-29, of
+# Bear Creek Landscapes built in Formwork: "why did it make this website so
+# colorless and bland?" - Formwork prints every photo black and white).
+# Formwork, Darkroom, Overprint, Blueprint, Broadside, Brutal, Sport (mono or
+# duotone photos) and Ink (colour turned down) were taken out.
 THEMES_FOR = {
-    "trade": ("formwork", "furrow", "blueprint", "terrazzo", "brutal", "ink"),
-    "food": ("vellum", "garden", "hedgerow", "solstice", "spore", "squeeze", "halftone", "overprint"),
-    "salon": ("loom", "sport", "darkroom", "brutal", "vellum", "overprint"),
+    "trade": ("furrow", "terrazzo", "halftone", "sticker"),
+    "food": ("vellum", "garden", "hedgerow", "solstice", "spore", "squeeze", "halftone"),
+    "salon": ("loom", "vellum", "spore", "terrazzo", "halftone"),
     "retail": ("vellum", "loom", "sticker", "squeeze", "terrazzo", "garden", "halftone"),
-    "other": ("ink", "broadside", "darkroom", "formwork", "loom", "garden"),
+    "other": ("terrazzo", "loom", "garden", "sticker", "furrow"),
 }
+# A business that sells green - lawns, gardens, trees - gets green themes,
+# whatever its kind: Bear Creek was a "trade" and was dealt concrete.
+GREEN = re.compile(r"\b(landscap|lawn|garden|trees?\b|nurser|sod\b|mow|yards?\b|turf|florist|flower|greenhouse|plants?\b)", re.I)
+GREEN_THEMES = ("garden", "hedgerow", "furrow", "solstice")
 DEAL = 3
 
 
-def deal_themes(kind, rand=None):
-    """Three themes for this kind, none of the last three builds' own."""
+def deal_themes(kind, what="", rand=None):
+    """Three themes for this kind (green ones for a business whose name or
+    category is green), none of the last three builds' own."""
     rand = rand or secrets.SystemRandom()
     recent = {b.get("theme") for b in [b for b in builds() if b.get("outcome") == "built"][-3:]}
-    mine = [t for t in THEMES_FOR.get(kind) or () if t not in recent]
+    mine = [t for t in (GREEN_THEMES if GREEN.search(str(what or "")) else THEMES_FOR.get(kind) or ())
+            if t not in recent]
     rest = [t for t in dict.fromkeys(t for ts in THEMES_FOR.values() for t in ts) if t not in recent and t not in mine]
     pick = rand.sample(mine, min(DEAL, len(mine)))
     return pick + rand.sample(rest, DEAL - len(pick))
@@ -1817,7 +1828,7 @@ DESC_JS = r"""function desc(e){var c=(e.getAttribute('class')||'').trim().split(
  return '<'+e.tagName.toLowerCase()+(e.id?' id="'+e.id+'"':'')+(c?' class="'+c+'"':'')+'>';}"""
 # Bump when a probe learns something new, so a site measured before is
 # measured again rather than passed from memory.
-PROBE_V = 6
+PROBE_V = 7
 # Why a sample photo's label was not found on it, as Paul is told.
 SAMPLE_WHY = {
     "none": "no element saying Sample has its middle inside the photo - a ::before/::after "
@@ -1932,6 +1943,21 @@ all.forEach(function(e){var t=own(e);if(!words(t)||!vis(e))return;var fs=parseFl
 all.forEach(function(e){if(!vis(e))return;var r=e.getBoundingClientRect();if(r.width<300||r.height<200)return;var s=getComputedStyle(e);
  if(/url\(/.test(s.backgroundImage)||!(/gradient/.test(s.backgroundImage)||s.backgroundColor!=='rgba(0, 0, 0, 0)'))return;
  if(txt(e)||e.querySelector('img,svg,video,canvas,picture'))return;add('empty',desc(e)+' '+Math.round(r.width)+'x'+Math.round(r.height));});
+// Bear Creek (2026-10-29): Formwork's black-and-white treatment drained a
+// landscaper's lawns to grey. A photo shows in its own colours: no grey,
+// sepia or desaturating filter on it or a box around it, no blend into the
+// page, not faded. Overlays beside a photo are fine; the photo itself is not touched.
+function drain(e,img){for(var a=e;a&&a!==document.documentElement;a=a.parentElement){var s=getComputedStyle(a),f=s.filter||'',m,re=/(grayscale|sepia|saturate)\(([\d.]*)(%?)\)/g;
+  if(/url\(/.test(f))return 'filter '+f.slice(0,40);
+  while((m=re.exec(f))){var v=m[2]===''?1:parseFloat(m[2])/(m[3]?100:1);if(m[1]==='saturate'?v<0.85:v>0.05)return m[0]+(a===e?'':' on '+desc(a));}}
+ var s0=getComputedStyle(e);if(img&&s0.mixBlendMode&&s0.mixBlendMode!=='normal')return 'mix-blend-mode:'+s0.mixBlendMode;
+ if(!img&&s0.backgroundBlendMode&&!/^normal/.test(s0.backgroundBlendMode))return 'background-blend-mode:'+s0.backgroundBlendMode;
+ var o=1;for(var b=e;b&&b!==document.documentElement;b=b.parentElement)o*=parseFloat(getComputedStyle(b).opacity);
+ if(o<0.6)return 'opacity '+Math.round(o*100)/100;return '';}
+all.forEach(function(e){if(!vis(e))return;var r=e.getBoundingClientRect(),img=e.tagName==='IMG';if(r.width<80||r.height<80)return;
+ if(img){if(/\.svg(\?|#|$)|^data:image\/svg/i.test(e.currentSrc||e.src||''))return;}
+ else if(!/url\(["']?[^)"']*\.(jpe?g|png|webp|avif)/i.test(getComputedStyle(e).backgroundImage))return;
+ var w=drain(e,img);if(w)add('drained',desc(e)+' '+w);});
 if(big){window.scrollTo(0,0);
  // 44b the hero: headline, its first sentence and the main button on one laptop screen.
  var h1=document.querySelector('h1');
@@ -2001,6 +2027,8 @@ LOOK_SAYS = {
     "focus": "link(s) or button(s) show nothing when reached by keyboard - give :focus-visible an outline",
     "wrap": "a button or link breaks onto two lines - shorten it or let it fit",
     "wide": "the page scrolls sideways - make it fit (max-width:100%, wrap, or hide it until opened)",
+    "drained": "a photo shown drained of its colour (grey, sepia, faded or blended) - show their photos "
+               "in their own colours; no theme's photo treatment applies",
 }
 
 
@@ -4658,7 +4686,7 @@ def cmd_brief(a, get=http_get):
     if kind in ("build", "resume") and not A("work", "REVISE.md").is_file() and not mine.get("reference"):
         dealt = (read_json(themes, {}) or {}).get("themes")
         if not dealt:
-            dealt = deal_themes(mine.get("kind") or "other")
+            dealt = deal_themes(mine.get("kind") or "other", f"{mine.get('category') or ''} {mine.get('name') or ''}")
             write_json(themes, {"themes": dealt, "kind": mine.get("kind")})
         L += [f"THEMES       no reference from the owner: build in one of {', '.join(dealt)}.",
               "             Read hallmark/themes/<name>.md and look at hallmark/themes/<name>.jpg,",
@@ -4757,6 +4785,7 @@ Ask:
 - Do the photos carry this business - is any caption wrong for what it shows, any stock photo
   that would not pass for a shop like theirs in their town?
 - Does the page lead a visitor to what they came to do - book, visit, order, call - and end on it?
+- Does the page carry the business's own colours, or does it look washed out, grey, colourless?
 - Did it do what the owner asked, if the owner asked something?
 
 First line, one word: ship (nothing owed) or fix (findings follow). Then at most six findings,
