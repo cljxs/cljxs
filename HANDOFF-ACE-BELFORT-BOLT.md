@@ -138,7 +138,9 @@ If the owner asks for a rule change, tell them this first and let them choose.
 **How bets are made since 2026-10-12:** the *math rule* bets from the blind
 estimates - the estimate is pulled 60% toward the market, must still clear it
 by 2 points (or 3%) with positive expected value, sides priced 30-75% only.
-`ace-judge.py blind` places them the moment the last estimate is in. News is
+`ace-judge.py blind` places them the moment the last estimate is in. Since
+2026-10-29 each estimate names its team (`"1:BUF:55"`, `BLIND_EXAMPLE` in
+ace-judge.py) - bare home chances went in the wrong way round. News is
 optional. (Under the old cited-news rule there was not one bet in a month.)
 A **focus day** (`scripts/ace-focus.py`) points Ace at one sport and a short slate.
 

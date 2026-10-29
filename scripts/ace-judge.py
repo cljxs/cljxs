@@ -673,9 +673,27 @@ def blind_gate():
         return None
     return (f"blind estimates first: {len(missing)} game(s) on data/blind.json have none this cycle "
             f"({', '.join(str(n) for n in missing[:20])}{' ...' if len(missing) > 20 else ''}). "
-            f"Read data/blind.json - it has no prices on purpose - and give each game the HOME "
-            f"team's chance:\n  python3 ../../scripts/ace-judge.py blind \"1:55,2:41,3:62\"\n"
+            f"Read data/blind.json - it has no prices on purpose - and give each game a chance for "
+            f"the team you name ({BLIND_FORM}):\n  python3 ../../scripts/ace-judge.py blind {BLIND_EXAMPLE}\n"
             f"Prices are shown after that.")
+
+
+# How a blind estimate is written: game number, the team named, its chance.
+# Owner, 2026-10-29 (option A): "1:55" meant the HOME team's 55%, and on
+# Oct 4 four NFL games went in the wrong way round - 15% for Baltimore when
+# the market said 85%. Naming the team makes a swap a refusal, not a record.
+BLIND_EXAMPLE = '"1:BUF:55,2:LAL:41,3:KC:62"'
+BLIND_FORM = "number:TEAM:percent"
+
+
+def blind_team(g, name):
+    """'home' or 'away' for the team named in game g, or None. The sheet's
+    abbreviations; the words home and away only where it has none."""
+    name = str(name or "").strip().upper()
+    abbr = {side: str((g.get(side) or {}).get("abbr") or "").upper() for side in ("home", "away")}
+    if abbr["home"] and abbr["away"] and abbr["home"] != abbr["away"]:
+        return {abbr["home"]: "home", abbr["away"]: "away"}.get(name)
+    return {"HOME": "home", "AWAY": "away"}.get(name)
 
 
 def cmd_blind(a):
@@ -688,18 +706,24 @@ def cmd_blind(a):
     for part in str(a.pairs).replace(" ", "").split(","):
         if not part:
             continue
+        bits = part.split(":")
         try:
-            n, pct = part.split(":", 1)
-            n, pct = int(n), float(pct)
+            if len(bits) != 3:
+                raise ValueError
+            n, team, pct = int(bits[0]), bits[1], float(bits[2])
         except ValueError:
-            bad.append(f"{part!r} is not number:percent")
+            bad.append(f"{part!r} is not {BLIND_FORM}, e.g. 1:BUF:55")
             continue
-        if n not in games:
+        g = games.get(n)
+        side = blind_team(g, team) if g else None
+        if g is None:
             bad.append(f"there is no game {n} - the sheet has 1-{len(games)}")
+        elif side is None:
+            bad.append(f"game {n} is {g.get('match')} - {team!r} is not in it")
         elif not 1 <= pct <= 99:
             bad.append(f"game {n}: {pct:g}% - a chance is between 1 and 99")
         else:
-            got[n] = pct
+            got[n] = (team.upper(), pct, pct if side == "home" else round(100 - pct, 1))
     if bad:
         print("nothing recorded:\n  " + "\n  ".join(bad), file=sys.stderr)
         return 1
@@ -707,14 +731,14 @@ def cmd_blind(a):
     path = AGENT / "state" / "blind.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as f:
-        for n, pct in sorted(got.items()):
+        for n, (team, pct, home_pct) in sorted(got.items()):
             g = games[n]
             f.write(json.dumps({"utc": stamp, "key": blind_key(g), "sport": g.get("sport"),
                                 "event_id": g.get("event_id"), "match": g.get("match"),
                                 "starts_utc": g.get("starts_utc"),
                                 "home": (g.get("home") or {}).get("abbr"),
                                 "away": (g.get("away") or {}).get("abbr"),
-                                "home_pct": pct}) + "\n")
+                                "team": team, "team_pct": pct, "home_pct": home_pct}) + "\n")
     left = blind_missing()
     print(f"recorded {len(got)} blind estimate(s)." + (
         f" Still owed: {', '.join(str(n) for n in left)}." if left else
@@ -940,8 +964,9 @@ def main():
                                        "checked when given, not required (2026-10-12)")
         s.set_defaults(fn=fn)
 
-    bl = sub.add_parser("blind", help="home-win chances from data/blind.json, before any price")
-    bl.add_argument("pairs", help='"1:55,2:41,..." - game number : home team\'s chance')
+    bl = sub.add_parser("blind", help="a winning chance for every game on data/blind.json, team named, before any price")
+    bl.add_argument("pairs", help=f"{BLIND_EXAMPLE} - {BLIND_FORM}: the game, the team you name "
+                                  "(either one), its chance")
     bl.set_defaults(fn=cmd_blind)
 
     sub.add_parser("math", help="bet every game whose blind estimate clears the bar "

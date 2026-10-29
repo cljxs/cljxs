@@ -135,3 +135,13 @@ fresh-news bettor matches Ace, the model adds nothing.
   AI's contribution is still measured against the five above; `underdog` is
   reported beside them from its first bet, on games after today only. Every
   number in the table above is unchanged.
+* 2026-10-29 — a bug fix, not a rule change (owner's decision): a blind
+  estimate names its team - `ace-judge.py blind "1:BUF:55"`, either team - and
+  the script records the home team's chance from it. `1:55` was read as the
+  home team's chance, and some went in the wrong way round: on 2026-10-04 all
+  four NFL games on the sheet (15% for Baltimore at home, the market 85%), and
+  a few NBA games. None became a bet - all were outside the 30–75% range - but
+  a swap on a close game would look like an ordinary disagreement. A team not
+  in that game is now refused and nothing is recorded. Gate 1 keeps every
+  estimate already made; `scripts/ace-study.py` names the far-apart games.
+  Every number in the table above is unchanged.

@@ -193,6 +193,32 @@ class GamesFarFromTheMarketAreNamed(StudyCase):
         self.assertNotIn("mix-up", self.s.text(s))
 
 
+class AFlatFiftyIsCountedApart(StudyCase):
+    """2026-10-29: 29 of the 42 games far from the market were exactly 50% -
+    games he did not think about. A flat 50 on a close game still clears his
+    bar on the underdog, so the report counts them, scores him without them,
+    and splits his bets by whether the estimate was a flat 50."""
+
+    def test_counted_and_scored_without(self):
+        # Where he gives a real number, he knows the truth; elsewhere a flat 50.
+        s = self.study(13, lambda t, m, r: 50 if r.random() < 0.3 else t)
+        f = s["forecasts"]
+        self.assertEqual(f["at_50"], sum(1 for line in (self.state / "blind.jsonl").read_text().splitlines()
+                                         if json.loads(line)["home_pct"] == 50))
+        self.assertGreater(f["at_50"], 0)
+        self.assertLess(f["brier_ace_no50"], f["brier_ace"], "the filler is what made him look worse")
+        self.assertIn("were exactly 50%", self.s.text(s))
+        split = s["money"]["his estimate was"]
+        self.assertEqual(set(split), {"a flat 50%", "a real number"})
+        self.assertEqual(sum(v["bets"] for v in split.values()), s["profit"]["bets"])
+
+    def test_silent_without_any(self):
+        never_fifty = lambda v: 51 if round(v) == 50 else v
+        s = self.study(14, lambda t, m, r: never_fifty(m + r.gauss(0, 3)))
+        self.assertEqual(s["forecasts"]["at_50"], 0)
+        self.assertNotIn("were exactly 50%", self.s.text(s))
+
+
 class ProfitIsWorthPlusLuck(StudyCase):
     """Section 2 splits profit into what the closing prices say the bets were
     worth and the luck on top. The two must add back to the profit, and Ace

@@ -615,8 +615,8 @@ def build_blind(day, ctx_dir, slot, now=None):
     return {
         "asof_utc": now.strftime("%Y-%m-%d %H:%M:%S"), "day": day, "slot": slot,
         "window_hours": ESTIMATE_WINDOW_HOURS,
-        "how": "Give every game the HOME team's chance of winning, from this sheet only: "
-               "python3 ../../scripts/ace-judge.py blind \"1:55,2:41,...\". No prices are on it on purpose.",
+        "how": "Give every game a winning chance for a team you name, from this sheet only - "
+               "as `python3 ../../scripts/ace-judge.py blind --help` shows. No prices are on it on purpose.",
         "games": games,
     }
 

@@ -28,7 +28,7 @@ You are measured on two things, both written down in `PREREGISTRATION.md` and
 neither changed until 2026-12-01:
 
 1. **Blind estimates.** Before you see a single price, you give every game on
-   `data/blind.json` the home team's chance of winning. After about 300 finished
+   `data/blind.json` a winning chance for a team you name. After about 300 finished
    games, code compares your numbers with the market's. If yours are not better,
    no bet you make is anything but luck.
 2. **Closing-line value** on the few bets you make: did the price you took beat
@@ -80,12 +80,18 @@ second chance. That has three consequences:
    match `state/bets.jsonl`.
 2. **Blind estimates — every game, before any price.** Read `data/blind.json`.
    It has no prices on purpose: an estimate made after reading the line is an
-   estimate of the line. Give **every** game the HOME team's chance of winning,
-   in one call:
+   estimate of the line. Give **every** game a winning chance, in one call,
+   as `number:TEAM:percent` - the game's number, the team you mean (its
+   abbreviation from the sheet, home or away, whichever you are thinking
+   about), and that team's chance:
 
    ```
-   python3 ../../scripts/ace-judge.py blind "1:55,2:41,3:62,4:50"
+   python3 ../../scripts/ace-judge.py blind "1:BUF:55,2:LAL:41,3:KC:62"
    ```
+
+   Name the team every time: a chance with no team was read as the home
+   team's, and on 2026-10-04 four games went in the wrong way round. A team
+   that is not in that game is refused and nothing is recorded.
 
    `list`, `pass`, `bet` and `rest` are refused until every game on the sheet
    has one, and the verifier fails a cycle that comes home without them. On a

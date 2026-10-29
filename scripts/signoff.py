@@ -215,7 +215,7 @@ def main():
                 lines.append(f"{label}: MISSING - {len(owed)} of {total} game(s) on {rel} have no "
                              f"blind estimate this cycle ({', '.join(str(n) for n in owed[:15])}"
                              f"{' ...' if len(owed) > 15 else ''}). Run: python3 ../../scripts/"
-                             f"ace-judge.py blind \"1:55,2:41,...\"")
+                             f"ace-judge.py blind {ace_judge.BLIND_EXAMPLE}")
                 missing.append(label)
             else:
                 lines.append(f"{label}: {total} game(s) estimated blind" if total

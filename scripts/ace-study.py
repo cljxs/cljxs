@@ -187,6 +187,15 @@ def forecast_section(rows):
     out.update(brier_ace=brier("blind"), brier_market=brier("then"))
     # Squeezed toward 50-50? How far his chances sit from even, against the
     # market's on the same games.
+    # A flat 50 is often a game he did not think about (2026-10-29: 29 of the
+    # 42 games 30+ points from the market were exactly 50). Count them, and
+    # score him and the market again on the games he gave a real number.
+    real = [r for r in paired if r["blind"] != 0.5]
+    out["at_50"] = len(paired) - len(real)
+    if real:
+        out["brier_ace_no50"] = round(sum((r["blind"] - r["y"]) ** 2 for r in real) / len(real), 4)
+        out["brier_market_no50"] = round(sum((r["then"] / 100 - r["y"]) ** 2 for r in real) / len(real), 4)
+        out["ace_from_even_no50_pts"] = round(sum(abs(r["blind"] * 100 - 50) for r in real) / len(real), 1)
     out["ace_from_even_pts"] = round(sum(abs(r["blind"] * 100 - 50) for r in paired) / len(paired), 1)
     out["market_from_even_pts"] = round(sum(abs(r["then"] - 50) for r in paired) / len(paired), 1)
     out["calibration"] = []
@@ -258,7 +267,11 @@ def money_section(bets):
             return None
         d = float(c) - float(m)
         return "moved his way" if d > 0.5 else "moved against him" if d < -0.5 else "barely moved"
+    def estimate(b):
+        m = b.get("my_pct")
+        return None if m is None else "a flat 50%" if float(m) == 50 else "a real number"
     return {"by sport": group(bets, lambda b: str(b.get("sport") or "?").upper()),
+            "his estimate was": group(bets, estimate),
             "favourite or underdog": group(bets, lambda b: None if b.get("market_pct") is None
                                            else "favourite" if float(b["market_pct"]) >= 50 else "underdog"),
             "by price": group(bets, price_band), "by edge": group(bets, edge_band),
@@ -382,7 +395,12 @@ def text(s):
                 f"   How far from 50-50 his chances sit: {f['ace_from_even_pts']} pts on average; the market's: "
                 f"{f['market_from_even_pts']} pts." + (" His are squeezed toward even."
                                                      if f["ace_from_even_pts"] < f["market_from_even_pts"] - 1 else ""),
-                "   When he said / the market said / what happened (home team):"]
+                ]
+        if f.get("at_50"):
+            out.append(f"   {f['at_50']} of {f['paired']} were exactly 50% - often a game he did not think about."
+                       + (f" Without them: Ace {f['brier_ace_no50']}, market {f['brier_market_no50']}; his chances "
+                          f"sit {f['ace_from_even_no50_pts']} pts from even." if f.get("brier_ace_no50") is not None else ""))
+        out += ["   When he said / the market said / what happened (home team):"]
         out += [f"     {c['bin']:>8}  n={c['n']:<4} Ace {c['ace_said']:5.1f}%  market {c['market_said']:5.1f}%  "
                 f"happened {c['happened']:5.1f}%" for c in f["calibration"]]
         if f.get("far_apart"):

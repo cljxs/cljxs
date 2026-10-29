@@ -213,7 +213,7 @@ def check_blind(problems, notes, started):
             f"{len(missing)} of {total} game(s) on data/blind.json have no blind estimate from "
             f"this cycle ({', '.join(str(n) for n in missing[:15])}{' ...' if len(missing) > 15 else ''}). "
             f"Every game gets one, before the prices:\n"
-            f"    python3 ../../scripts/ace-judge.py blind \"1:55,2:41,...\"")
+            f"    python3 ../../scripts/ace-judge.py blind {ace_judge.BLIND_EXAMPLE}")
     elif total:
         notes.append(f"blind: all {total} game(s) estimated")
 

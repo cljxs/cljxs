@@ -4116,30 +4116,32 @@ class EveryGameIsEstimatedBlindFirst(unittest.TestCase):
         r = self.run_j("list")
         self.assertEqual(r.returncode, 1)
         self.assertIn("blind estimates first: 3 game(s)", r.stderr)
-        self.assertEqual(self.run_j("blind", "1:55,2:41").returncode, 0)
+        self.assertEqual(self.run_j("blind", "1:H1:55,2:H2:41").returncode, 0)
         r = self.run_j("pass", "1", "--my-pct", "50", "--why", "x")
         self.assertIn("(3)", r.stderr, "names the one still owed")
         self.assertEqual(self.run_j("rest", "--why", "x").returncode, 1)
-        self.assertEqual(self.run_j("blind", "3:62").returncode, 0)
+        self.assertEqual(self.run_j("blind", "3:H3:62").returncode, 0)
         self.assertIn("H1 ML", self.run_j("list").stdout)
 
     def test_a_bad_entry_records_nothing(self):
-        for bad, why in (("1:55,4:50", "there is no game 4"), ("1:0", "between 1 and 99"),
-                         ("1:55,two", "is not number:percent")):
+        for bad, why in (("1:H1:55,4:H4:50", "there is no game 4"), ("1:H1:0", "between 1 and 99"),
+                         ("1:H1:55,two", "is not number:TEAM:percent"),
+                         ("1:55", "is not number:TEAM:percent"),          # the old form: no team
+                         ("1:H2:55", "game 1 is A1 @ H1 - 'H2' is not in it")):
             r = self.run_j("blind", bad)
             self.assertEqual(r.returncode, 1, bad)
             self.assertIn(why, r.stderr)
         self.assertFalse((self.agent / "state/blind.jsonl").exists())
 
     def test_what_is_recorded(self):
-        self.run_j("blind", "1:55,2:41,3:62")
+        self.run_j("blind", "1:H1:55,2:H2:41,3:h3:62")
         rows = [json.loads(l) for l in (self.agent / "state/blind.jsonl").read_text().splitlines()]
         self.assertEqual([(r["home"], r["home_pct"], r["event_id"]) for r in rows],
                          [("H1", 55.0, "401"), ("H2", 41.0, "402"), ("H3", 62.0, "403")])
         self.assertEqual(rows[0]["key"], f"cfb|A1 @ H1|{self.start}", "ace-clv's game key, for grading")
 
     def test_estimates_from_an_earlier_cycle_do_not_count(self):
-        self.run_j("blind", "1:55,2:41,3:62")
+        self.run_j("blind", "1:H1:55,2:H2:41,3:H3:62")
         (self.agent / "state/.cycle-started").write_text(str(int(time.time()) + 5))
         self.assertEqual(self.j.blind_missing(), [1, 2, 3])
 
@@ -4153,7 +4155,8 @@ class EveryGameIsEstimatedBlindFirst(unittest.TestCase):
         problems, notes = [], []
         av.check_blind(problems, notes, None)
         self.assertIn("3 of 3 game(s) on data/blind.json have no blind estimate", problems[0])
-        self.run_j("blind", "1:55,2:41,3:62")
+        self.assertIn(self.j.BLIND_EXAMPLE, problems[0])
+        self.run_j("blind", "1:H1:55,2:H2:41,3:H3:62")
         problems, notes = [], []
         av.check_blind(problems, notes, None)
         self.assertEqual((problems, notes), ([], ["blind: all 3 game(s) estimated"]))
@@ -4188,10 +4191,35 @@ class EveryGameIsEstimatedBlindFirst(unittest.TestCase):
             self.assertNotIn(priced, text)
         self.assertEqual(sheet["games"][0]["last_five"], {"H": ["W 24-10 v X"]})
 
+    def test_naming_the_away_team_records_the_home_chance(self):
+        # 2026-10-29: on Oct 4 four NFL games went in the wrong way round -
+        # 15% for Baltimore at home when the market said 85%. Ace now names
+        # the team; whichever he names, the record is the home team's chance.
+        self.run_j("blind", "1:A1:70,2:H2:41,3:a3:62")
+        rows = [json.loads(l) for l in (self.agent / "state/blind.jsonl").read_text().splitlines()]
+        self.assertEqual([(r["team"], r["team_pct"], r["home_pct"]) for r in rows],
+                         [("A1", 70.0, 30.0), ("H2", 41.0, 41.0), ("A3", 62.0, 38.0)])
+        self.assertEqual(self.j.blind_done(0)[f"cfb|A1 @ H1|{self.start}"], 30.0)
+
+    def test_home_and_away_only_where_the_sheet_has_no_abbreviations(self):
+        g = {"match": "DOG @ FAV"}
+        self.assertEqual((self.j.blind_team(g, "home"), self.j.blind_team(g, "AWAY")), ("home", "away"))
+        g = {"home": {"abbr": "BAL"}, "away": {"abbr": "TEN"}}
+        self.assertEqual((self.j.blind_team(g, "bal"), self.j.blind_team(g, "TEN")), ("home", "away"))
+        self.assertIsNone(self.j.blind_team(g, "home"), "the team, by name, where the sheet names it")
+        self.assertIsNone(self.j.blind_team(g, "BUF"))
+
+    def test_every_place_that_says_how_shows_the_same_form(self):
+        self.assertIn(self.j.BLIND_EXAMPLE, self.j.blind_gate())
+        for f in ("ace-verify.py", "signoff.py"):
+            self.assertIn("ace_judge.BLIND_EXAMPLE", (SCRIPTS / f).read_text(), f)
+        self.assertNotIn("1:55,2:41", (SCRIPTS / "ace-fetch.py").read_text(), "the old form, no team")
+
     def test_the_header_says_so(self):
         header = (ROOT / "agents" / "ace" / "_ace-agents-header.md").read_text()
-        self.assertIn('ace-judge.py blind "1:55,2:41,3:62,4:50"', header)
-        self.assertIn("**every** game the HOME team's chance", header)
+        self.assertIn(f"ace-judge.py blind {self.j.BLIND_EXAMPLE}", header)
+        self.assertIn("**every** game a winning chance", header)
+        self.assertIn("`number:TEAM:percent`", header)
         self.assertRegex(header, r"the verifier fails a cycle that comes home without them")
 
 
@@ -15333,7 +15361,7 @@ class AceBetsByTheReviewedBar(unittest.TestCase):
 
     def blind(self, home_pct):
         (self.m.AGENT / "data" / "blind.json").write_text(json.dumps({"games": [
-            {"n": 1, "sport": "nfl", "match": "DOG @ FAV", "starts_utc": self.start}]}))
+            {"n": 1, "sport": "nfl", "match": "DOG @ FAV", "starts_utc": self.start}]}))    # no abbreviations
         (self.m.AGENT / "state" / "blind.jsonl").write_text(json.dumps(
             {"utc": self.now.strftime("%Y-%m-%dT%H:%M:%SZ"), "sport": "nfl", "match": "DOG @ FAV",
              "starts_utc": self.start, "key": f"nfl|DOG @ FAV|{self.start}", "home_pct": home_pct}) + "\n")
@@ -15378,7 +15406,7 @@ class AceBetsByTheReviewedBar(unittest.TestCase):
         (self.m.AGENT / "state" / "blind.jsonl").unlink()
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            self.assertEqual(self.m.cmd_blind(types.SimpleNamespace(pairs="1:40")), 0)
+            self.assertEqual(self.m.cmd_blind(types.SimpleNamespace(pairs="1:home:40")), 0)
         self.assertIn("math rule: 1 bet(s) placed", out.getvalue())
         self.assertEqual(self.bets()[0]["selection"], "DOG ML")
 
