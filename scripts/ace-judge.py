@@ -511,9 +511,11 @@ def kelly_stake(my_pct, price, bankroll):
     return round(float(bankroll) * frac, 2), round(frac * 100, 2)
 
 
-def bar(my_pct, row):
+def bar(my_pct, row, shrink=None):
     """Everything the bar decides for one estimate on one row:
-    {q, q_source, p_used, gap_pts, need_pts, ev_pct, clears, why}."""
+    {q, q_source, p_used, gap_pts, need_pts, ev_pct, clears, why}.
+    `shrink` is for ace-study.py's replays only; the rule itself is SHRINK."""
+    shrink = SHRINK if shrink is None else shrink
     q, src = row.get("sharp_pct"), "Pinnacle"
     if q is None:
         q, src = row.get("novig_pct"), "DraftKings"
@@ -523,7 +525,7 @@ def bar(my_pct, row):
         out["why"] = "no estimate" if my_pct is None else "no market price to measure against"
         return out
     q = float(q)
-    p_used = round(q + (1 - SHRINK) * (float(my_pct) - q), 1)
+    p_used = round(q + (1 - shrink) * (float(my_pct) - q), 1)
     gap = round(p_used - q, 1)
     need = round(max(GAP_MIN_PTS, q * GAP_MIN_REL / 100), 1)
     ev = ev_pct(p_used, row.get("price"))
@@ -532,7 +534,7 @@ def bar(my_pct, row):
         out["why"] = (f"the market gives this side {q:.1f}% - bets are only taken between "
                       f"{BET_RANGE[0]:g}% and {BET_RANGE[1]:g}%")
     elif gap < need:
-        out["why"] = (f"your {float(my_pct):g}% counts as {p_used:g}% (pulled {SHRINK:.0%} of the way to "
+        out["why"] = (f"your {float(my_pct):g}% counts as {p_used:g}% (pulled {shrink:.0%} of the way to "
                       f"the market's {q:.1f}%, {src}) - {gap:+.1f} pts, and the bar is +{need:g}")
     elif ev is None or ev <= 0:
         out["why"] = f"at {p_used:g}% the price {row.get('price')} is not positive expected value ({ev})"

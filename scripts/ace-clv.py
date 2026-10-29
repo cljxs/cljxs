@@ -152,9 +152,9 @@ def log_judgements(rows, now=None, path=None):
                 "stake": r.get("stake")}) + "\n")
 
 
-def price_at(entry, side, at):
-    """The side's no-vig chance at the last price seen at or before `at`
-    (a datetime), or None when no price had been seen yet."""
+def snapshot_at(entry, side, at):
+    """The last price snapshot seen at or before `at` (a datetime) with a
+    chance for the side - its moneylines too - or None."""
     best = None
     for snap in (entry or {}).get("history") or [(entry or {}).get("first") or {}]:
         when = parse_start(snap.get("at"))
@@ -162,6 +162,13 @@ def price_at(entry, side, at):
             continue
         if best is None or when >= parse_start(best.get("at")):
             best = snap
+    return best
+
+
+def price_at(entry, side, at):
+    """The side's no-vig chance at the last price seen at or before `at`
+    (a datetime), or None when no price had been seen yet."""
+    best = snapshot_at(entry, side, at)
     return None if best is None else float(best[f"novig_{side}_pct"])
 
 
@@ -357,14 +364,11 @@ def report(now=None, lines_path=None, journal_path=None):
     }
 
 
-def calibration(blind_path=None, results_path=None, lines_path=None):
-    """Are Ace's BLIND estimates better forecasts than the market's own
-    numbers? Brier score - the mean squared gap between a chance and what
-    happened, 0 is perfect, 0.25 is a coin flip - over every finished game he
-    estimated before seeing a price, against the same games' DraftKings
-    no-vig chance at the moment he estimated, at the close, and Pinnacle's
-    close where there is one. The review's first gate: if his blind number
-    cannot beat the market's, no bar or staking rule turns it into money."""
+def calibration_rows(blind_path=None, results_path=None, lines_path=None):
+    """One row per finished game Ace estimated blind: y (1 = home won), his
+    chance, DraftKings' no-vig chance when he estimated ("then"), at the
+    close, Pinnacle's close, and the game's key and price snapshot then.
+    calibration() scores these; ace-study.py studies them."""
     blind = {}
     try:
         text = Path(blind_path or STATE / "blind.jsonl").read_text()
@@ -390,7 +394,21 @@ def calibration(blind_path=None, results_path=None, lines_path=None):
         rows.append({"y": y, "blind": float(j["home_pct"]) / 100,
                      "then": (price_at(entry, "home", parse_start(j["utc"])) if entry else None),
                      "close": closing(entry, "home")[0] if entry else None,
-                     "sharp": sharp_close(entry, "home")})
+                     "sharp": sharp_close(entry, "home"),
+                     "key": k, "sport": j.get("sport"), "utc": j.get("utc"), "starts_utc": j.get("starts_utc"),
+                     "snap": snapshot_at(entry, "home", parse_start(j["utc"])) if entry else None})
+    return rows
+
+
+def calibration(blind_path=None, results_path=None, lines_path=None):
+    """Are Ace's BLIND estimates better forecasts than the market's own
+    numbers? Brier score - the mean squared gap between a chance and what
+    happened, 0 is perfect, 0.25 is a coin flip - over every finished game he
+    estimated before seeing a price, against the same games' DraftKings
+    no-vig chance at the moment he estimated, at the close, and Pinnacle's
+    close where there is one. The review's first gate: if his blind number
+    cannot beat the market's, no bar or staking rule turns it into money."""
+    rows = calibration_rows(blind_path, results_path, lines_path)
 
     def brier(key):
         xs = [(r[key] if key == "blind" else (r[key] / 100 if r[key] is not None else None), r["y"]) for r in rows]

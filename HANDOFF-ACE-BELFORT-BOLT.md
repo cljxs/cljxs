@@ -123,6 +123,12 @@ If the owner asks for a rule change, tell them this first and let them choose.
 - **Five no-AI bettors** (`scripts/ace-baselines.py`) bet the same games by
   fixed rules; if the mechanical fresh-news bettor matches Ace, the AI adds
   nothing.
+- **What his record says** (`scripts/ace-study.py`, read-only, owner
+  2026-10-29: find a second strategy to run beside him; better = more
+  profit): profit split into closing-price worth + luck, his blind forecasts
+  against the market (is his number squeezed toward 50-50, does it carry
+  anything the market's does not), where the money went, and candidate rules
+  replayed at the price when he estimated - in-sample ideas, not proof.
 - **Stops:** fault stop at -30% of the start; evidence stop after 60 bets with
   average CLV at or below zero. Both refuse new bets; the owner decides.
 
