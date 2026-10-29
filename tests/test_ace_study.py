@@ -168,6 +168,31 @@ class SqueezedTowardEvenIsSeen(StudyCase):
         self.assertNotIn("squeezed toward even", self.s.text(s))
 
 
+class GamesFarFromTheMarketAreNamed(StudyCase):
+    """Owner, 2026-10-29: "Check those 3 games" - three games where Ace said
+    about 20% for the home team and the market 66%. A home and away read the
+    wrong way round looks exactly like that, so the report names every game
+    30+ points from the market, with when he estimated it - and only those."""
+
+    def test_named(self):
+        # Game 0 swapped: he gives the home team the away team's chance.
+        s = self.study(11, lambda t, m, r: (100 - m) if r.random() < 0.02 else m + r.gauss(0, 3))
+        far = s["forecasts"]["far_apart"]
+        self.assertTrue(far)
+        for g in far:
+            self.assertGreaterEqual(abs(g["ace_home"] - g["market_home"]), 30)
+            self.assertIn(" @ ", g["game"])
+        out = self.s.text(s)
+        self.assertIn("a home/away mix-up looks like this", out)
+        self.assertIn(far[0]["game"], out)
+        self.assertIn(" ET)", out)
+
+    def test_none_when_none(self):
+        s = self.study(12, lambda t, m, r: m + r.gauss(0, 3))
+        self.assertEqual(s["forecasts"]["far_apart"], [])
+        self.assertNotIn("mix-up", self.s.text(s))
+
+
 class ProfitIsWorthPlusLuck(StudyCase):
     """Section 2 splits profit into what the closing prices say the bets were
     worth and the luck on top. The two must add back to the profit, and Ace

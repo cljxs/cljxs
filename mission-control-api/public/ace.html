@@ -124,6 +124,22 @@
   .hist button{background:none;border:1px solid var(--line);border-radius:6px;font-size:11.5px;padding:5px 9px;cursor:pointer}
   .hist button.on{border-color:var(--acc);color:var(--acc2)}
   .empty{color:var(--mute);padding:18px 4px;text-align:center}
+
+  /* the no-AI bettors: a tab each beside Ace (2026-10-29) */
+  .whobar{background:rgba(95,179,255,.03)}
+  .lead{width:100%;border-collapse:collapse;font-size:12.5px}
+  .lead th{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);font-weight:400;text-align:right;padding:6px 8px;border-bottom:1px solid var(--line2)}
+  .lead td{text-align:right;padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+  .lead th:first-child,.lead td:first-child{text-align:left}
+  .lead tr[data-who]{cursor:pointer}
+  .lead tr.on td{background:rgba(95,179,255,.08)}
+  .lead tr.on td:first-child{box-shadow:inset 3px 0 0 var(--acc);color:var(--acc2);font-weight:700}
+  .leadwrap{overflow-x:auto}
+  .desc{margin:12px 0 4px;font-size:12.5px;border-left:2px solid var(--acc);padding-left:10px}
+  .note{color:var(--mute);font-size:11.5px;margin-top:8px}
+  .naigrid{display:grid;grid-template-columns:minmax(0,1fr) 390px;gap:16px;padding:16px 20px 22px}
+  @media (max-width:1100px){ .naigrid{grid-template-columns:1fr} .naigrid > .box:last-child{order:-1} }
+  @media (max-width:760px){ .naigrid{padding:10px 12px 16px} }
   .err{color:var(--down)}
 
   /* Narrow: his tickets first - what he is betting is the headline - then
@@ -151,6 +167,8 @@
     <a class="btn" id="back" href="/dashboard">← Deck</a>
     <button class="btn" id="close" style="display:none">✕ Esc</button>
   </div>
+  <div class="bar whobar" id="who"></div>
+  <div id="acepane">
   <div class="verdict" id="verdict"><span class="k">loading…</span></div>
   <div class="bar" id="bar"></div>
   <div class="grid">
@@ -167,6 +185,8 @@
       <div class="box reasons" id="reasons"></div>
     </div>
   </div>
+  </div>
+  <div id="naipane" style="display:none"></div>
 </div>
 <script>
 'use strict';
@@ -389,8 +409,98 @@ function drawReasons() {
     : '<div class="empty">No reasons recorded this cycle.</div>');
 }
 
+// ------------------------------------------------------------ the no-AI bettors
+// One tab each beside Ace. Every number comes graded from ace-baselines.py
+// (/api/ace/no-ai); this only lays it out.
+const NAMES = { ace: 'Ace', underdog: 'Underdog', steam: 'Steam', sharp: 'Sharp', news: 'News', favourite: 'Favourite', random: 'Random' };
+const nameOf = s => NAMES[s] || s.charAt(0).toUpperCase() + s.slice(1);
+let N = null, who = 'ace';
+try { who = localStorage.getItem('ace.who') || 'ace'; } catch (e) { /* private window */ }
+
+async function loadNai() {
+  try {
+    const r = await fetch('/api/ace/no-ai', { cache: 'no-store' });
+    const d = await r.json();
+    N = d && d.strategies ? d : { error: (d && d.error) || 'unreadable' };
+  } catch (e) {
+    N = { error: e.message };
+  }
+  drawWho();
+}
+
+function drawWho() {
+  const order = (N && N.order) || ['ace'];
+  if (!order.includes(who)) who = 'ace';
+  $('who').innerHTML = order.map(s => {
+    const p = N && N.strategies && N.strategies[s] && N.strategies[s].record;
+    return `<button class="chip ${s === who ? 'on' : ''}" data-who="${esc(s)}">${esc(nameOf(s))}${p ? `<b class="${cls(p.profit)}">${signed(p.profit)}</b>` : ''}</button>`;
+  }).join('');
+  $('acepane').style.display = who === 'ace' ? '' : 'none';
+  $('naipane').style.display = who === 'ace' ? 'none' : '';
+  if (who !== 'ace') drawNai();
+}
+$('who').addEventListener('click', e => {
+  const b = e.target.closest('[data-who]');
+  if (!b) return;
+  who = b.dataset.who;
+  try { localStorage.setItem('ace.who', who); } catch (err) { /* private window */ }
+  drawWho();
+});
+
+function naiTicket(p) {
+  const res = p.result || 'open';
+  return `<div class="ticket">
+      <div class="t1"><span class="pick">${esc(p.selection)} <span class="num">${price(p.price)}</span></span>
+        <span class="res ${esc(res === 'tie' ? 'push' : res)}">${esc(res.toUpperCase())}</span></div>
+      <div class="mu">${esc(p.match || '')}${p.sport ? ' · ' + esc(SPORT[p.sport] || p.sport) : ''} · ${esc(when(p.starts_utc))}</div>
+      <div class="mu num">stake <b>${money(p.stake)}</b> · market <b>${pc(p.novig_pct)}</b>${has(p.profit) ? ` · <b class="${cls(p.profit)}">${signed(p.profit)}</b>` : ''}${has(p.clv_pct) ? ` · vs close <b class="${cls(p.clv_pct)}">${pp(p.clv_pct)}</b>` : ''}</div>
+      ${p.why ? `<div class="wy">${esc(p.why)}</div>` : ''}
+    </div>`;
+}
+
+function drawNai() {
+  const host = $('naipane');
+  if (!N || N.error) {
+    host.innerHTML = `<div class="box empty ${N ? 'err' : ''}" style="margin:16px 20px">${N ? 'Could not load the no-AI bettors: ' + esc(N.error) : 'loading…'}</div>`;
+    return;
+  }
+  const S = N.strategies, me = S[who];
+  const rows = N.order.filter(s => S[s]).sort((a, b) => (S[b].record.profit || 0) - (S[a].record.profit || 0));
+  const pct = v => has(v) ? v + '%' : '—';
+  const lead = `<div class="leadwrap"><table class="lead num"><thead><tr><th>Bettor</th><th>Bets</th><th>Settled</th><th>Won</th><th>Profit</th><th>Vs close</th><th>Beat close</th></tr></thead><tbody>${
+    rows.map(s => { const r = S[s].record; return `<tr data-who="${esc(s)}" class="${s === who ? 'on' : ''}">
+      <td>${esc(nameOf(s))}</td><td>${r.bets}</td><td>${r.settled}</td><td>${r.won}</td>
+      <td class="${cls(r.profit)}">${signed(r.profit)}</td><td class="${cls(r.avg_clv_pct)}">${pp(r.avg_clv_pct)}</td><td>${pct(r.beat_close_pct)}</td></tr>`; }).join('')
+  }</tbody></table></div>`;
+  const open = me.open || [], settled = me.settled || [];
+  host.innerHTML = `<div class="naigrid">
+      <div class="box">
+        <div class="k">Everyone on the same games, most profit first</div>
+        ${lead}
+        <div class="desc"><b>${esc(nameOf(who))}</b> - ${esc(me.describe)}</div>
+        <div class="note">Plain code, no AI, flat $100 paper bets at the price when it decided. These don't touch Ace's bankroll.
+          "Vs close" is the price taken against the closing price - above zero means it beat the market.</div>
+        <div class="k" style="margin:16px 0 8px">Settled${settled.length ? ` (latest ${settled.length})` : ''}</div>
+        ${settled.length ? settled.map(naiTicket).join('') : '<div class="empty">Nothing settled yet.</div>'}
+      </div>
+      <div class="box">
+        <div class="k" style="margin-bottom:8px">Open now</div>
+        ${open.length ? open.map(naiTicket).join('') : '<div class="empty">Nothing open right now.</div>'}
+      </div>
+    </div>`;
+}
+$('naipane').addEventListener('click', e => {
+  const b = e.target.closest('tr[data-who]');
+  if (!b) return;
+  who = b.dataset.who;
+  try { localStorage.setItem('ace.who', who); } catch (err) { /* private window */ }
+  drawWho();
+});
+
+drawWho();
 load();
-setInterval(() => { if (tab !== 'report') load(); }, 60000);
+loadNai();
+setInterval(() => { if (tab !== 'report') load(); loadNai(); }, 60000);
 </script>
 </body>
 </html>

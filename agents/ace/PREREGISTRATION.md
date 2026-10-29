@@ -127,3 +127,11 @@ fresh-news bettor matches Ace, the model adds nothing.
   wake now runs the fetch first and waits for it, so the price is in place
   when he bets. Still one decision snapshot a sport a day; every number in
   the table above is unchanged.
+* 2026-10-29 — not a rule change: a sixth no-AI bettor, `underdog`, joins the
+  comparison (owner's decision, after `scripts/ace-study.py` showed Ace's
+  blind chances squeezed toward 50-50, so his rule bets mostly underdogs). It
+  takes the side DraftKings gives 38–48% on game day from 10:00 ET, flat $100.
+  It was chosen after looking at this data, so for the 2026-12-01 read-out the
+  AI's contribution is still measured against the five above; `underdog` is
+  reported beside them from its first bet, on games after today only. Every
+  number in the table above is unchanged.

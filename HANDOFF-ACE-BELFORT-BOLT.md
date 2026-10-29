@@ -120,9 +120,12 @@ If the owner asks for a rule change, tell them this first and let them choose.
   forecaster.
 - **Gate 2 - closing-line value (CLV):** did the price taken beat the close,
   Pinnacle's especially. 150 bets for a first read, 200 for a verdict.
-- **Five no-AI bettors** (`scripts/ace-baselines.py`) bet the same games by
+- **Six no-AI bettors** (`scripts/ace-baselines.py`) bet the same games by
   fixed rules; if the mechanical fresh-news bettor matches Ace, the AI adds
-  nothing.
+  nothing. The sixth, `underdog` (owner 2026-10-29: the close underdog,
+  38-48%, game day from 10:00 ET), is the strategy run beside him to compare
+  on profit. Each has a tab on Ace's page (`/api/ace/no-ai` <- `ace-baselines.py
+  board`): records side by side, and every open and settled pick.
 - **What his record says** (`scripts/ace-study.py`, read-only, owner
   2026-10-29: find a second strategy to run beside him; better = more
   profit): profit split into closing-price worth + luck, his blind forecasts

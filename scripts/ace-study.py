@@ -22,7 +22,7 @@ writes nothing, wakes no model, moves no money - and answers, in order:
      his disagreement is also the pull toward the market the data supports).
   4. Where the money went: his bets by sport, favourite or underdog, edge,
      price, timing and the way the price moved after.
-  5. The five no-AI bettors on the same games (ace-baselines.py).
+  5. The no-AI bettors on the same games (ace-baselines.py).
   6. Candidate rules replayed on every game he estimated, at the price when
      he estimated. These are IDEAS found on this data: a rule chosen because
      it did well here has to prove itself on games after today.
@@ -49,6 +49,7 @@ BOOT = 2000                    # resamples for each range
 SEED = 20261029                # the same ranges every run
 MIN_FIT = 30                   # games before the regression is run
 CAL_BINS = ((0, 30), (30, 40), (40, 50), (50, 60), (60, 70), (70, 101))
+FAR_APART_PTS = 30             # a blind estimate this far from the market is listed by name
 
 
 def _load(name, file):
@@ -196,6 +197,14 @@ def forecast_section(rows):
                                        "ace_said": round(sum(r["blind"] for r in b) / len(b) * 100, 1),
                                        "market_said": round(sum(r["then"] for r in b) / len(b), 1),
                                        "happened": round(sum(r["y"] for r in b) / len(b) * 100, 1)})
+    # Games where he and the market were miles apart, by name - a home and
+    # away read the wrong way round looks exactly like this (2026-10-29: three
+    # games where he said ~20% and the market ~66%).
+    out["far_apart"] = [{"game": str(r.get("key") or "").split("|")[1] if "|" in str(r.get("key") or "") else r.get("key"),
+                         "sport": r.get("sport"), "starts_utc": r.get("starts_utc"), "estimated_utc": r.get("utc"),
+                         "ace_home": round(r["blind"] * 100, 1), "market_home": r["then"],
+                         "winner": "home" if r["y"] == 1 else "away"}
+                        for r in paired if abs(r["blind"] * 100 - r["then"]) >= FAR_APART_PTS]
     if len(paired) >= MIN_FIT:
         X = [[1.0, logit(r["then"] / 100), logit(r["blind"]) - logit(r["then"] / 100)] for r in paired]
         fit = logistic(X, [r["y"] for r in paired])
@@ -342,6 +351,12 @@ def study():
     }
 
 
+def eastern(utc):
+    """'Oct 24 11:41' - when, in Eastern time (et_time.py owns the clock)."""
+    t = _load("et_time_study", "et_time.py").to_eastern(str(utc or "").replace(" ", "T"))
+    return t.strftime("%b %d %H:%M") if t else str(utc or "?")
+
+
 def text(s):
     out = ["ACE - WHAT HIS RECORD SAYS (read-only; changes nothing)", ""]
     d, p, f = s["data"], s["profit"], s["forecasts"]
@@ -370,6 +385,12 @@ def text(s):
                 "   When he said / the market said / what happened (home team):"]
         out += [f"     {c['bin']:>8}  n={c['n']:<4} Ace {c['ace_said']:5.1f}%  market {c['market_said']:5.1f}%  "
                 f"happened {c['happened']:5.1f}%" for c in f["calibration"]]
+        if f.get("far_apart"):
+            out.append(f"   {len(f['far_apart'])} game(s) where he and the market were {FAR_APART_PTS}+ pts apart "
+                       "(home team's chance; a home/away mix-up looks like this):")
+            out += [f"     {str(g['starts_utc'])[:10]} {str(g['sport'] or '').upper():<4} {g['game']:<24} Ace {g['ace_home']:5.1f}%  "
+                    f"market {g['market_home']:5.1f}%  {g['winner']} won  (estimated {eastern(g['estimated_utc'])} ET)"
+                    for g in f["far_apart"]]
         fit = f.get("fit")
         if fit:
             sig = fit["ace_weight"] - 2 * fit["ace_se"] > 0

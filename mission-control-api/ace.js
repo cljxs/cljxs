@@ -10,7 +10,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { AGENTS_DIR } = require('./db');
+const { execFile } = require('child_process');
+const { AGENTS_DIR, ROOT } = require('./db');
 // THE starting-capital rule, imported rather than written a second time.
 // This file used to fall back to the literal 10000, which is why Ace's own
 // panel showed a confident percentage while the Deck showed none - two
@@ -342,6 +343,19 @@ function register(app) {
       return res.json({ available: false, reason: 'Ace has not written a ledger yet - it writes one each cycle', games: [] });
     }
     res.json(d);
+  });
+
+  // The no-AI bettors beside him (owner, 2026-10-29: a tab each on his
+  // page). Every record and pick is graded by ace-baselines.py - the same
+  // closes and results as Ace - and only passed through here.
+  app.get('/api/ace/no-ai', (req, res) => {
+    execFile('python3', [path.join(ROOT, 'scripts', 'ace-baselines.py'), 'board'],
+      { cwd: ROOT, timeout: 30000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+        let d = null;
+        try { d = err ? null : JSON.parse(stdout); } catch { d = null; }
+        if (!d) return res.status(500).json({ error: String(stderr || err || 'unreadable').slice(-300) });
+        res.json(d);
+      });
   });
 
   app.get('/api/ace/ledger', (req, res) => {

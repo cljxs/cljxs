@@ -6,6 +6,7 @@ something to compare him to.
     python3 scripts/ace-baselines.py run       decide on the current candidates (the fetcher calls this)
     python3 scripts/ace-baselines.py report    each strategy's record, beside Ace's
     python3 scripts/ace-baselines.py report --json
+    python3 scripts/ace-baselines.py board     the page's JSON: records and every pick, graded
 
 WHY (2026-10-01, from the outside review). Ace's results alone cannot say
 whether the AI adds anything: a rule a script can follow might do as well.
@@ -26,6 +27,11 @@ stakes, graded on the same closes and the same final scores:
              ace-sharp.py's key; silent without it.
   steam      the side whose DraftKings chance rose 1.5 points or more in
              the last hour - does the market's own direction carry on?
+  underdog   the close underdog: the side DraftKings gives 38-48% (about
+             +105 to +150), on game day from 10:00 ET, the first time it is
+             in that range. Owner, 2026-10-29, after ace-study.py showed
+             Ace's rule is mostly this: if plain code matches him, the AI adds
+             nothing; if it beats him, it is the better strategy (more profit).
 
 `random` and `favourite` decide on games starting within 6 hours, about
 when Ace bets; the others decide whenever their signal appears. Each
@@ -48,13 +54,25 @@ ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", SCRIPTS.parent))
 AGENT = ROOT / "agents" / "ace"
 PICKS = AGENT / "state" / "baselines.jsonl"
 
-STRATEGIES = ("random", "favourite", "news", "sharp", "steam")
+STRATEGIES = ("random", "favourite", "news", "sharp", "steam", "underdog")
 EVERY_GAME_WITHIN_HOURS = 6.0
 NEWS_HOURS = 3.0
 NEWS_STATUSES = ("out", "doubtful")
 SHARP_GAP_PTS = 2.0
 STEAM_PTS, STEAM_MINUTES = 1.5, 60
+UNDERDOG_PCT = (38.0, 48.0)     # owner, 2026-10-29: close underdogs
+UNDERDOG_FROM_ET = 10           # on game day, from 10:00 Eastern
 STAKE = 100.0
+
+# What each one does, in a line - the page shows these.
+DESCRIBE = {
+    "random": "A coin flip on every game within 6 hours. What no skill looks like at these prices.",
+    "favourite": "The market favourite on every game within 6 hours.",
+    "news": "The opponent of a team with a fresh Out or Doubtful report (3 hours or less), while the price has not moved yet.",
+    "sharp": "The side Pinnacle rates at least 2 points higher than DraftKings does.",
+    "steam": "The side whose DraftKings chance rose 1.5 points or more in the last hour.",
+    "underdog": "The close underdog - DraftKings gives it 38-48% (about +105 to +150) - on game day from 10am ET.",
+}
 
 
 def _load(name, file):
@@ -62,6 +80,10 @@ def _load(name, file):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def _et():
+    return _load("et_time_b", "et_time.py")
 
 
 def _read(path, default):
@@ -101,6 +123,7 @@ def other(side):
 def decide(rows, lines, now, clv):
     """[(strategy, row, why)] for every strategy that wants a side now."""
     out = []
+    now_et = _et().to_eastern(now)
     for (sport, match, start), sides in games(rows).items():
         begins = clv.parse_start(start)
         if begins is None or begins <= now:
@@ -115,6 +138,13 @@ def decide(rows, lines, now, clv):
             if h.get("novig_pct") is not None and a.get("novig_pct") is not None:
                 fav = h if float(h["novig_pct"]) >= float(a["novig_pct"]) else a
                 out.append(("favourite", fav, f"market favourite at {fav['novig_pct']}%"))
+
+        if h.get("novig_pct") is not None and a.get("novig_pct") is not None:
+            dog = h if float(h["novig_pct"]) < float(a["novig_pct"]) else a
+            game_day = _et().to_eastern(begins).date() == now_et.date()
+            if UNDERDOG_PCT[0] <= float(dog["novig_pct"]) <= UNDERDOG_PCT[1] and game_day \
+                    and now_et.hour >= UNDERDOG_FROM_ET:
+                out.append(("underdog", dog, f"close underdog at {dog['novig_pct']}%"))
 
         hurt = {}
         team_of = {str(r.get("selection") or "").rsplit(" ML", 1)[0]: r["side"] for r in (h, a)}
@@ -174,30 +204,44 @@ def run(now=None, path=None, candidates=None, lines_path=None):
     return written
 
 
+def graded(p, lines, results, clv, book, now=None):
+    """One pick, graded: its result (won, lost, tie or None while open), its
+    profit, and its CLV against the DraftKings and Pinnacle closes."""
+    now = now or datetime.now(timezone.utc)
+    out = {"result": None, "profit": None, "clv_pct": None, "sharp_clv_pct": None}
+    entry = lines.get(p.get("key"))
+    if entry and clv.parse_start(entry.get("start_utc")) and clv.parse_start(entry["start_utc"]) <= now:
+        # The same closes Ace is graded on, and only from after this bet (clv.closing).
+        at = clv.parse_start(p.get("utc"))
+        out["clv_pct"] = clv.clv_at(p.get("price"), clv.closing(entry, p["side"], "draftkings", at)[0])
+        out["sharp_clv_pct"] = clv.clv_at(p.get("price"), clv.sharp_close(entry, p["side"], at))
+    res = results.get(f"{p.get('sport')}|{p.get('event_id')}")
+    if res and res.get("winner") in ("home", "away", "tie"):
+        stake = float(p.get("stake") or STAKE)
+        if res["winner"] == p["side"]:
+            out["result"], out["profit"] = "won", round(stake * (book.decimal_odds(p.get("price")) - 1), 2)
+        elif res["winner"] == "tie":
+            out["result"], out["profit"] = "tie", 0.0
+        else:
+            out["result"], out["profit"] = "lost", -stake
+    return out
+
+
 def score(rows, lines, results, clv, book):
     """One strategy's record: bets, settled, won, profit, CLV."""
     out = {"bets": len(rows), "settled": 0, "won": 0, "profit": 0.0,
            "clv": [], "sharp_clv": [], "beat_close": 0}
     for p in rows:
-        entry = lines.get(p.get("key"))
-        if entry and clv.parse_start(entry.get("start_utc")) and clv.parse_start(entry["start_utc"]) <= datetime.now(timezone.utc):
-            # The same closes Ace is graded on, and only from after this bet (clv.closing).
-            at = clv.parse_start(p.get("utc"))
-            c = clv.clv_at(p.get("price"), clv.closing(entry, p["side"], "draftkings", at)[0])
-            if c is not None:
-                out["clv"].append(c)
-                out["beat_close"] += c > 0
-            sc = clv.clv_at(p.get("price"), clv.sharp_close(entry, p["side"], at))
-            if sc is not None:
-                out["sharp_clv"].append(sc)
-        res = results.get(f"{p.get('sport')}|{p.get('event_id')}")
-        if res and res.get("winner") in ("home", "away", "tie"):
+        g = graded(p, lines, results, clv, book)
+        if g["clv_pct"] is not None:
+            out["clv"].append(g["clv_pct"])
+            out["beat_close"] += g["clv_pct"] > 0
+        if g["sharp_clv_pct"] is not None:
+            out["sharp_clv"].append(g["sharp_clv_pct"])
+        if g["result"] is not None:
             out["settled"] += 1
-            if res["winner"] == p["side"]:
-                out["won"] += 1
-                out["profit"] += float(p.get("stake") or STAKE) * (book.decimal_odds(p.get("price")) - 1)
-            elif res["winner"] != "tie":
-                out["profit"] -= float(p.get("stake") or STAKE)
+            out["won"] += g["result"] == "won"
+            out["profit"] += g["profit"]
     n = len(out["clv"])
     out["avg_clv_pct"] = round(sum(out["clv"]) / n, 2) if n else None
     out["avg_sharp_clv_pct"] = round(sum(out["sharp_clv"]) / len(out["sharp_clv"]), 2) if out["sharp_clv"] else None
@@ -208,20 +252,54 @@ def score(rows, lines, results, clv, book):
     return out
 
 
-def report(path=None):
+def _ace_picks(clv, book):
+    return [dict(b, key=clv.game_key(b.get("sport"), b.get("match"), b.get("starts_utc")))
+            for b in book.events(AGENT / "state" / "bets.jsonl")
+            if b.get("kind") == "bet" and b.get("side") in ("home", "away") and not book.is_props(b)]
+
+
+def _sources():
     clv = _load("ace_clv_r", "ace-clv.py")
     book = _load("ace_book_r", "ace-book.py")
     book.STATE = AGENT / "state"
-    lines = _read(AGENT / "state" / "lines.json", {})
-    results = _read(AGENT / "state" / "results.json", {})
+    return (clv, book, _read(AGENT / "state" / "lines.json", {}), _read(AGENT / "state" / "results.json", {}))
+
+
+def report(path=None):
+    clv, book, lines, results = _sources()
     by = {s: [] for s in STRATEGIES}
     for p in picks(path):
         by.setdefault(p.get("strategy"), []).append(p)
     out = {s: score(rows, lines, results, clv, book) for s, rows in by.items()}
-    ace = [dict(b, key=clv.game_key(b.get("sport"), b.get("match"), b.get("starts_utc")))
-           for b in book.events(AGENT / "state" / "bets.jsonl")
-           if b.get("kind") == "bet" and b.get("side") in ("home", "away")]
-    out["ace"] = score(ace, lines, results, clv, book)
+    out["ace"] = score(_ace_picks(clv, book), lines, results, clv, book)
+    return out
+
+
+SHOW_SETTLED = 60
+
+
+def board_json(path=None):
+    """Everything the No-AI tabs on Ace's page show: each bettor's record
+    beside Ace's, and its open and settled picks - all graded here."""
+    clv, book, lines, results = _sources()
+    by = {s: [] for s in STRATEGIES}
+    for p in picks(path):
+        by.setdefault(p.get("strategy"), []).append(p)
+    keep = ("utc", "sport", "match", "starts_utc", "selection", "side", "price", "novig_pct", "sharp_pct",
+            "stake", "why")
+    # Ace first, then the owner's own idea, then the rest.
+    out = {"strategies": {}, "order": ["ace"] + sorted(STRATEGIES, key=lambda s: s != "underdog")}
+    for s, rows in by.items():
+        if s not in STRATEGIES:
+            continue
+        shown = [dict({k: p.get(k) for k in keep}, **graded(p, lines, results, clv, book)) for p in rows]
+        out["strategies"][s] = {
+            "describe": DESCRIBE.get(s, ""), "record": score(rows, lines, results, clv, book),
+            "open": sorted([x for x in shown if x["result"] is None], key=lambda x: str(x["starts_utc"])),
+            "settled": sorted([x for x in shown if x["result"] is not None],
+                              key=lambda x: str(x["starts_utc"]), reverse=True)[:SHOW_SETTLED]}
+    out["strategies"]["ace"] = {"describe": "Ace himself: his blind estimate against the market, by his preregistered rule.",
+                                "record": score(_ace_picks(clv, book), lines, results, clv, book)}
     return out
 
 
@@ -243,13 +321,16 @@ def report_lines(r):
 def main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(description="The no-AI bettors beside Ace")
-    ap.add_argument("cmd", nargs="?", default="report", choices=["run", "report"])
+    ap.add_argument("cmd", nargs="?", default="report", choices=["run", "report", "board"])
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     cmd, argv = a.cmd, (["--json"] if a.json else [])
     if cmd == "run":
         for row in run():
             print(f"{row['strategy']}: {row['selection']} ({row['match']}) {row['price']} - {row['why']}")
+        return 0
+    if cmd == "board":
+        print(json.dumps(board_json()))
         return 0
     if cmd == "report":
         r = report()

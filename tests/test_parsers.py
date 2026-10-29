@@ -16913,7 +16913,8 @@ class TheNoAIBettorsAndTheBlindScore(unittest.TestCase):
         cands = self.root / "agents/ace/data/candidates.json"
         cands.write_text(json.dumps({"candidates": self.rows()}))
         out = self.root / "agents/ace/state/baselines.jsonl"
-        self.assertEqual(len(self.bl.run(now=self.now, path=out)), 2)
+        self.assertEqual({r["strategy"] for r in self.bl.run(now=self.now, path=out)},
+                         {"random", "favourite", "underdog"})
         self.assertEqual(self.bl.run(now=self.now, path=out), [], "once a game")
         # The close: 10 minutes before the 23:00 start, after the 19:00 bets.
         # (It was a price seen at the moment of the bet, which is not a
@@ -16933,6 +16934,37 @@ class TheNoAIBettorsAndTheBlindScore(unittest.TestCase):
             {f"nfl|PIT @ CLE|{self.start}": {"start_utc": self.start, "last": self.snap(0, 60.0),
                                              "history": [self.snap(0, 60.0)]}}))
         self.assertIsNone(self.bl.report(path=out)["favourite"]["avg_clv_pct"])
+
+    def test_underdog_takes_the_close_underdog_on_game_day_from_ten(self):
+        # Owner, 2026-10-29: "Let's do A ... 38-48% is fine." PIT at 42.8%
+        # is a close underdog; the game is tonight and it is 15:00 ET.
+        self.assertEqual(self.picks(self.rows(), {})["underdog"], "PIT ML")
+        self.assertNotIn("underdog", self.picks(self.rows(home_pct=63.0), {}), "37% is too long a shot")
+        self.assertNotIn("underdog", self.picks(self.rows(home_pct=51.0), {}), "49% is a coin flip")
+        self.assertEqual(self.picks(self.rows(home_pct=52.0), {})["underdog"], "PIT ML", "48% is in")
+        self.assertEqual(self.picks(self.rows(home_pct=38.0), {})["underdog"], "CLE ML", "the home dog too")
+        self.now = datetime(2026, 10, 1, 13, 30, tzinfo=timezone.utc)      # 09:30 ET
+        self.assertNotIn("underdog", self.picks(self.rows(), {}), "not before 10am")
+        self.now = datetime(2026, 9, 30, 19, tzinfo=timezone.utc)          # the day before
+        self.assertNotIn("underdog", self.picks(self.rows(), {}), "only on game day")
+
+    def test_the_page_gets_every_pick_graded_by_the_same_rule_as_the_record(self):
+        out = self.root / "agents/ace/state/baselines.jsonl"
+        (self.root / "agents/ace/data/candidates.json").write_text(json.dumps({"candidates": self.rows()}))
+        self.bl.run(now=self.now, path=out)
+        self.bl.run(now=self.now, path=out)
+        (self.root / "agents/ace/state/results.json").write_text(json.dumps(
+            {"nfl|401": {"winner": "away", "status": "STATUS_FINAL"}}))
+        b = self.bl.board_json(path=out)
+        self.assertEqual(b["order"][0], "ace")
+        self.assertEqual(set(b["order"]), set(b["strategies"]))
+        dog = b["strategies"]["underdog"]
+        self.assertEqual(len(dog["settled"]), 1)
+        self.assertEqual((dog["settled"][0]["selection"], dog["settled"][0]["result"], dog["settled"][0]["profit"]),
+                         ("PIT ML", "won", 124.0))
+        self.assertEqual(dog["record"]["profit"], sum(x["profit"] for x in dog["settled"]))
+        self.assertEqual(b["strategies"]["favourite"]["settled"][0]["profit"], -100.0)
+        self.assertTrue(all(b["strategies"][s]["describe"] for s in b["order"]))
 
     def test_blind_estimates_are_scored_against_the_market(self):
         st = self.root / "agents/ace/state"
