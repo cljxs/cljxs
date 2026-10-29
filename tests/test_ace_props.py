@@ -246,6 +246,30 @@ class TheBookItKeeps(PropsCase):
         self.assertTrue(json.loads((self.root / "agents/ace/data/props-board.json").read_text())["games"])
 
 
+class EachRunTakesItsHalf(PropsCase):
+    """2026-10-29, owner: "Why hasn't this placed any bets so far". The 17:30
+    run decided its half by the 17:45 split between afternoon and evening
+    games, so it took the afternoon - nothing, on a weekday - and the evening
+    slate was never judged. Its board was saved with no games at all."""
+
+    def test_the_timers_two_runs_take_the_two_halves(self):
+        timer = (ROOT / "deploy" / "ace-props.timer").read_text()
+        times = [l.split()[1] for l in timer.splitlines() if l.startswith("OnCalendar=")]
+        parts = [self.p.part_of(datetime(2026, 10, 28, int(t[:2]), int(t[3:5]))) for t in times]
+        self.assertEqual(dict(zip(times, parts)), {"12:30": "early", "17:30": "late"})
+
+    def test_a_run_with_no_part_given_judges_the_evening_games_at_1730(self):
+        event = {"id": "e1", "shortName": "CLE @ ATL", "date": "2026-10-29T23:30Z", "season": {"type": 2},
+                 "competitions": [{"status": {"type": {"name": "STATUS_SCHEDULED"}},
+                                   "competitors": [{"homeAway": "home", "team": {"abbreviation": "ATL"}},
+                                                   {"homeAway": "away", "team": {"abbreviation": "CLE"}}]}]}
+        get = lambda url: {"events": [event]} if "scoreboard" in url else {"items": []}
+        at_1730 = datetime(2026, 10, 29, 21, 30, tzinfo=timezone.utc)
+        part = self.p.part_of(self.p.et_time.to_eastern(at_1730))
+        doc = self.p.scan(part, get, {"games": {}}, at_1730)
+        self.assertEqual([g["match"] for g in doc["games"]], ["CLE @ ATL"], "the 19:30 ET game is on the board")
+
+
 class AcesOwnBookIgnoresIt(PropsCase):
     """The bankroll is shared; nothing else is."""
 

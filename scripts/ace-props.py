@@ -85,6 +85,11 @@ FIRST_SEASON_DAY = "2025-10-21"   # last season's first day: the store starts th
 # Two runs a day, split by tip-off: early takes games before 17:45 ET (weekend
 # afternoons), late the evening slate. Both bet within the one daily cap.
 SPLIT_ET = (17, 45)
+# Which half a run takes is decided by the clock at a time between the two
+# runs - NOT at SPLIT_ET. Until 2026-10-29 it was SPLIT_ET, and the 17:30 run,
+# being before 17:45, took the afternoon half: on a weekday that is no game at
+# all, so no evening game was ever judged and no bet placed in three days.
+LATE_RUN_FROM = (15, 0)
 NOT_WITHIN_MIN = 20            # never bet a game starting in less than this
 VOID_AFTER_HOURS = 72
 GAP = 0.4
@@ -535,7 +540,9 @@ def clv_of(bet, closes, clv=None):
 # ------------------------------------------------------------------ runs
 
 def part_of(now_et):
-    return "early" if (now_et.hour, now_et.minute) < SPLIT_ET else "late"
+    """The half of the day a run judges: the 12:30 run the early games, the
+    17:30 run the evening slate."""
+    return "early" if (now_et.hour, now_et.minute) < LATE_RUN_FROM else "late"
 
 
 def in_part(start_utc, part):
