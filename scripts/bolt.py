@@ -6,6 +6,8 @@ bolt.py — Bolt, the crypto momentum trader. Paper money, plain code, no model.
     bolt.py show         the book, in words
     bolt.py check        does the book balance? (exit 1 if not)
     bolt.py board        everything the Bolt screen draws, as JSON
+    bolt.py replay       today's exit rules against the old ones, over the last
+                         90 days of hourly prices (read-only; --days N, --json)
 
 NO MODEL IS CALLED, ON PURPOSE (owner, 2026-10-13). Every rule Bolt trades by
 is a formula - the score, the stops, the sizes, the breakers - and a model
@@ -22,15 +24,19 @@ then the exits, at this tick's prices:
 
     stop loss     -8% on the price paid
     trailing stop 8% under the best price since he bought - it only rises
+    take profit   +10% on the average price paid: three quarters sold; the
+                  quarter kept trails 5% under its best (owner, 2026-10-30)
     time limit    14 days open, whatever it is doing
-    (no fixed target: a winner runs until the trailing stop takes it)
     BTC dump      BTC down more than 5% on the day: every coin but BTC goes
 
-EVERY HOUR AND A HALF (00:00, 01:30, 03:00 ... UTC): at most one new position, the best
+EVERY HOUR AND A HALF (00:00, 01:30, 03:00 ... UTC): at most one buy, the best
 scorer of 7 or more on the 10-point rubric below, if nothing stops him -
 the dump switch, the drawdown halt, or the 5% of the account he always keeps
 in cash. There is no limit on how many coins he holds (owner, 2026-10-13);
-one of each, and the cash floor, are the only bounds.
+one of each, and the cash floor, are the only bounds. A coin he took profit
+on and still holds a quarter of may be bought again: back up to 15% of the
+account, at the average price paid, the stop, the target and the 14 days
+starting again from there.
 
 A FILL IS THE PRICE AT THE TICK, NOT THE STOP. A stop at -4% checked every
 ten minutes can still be crossed by more than that between two looks; the
@@ -65,6 +71,7 @@ import os
 import re
 import ssl
 import sys
+import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -117,6 +124,18 @@ MAX_HOLD_DAYS = 14.0
 BTC_DUMP_PCT = -5.0           # BTC's 24h change below this: close every altcoin
 MAX_DRAWDOWN_PCT = 15.0
 HALT_HOURS = 24.0
+
+# TAKE PROFIT, AND BUYING BACK IN (owner, 2026-10-30: "if we only have a
+# trailing stop loss we will never have any real winning trades"; "sell a
+# coin for a good profit without sacrificing a potentially good entry price.
+# If he rebuys the coin just change the average price paid"). Replayed through
+# run() over 90 days of hourly prices (bolt.py replay): the trail alone made
+# +$553; selling all at +10% +$1,092; this +$1,181, better in both halves. Any
+# piece kept blocked buying the coin again - a 1% sliver kept made +$56 - so a
+# coin with profit taken may be bought again, and the buy merges into it.
+TAKE_PROFIT_PCT = 10.0        # up this much on the average price paid...
+TAKE_FRACTION = 0.75          # ...this much of it is sold
+KEPT_TRAIL_PCT = 5.0          # and what is kept trails this far under its best
 
 # Owner, 2026-10-13: every 1.5 hours, not 4 - it costs nothing, being code.
 # 5,400 seconds divides a day exactly, so the checks fall at the same 16
@@ -304,27 +323,85 @@ def buy(book, sym, price, notional, now, reason):
     return t
 
 
-def sell(book, pos, price, now, reason):
-    notional = pos["qty"] * price
+def sell(book, pos, price, now, reason, fraction=1.0):
+    """Sell the position, or `fraction` of it - the part sold carries that
+    share of its cost, and what is left keeps the rest."""
+    whole = fraction >= 1.0
+    qty = pos["qty"] if whole else pos["qty"] * fraction
+    cost = pos["cost"] if whole else pos["cost"] * fraction
+    notional = qty * price
     fee = notional * FEE_PCT / 100.0
     book["cash"] += notional - fee
-    book["positions"] = [p for p in book["positions"] if p is not pos]
-    pnl = notional - fee - pos["cost"]
-    t = {"utc": iso(now), "symbol": pos["symbol"], "side": "sell", "qty": pos["qty"],
+    if whole:
+        book["positions"] = [p for p in book["positions"] if p is not pos]
+    else:
+        pos["qty"], pos["cost"] = pos["qty"] - qty, pos["cost"] - cost
+    pnl = notional - fee - cost
+    t = {"utc": iso(now), "symbol": pos["symbol"], "side": "sell", "qty": qty,
          "price": price, "notional": notional, "fee": fee, "reason": reason,
          "entry_price": pos["entry_price"], "opened_utc": pos["opened_utc"],
-         "pnl": pnl, "pnl_pct": pnl / pos["cost"] * 100.0,
+         "pnl": pnl, "pnl_pct": pnl / cost * 100.0,
          # How far up it got - coach.py's "gave back a gain" reads it.
          "best_pct": round(pos.get("high_water_pct") or 0.0, 2)}
+    if not whole:
+        t["fraction"] = fraction
     book["trades"].append(t)
     return t
 
 
+def take_profit_due(pos, price):
+    """True when the position is up TAKE_PROFIT_PCT on the average paid and
+    has not taken profit since it was last bought."""
+    return (TAKE_PROFIT_PCT is not None and not pos.get("took_profit")
+            and pnl_pct(pos, price) >= TAKE_PROFIT_PCT)
+
+
+def take_profit(book, pos, price, now):
+    """Sell TAKE_FRACTION at the target; the rest trails KEPT_TRAIL_PCT."""
+    move = pnl_pct(pos, price)
+    if TAKE_FRACTION >= 1.0:
+        return sell(book, pos, price, now, f"take profit (+{TAKE_PROFIT_PCT:g}% target, {move:+.1f}%)")
+    t = sell(book, pos, price, now, f"take profit (+{TAKE_PROFIT_PCT:g}% target: {TAKE_FRACTION:.0%} sold, "
+                                    f"the rest trails {KEPT_TRAIL_PCT:g}%)", fraction=TAKE_FRACTION)
+    pos["took_profit"] = True
+    pos["stop_price"] = stop_for(pos)
+    return t
+
+
+def top_up(book, pos, price, notional, now, reason):
+    """Buy more of a coin still held after taking profit. The price paid
+    becomes the average; the best price, the stop, the target and the 14
+    days start again from this buy."""
+    fee = notional * FEE_PCT / 100.0
+    qty = notional / price
+    book["cash"] -= notional + fee
+    total = pos["qty"] + qty
+    pos["entry_price"] = (pos["qty"] * pos["entry_price"] + qty * price) / total
+    pos["qty"], pos["cost"] = total, pos["cost"] + notional + fee
+    pos["opened_utc"] = iso(now)
+    pos["took_profit"] = False
+    pos["high_water_pct"] = max(0.0, pnl_pct(pos, price))
+    pos["stop_price"] = stop_for(pos)
+    t = {"utc": iso(now), "symbol": pos["symbol"], "side": "buy", "qty": qty, "price": price,
+         "notional": notional, "fee": fee, "reason": reason, "top_up": True,
+         "avg_price": pos["entry_price"]}
+    book["trades"].append(t)
+    return t
+
+
+def blocked(book):
+    """The coins he holds and may not buy: all of them, except one he took
+    profit on - that one may be bought back up to size."""
+    return {p["symbol"] for p in book["positions"] if not p.get("took_profit")}
+
+
 def stop_for(pos):
     """The stop: STOP_LOSS_PCT under the price paid, or TRAIL_PCT under the
-    best price since, whichever is higher - so it only ever rises."""
+    best price since, whichever is higher - so it only ever rises. Once
+    profit is taken, the quarter kept trails KEPT_TRAIL_PCT under its best."""
     best = pos["entry_price"] * (1 + (pos.get("high_water_pct") or 0.0) / 100.0)
-    return max(pos["entry_price"] * (1 - STOP_LOSS_PCT / 100.0), best * (1 - TRAIL_PCT / 100.0))
+    trail = KEPT_TRAIL_PCT if pos.get("took_profit") else TRAIL_PCT
+    return max(pos["entry_price"] * (1 - STOP_LOSS_PCT / 100.0), best * (1 - trail / 100.0))
 
 
 def trailing(pos):
@@ -435,6 +512,8 @@ def run(book, market, now, gate=None):
         why = exit_reason(pos, marks[pos["symbol"]], now)
         if why:
             ev["exits"].append(sell(book, pos, marks[pos["symbol"]], now, why))
+        elif take_profit_due(pos, marks[pos["symbol"]]):
+            ev["exits"].append(take_profit(book, pos, marks[pos["symbol"]], now))
     if btc is not None and btc < BTC_DUMP_PCT:
         ev["dumped"] = True
         for pos in [p for p in book["positions"] if p["symbol"] != "BTC"]:
@@ -455,7 +534,7 @@ def run(book, market, now, gate=None):
     if book.get("last_cycle_block") == block:
         return ev
     book["last_cycle_block"], book["last_cycle_utc"] = block, iso(now)
-    held = {p["symbol"] for p in book["positions"]}
+    held = blocked(book)
     rows = [assess(s, c, btc, held) for s, c in coins.items()]
     best = sorted((r for r in rows if not r["out"] and r["score"] >= MIN_SCORE),
                   key=lambda r: (-r["score"], coins[r["symbol"]].get("rank") or 999))
@@ -474,6 +553,9 @@ def run(book, market, now, gate=None):
     else:
         pick = best[0]
         notional = size_for(book, eq)
+        mine = next((p for p in book["positions"] if p["symbol"] == pick["symbol"]), None)
+        if mine:                                  # bought back: up to the size of a new one
+            notional = min(notional, eq * TARGET_PCT / 100.0 - mine["qty"] * marks[pick["symbol"]])
         if notional < MIN_TRADE:
             action = (f"no entry: {pick['symbol']} scored {pick['score']}, but the "
                       f"{CASH_FLOOR_PCT:g}% cash floor leaves {money(notional)} to spend")
@@ -482,12 +564,18 @@ def run(book, market, now, gate=None):
             if not ok:
                 action = f"no entry: {pick['symbol']} scored {pick['score']}, but the news check said no - {note}"
             else:
-                bought = buy(book, pick["symbol"], marks[pick["symbol"]], notional, now,
-                             f"scored {pick['score']}/10: " + "; ".join(pick["points"])
-                             + (f" · news: {note}" if note else ""))
-                action = (f"bought {pick['symbol']}: {money(notional)} at "
-                          f"{money(marks[pick['symbol']])}, scored {pick['score']}/10"
-                          + (f" · news: {note}" if note else ""))
+                why = (f"scored {pick['score']}/10: " + "; ".join(pick["points"])
+                       + (f" · news: {note}" if note else ""))
+                if mine:
+                    bought = top_up(book, mine, marks[pick["symbol"]], notional, now, "bought back, " + why)
+                    action = (f"bought {pick['symbol']} back: {money(notional)} at "
+                              f"{money(marks[pick['symbol']])}, average paid now {money(mine['entry_price'])}, "
+                              f"scored {pick['score']}/10" + (f" · news: {note}" if note else ""))
+                else:
+                    bought = buy(book, pick["symbol"], marks[pick["symbol"]], notional, now, why)
+                    action = (f"bought {pick['symbol']}: {money(notional)} at "
+                              f"{money(marks[pick['symbol']])}, scored {pick['score']}/10"
+                              + (f" · news: {note}" if note else ""))
     ev["cycle"] = {"rows": rows, "action": action, "bought": bought}
     return ev
 
@@ -717,7 +805,8 @@ def pct(x, base):
 
 
 def exit_line(t):
-    return (f"sold {t['symbol']} at {money(t['price'])} - {t['reason']}: "
+    part = f"{t['fraction']:.0%} of " if t.get("fraction") else ""
+    return (f"sold {part}{t['symbol']} at {money(t['price'])} - {t['reason']}: "
             f"{signed(t['pnl_pct'], 1)}% ({'+' if t['pnl'] >= 0 else '-'}{money(abs(t['pnl']))})")
 
 
@@ -964,7 +1053,7 @@ def board(now=None):
     held = {p["symbol"] for p in book["positions"]}
     coins = []
     for sym, c in ((market or {}).get("coins") or {}).items():
-        a = assess(sym, c, btc, held)
+        a = assess(sym, c, btc, blocked(book))
         coins.append({"symbol": sym, "name": c.get("name"), "price": c["price"],
                       "ma_20h": c["ma_20h"], "ma_50h": c["ma_50h"],
                       "change_1h": c.get("change_1h"), "change_24h": c.get("change_24h"),
@@ -1005,6 +1094,8 @@ def board(now=None):
         "last_cycle_utc": book.get("last_cycle_utc"), "next_cycle_utc": iso(nxt),
         "balances": not problems(book),
         "rules": {"stop_loss_pct": STOP_LOSS_PCT, "trail_pct": TRAIL_PCT,
+                  "take_profit_pct": TAKE_PROFIT_PCT, "take_fraction": TAKE_FRACTION,
+                  "kept_trail_pct": KEPT_TRAIL_PCT,
                   "max_hold_days": MAX_HOLD_DAYS, "btc_dump_pct": BTC_DUMP_PCT,
                   "max_drawdown_pct": MAX_DRAWDOWN_PCT, "halt_hours": HALT_HOURS,
                   "target_pct": TARGET_PCT,
@@ -1012,6 +1103,130 @@ def board(now=None):
                   "cycle_hours": CYCLE_HOURS, "chase_pct": CHASE_PCT,
                   "min_market_cap": MIN_MARKET_CAP, "min_volume_24h": MIN_VOLUME_24H},
     }
+
+
+# ---------------------------------------------------------------- the replay
+
+# The exits, replayed through run() itself over CoinGecko's hourly history,
+# so a rule change is measured on real prices before and after (owner,
+# 2026-10-30: the take-profit and buy-back were chosen this way). Read-only:
+# it writes nothing but its cache of prices.
+REPLAY_DIR = AGENT / "data" / "replay"
+CHART = "https://api.coingecko.com/api/v3/coins/{cid}/market_chart?vs_currency=usd&days={days}"
+REPLAY_PLANS = (
+    ("Rules now", {}),
+    ("Trail only (before 2026-10-30)", {"TAKE_PROFIT_PCT": None}),
+    ("Sell all at the target", {"TAKE_FRACTION": 1.0}),
+)
+WEEK_HOURS = 168
+
+
+def http_json(url, timeout=30):
+    headers = {"User-Agent": UA, "Accept": "application/json"}
+    key = os.environ.get("COINGECKO_API_KEY", "").strip()
+    if key:
+        headers["x-cg-demo-api-key"] = key
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout, context=ssl.create_default_context()) as r:
+        return json.load(r)
+
+
+def replay_charts(days, get=http_json, sleep=time.sleep, now=None):
+    """{symbol: CoinGecko market_chart} for every coin, kept for 12 hours in
+    REPLAY_DIR - ten calls, paced for the free limit."""
+    now = now or utcnow()
+    REPLAY_DIR.mkdir(parents=True, exist_ok=True)
+    out = {}
+    for n, (sym, cid) in enumerate(UNIVERSE.items()):
+        path = REPLAY_DIR / f"{cid}-{days}d.json"
+        if path.is_file() and now.timestamp() - path.stat().st_mtime < 12 * 3600:
+            out[sym] = json.loads(path.read_text())
+            continue
+        for attempt in range(3):
+            try:
+                doc = get(CHART.format(cid=cid, days=days))
+                if not doc.get("prices"):
+                    raise BadData(f"{cid}: no prices - {str(doc)[:120]}")
+                break
+            except Exception:
+                if attempt == 2:
+                    raise
+                sleep(30)
+        path.write_text(json.dumps(doc))
+        out[sym] = doc
+        sleep(7)
+    return out
+
+
+def replay_markets(charts):
+    """[(time, market)] an hour apart, each shaped as parse_markets writes
+    it: the averages, the 1h/24h/7d changes, size and volume, from the hours
+    up to that one."""
+    series = {}
+    for sym, d in charts.items():
+        hour = lambda rows: {int(t // 3_600_000): v for t, v in rows}
+        series[sym] = (hour(d["prices"]), hour(d.get("market_caps") or []), hour(d.get("total_volumes") or []))
+    hours = sorted(set.intersection(*[set(p) for p, _m, _v in series.values()]))
+    out = []
+    for i in range(WEEK_HOURS, len(hours)):
+        coins = {}
+        for sym, (p, mc, vol) in series.items():
+            ps = [p[h] for h in hours[i - WEEK_HOURS:i + 1]]
+            price = ps[-1]
+            coins[sym] = {"price": price, "ma_20h": mean(ps[-MA_FAST:]), "ma_50h": mean(ps[-MA_SLOW:]),
+                          "change_1h": pct(price, ps[-2]), "change_24h": pct(price, ps[-25]),
+                          "change_7d": pct(price, ps[0]), "market_cap": mc.get(hours[i], 0.0),
+                          "volume_24h": vol.get(hours[i], 0.0)}
+        for rank, sym in enumerate(sorted(coins, key=lambda s: -coins[s]["market_cap"]), 1):
+            coins[sym]["rank"] = rank
+        out.append((datetime.fromtimestamp(hours[i] * 3600, timezone.utc),
+                    {"coins": coins, "btc_change_24h": coins["BTC"]["change_24h"]}))
+    return out
+
+
+def replay(markets, overrides=None):
+    """One plan over the markets: run() on a fresh $10,000 book with these
+    module settings for the length of the replay, then put back."""
+    overrides = overrides or {}
+    saved = {k: globals()[k] for k in overrides}
+    globals().update(overrides)
+    try:
+        book = seed(markets[0][0])
+        mid = None
+        for n, (now, market) in enumerate(markets):
+            run(book, market, now)
+            if n == len(markets) // 2:
+                mid = equity(book, book["marks"])
+        end = equity(book, book["marks"])
+    finally:
+        globals().update(saved)
+    sells = [t for t in book["trades"] if t["side"] == "sell"]
+    start = book["starting_cash"]
+    return {"profit": round(end - start, 2), "first_half": round(mid - start, 2),
+            "second_half": round(end - mid, 2), "sells": len(sells),
+            "won": sum(1 for t in sells if t["pnl"] > 0),
+            "bought_back": sum(1 for t in book["trades"] if t.get("top_up")),
+            "open": len(book["positions"]), "balances": not problems(book)}
+
+
+def cmd_replay(args):
+    days = int(args[args.index("--days") + 1]) if "--days" in args else 90
+    markets = replay_markets(replay_charts(days))
+    first, last = markets[0], markets[-1]
+    out = {"from_utc": iso(first[0]), "to_utc": iso(last[0]), "hours": len(markets),
+           "btc_pct": round(pct(last[1]["coins"]["BTC"]["price"], first[1]["coins"]["BTC"]["price"]), 1),
+           "plans": {name: replay(markets, kw) for name, kw in REPLAY_PLANS}}
+    if "--json" in args:
+        print(json.dumps(out, indent=1))
+        return 0
+    print(f"Bolt's exits replayed through his own code, {out['from_utc'][:10]} to {out['to_utc'][:10]} "
+          f"({out['hours']} hours; BTC {out['btc_pct']:+.1f}%), from $10,000. Hourly prices - he looks "
+          f"every 10 minutes - and one period: a guide, not a promise.")
+    print(f"  {'plan':<32}{'profit':>10}{'1st half':>10}{'2nd half':>10}{'sales':>7}{'won':>5}{'bought back':>13}")
+    for name, r in out["plans"].items():
+        print(f"  {name:<32}{r['profit']:>+10,.0f}{r['first_half']:>+10,.0f}{r['second_half']:>+10,.0f}"
+              f"{r['sells']:>7}{r['won']:>5}{r['bought_back']:>13}")
+    return 0
 
 
 def main():
@@ -1025,7 +1240,9 @@ def main():
     if cmd == "board":
         print(json.dumps(board()))
         return 0
-    print("usage: bolt.py tick | show | check | board", file=sys.stderr)
+    if cmd == "replay":
+        return cmd_replay(sys.argv[2:])
+    print("usage: bolt.py tick | show | check | board | replay [--days N] [--json]", file=sys.stderr)
     return 2
 
 

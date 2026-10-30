@@ -260,9 +260,17 @@ Rules for the model: `agents/belfort/_belfort-agents-header.md`. Tests:
   scoring 7+ on a 10-point rubric, 15% of the account, keeping 5% cash; no buy
   of a coin up 20%+ on the day.
 - **Exits, every tick (swing exits since 2026-10-19):** stop -8%; trailing stop
-  8% under the best price since buying (only rises, no fixed target); 14-day
-  time limit; BTC down 5% on the day sells every other coin. Fills at the
-  tick's price with a 0.1% fee each way.
+  8% under the best price since buying (only rises); 14-day time limit; BTC
+  down 5% on the day sells every other coin. Fills at the tick's price with a
+  0.1% fee each way.
+- **Take profit and buy back (owner, 2026-10-30):** at +10% on the average
+  price paid, 3/4 is sold and the quarter kept trails 5% under its best
+  (`TAKE_PROFIT_PCT`, `TAKE_FRACTION`, `KEPT_TRAIL_PCT`). A coin with profit
+  taken may be bought again on a 7+, back up to 15% of the account
+  (`top_up`): the price paid becomes the average, and the stop, the target
+  and the 14 days restart. Chosen by `python3 scripts/bolt.py replay` (run()
+  over 90 days of hourly CoinGecko prices): trail only +$553, sell all at
+  +10% +$1,092, this +$1,181. Re-run it to check the rules on new prices.
 - Down 15%: no buys for 24 hours, then he restarts counting by himself.
 - **Bolt + News, a second $10,000 book** (2026-10-16): the same rules and exits,
   but before a buy the coin's last 48 hours of headlines (CoinDesk,

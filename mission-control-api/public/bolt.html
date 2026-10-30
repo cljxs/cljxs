@@ -289,9 +289,9 @@ function center(c) {
       <div class="stat"><div class="l">Now</div><div class="v num ${cls(p.pnl_pct)}">${pct(p.pnl_pct)}</div></div>
       <div class="stat"><div class="l">Worth</div><div class="v num">${money(p.value)}</div></div>
       <div class="stat"><div class="l">P&amp;L</div><div class="v num ${cls(p.pnl)}">${money(p.pnl)}</div></div>
-      <div class="stat"><div class="l">Stop</div><div class="v num">${price(p.stop_price)}</div><div class="l">${p.trailing ? 'trailing ' + B.rules.trail_pct + '% off best' : '-' + B.rules.stop_loss_pct + '%'}</div></div>
+      <div class="stat"><div class="l">Stop</div><div class="v num">${price(p.stop_price)}</div><div class="l">${p.trailing ? 'trailing ' + (p.took_profit ? B.rules.kept_trail_pct : B.rules.trail_pct) + '% off best' : '-' + B.rules.stop_loss_pct + '%'}</div></div>
       <div class="stat"><div class="l">Stop is</div><div class="v num ${cls(p.stop_price / p.entry_price - 1)}">${pct((p.stop_price / p.entry_price - 1) * 100, 1)}</div><div class="l">from his entry</div></div>
-      <div class="stat"><div class="l">Best</div><div class="v num">${pct(p.high_water_pct, 1)}</div><div class="l">stop trails ${B.rules.trail_pct}% under it</div></div>
+      <div class="stat"><div class="l">Best</div><div class="v num">${pct(p.high_water_pct, 1)}</div><div class="l">${p.took_profit ? B.rules.take_fraction * 100 + '% sold at +' + B.rules.take_profit_pct + '%; the rest trails ' + B.rules.kept_trail_pct + '%' : 'stop trails ' + B.rules.trail_pct + '% under it'}</div></div>
       <div class="stat"><div class="l">Held</div><div class="v num">${has(p.held_hours) ? (p.held_hours >= 48 ? (p.held_hours / 24).toFixed(1) + 'd' : p.held_hours.toFixed(1) + 'h') : '—'}</div><div class="l">sold at ${B.rules.max_hold_days} days</div></div>
     </div></div>` : '';
   return `
@@ -415,13 +415,15 @@ async function side() {
     <div class="sect">Every 10 minutes</div><ul class="rules">
       <li>One price check for all ten coins (CoinGecko).</li>
       <li>Stop loss at <b>-${r.stop_loss_pct}%</b> on the price paid.</li>
-      <li>Trailing stop <b>${r.trail_pct}%</b> under the best price since he bought - it only ever rises. No fixed target: a winner runs until this takes it.</li>
+      <li>Trailing stop <b>${r.trail_pct}%</b> under the best price since he bought - it only ever rises.</li>
+      <li>Take profit at <b>+${r.take_profit_pct}%</b> on the average price paid: <b>${Math.round(r.take_fraction * 100)}%</b> is sold, and the rest trails <b>${r.kept_trail_pct}%</b> under its best.</li>
       <li>Time limit: sold after <b>${r.max_hold_days} days</b>, whatever it is doing.</li>
       <li>BTC down more than <b>${Math.abs(r.btc_dump_pct)}%</b> on the day: every coin but BTC is sold, and nothing new is bought.</li>
       <li>Sales fill at that tick's price, not the stop's, less a <b>${r.fee_pct}%</b> fee.</li></ul>
     <div class="sect">Every ${r.cycle_hours} hours</div><ul class="rules">
       <li>At most one new coin, the best scoring <b>${r.min_score}/10</b> or more.</li>
-      <li>Never: one already held, one up <b>${r.chase_pct}%+</b> on the day, one at or under its 50h average, or one under ${big(r.min_market_cap)} in size or ${big(r.min_volume_24h)} traded a day.</li>
+      <li>A coin he took profit on and still holds part of can be bought back, up to <b>${r.target_pct}%</b> of the account. The price paid becomes the average, and the stop, the +${r.take_profit_pct}% target and the ${r.max_hold_days} days start again from it.</li>
+      <li>Never: one already held (unless profit was taken on it), one up <b>${r.chase_pct}%+</b> on the day, one at or under its 50h average, or one under ${big(r.min_market_cap)} in size or ${big(r.min_volume_24h)} traded a day.</li>
       <li>As many coins as he likes, one of each, every new one about <b>${r.target_pct}%</b> of the account - but <b>${r.cash_floor_pct}%</b> always stays in cash, so the last one may be smaller.</li></ul>
     <div class="sect">The score</div><ul class="rules">
       <li>+4 uptrend: price above its 20h average, the 20h above the 50h</li>

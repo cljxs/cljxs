@@ -20551,6 +20551,7 @@ class BoltBase(unittest.TestCase):
         self.b.NEWS_BOOK, self.b.NEWS_EQUITY = a / "state" / "news-portfolio.json", a / "state" / "news-equity.jsonl"
         self.b.NEWS_CALLS, self.b.NEWS_USE = a / "state" / "news-calls.jsonl", a / "state" / "news-wakes.json"
         self.b.fetch_news = lambda get=None: []
+        self.b.REPLAY_DIR = a / "data" / "replay"           # the replay's price cache too
         self.rows = json.loads((FIXTURES / "coingecko-markets-bolt-10.json").read_text())
 
     def coin(self, price=100.0, ma20=98.0, ma50=95.0, ch1=0.5, ch24=5.0, ch7=3.0,
@@ -20649,11 +20650,29 @@ class BoltExitsAtTheTicksPrice(BoltBase):
         book["last_cycle_block"] = self.b.cycle_block(now)       # exits only, no buying
         return self.b.run(book, self.market(btc=btc, **prices), now)
 
-    def test_no_fixed_target_a_winner_runs(self):
-        # The old +15% take profit sold here; now it stays open.
+    def test_three_quarters_sold_at_ten_percent_the_rest_trails_five(self):
+        # Owner, 2026-10-30: "if we only have a trailing stop loss we will
+        # never have any real winning trades" - "Build it with 3/4 and the 5%
+        # trail". The old rule held all of it here.
         book = self.hold()
-        self.assertEqual(self.tick(book, 10, SOL=125.0)["exits"], [])
-        self.assertEqual(len(book["positions"]), 1)
+        self.assertEqual(self.tick(book, 10, SOL=109.0)["exits"], [], "+9% is under the target")
+        ev = self.tick(book, 20, SOL=110.0)
+        t = ev["exits"][0]
+        self.assertIn("take profit", t["reason"])
+        self.assertEqual((t["fraction"], t["price"]), (0.75, 110.0))
+        self.assertAlmostEqual(t["qty"], 18.75, msg="three quarters of the 25 coins")
+        self.assertGreater(t["pnl"], 0)
+        pos = book["positions"][0]
+        self.assertAlmostEqual(pos["qty"], 6.25)
+        self.assertTrue(pos["took_profit"])
+        self.assertAlmostEqual(pos["stop_price"], 104.5, msg="5% under the best, 110 - not 8% (101.2)")
+        self.assertEqual(self.tick(book, 30, SOL=120.0)["exits"], [], "the target is taken once")
+        self.assertAlmostEqual(pos["stop_price"], 114.0, msg="and the quarter's stop rises with it")
+        ev = self.tick(book, 40, SOL=113.0)
+        self.assertIn("trailing stop", ev["exits"][0]["reason"])
+        self.assertNotIn("fraction", ev["exits"][0], "the quarter goes whole")
+        self.assertEqual(book["positions"], [])
+        self.assertEqual(self.b.problems(book), [])
 
     def test_a_stop_crossed_between_looks_fills_at_the_real_price(self):
         book = self.hold()
@@ -20665,14 +20684,15 @@ class BoltExitsAtTheTicksPrice(BoltBase):
         self.assertLess(t["pnl_pct"], -10.0, "and the loss includes both fees")
 
     def test_the_stop_trails_the_best_price_and_never_falls(self):
+        # Under the +10% target the whole position trails 8% under its best.
         book = self.hold()
-        self.tick(book, 10, SOL=120.0)
-        self.assertAlmostEqual(book["positions"][0]["stop_price"], 110.4, msg="8% under the best, 120")
-        self.tick(book, 20, SOL=112.0)
-        self.assertAlmostEqual(book["positions"][0]["stop_price"], 110.4, msg="a dip does not lower it")
-        ev = self.tick(book, 30, SOL=110.0)
+        self.tick(book, 10, SOL=109.5)
+        self.assertAlmostEqual(book["positions"][0]["stop_price"], 100.74, msg="8% under the best, 109.5")
+        self.tick(book, 20, SOL=104.0)
+        self.assertAlmostEqual(book["positions"][0]["stop_price"], 100.74, msg="a dip does not lower it")
+        ev = self.tick(book, 30, SOL=100.5)
         self.assertIn("trailing stop", ev["exits"][0]["reason"])
-        self.assertGreater(ev["exits"][0]["pnl_pct"], 9.0, "the gain is kept")
+        self.assertGreater(ev["exits"][0]["price"], 100.0, "sold above the price paid")
 
     def test_no_dead_money_rule_and_a_14_day_limit(self):
         # The old rule sold a flat position at 24 hours - 118 of 166 trades in
@@ -20786,6 +20806,129 @@ class BoltBuysOnTheFourHourCycle(BoltBase):
         ev = self.b.run(book, self.market(btc=-6.0, SOL=good), self.T0)
         self.assertEqual(book["positions"], [])
         self.assertIn("dump switch", ev["cycle"]["action"])
+
+
+class BoltBuysBackAfterTakingProfit(BoltBase):
+    """Owner, 2026-10-30: "sell a coin for a good profit without sacrificing
+    a potentially good entry price. If he rebuys the coin just change the
+    average price paid so it can adjust the stop/loss and take profit." In
+    the replay a piece kept blocked buying the coin again (a 1% sliver kept
+    made +$56 against +$1,092 for selling it all), so a coin with profit
+    taken may be bought back up to size, merged at the average price."""
+
+    GOOD = dict(ma20=99.0, ma50=95.0, ch1=0.4, ch24=5.0, ch7=2.0)
+
+    def took_profit(self):
+        book = self.b.seed(self.T0)
+        self.b.run(book, self.market(SOL=self.coin(price=100.0, **self.GOOD)), self.T0)
+        t1 = self.T0 + timedelta(minutes=10)
+        self.b.run(book, self.market(SOL=self.coin(price=110.0, **self.GOOD)), t1)     # same block: exits only
+        return book
+
+    def test_a_coin_with_profit_taken_is_bought_back_at_the_average_price(self):
+        book = self.took_profit()
+        pos = book["positions"][0]
+        self.assertTrue(pos["took_profit"])
+        kept_qty, kept_cost = pos["qty"], pos["cost"]
+        later = self.T0 + timedelta(hours=1, minutes=30)
+        ev = self.b.run(book, self.market(SOL=self.coin(price=112.0, ma20=111.0, ma50=105.0, ch1=0.4,
+                                                        ch24=5.0, ch7=2.0)), later)
+        self.assertIn("bought SOL back", ev["cycle"]["action"])
+        self.assertEqual(len(book["positions"]), 1, "one position, merged")
+        t = book["trades"][-1]
+        self.assertTrue(t["top_up"])
+        eq = self.b.equity(book)
+        self.assertAlmostEqual(pos["qty"] * 112.0, eq * 0.15, delta=1.0, msg="back up to 15% of the account")
+        want = (kept_qty * 100.0 + t["qty"] * 112.0) / (kept_qty + t["qty"])
+        self.assertAlmostEqual(pos["entry_price"], want, msg="the average price paid")
+        self.assertAlmostEqual(t["avg_price"], want)
+        self.assertAlmostEqual(pos["cost"], kept_cost + t["notional"] + t["fee"])
+        self.assertFalse(pos["took_profit"], "the +10% target counts again, from the average")
+        self.assertEqual(pos["opened_utc"], self.b.iso(later), "and the 14 days start again")
+        self.assertAlmostEqual(pos["stop_price"], 112.0 * 0.92, msg="8% under the best since: this buy")
+        self.assertEqual(self.b.problems(book), [])
+        # The next target is +10% on the average, not on the first price.
+        ev = self.b.run(book, self.market(SOL=want * 1.10 + 0.01), later + timedelta(minutes=10))
+        self.assertIn("take profit", ev["exits"][0]["reason"])
+
+    def test_a_coin_held_without_profit_taken_is_still_never_bought_twice(self):
+        book = self.b.seed(self.T0)
+        self.b.run(book, self.market(SOL=self.coin(price=100.0, **self.GOOD)), self.T0)
+        later = self.T0 + timedelta(hours=1, minutes=30)
+        ev = self.b.run(book, self.market(SOL=self.coin(price=105.0, **self.GOOD)), later)
+        self.assertNotIn("bought", ev["cycle"]["action"])
+        sol = next(r for r in ev["cycle"]["rows"] if r["symbol"] == "SOL")
+        self.assertEqual(sol["out"], "already held")
+
+    def test_a_sale_and_a_buy_back_pair_up_for_the_coach(self):
+        book = self.took_profit()
+        later = self.T0 + timedelta(hours=1, minutes=30)
+        self.b.run(book, self.market(SOL=self.coin(price=112.0, ma20=111.0, ma50=105.0, ch1=0.4,
+                                                   ch24=5.0, ch7=2.0)), later)
+        buys = {(t["symbol"], t["utc"]) for t in book["trades"] if t["side"] == "buy"}
+        ev = self.b.run(book, self.market(SOL=90.0), later + timedelta(minutes=10))
+        for t in [x for x in book["trades"] if x["side"] == "sell"]:
+            self.assertIn((t["symbol"], t["opened_utc"]), buys, "every sale names the buy it closes")
+        self.assertEqual(self.b.problems(book), [])
+
+    def test_the_page_says_the_rules(self):
+        html = (ROOT / "mission-control-api" / "public" / "bolt.html").read_text()
+        for key in ("take_profit_pct", "take_fraction", "kept_trail_pct"):
+            self.assertIn(f"r.{key}", html)
+            self.assertIn(key, self.b.board(self.T0)["rules"])
+        self.assertNotIn("No fixed target", html)
+
+
+class BoltsExitsReplayOnHourlyPrices(BoltBase):
+    """`bolt.py replay` (2026-10-30): the exit rules measured through run()
+    itself on CoinGecko's hourly history - how the take-profit and buy-back
+    were chosen, kept so the choice can be checked again on new prices. The
+    hours here are made up (a rising wave per coin); the shapes are
+    market_chart's."""
+
+    def charts(self, hours=420):
+        import math
+        t0 = int(self.T0.timestamp() * 1000) - hours * 3_600_000
+        out = {}
+        for k, sym in enumerate(self.b.UNIVERSE):
+            prices = [[t0 + h * 3_600_000, 100 * (1 + 0.001 * h) + 8 * math.sin(h / (12 + k))] for h in range(hours)]
+            out[sym] = {"prices": prices, "market_caps": [[t, 50e9 + k] for t, _ in prices],
+                        "total_volumes": [[t, 2e9] for t, _ in prices]}
+        return out
+
+    def test_each_hour_is_shaped_as_the_live_market(self):
+        markets = self.b.replay_markets(self.charts())
+        self.assertEqual(len(markets), 420 - 168)
+        now, m = markets[0]
+        prices = [p for _t, p in self.charts()["SOL"]["prices"][:169]]
+        sol = m["coins"]["SOL"]
+        self.assertAlmostEqual(sol["price"], prices[-1])
+        self.assertAlmostEqual(sol["ma_20h"], sum(prices[-20:]) / 20)
+        self.assertAlmostEqual(sol["change_24h"], (prices[-1] / prices[-25] - 1) * 100)
+        self.assertEqual(m["btc_change_24h"], m["coins"]["BTC"]["change_24h"])
+        self.assertEqual(sorted(c["rank"] for c in m["coins"].values()), list(range(1, 11)))
+
+    def test_a_plan_changes_the_rules_only_for_its_own_run(self):
+        markets = self.b.replay_markets(self.charts())
+        before = self.b.replay(markets, {"TAKE_PROFIT_PCT": None})
+        self.assertEqual(self.b.TAKE_PROFIT_PCT, 10.0, "put back after the replay")
+        now = self.b.replay(markets)
+        self.assertTrue(before["balances"] and now["balances"])
+        self.assertEqual(before["bought_back"], 0, "no target, nothing to buy back")
+        self.assertGreater(now["sells"], 0)
+        self.assertAlmostEqual(now["first_half"] + now["second_half"], now["profit"], places=1)
+
+    def test_prices_are_kept_and_paced(self):
+        calls, sleeps = [], []
+        got = self.b.replay_charts(90, get=lambda url: calls.append(url) or self.charts(200)["SOL"],
+                                   sleep=sleeps.append, now=self.T0)
+        self.assertEqual(len(calls), 10)
+        self.assertEqual(sleeps, [7] * 10, "paced for CoinGecko's free limit")
+        self.assertIn("/coins/solana/market_chart?vs_currency=usd&days=90", " ".join(calls))
+        self.assertEqual(set(got), set(self.b.UNIVERSE))
+        again = []
+        self.b.replay_charts(90, get=lambda url: again.append(url), sleep=lambda s: None)
+        self.assertEqual(again, [], "kept for 12 hours")
 
 
 class BoltHaltsAndResumesOnHisOwn(BoltBase):

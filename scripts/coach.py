@@ -611,7 +611,10 @@ def _rules(b, bt, ab, aj):
                    f"{b.TARGET_PCT:g}% of the account, {b.CASH_FLOOR_PCT:g}% kept in cash; the news book also "
                    f"needs a cited catalyst scored {b.NEWS_MIN_SCORE}+",
             "exits": f"stop -{b.STOP_LOSS_PCT:g}%, trailing stop {b.TRAIL_PCT:g}% under the best price, "
-                     f"sold after {b.MAX_HOLD_DAYS:g} days, BTC dump switch at {b.BTC_DUMP_PCT:g}%",
+                     f"{b.TAKE_FRACTION:.0%} sold at +{b.TAKE_PROFIT_PCT:g}% on the average paid with the rest "
+                     f"trailing {b.KEPT_TRAIL_PCT:g}% (and bought back up to size on a new {b.MIN_SCORE}+, "
+                     f"at the average price), sold after {b.MAX_HOLD_DAYS:g} days, BTC dump switch at "
+                     f"{b.BTC_DUMP_PCT:g}%",
             "halt": f"no buys for {b.HALT_HOURS:g}h after a {b.MAX_DRAWDOWN_PCT:g}% drawdown"},
         "Belfort (stocks)": {
             "exits": f"stop {bt.STOP_LOSS:g}% (or {bt.ATR_MULT:g}x ATR, {bt.STOP_MIN_PCT:g}-{bt.STOP_MAX_PCT:g}%), "
