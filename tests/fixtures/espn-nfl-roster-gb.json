@@ -1,0 +1,2476 @@
+{
+ "timestamp": "2026-09-24T13:16:52Z",
+ "status": "success",
+ "season": {
+  "year": 2026,
+  "displayName": "2026",
+  "type": 2,
+  "name": "Regular Season"
+ },
+ "team": {
+  "id": "9",
+  "abbreviation": "GB",
+  "location": "Green Bay",
+  "name": "Packers",
+  "displayName": "Green Bay Packers",
+  "clubhouse": "https://www.espn.com/nfl/team/_/name/gb/green-bay-packers",
+  "color": "204e32",
+  "logo": "https://a.espncdn.com/i/teamlogos/nfl/500/gb.png",
+  "recordSummary": "1-1",
+  "seasonSummary": "2026",
+  "standingSummary": "2nd in NFC North"
+ },
+ "athletes": [
+  {
+   "position": "offense",
+   "items": [
+    {
+     "id": "3149687",
+     "uid": "s:20~l:28~a:3149687",
+     "guid": "32edc96f-e826-6969-576d-2040ac4890a5",
+     "alternateIds": {
+      "sdr": "3149687"
+     },
+     "firstName": "Chris",
+     "lastName": "Brooks",
+     "fullName": "Chris Brooks",
+     "displayName": "Chris Brooks",
+     "shortName": "C. Brooks",
+     "weight": 219.0,
+     "displayWeight": "219 lbs",
+     "height": 73.0,
+     "displayHeight": "6' 1\"",
+     "age": 26,
+     "dateOfBirth": "2000-01-11T08:00Z",
+     "links": [
+      {
+       "language": "en-US",
+       "rel": [
+        "playercard",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/_/id/3149687/chris-brooks",
+       "text": "Player Card",
+       "shortText": "Player Card",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "stats",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/stats/_/id/3149687/chris-brooks",
+       "text": "Stats",
+       "shortText": "Stats",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "stats",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:3149687&section=stats",
+       "text": "Stats",
+       "shortText": "Stats",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "splits",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/splits/_/id/3149687/chris-brooks",
+       "text": "Splits",
+       "shortText": "Splits",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "gamelog",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/gamelog/_/id/3149687/chris-brooks",
+       "text": "Game Log",
+       "shortText": "Game Log",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "gamelog",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:3149687&section=gamelog",
+       "text": "Game Log",
+       "shortText": "Game Log",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "news",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/news/_/id/3149687/chris-brooks",
+       "text": "News",
+       "shortText": "News",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "news",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:3149687&section=news",
+       "text": "News",
+       "shortText": "News",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "bio",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/bio/_/id/3149687/chris-brooks",
+       "text": "Bio",
+       "shortText": "Bio",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "bio",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:3149687&section=bio",
+       "text": "Bio",
+       "shortText": "Bio",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "overview",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/_/id/3149687/chris-brooks",
+       "text": "Overview",
+       "shortText": "Overview",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "overview",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:3149687",
+       "text": "Overview",
+       "shortText": "Overview",
+       "isExternal": false,
+       "isPremium": false
+      }
+     ],
+     "birthPlace": {
+      "city": "Oceanside",
+      "state": "CA",
+      "country": "USA"
+     },
+     "college": {
+      "id": "252",
+      "guid": "964df5a0-509d-3a82-8241-98e96986bcf9",
+      "mascot": "Cougars",
+      "name": "BYU",
+      "shortName": "BYU",
+      "abbrev": "BYU",
+      "logos": [
+       {
+        "href": "https://a.espncdn.com/i/teamlogos/ncaa/500/252.png",
+        "width": 500,
+        "height": 500,
+        "alt": "",
+        "rel": [
+         "full",
+         "default"
+        ],
+        "lastUpdated": "2025-12-23T01:44Z"
+       },
+       {
+        "href": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/252.png",
+        "width": 500,
+        "height": 500,
+        "alt": "",
+        "rel": [
+         "full",
+         "dark"
+        ],
+        "lastUpdated": "2025-12-23T01:44Z"
+       }
+      ]
+     },
+     "slug": "chris-brooks",
+     "headshot": {
+      "href": "https://a.espncdn.com/i/headshots/nfl/players/full/3149687.png",
+      "alt": "Chris Brooks"
+     },
+     "jersey": "30",
+     "position": {
+      "id": "9",
+      "name": "Running Back",
+      "displayName": "Running Back",
+      "abbreviation": "RB",
+      "leaf": true,
+      "parent": {
+       "id": "70",
+       "name": "Offense",
+       "displayName": "Offense",
+       "abbreviation": "OFF",
+       "leaf": false
+      }
+     },
+     "injuries": [],
+     "teams": [
+      {
+       "$ref": "http://sports.core.api.espn.pvt/v2/sports/football/leagues/nfl/seasons/2026/teams/9?lang=en&region=us"
+      }
+     ],
+     "contracts": [
+      {
+       "salary": 602000,
+       "season": {
+        "year": 2023,
+        "startDate": "2023-08-01T07:00Z",
+        "endDate": "2024-02-15T07:59Z"
+       }
+      },
+      {
+       "salary": 813333,
+       "season": {
+        "year": 2024,
+        "startDate": "2024-08-01T07:00Z",
+        "endDate": "2025-02-15T07:59Z"
+       }
+      },
+      {
+       "salary": 1030000,
+       "season": {
+        "year": 2025,
+        "startDate": "2025-07-31T07:00Z",
+        "endDate": "2026-02-12T07:59Z"
+       }
+      },
+      {
+       "salary": 2170000,
+       "season": {
+        "year": 2026,
+        "startDate": "2026-08-06T07:00Z",
+        "endDate": "2027-02-16T07:59Z"
+       }
+      },
+      {
+       "salary": 2680000
+      }
+     ],
+     "experience": {
+      "years": 4
+     },
+     "contract": {
+      "optionType": 0,
+      "salary": 2170000,
+      "bonus": 0,
+      "salaryRemaining": 2680000,
+      "yearsRemaining": 1,
+      "signedThrough": 2027,
+      "season": {
+       "year": 2026,
+       "startDate": "2026-08-06T07:00Z",
+       "endDate": "2027-02-16T07:59Z"
+      },
+      "active": true
+     },
+     "status": {
+      "id": "1",
+      "name": "Active",
+      "type": "active",
+      "abbreviation": "Active"
+     }
+    },
+    {
+     "id": "4701936",
+     "uid": "s:20~l:28~a:4701936",
+     "guid": "c5e38ead-375e-3df1-8989-1d7b334915a7",
+     "alternateIds": {
+      "sdr": "4701936"
+     },
+     "firstName": "Matthew",
+     "lastName": "Golden",
+     "fullName": "Matthew Golden",
+     "displayName": "Matthew Golden",
+     "shortName": "M. Golden",
+     "weight": 191.0,
+     "displayWeight": "191 lbs",
+     "height": 71.0,
+     "displayHeight": "5' 11\"",
+     "age": 23,
+     "dateOfBirth": "2003-08-01T07:00Z",
+     "links": [
+      {
+       "language": "en-US",
+       "rel": [
+        "playercard",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/_/id/4701936/matthew-golden",
+       "text": "Player Card",
+       "shortText": "Player Card",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "stats",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/stats/_/id/4701936/matthew-golden",
+       "text": "Stats",
+       "shortText": "Stats",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "stats",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4701936&section=stats",
+       "text": "Stats",
+       "shortText": "Stats",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "splits",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/splits/_/id/4701936/matthew-golden",
+       "text": "Splits",
+       "shortText": "Splits",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "gamelog",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/gamelog/_/id/4701936/matthew-golden",
+       "text": "Game Log",
+       "shortText": "Game Log",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "gamelog",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4701936&section=gamelog",
+       "text": "Game Log",
+       "shortText": "Game Log",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "news",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/news/_/id/4701936/matthew-golden",
+       "text": "News",
+       "shortText": "News",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "news",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4701936&section=news",
+       "text": "News",
+       "shortText": "News",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "bio",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/bio/_/id/4701936/matthew-golden",
+       "text": "Bio",
+       "shortText": "Bio",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "bio",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4701936&section=bio",
+       "text": "Bio",
+       "shortText": "Bio",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "overview",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/_/id/4701936/matthew-golden",
+       "text": "Overview",
+       "shortText": "Overview",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "overview",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4701936",
+       "text": "Overview",
+       "shortText": "Overview",
+       "isExternal": false,
+       "isPremium": false
+      }
+     ],
+     "birthPlace": {
+      "city": "Houston",
+      "state": "TX",
+      "country": "USA"
+     },
+     "college": {
+      "id": "251",
+      "guid": "a5881f63-e491-3e48-9064-916de4a4849a",
+      "mascot": "Longhorns",
+      "name": "Texas",
+      "shortName": "Texas",
+      "abbrev": "TEX",
+      "logos": [
+       {
+        "href": "https://a.espncdn.com/i/teamlogos/ncaa/500/251.png",
+        "width": 500,
+        "height": 500,
+        "alt": "",
+        "rel": [
+         "full",
+         "default"
+        ],
+        "lastUpdated": "2025-12-19T23:48Z"
+       },
+       {
+        "href": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/251.png",
+        "width": 500,
+        "height": 500,
+        "alt": "",
+        "rel": [
+         "full",
+         "dark"
+        ],
+        "lastUpdated": "2025-12-19T23:47Z"
+       }
+      ]
+     },
+     "slug": "matthew-golden",
+     "headshot": {
+      "href": "https://a.espncdn.com/i/headshots/nfl/players/full/4701936.png",
+      "alt": "Matthew Golden"
+     },
+     "jersey": "0",
+     "position": {
+      "id": "1",
+      "name": "Wide Receiver",
+      "displayName": "Wide Receiver",
+      "abbreviation": "WR",
+      "leaf": true,
+      "parent": {
+       "id": "70",
+       "name": "Offense",
+       "displayName": "Offense",
+       "abbreviation": "OFF",
+       "leaf": false
+      }
+     },
+     "injuries": [],
+     "teams": [
+      {
+       "$ref": "http://sports.core.api.espn.pvt/v2/sports/football/leagues/nfl/seasons/2026/teams/9?lang=en&region=us"
+      }
+     ],
+     "contracts": [
+      {
+       "salary": 10262064,
+       "season": {
+        "year": 2025,
+        "startDate": "2025-07-31T07:00Z",
+        "endDate": "2026-02-12T07:59Z"
+       }
+      },
+      {
+       "salary": 1638879,
+       "season": {
+        "year": 2026,
+        "startDate": "2026-08-06T07:00Z",
+        "endDate": "2027-02-16T07:59Z"
+       }
+      },
+      {
+       "salary": 2437758
+      },
+      {
+       "salary": 3236637
+      }
+     ],
+     "experience": {
+      "years": 2
+     },
+     "contract": {
+      "optionType": 0,
+      "salary": 1638879,
+      "bonus": 633879,
+      "salaryRemaining": 5674395,
+      "yearsRemaining": 2,
+      "signedThrough": 2028,
+      "season": {
+       "year": 2026,
+       "startDate": "2026-08-06T07:00Z",
+       "endDate": "2027-02-16T07:59Z"
+      },
+      "active": true
+     },
+     "status": {
+      "id": "1",
+      "name": "Active",
+      "type": "active",
+      "abbreviation": "Active"
+     }
+    },
+    {
+     "id": "4047365",
+     "uid": "s:20~l:28~a:4047365",
+     "guid": "a83b6715-f018-aedf-190e-f77f026c7e4a",
+     "alternateIds": {
+      "sdr": "4047365"
+     },
+     "firstName": "Josh",
+     "lastName": "Jacobs",
+     "fullName": "Josh Jacobs",
+     "displayName": "Josh Jacobs",
+     "shortName": "J. Jacobs",
+     "weight": 223.0,
+     "displayWeight": "223 lbs",
+     "height": 70.0,
+     "displayHeight": "5' 10\"",
+     "age": 28,
+     "dateOfBirth": "1998-02-11T08:00Z",
+     "debutYear": 2019,
+     "links": [
+      {
+       "language": "en-US",
+       "rel": [
+        "playercard",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/_/id/4047365/josh-jacobs",
+       "text": "Player Card",
+       "shortText": "Player Card",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "stats",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/stats/_/id/4047365/josh-jacobs",
+       "text": "Stats",
+       "shortText": "Stats",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "stats",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4047365&section=stats",
+       "text": "Stats",
+       "shortText": "Stats",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "splits",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/splits/_/id/4047365/josh-jacobs",
+       "text": "Splits",
+       "shortText": "Splits",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "gamelog",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/gamelog/_/id/4047365/josh-jacobs",
+       "text": "Game Log",
+       "shortText": "Game Log",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "gamelog",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4047365&section=gamelog",
+       "text": "Game Log",
+       "shortText": "Game Log",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "news",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/news/_/id/4047365/josh-jacobs",
+       "text": "News",
+       "shortText": "News",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "news",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4047365&section=news",
+       "text": "News",
+       "shortText": "News",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "bio",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/bio/_/id/4047365/josh-jacobs",
+       "text": "Bio",
+       "shortText": "Bio",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "bio",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4047365&section=bio",
+       "text": "Bio",
+       "shortText": "Bio",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "overview",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/_/id/4047365/josh-jacobs",
+       "text": "Overview",
+       "shortText": "Overview",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "overview",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4047365",
+       "text": "Overview",
+       "shortText": "Overview",
+       "isExternal": false,
+       "isPremium": false
+      }
+     ],
+     "birthPlace": {
+      "city": "Tulsa",
+      "state": "OK",
+      "country": "USA"
+     },
+     "college": {
+      "id": "333",
+      "guid": "284484f2-b714-35bc-9162-4dc652590b02",
+      "mascot": "Crimson Tide",
+      "name": "Alabama",
+      "shortName": "Alabama",
+      "abbrev": "ALA",
+      "logos": [
+       {
+        "href": "https://a.espncdn.com/i/teamlogos/ncaa/500/333.png",
+        "width": 500,
+        "height": 500,
+        "alt": "",
+        "rel": [
+         "full",
+         "default"
+        ],
+        "lastUpdated": "2025-12-19T23:48Z"
+       },
+       {
+        "href": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/333.png",
+        "width": 500,
+        "height": 500,
+        "alt": "",
+        "rel": [
+         "full",
+         "dark"
+        ],
+        "lastUpdated": "2025-12-19T23:47Z"
+       }
+      ]
+     },
+     "slug": "josh-jacobs",
+     "headshot": {
+      "href": "https://a.espncdn.com/i/headshots/nfl/players/full/4047365.png",
+      "alt": "Josh Jacobs"
+     },
+     "jersey": "8",
+     "position": {
+      "id": "9",
+      "name": "Running Back",
+      "displayName": "Running Back",
+      "abbreviation": "RB",
+      "leaf": true,
+      "parent": {
+       "id": "70",
+       "name": "Offense",
+       "displayName": "Offense",
+       "abbreviation": "OFF",
+       "leaf": false
+      }
+     },
+     "injuries": [
+      {
+       "status": "Out",
+       "date": "2026-09-13T15:09Z"
+      }
+     ],
+     "teams": [
+      {
+       "$ref": "http://sports.core.api.espn.pvt/v2/sports/football/leagues/nfl/seasons/2026/teams/9?lang=en&region=us"
+      }
+     ],
+     "contracts": [
+      {
+       "salary": 7193836,
+       "season": {
+        "year": 2019,
+        "startDate": "2019-07-31T07:00Z",
+        "endDate": "2020-02-06T07:59Z"
+       }
+      },
+      {
+       "salary": 1037427,
+       "season": {
+        "year": 2020,
+        "startDate": "2020-08-05T07:00Z",
+        "endDate": "2021-02-10T07:59Z"
+       }
+      },
+      {
+       "salary": 1579854,
+       "season": {
+        "year": 2021,
+        "startDate": "2021-07-17T07:00Z",
+        "endDate": "2022-02-16T07:59Z"
+       }
+      },
+      {
+       "salary": 2122281,
+       "season": {
+        "year": 2022,
+        "startDate": "2022-08-01T07:00Z",
+        "endDate": "2023-02-15T07:59Z"
+       }
+      },
+      {
+       "salary": 11791000,
+       "season": {
+        "year": 2023,
+        "startDate": "2023-08-01T07:00Z",
+        "endDate": "2024-02-15T07:59Z"
+       }
+      },
+      {
+       "salary": 14800000,
+       "season": {
+        "year": 2024,
+        "startDate": "2024-08-01T07:00Z",
+        "endDate": "2025-02-15T07:59Z"
+       }
+      },
+      {
+       "salary": 8200000,
+       "season": {
+        "year": 2025,
+        "startDate": "2025-07-31T07:00Z",
+        "endDate": "2026-02-12T07:59Z"
+       }
+      },
+      {
+       "salary": 11500000,
+       "season": {
+        "year": 2026,
+        "startDate": "2026-08-06T07:00Z",
+        "endDate": "2027-02-16T07:59Z"
+       }
+      },
+      {
+       "salary": 13500000
+      }
+     ],
+     "experience": {
+      "years": 8
+     },
+     "contract": {
+      "optionType": 0,
+      "salary": 11500000,
+      "bonus": 0,
+      "salaryRemaining": 13500000,
+      "yearsRemaining": 1,
+      "signedThrough": 2027,
+      "season": {
+       "year": 2026,
+       "startDate": "2026-08-06T07:00Z",
+       "endDate": "2027-02-16T07:59Z"
+      },
+      "active": true
+     },
+     "status": {
+      "id": "15",
+      "name": "News",
+      "type": "news",
+      "abbreviation": "News"
+     }
+    },
+    {
+     "id": "4819231",
+     "uid": "s:20~l:28~a:4819231",
+     "guid": "69abf2e0-5e51-3367-a4cf-2eaf9d46ff9b",
+     "alternateIds": {
+      "sdr": "4819231"
+     },
+     "firstName": "Kaleb",
+     "lastName": "Johnson",
+     "fullName": "Kaleb Johnson",
+     "displayName": "Kaleb Johnson",
+     "shortName": "K. Johnson",
+     "weight": 224.0,
+     "displayWeight": "224 lbs",
+     "height": 73.0,
+     "displayHeight": "6' 1\"",
+     "age": 23,
+     "dateOfBirth": "2003-08-14T07:00Z",
+     "links": [
+      {
+       "language": "en-US",
+       "rel": [
+        "playercard",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/_/id/4819231/kaleb-johnson",
+       "text": "Player Card",
+       "shortText": "Player Card",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "stats",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/stats/_/id/4819231/kaleb-johnson",
+       "text": "Stats",
+       "shortText": "Stats",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "stats",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4819231&section=stats",
+       "text": "Stats",
+       "shortText": "Stats",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "splits",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/splits/_/id/4819231/kaleb-johnson",
+       "text": "Splits",
+       "shortText": "Splits",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "gamelog",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/gamelog/_/id/4819231/kaleb-johnson",
+       "text": "Game Log",
+       "shortText": "Game Log",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "gamelog",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4819231&section=gamelog",
+       "text": "Game Log",
+       "shortText": "Game Log",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "news",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/news/_/id/4819231/kaleb-johnson",
+       "text": "News",
+       "shortText": "News",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "news",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4819231&section=news",
+       "text": "News",
+       "shortText": "News",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "bio",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/bio/_/id/4819231/kaleb-johnson",
+       "text": "Bio",
+       "shortText": "Bio",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "bio",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4819231&section=bio",
+       "text": "Bio",
+       "shortText": "Bio",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "overview",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/_/id/4819231/kaleb-johnson",
+       "text": "Overview",
+       "shortText": "Overview",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "overview",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4819231",
+       "text": "Overview",
+       "shortText": "Overview",
+       "isExternal": false,
+       "isPremium": false
+      }
+     ],
+     "birthPlace": {
+      "city": "Hamilton",
+      "state": "OH",
+      "country": "USA"
+     },
+     "college": {
+      "id": "2294",
+      "guid": "81ae5ece-a3fc-3b4e-b77b-20f0c416b2e2",
+      "mascot": "Hawkeyes",
+      "name": "Iowa",
+      "shortName": "Iowa",
+      "abbrev": "IOWA",
+      "logos": [
+       {
+        "href": "https://a.espncdn.com/i/teamlogos/ncaa/500/2294.png",
+        "width": 500,
+        "height": 500,
+        "alt": "",
+        "rel": [
+         "full",
+         "default"
+        ],
+        "lastUpdated": "2025-12-23T01:44Z"
+       },
+       {
+        "href": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2294.png",
+        "width": 500,
+        "height": 500,
+        "alt": "",
+        "rel": [
+         "full",
+         "dark"
+        ],
+        "lastUpdated": "2025-12-23T01:44Z"
+       }
+      ]
+     },
+     "slug": "kaleb-johnson",
+     "headshot": {
+      "href": "https://a.espncdn.com/i/headshots/nfl/players/full/4819231.png",
+      "alt": "Kaleb Johnson"
+     },
+     "jersey": "26",
+     "position": {
+      "id": "9",
+      "name": "Running Back",
+      "displayName": "Running Back",
+      "abbreviation": "RB",
+      "leaf": true,
+      "parent": {
+       "id": "70",
+       "name": "Offense",
+       "displayName": "Offense",
+       "abbreviation": "OFF",
+       "leaf": false
+      }
+     },
+     "injuries": [],
+     "teams": [
+      {
+       "$ref": "http://sports.core.api.espn.pvt/v2/sports/football/leagues/nfl/seasons/2026/teams/9?lang=en&region=us"
+      }
+     ],
+     "contracts": [
+      {
+       "salary": 2114228,
+       "season": {
+        "year": 2025,
+        "startDate": "2025-07-31T07:00Z",
+        "endDate": "2026-02-12T07:59Z"
+       }
+      },
+      {
+       "salary": 1129639,
+       "season": {
+        "year": 2026,
+        "startDate": "2026-08-06T07:00Z",
+        "endDate": "2027-02-16T07:59Z"
+       }
+      },
+      {
+       "salary": 1419278
+      },
+      {
+       "salary": 1708917
+      }
+     ],
+     "experience": {
+      "years": 2
+     },
+     "contract": {
+      "optionType": 0,
+      "salary": 1129639,
+      "bonus": 0,
+      "salaryRemaining": 3128195,
+      "yearsRemaining": 2,
+      "signedThrough": 2028,
+      "season": {
+       "year": 2026,
+       "startDate": "2026-08-06T07:00Z",
+       "endDate": "2027-02-16T07:59Z"
+      },
+      "active": true
+     },
+     "status": {
+      "id": "1",
+      "name": "Active",
+      "type": "active",
+      "abbreviation": "Active"
+     }
+    },
+    {
+     "id": "4362249",
+     "uid": "s:20~l:28~a:4362249",
+     "guid": "3e2ffc6d-de98-dfd9-ce4d-bce3b6d9eebe",
+     "alternateIds": {
+      "sdr": "4362249"
+     },
+     "firstName": "Jayden",
+     "lastName": "Reed",
+     "fullName": "Jayden Reed",
+     "displayName": "Jayden Reed",
+     "shortName": "J. Reed",
+     "weight": 187.0,
+     "displayWeight": "187 lbs",
+     "height": 71.0,
+     "displayHeight": "5' 11\"",
+     "age": 26,
+     "dateOfBirth": "2000-04-28T07:00Z",
+     "links": [
+      {
+       "language": "en-US",
+       "rel": [
+        "playercard",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/_/id/4362249/jayden-reed",
+       "text": "Player Card",
+       "shortText": "Player Card",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "stats",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/stats/_/id/4362249/jayden-reed",
+       "text": "Stats",
+       "shortText": "Stats",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "stats",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4362249&section=stats",
+       "text": "Stats",
+       "shortText": "Stats",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "splits",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/splits/_/id/4362249/jayden-reed",
+       "text": "Splits",
+       "shortText": "Splits",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "gamelog",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/gamelog/_/id/4362249/jayden-reed",
+       "text": "Game Log",
+       "shortText": "Game Log",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "gamelog",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4362249&section=gamelog",
+       "text": "Game Log",
+       "shortText": "Game Log",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "news",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/news/_/id/4362249/jayden-reed",
+       "text": "News",
+       "shortText": "News",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "news",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4362249&section=news",
+       "text": "News",
+       "shortText": "News",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "bio",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/bio/_/id/4362249/jayden-reed",
+       "text": "Bio",
+       "shortText": "Bio",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "bio",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4362249&section=bio",
+       "text": "Bio",
+       "shortText": "Bio",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "overview",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/_/id/4362249/jayden-reed",
+       "text": "Overview",
+       "shortText": "Overview",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "overview",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4362249",
+       "text": "Overview",
+       "shortText": "Overview",
+       "isExternal": false,
+       "isPremium": false
+      }
+     ],
+     "birthPlace": {
+      "city": "Naperville",
+      "state": "IL",
+      "country": "USA"
+     },
+     "college": {
+      "id": "127",
+      "guid": "09d12526-1ba9-3567-8afe-2a79cd6ea331",
+      "mascot": "Spartans",
+      "name": "Michigan State",
+      "shortName": "Michigan St",
+      "abbrev": "MSU",
+      "logos": [
+       {
+        "href": "https://a.espncdn.com/i/teamlogos/ncaa/500/127.png",
+        "width": 500,
+        "height": 500,
+        "alt": "",
+        "rel": [
+         "full",
+         "default"
+        ],
+        "lastUpdated": "2025-12-23T01:44Z"
+       },
+       {
+        "href": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/127.png",
+        "width": 500,
+        "height": 500,
+        "alt": "",
+        "rel": [
+         "full",
+         "dark"
+        ],
+        "lastUpdated": "2026-01-05T20:05Z"
+       }
+      ]
+     },
+     "slug": "jayden-reed",
+     "headshot": {
+      "href": "https://a.espncdn.com/i/headshots/nfl/players/full/4362249.png",
+      "alt": "Jayden Reed"
+     },
+     "jersey": "11",
+     "position": {
+      "id": "1",
+      "name": "Wide Receiver",
+      "displayName": "Wide Receiver",
+      "abbreviation": "WR",
+      "leaf": true,
+      "parent": {
+       "id": "70",
+       "name": "Offense",
+       "displayName": "Offense",
+       "abbreviation": "OFF",
+       "leaf": false
+      }
+     },
+     "injuries": [
+      {
+       "status": "Out",
+       "date": "2026-09-23T20:13Z"
+      }
+     ],
+     "teams": [
+      {
+       "$ref": "http://sports.core.api.espn.pvt/v2/sports/football/leagues/nfl/seasons/2026/teams/9?lang=en&region=us"
+      }
+     ],
+     "contracts": [
+      {
+       "salary": 2972384,
+       "season": {
+        "year": 2023,
+        "startDate": "2023-08-01T07:00Z",
+        "endDate": "2024-02-15T07:59Z"
+       }
+      },
+      {
+       "salary": 1076399,
+       "season": {
+        "year": 2024,
+        "startDate": "2024-08-01T07:00Z",
+        "endDate": "2025-02-15T07:59Z"
+       }
+      },
+      {
+       "salary": 1402798,
+       "season": {
+        "year": 2025,
+        "startDate": "2025-07-31T07:00Z",
+        "endDate": "2026-02-12T07:59Z"
+       }
+      },
+      {
+       "salary": 21229197,
+       "season": {
+        "year": 2026,
+        "startDate": "2026-08-06T07:00Z",
+        "endDate": "2027-02-16T07:59Z"
+       }
+      },
+      {
+       "salary": 5875000
+      },
+      {
+       "salary": 12625000
+      },
+      {
+       "salary": 12250000
+      }
+     ],
+     "experience": {
+      "years": 4
+     },
+     "contract": {
+      "optionType": 0,
+      "salary": 21229197,
+      "bonus": 0,
+      "salaryRemaining": 30750000,
+      "yearsRemaining": 3,
+      "signedThrough": 2029,
+      "season": {
+       "year": 2026,
+       "startDate": "2026-08-06T07:00Z",
+       "endDate": "2027-02-16T07:59Z"
+      },
+      "active": true
+     },
+     "status": {
+      "id": "1",
+      "name": "Active",
+      "type": "active",
+      "abbreviation": "Active"
+     }
+    }
+   ]
+  },
+  {
+   "position": "defense",
+   "items": [
+    {
+     "id": "4887255",
+     "uid": "s:20~l:28~a:4887255",
+     "guid": "ccdb7615-d2f5-3dab-8727-f05501e7253f",
+     "alternateIds": {
+      "sdr": "4887255"
+     },
+     "firstName": "Anthony",
+     "lastName": "Campbell",
+     "fullName": "Anthony Campbell",
+     "displayName": "Anthony Campbell",
+     "shortName": "A. Campbell",
+     "weight": 307.0,
+     "displayWeight": "307 lbs",
+     "height": 78.0,
+     "displayHeight": "6' 6\"",
+     "age": 26,
+     "dateOfBirth": "2000-09-09T07:00Z",
+     "links": [
+      {
+       "language": "en-US",
+       "rel": [
+        "playercard",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/_/id/4887255/anthony-campbell",
+       "text": "Player Card",
+       "shortText": "Player Card",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "stats",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/stats/_/id/4887255/anthony-campbell",
+       "text": "Stats",
+       "shortText": "Stats",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "stats",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4887255&section=stats",
+       "text": "Stats",
+       "shortText": "Stats",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "splits",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/splits/_/id/4887255/anthony-campbell",
+       "text": "Splits",
+       "shortText": "Splits",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "gamelog",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/gamelog/_/id/4887255/anthony-campbell",
+       "text": "Game Log",
+       "shortText": "Game Log",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "gamelog",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4887255&section=gamelog",
+       "text": "Game Log",
+       "shortText": "Game Log",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "news",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/news/_/id/4887255/anthony-campbell",
+       "text": "News",
+       "shortText": "News",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "news",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4887255&section=news",
+       "text": "News",
+       "shortText": "News",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "bio",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/bio/_/id/4887255/anthony-campbell",
+       "text": "Bio",
+       "shortText": "Bio",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "bio",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4887255&section=bio",
+       "text": "Bio",
+       "shortText": "Bio",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "overview",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/_/id/4887255/anthony-campbell",
+       "text": "Overview",
+       "shortText": "Overview",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "overview",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4887255",
+       "text": "Overview",
+       "shortText": "Overview",
+       "isExternal": false,
+       "isPremium": false
+      }
+     ],
+     "birthPlace": {
+      "city": "Bartow",
+      "state": "FL",
+      "country": "USA"
+     },
+     "college": {
+      "id": "2390",
+      "guid": "6a9f5d5f-db5f-3a43-94b0-da8376403a1b",
+      "mascot": "Hurricanes",
+      "name": "Miami",
+      "shortName": "Miami",
+      "abbrev": "MIA",
+      "logos": [
+       {
+        "href": "https://a.espncdn.com/i/teamlogos/ncaa/500/2390.png",
+        "width": 500,
+        "height": 500,
+        "alt": "",
+        "rel": [
+         "full",
+         "default"
+        ],
+        "lastUpdated": "2025-12-19T22:33Z"
+       },
+       {
+        "href": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2390.png",
+        "width": 500,
+        "height": 500,
+        "alt": "",
+        "rel": [
+         "full",
+         "dark"
+        ],
+        "lastUpdated": "2025-12-19T22:35Z"
+       }
+      ]
+     },
+     "slug": "anthony-campbell",
+     "headshot": {
+      "href": "https://a.espncdn.com/i/headshots/nfl/players/full/4887255.png",
+      "alt": "Anthony Campbell"
+     },
+     "jersey": "93",
+     "position": {
+      "id": "32",
+      "name": "Defensive Tackle",
+      "displayName": "Defensive Tackle",
+      "abbreviation": "DT",
+      "leaf": true,
+      "parent": {
+       "id": "71",
+       "name": "Defense",
+       "displayName": "Defense",
+       "abbreviation": "DEF",
+       "leaf": false
+      }
+     },
+     "injuries": [
+      {
+       "status": "Questionable",
+       "date": "2026-09-22T01:07Z"
+      }
+     ],
+     "teams": [
+      {
+       "$ref": "http://sports.core.api.espn.pvt/v2/sports/football/leagues/nfl/seasons/2026/teams/9?lang=en&region=us"
+      }
+     ],
+     "contracts": [],
+     "experience": {
+      "years": 1
+     },
+     "status": {
+      "id": "1",
+      "name": "Active",
+      "type": "active",
+      "abbreviation": "Active"
+     }
+    }
+   ]
+  },
+  {
+   "position": "specialTeam",
+   "items": []
+  },
+  {
+   "position": "injuredReserveOrOut",
+   "items": [
+    {
+     "id": "4428085",
+     "uid": "s:20~l:28~a:4428085",
+     "guid": "bf6276c6-a204-a38c-d2cb-3551352e6a78",
+     "alternateIds": {
+      "sdr": "4428085"
+     },
+     "firstName": "Luke",
+     "lastName": "Musgrave",
+     "fullName": "Luke Musgrave",
+     "displayName": "Luke Musgrave",
+     "shortName": "L. Musgrave",
+     "weight": 253.0,
+     "displayWeight": "253 lbs",
+     "height": 78.0,
+     "displayHeight": "6' 6\"",
+     "age": 26,
+     "dateOfBirth": "2000-09-02T07:00Z",
+     "links": [
+      {
+       "language": "en-US",
+       "rel": [
+        "playercard",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/_/id/4428085/luke-musgrave",
+       "text": "Player Card",
+       "shortText": "Player Card",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "stats",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/stats/_/id/4428085/luke-musgrave",
+       "text": "Stats",
+       "shortText": "Stats",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "stats",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4428085&section=stats",
+       "text": "Stats",
+       "shortText": "Stats",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "splits",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/splits/_/id/4428085/luke-musgrave",
+       "text": "Splits",
+       "shortText": "Splits",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "gamelog",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/gamelog/_/id/4428085/luke-musgrave",
+       "text": "Game Log",
+       "shortText": "Game Log",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "gamelog",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4428085&section=gamelog",
+       "text": "Game Log",
+       "shortText": "Game Log",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "news",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/news/_/id/4428085/luke-musgrave",
+       "text": "News",
+       "shortText": "News",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "news",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4428085&section=news",
+       "text": "News",
+       "shortText": "News",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "bio",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/bio/_/id/4428085/luke-musgrave",
+       "text": "Bio",
+       "shortText": "Bio",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "bio",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4428085&section=bio",
+       "text": "Bio",
+       "shortText": "Bio",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "overview",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/_/id/4428085/luke-musgrave",
+       "text": "Overview",
+       "shortText": "Overview",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "overview",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4428085",
+       "text": "Overview",
+       "shortText": "Overview",
+       "isExternal": false,
+       "isPremium": false
+      }
+     ],
+     "birthPlace": {
+      "city": "Bend",
+      "state": "OR",
+      "country": "USA"
+     },
+     "college": {
+      "id": "204",
+      "guid": "41fda33a-d6a5-3594-ac8c-0ab5e8c1148b",
+      "mascot": "Beavers",
+      "name": "Oregon State",
+      "shortName": "Oregon St",
+      "abbrev": "ORST",
+      "logos": [
+       {
+        "href": "https://a.espncdn.com/i/teamlogos/ncaa/500/204.png",
+        "width": 500,
+        "height": 500,
+        "alt": "",
+        "rel": [
+         "full",
+         "default"
+        ],
+        "lastUpdated": "2025-12-24T20:19Z"
+       },
+       {
+        "href": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/204.png",
+        "width": 500,
+        "height": 500,
+        "alt": "",
+        "rel": [
+         "full",
+         "dark"
+        ],
+        "lastUpdated": "2025-12-24T20:18Z"
+       }
+      ]
+     },
+     "slug": "luke-musgrave",
+     "headshot": {
+      "href": "https://a.espncdn.com/i/headshots/nfl/players/full/4428085.png",
+      "alt": "Luke Musgrave"
+     },
+     "jersey": "88",
+     "position": {
+      "id": "7",
+      "name": "Tight End",
+      "displayName": "Tight End",
+      "abbreviation": "TE",
+      "leaf": true,
+      "parent": {
+       "id": "70",
+       "name": "Offense",
+       "displayName": "Offense",
+       "abbreviation": "OFF",
+       "leaf": false
+      }
+     },
+     "injuries": [
+      {
+       "status": "Out",
+       "date": "2026-09-01T15:24Z"
+      }
+     ],
+     "teams": [
+      {
+       "$ref": "http://sports.core.api.espn.pvt/v2/sports/football/leagues/nfl/seasons/2026/teams/9?lang=en&region=us"
+      }
+     ],
+     "contracts": [
+      {
+       "salary": 3914176,
+       "season": {
+        "year": 2023,
+        "startDate": "2023-08-01T07:00Z",
+        "endDate": "2024-02-15T07:59Z"
+       }
+      },
+      {
+       "salary": 1135261,
+       "season": {
+        "year": 2024,
+        "startDate": "2024-08-01T07:00Z",
+        "endDate": "2025-02-15T07:59Z"
+       }
+      },
+      {
+       "salary": 1520522,
+       "season": {
+        "year": 2025,
+        "startDate": "2025-07-31T07:00Z",
+        "endDate": "2026-02-12T07:59Z"
+       }
+      },
+      {
+       "salary": 1905783,
+       "season": {
+        "year": 2026,
+        "startDate": "2026-08-06T07:00Z",
+        "endDate": "2027-02-16T07:59Z"
+       }
+      }
+     ],
+     "experience": {
+      "years": 4
+     },
+     "contract": {
+      "optionType": 0,
+      "salary": 1905783,
+      "bonus": 0,
+      "yearsRemaining": 0,
+      "signedThrough": 2026,
+      "season": {
+       "year": 2026,
+       "startDate": "2026-08-06T07:00Z",
+       "endDate": "2027-02-16T07:59Z"
+      },
+      "active": true
+     },
+     "status": {
+      "id": "13",
+      "name": "Day-To-Day",
+      "type": "day-to-day",
+      "abbreviation": "Day-To-Day"
+     }
+    }
+   ]
+  },
+  {
+   "position": "suspended",
+   "items": []
+  },
+  {
+   "position": "practiceSquad",
+   "items": [
+    {
+     "id": "4249836",
+     "uid": "s:20~l:28~a:4249836",
+     "guid": "917bb30a-75c3-de54-340c-f674a0615516",
+     "alternateIds": {
+      "sdr": "4249836"
+     },
+     "firstName": "Pierre",
+     "lastName": "Strong Jr.",
+     "fullName": "Pierre Strong Jr.",
+     "displayName": "Pierre Strong Jr.",
+     "shortName": "P. Strong Jr.",
+     "weight": 207.0,
+     "displayWeight": "207 lbs",
+     "height": 71.0,
+     "displayHeight": "5' 11\"",
+     "age": 27,
+     "dateOfBirth": "1998-12-10T08:00Z",
+     "links": [
+      {
+       "language": "en-US",
+       "rel": [
+        "playercard",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/_/id/4249836/pierre-strong-jr",
+       "text": "Player Card",
+       "shortText": "Player Card",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "stats",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/stats/_/id/4249836/pierre-strong-jr",
+       "text": "Stats",
+       "shortText": "Stats",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "stats",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4249836&section=stats",
+       "text": "Stats",
+       "shortText": "Stats",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "splits",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/splits/_/id/4249836/pierre-strong-jr",
+       "text": "Splits",
+       "shortText": "Splits",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "gamelog",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/gamelog/_/id/4249836/pierre-strong-jr",
+       "text": "Game Log",
+       "shortText": "Game Log",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "gamelog",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4249836&section=gamelog",
+       "text": "Game Log",
+       "shortText": "Game Log",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "news",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/news/_/id/4249836/pierre-strong-jr",
+       "text": "News",
+       "shortText": "News",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "news",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4249836&section=news",
+       "text": "News",
+       "shortText": "News",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "bio",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/bio/_/id/4249836/pierre-strong-jr",
+       "text": "Bio",
+       "shortText": "Bio",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "bio",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4249836&section=bio",
+       "text": "Bio",
+       "shortText": "Bio",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "overview",
+        "desktop",
+        "athlete"
+       ],
+       "href": "https://www.espn.com/nfl/player/_/id/4249836/pierre-strong-jr",
+       "text": "Overview",
+       "shortText": "Overview",
+       "isExternal": false,
+       "isPremium": false
+      },
+      {
+       "language": "en-US",
+       "rel": [
+        "overview",
+        "sportscenter",
+        "app",
+        "athlete"
+       ],
+       "href": "sportscenter://x-callback-url/showClubhouse?uid=s:20~l:28~a:4249836",
+       "text": "Overview",
+       "shortText": "Overview",
+       "isExternal": false,
+       "isPremium": false
+      }
+     ],
+     "birthPlace": {
+      "city": "Little Rock",
+      "state": "AR",
+      "country": "USA"
+     },
+     "college": {
+      "id": "2571",
+      "guid": "5562c8b4-42f8-38ea-86ba-6d1779273f82",
+      "mascot": "Jackrabbits",
+      "name": "South Dakota State",
+      "shortName": "S Dakota St",
+      "abbrev": "SDST",
+      "logos": [
+       {
+        "href": "https://a.espncdn.com/i/teamlogos/ncaa/500/2571.png",
+        "width": 500,
+        "height": 500,
+        "alt": "",
+        "rel": [
+         "full",
+         "default"
+        ],
+        "lastUpdated": "2023-03-01T14:17Z"
+       },
+       {
+        "href": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2571.png",
+        "width": 500,
+        "height": 500,
+        "alt": "",
+        "rel": [
+         "full",
+         "dark"
+        ],
+        "lastUpdated": "2023-03-01T14:18Z"
+       }
+      ]
+     },
+     "slug": "pierre-strong-jr",
+     "headshot": {
+      "href": "https://a.espncdn.com/i/headshots/nfl/players/full/4249836.png",
+      "alt": "Pierre Strong Jr."
+     },
+     "jersey": "22",
+     "position": {
+      "id": "9",
+      "name": "Running Back",
+      "displayName": "Running Back",
+      "abbreviation": "RB",
+      "leaf": true,
+      "parent": {
+       "id": "70",
+       "name": "Offense",
+       "displayName": "Offense",
+       "abbreviation": "OFF",
+       "leaf": false
+      }
+     },
+     "injuries": [
+      {
+       "status": "Questionable",
+       "date": "2026-09-10T23:10Z"
+      }
+     ],
+     "contracts": [
+      {
+       "salary": 1418428,
+       "season": {
+        "year": 2022,
+        "startDate": "2022-08-01T07:00Z",
+        "endDate": "2023-02-15T07:59Z"
+       }
+      },
+      {
+       "salary": 870000,
+       "season": {
+        "year": 2023,
+        "startDate": "2023-08-01T07:00Z",
+        "endDate": "2024-02-15T07:59Z"
+       }
+      },
+      {
+       "salary": 985000,
+       "season": {
+        "year": 2024,
+        "startDate": "2024-08-01T07:00Z",
+        "endDate": "2025-02-15T07:59Z"
+       }
+      },
+      {
+       "salary": 1100000,
+       "season": {
+        "year": 2025,
+        "startDate": "2025-07-31T07:00Z",
+        "endDate": "2026-02-12T07:59Z"
+       }
+      },
+      {
+       "salary": 1215000,
+       "season": {
+        "year": 2026,
+        "startDate": "2026-08-06T07:00Z",
+        "endDate": "2027-02-16T07:59Z"
+       }
+      }
+     ],
+     "experience": {
+      "years": 4
+     },
+     "contract": {
+      "optionType": 0,
+      "salary": 1215000,
+      "bonus": 0,
+      "yearsRemaining": 0,
+      "signedThrough": 2026,
+      "season": {
+       "year": 2026,
+       "startDate": "2026-08-06T07:00Z",
+       "endDate": "2027-02-16T07:59Z"
+      },
+      "active": true
+     },
+     "status": {
+      "id": "29",
+      "name": "Practice Squad",
+      "type": "practice-squad",
+      "abbreviation": "Practice Squad"
+     }
+    }
+   ]
+  }
+ ]
+}

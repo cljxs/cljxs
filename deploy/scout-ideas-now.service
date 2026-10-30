@@ -1,0 +1,22 @@
+[Unit]
+Description=Find new ideas now: Scout's niche scan, then Scout's idea run (the house's button)
+Documentation=https://github.com/cljxs/cljxs
+After=network-online.target
+
+[Service]
+# Owner, 2026-10-28: "I thought the run market scan was a get ideas now
+# button." The button in Scout's house starts this: the 06:30 scan and the
+# 08:00 idea run, one after the other, now. Each is the timer's own command,
+# unchanged - so the idea run still holds itself back (and says why) when
+# ideas are already waiting on the owner. The idea run uses the owner's
+# Claude plan, not money (tasks/engines.json).
+Type=oneshot
+User=root
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WorkingDirectory=/root/ecosystem/agents/scout
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/niche-scan.py run
+ExecStart=/root/ecosystem/scripts/scout-cycle.sh
+TimeoutStartSec=4500
+StandardOutput=journal
+StandardError=journal

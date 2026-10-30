@@ -1,0 +1,12 @@
+[Unit]
+Description=Ace Props: the day's bets, at 12:30 and 17:30 Eastern
+
+[Timer]
+# 12:30 judges games starting before 17:45 ET (weekend afternoons), 17:30 the
+# evening slate (ace-props.py SPLIT_ET); both share the 2-a-day cap.
+OnCalendar=*-*-* 12:30 America/New_York
+OnCalendar=*-*-* 17:30 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

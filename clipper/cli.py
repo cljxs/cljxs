@@ -1,0 +1,876 @@
+"""python3 -m clipper <command>
+
+    source add NAME --rights KIND --evidence "..." [--url U] [--attribution "..."] [--channel UC...]
+    source channel NAME --channel UC...   link a source to the creator's YouTube channel
+    source rules NAME [--tags "#a #b"] [--credit "Clip from @creator"]   what every post must carry
+    source rules NAME --hunt "Topic: term, term; Topic2: term"   moments a campaign asks for
+    source rules NAME --spell "Right: wrong, wrong; Right2: wrong"   names Whisper mishears
+    source rules NAME --avoid "term, term"   never clip these (sponsor reads never are)
+    source rules NAME --watermark FILE|URL [--cut-out-white] [--watermark-top PX]
+                                a campaign's watermark, burned into every clip
+    source list
+    ingest SOURCE FILE_OR_HTTPS_URL [--title "..."] [--move] [--remote]
+    queue SOURCE DROPBOX_LINK [--title "..."] [--hunt "..."]   the next pickup downloads and clips it
+    hooks "VIDEO TITLE" [--source NAME]   a hunt list written from the title (about a tenth of a cent)
+    hunt VIDEO_ID "Topic: term; ..."      one video's own hunt list ("" = its source's)
+    inbox [--retry ID]                    the links queued, and what became of them
+    run [--video ID]            transcribe, find moments, render - whatever is pending
+    retry VIDEO_ID              put a failed video back where it failed
+    refind VIDEO_ID             choose its moments again (a new --hunt); only before any clip exists
+    forget VIDEO_ID [--including-posted]   remove a video and all its clips (a test run)
+    storage                     where Clip's disk space is going
+    cleanup [--sources] [--yes] delete finished clips' videos (and finished sources); lists first
+
+  A campaign's own clip list (its moments, hooks and captions):
+    source rules NAME --cutlist NOTION_URL      import it
+    ingest SOURCE LINK --remote --episode YT_ID  the file is that published episode
+    cuts VIDEO_ID [N] [--episode YT_ID]         queue the campaign's first batch, or the next N
+    status                      videos, stages, errors, today's spend
+    clips [VIDEO_ID]            finished clips with score and reason
+
+  Approving and posting:
+    copy CLIP [--redo]          the title, caption and tags a clip will post with
+    edit CLIP [--title T] [--caption C] [--tags "a b c"]
+    approve CLIP                approve and post it (YouTube now, TikTok by hand until approved)
+    reject CLIP --why "..."
+    publish                     post anything approved and still waiting
+    posted CLIP tiktok [--url U]   you posted it by hand
+    delete CLIP                 its video goes and it leaves the studio (not a rejection)
+    youtube-login               sign Clip in to your YouTube channel (a code for the iPad)
+
+  Dropbox (videos you put in a shared folder):
+    source rules NAME --dropbox-folder LINK     a shared folder: every video put in it is picked up
+    pickup [--run]              ingest new videos from the Dropbox folders (and render them)
+
+  Spotter, the research assistant:
+    spot                        research now: trending creators, their clipped moments
+    trends                      what the last research found
+    remake TREND_ID             cut Clip's own version of a trending moment from permitted footage
+"""
+
+import argparse
+import json
+import re
+import sys
+
+from clipper import (campaign, config, db, dropbox, inbox, ingest, media, pipeline, postcopy, publish, report,
+                     rights, score, storage, transcribe, trends, youtube)
+
+
+# Every connection a command opens, closed when it ends (main). Left to the
+# garbage collector they were closed at random later moments, each with a
+# ResourceWarning - which the tests read in a command's output (2026-10-22).
+_OPEN = []
+
+
+def open_all():
+    cfg = config.load()
+    paths = config.paths()
+    conn = db.connect(paths["db"])
+    _OPEN.append(conn)
+    return cfg, paths, conn
+
+
+def cmd_source(a):
+    cfg, paths, conn = open_all()
+    if a.action == "add":
+        row = ingest.add_source(conn, cfg, a.name, a.rights, a.evidence or "", a.url, a.attribution,
+                                a.channel)
+        print(f"source {row['name']} added ({row['rights']}: {rights.RIGHTS[row['rights']]})")
+        return 0
+    if a.action == "rules":
+        if a.dropbox_folder is not None:
+            set_pickup(conn, a.name, a.dropbox_folder)
+        if a.cutlist:
+            for ep, (section, n, first) in campaign.import_list(conn, a.name, a.cutlist).items():
+                print(f"campaign list for YouTube {ep} ({section}): {n} moments, {first} to start with")
+            print("link a video to its episode with --episode on ingest, or `clipper cuts VIDEO --episode ID`")
+        if a.spell is not None:
+            # Added to what the source already has, not in place of it: a
+            # show's names come back every episode, and setting LaMelo's
+            # spellings for one video wiped KAT's (2026-10-08). The same
+            # mishearing given again takes the new spelling; --spell "" clears.
+            src = conn.execute("SELECT spellings FROM sources WHERE name = ?", (a.name,)).fetchone()
+            if not src:
+                raise ValueError(f"no source named {a.name!r}")
+            new = transcribe.parse_spellings(a.spell)
+            rules = {} if not a.spell.strip() else {
+                tuple(w): r for w, r in json.loads(src["spellings"] or "[]")}
+            rules.update({tuple(w): r for w, r in new})
+            rules = sorted(([list(w), r] for w, r in rules.items()), key=lambda x: -len(x[0]))
+            with conn:
+                conn.execute("UPDATE sources SET spellings = ? WHERE name = ?",
+                             (json.dumps(rules) if rules else None, a.name))
+            if not rules:
+                print("no spellings - captions use Whisper's words as heard")
+            for wrong, right in rules:
+                print(f"captions say {right!r} where Whisper wrote {' '.join(wrong)!r}")
+        if a.avoid is not None:
+            avoid = score.parse_avoid(a.avoid)
+            with conn:
+                n = conn.execute("UPDATE sources SET avoid = ? WHERE name = ?",
+                                 (json.dumps(avoid) if avoid else None, a.name)).rowcount
+            if not n:
+                raise ValueError(f"no source named {a.name!r}")
+            print(f"never clipping: {', '.join(avoid) or 'nothing extra'} "
+                  f"(sponsor reads are always skipped)")
+            print("a video already searched keeps its picks - `refind VIDEO` searches it again")
+        if a.hunt is not None:
+            hunt = score.parse_hunt(a.hunt)
+            with conn:
+                n = conn.execute("UPDATE sources SET hunt = ? WHERE name = ?",
+                                 (json.dumps(hunt) if hunt else None, a.name)).rowcount
+            if not n:
+                raise ValueError(f"no source named {a.name!r}")
+            for t in hunt:
+                print(f"hunting: {t['name']} ({', '.join(t['terms'])})")
+            if hunt:
+                print("a video already searched keeps its picks - `refind VIDEO` searches it again")
+        # A new watermark and its position are checked together: checking the
+        # position first, against the watermark it replaces, refused the
+        # droplet's first real run (the old one was the flattened white box).
+        if a.watermark:
+            ingest.set_watermark(conn, paths, cfg, a.name, a.watermark, a.cut_out_white,
+                                 a.watermark_top)
+        elif a.watermark_top is not None:
+            ingest.set_watermark_top(conn, cfg, a.name, a.watermark_top)
+        s = conn.execute("SELECT * FROM sources WHERE name = ?", (a.name,)).fetchone()
+        if s and s["watermark"] and (a.watermark or a.watermark_top is not None):
+            from clipper import render
+            w, h, x, y = render.check_watermark(s["watermark"], render.source_cfg(cfg, s))
+            print(f"watermark kept: {w}x{h}, centred at {x},{y} on every clip from {a.name}, "
+                  f"start to finish")
+        with conn:
+            n = conn.execute("UPDATE sources SET post_tags = COALESCE(?, post_tags), "
+                             "credit = COALESCE(?, credit) WHERE name = ?",
+                             (" ".join("#" + t for t in postcopy.tags_of(a.tags)) if a.tags is not None else None,
+                              a.credit, a.name)).rowcount
+        if not n:
+            raise ValueError(f"no source named {a.name!r}")
+        s = conn.execute("SELECT * FROM sources WHERE name = ?", (a.name,)).fetchone()
+        print(f"every post from {a.name} carries: tags {s['post_tags'] or '(none)'}; "
+              f"credit {s['credit'] or '(none)'}")
+        return 0
+    if a.action == "channel":
+        ingest.set_channel(conn, a.name, a.channel)
+        print(f"source {a.name} linked to channel {a.channel} - Spotter now treats that creator "
+              f"as one Clip may cut")
+        return 0
+    for s in conn.execute("SELECT * FROM sources ORDER BY id"):
+        flag = ("" if s["active"] else "  [inactive]") + ("  [watermark]" if s["watermark"] else "")
+        print(f"{s['id']:>3}  {s['name']:<24} {s['rights']:<14} {s['evidence'][:60]}{flag}")
+    return 0
+
+
+def set_pickup(conn, name, folder):
+    """A source's Dropbox folder; "" clears it."""
+    if folder and not (folder.startswith("https://") and ingest.is_dropbox_folder(folder)):
+        raise ValueError("--dropbox-folder wants a Dropbox folder's share link "
+                         "(https://www.dropbox.com/scl/fo/...)")
+    with conn:
+        n = conn.execute("UPDATE sources SET dropbox_folder = ? WHERE name = ?",
+                         (folder or None, name)).rowcount
+        if not n:
+            raise ValueError(f"no source named {name!r}")
+    if folder:
+        print(f"every new video in that Dropbox folder becomes a {name} video "
+              f"(python3 -m clipper pickup, or its timer)")
+    elif folder == "":
+        print(f"no Dropbox folder is picked up for {name} any more")
+
+
+def cmd_pickup(a):
+    cfg, paths, conn = open_all()
+    # A link pasted in Clip's house first - one a tick (inbox.py).
+    item = inbox.drain_one(conn, paths, cfg) if a.run else None
+    if item:
+        print(f"inbox #{item['id']}: {item['state']}"
+              + (f" - video {item['video_id']}" if item["video_id"] else "")
+              + (f" ({item['note']})" if item["note"] else ""))
+    r = dropbox.pickup(conn, paths, cfg)
+    print(f"Dropbox: {len(r['new'])} new video(s)"
+          + (f" ({', '.join(map(str, r['new']))})" if r["new"] else "")
+          + f", {r['skipped']} already picked up, {r['failed']} could not be (see clipper status)")
+    # Approved posts still waiting - held by YouTube's daily limit or the daily
+    # cap. Nothing sent them before: "goes out tomorrow" never did.
+    if a.run and publish.waiting(conn) and not publish.youtube_held():
+        print_results(publish.publish(conn, cfg))
+    # Any video waiting, not only a new Dropbox one. 2026-10-08: a video added
+    # by hand with `ingest` sat unclipped for a day, because this timer only
+    # ran the pipeline when Dropbox brought something new. A video that keeps
+    # failing is parked after MAX_ATTEMPTS, so this cannot retry it forever.
+    waiting = [v["id"] for v in pipeline.unfinished(conn)]
+    if a.run and waiting:
+        try:
+            pipeline.run(conn, paths, cfg)
+        except pipeline.Busy:
+            print("a run is already going - it will get to them")
+            return 0
+        for vid in waiting:
+            v = conn.execute("SELECT stage, error FROM videos WHERE id = ?", (vid,)).fetchone()
+            print(f"video {vid}: {v['stage']}" + (f" - {v['error']}" if v["error"] else ""))
+    return 0
+
+
+def cmd_queue(a):
+    cfg, paths, conn = open_all()
+    row = inbox.queue(conn, a.source, a.link, a.title, a.hunt, a.youtube)
+    hunt = json.loads(row["hunt"]) if row["hunt"] else []
+    print(f"inbox #{row['id']} queued for {row['source']}"
+          + (f" with {len(hunt)} hook topic(s)" if hunt else " - no hooks: it uses the source's list")
+          + ". The next pickup (every 15 minutes) downloads it and clips it.")
+    return 0
+
+
+def cmd_hooks(a):
+    cfg, paths, conn = open_all()
+    notes = []
+    text, cost = inbox.hooks(conn, cfg, a.title, a.source or "", youtube=a.youtube, notes=notes)
+    print(text)
+    for n in notes:
+        print(n)
+    print(f"(cost ${float(cost or 0):.4f})", file=sys.stderr)
+    return 0
+
+
+def cmd_hunt(a):
+    """A video's own hunt list - then `refind` to choose its moments again."""
+    cfg, paths, conn = open_all()
+    topics = score.parse_hunt(a.hunt)
+    with conn:
+        n = conn.execute("UPDATE videos SET hunt = ? WHERE id = ?",
+                         (json.dumps(topics) if topics else None, a.video)).rowcount
+    if not n:
+        raise ValueError(f"no video {a.video}")
+    for t in topics:
+        print(f"hunting: {t['name']} ({', '.join(t['terms'])})")
+    print(f"video {a.video}: {'its own list' if topics else 'back to its source list'}. "
+          f"To use it on moments already chosen: python3 -m clipper refind {a.video}")
+    return 0
+
+
+def cmd_inbox(a):
+    cfg, paths, conn = open_all()
+    if a.retry:
+        inbox.retry(conn, a.retry)
+        print(f"inbox #{a.retry} queued again")
+        return 0
+    for r in inbox.recent(conn, 20):
+        print(f"  #{r['id']:<4}{r['state']:<9}{r['source']:<16}{(r['title'] or r['url'])[:50]}"
+              + (f"  video {r['video_id']}" if r["video_id"] else "")
+              + (f"\n        {r['note']}" if r["note"] else ""))
+    return 0
+
+
+def cmd_ingest(a):
+    cfg, paths, conn = open_all()
+    row, new = ingest.ingest(conn, paths, a.source, a.origin, a.title, a.move, a.remote)
+    if a.episode:
+        row = set_episode(conn, row, a.episode)
+    if new:
+        where = " - left in place, read over the network" if a.remote else ""
+        print(f"video {row['id']} ingested: {row['title']} ({row['duration'] / 60:.1f} min){where}. "
+              f"Clip starts on it within 15 minutes, or now with: clipper/.venv/bin/python -m clipper run")
+    else:
+        print(f"already have it: video {row['id']} ({row['title']}, stage {row['stage']}) - "
+              f"the same file is never processed twice")
+    return 0
+
+
+def set_episode(conn, video, episode):
+    """Link a video to the published YouTube episode it is (an id or a link)."""
+    m = campaign.YT.search(episode)
+    ep = m.group(1) if m else episode.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", ep):
+        raise ValueError(f"{episode!r} is not a YouTube video id or link")
+    with conn:
+        conn.execute("UPDATE videos SET episode = ? WHERE id = ?", (ep, video["id"]))
+    video = conn.execute("SELECT * FROM videos WHERE id = ?", (video["id"],)).fetchone()
+    n = len(campaign.entries(conn, video))
+    print(f"video {video['id']} is YouTube episode {ep}"
+          + (f" - the campaign lists {n} moments for it" if n else " - no campaign list for it yet"))
+    return video
+
+
+def cmd_cuts(a):
+    cfg, paths, conn = open_all()
+    v = conn.execute("SELECT * FROM videos WHERE id = ?", (a.video,)).fetchone()
+    if not v:
+        raise ValueError(f"no video {a.video}")
+    if a.episode:
+        v = set_episode(conn, v, a.episode)
+    if not campaign.entries(conn, v):
+        raise ValueError(f"video {a.video} has no campaign list - import one with "
+                         f"`source rules NAME --cutlist URL` and link the episode with --episode")
+    if v["stage"] in ("ingested",) or (v["stage"] == "failed" and (v["error"] or "").startswith("ingested")):
+        raise ValueError(f"video {a.video} is not transcribed yet - `run` first")
+    todo = campaign.queue(conn, paths, cfg, v, n=a.n, first_batch=a.n is None)
+    if not todo and a.n is None:
+        todo = campaign.queue(conn, paths, cfg, v, n=cfg["max_clips_per_video"])
+    if not todo:
+        print(f"every moment on the campaign's list for video {a.video} has been cut")
+        return 0
+    for r in todo:
+        print(f"  #{r['key']:<4} {pipeline.clock(r['start'])}-{pipeline.clock(r['end'])}  {r['hook'][:70]}")
+    print(f"queued {len(todo)}. Next: nice -n 19 clipper/.venv/bin/python -m clipper run --video {a.video}")
+    return 0
+
+
+def cmd_run(a):
+    cfg, paths, conn = open_all()
+    try:
+        results = pipeline.run(conn, paths, cfg, a.video)
+    except pipeline.Busy as exc:
+        print(exc, file=sys.stderr)
+        return 3
+    if not results:
+        print("nothing pending")
+        return 0
+    bad = 0
+    for vid, ok in results.items():
+        v = conn.execute("SELECT * FROM videos WHERE id = ?", (vid,)).fetchone()
+        n = conn.execute("SELECT COUNT(*) FROM clips WHERE video_id = ?", (vid,)).fetchone()[0]
+        if ok:
+            print(f"video {vid} done: {n} clip(s) in {paths['clips'] / str(vid)}")
+        else:
+            bad += 1
+            print(f"video {vid} stopped at {v['stage']} (attempt {v['attempts']}): {v['error']}")
+    return 1 if bad else 0
+
+
+def cmd_refind(a):
+    cfg, paths, conn = open_all()
+    v = pipeline.refind(conn, a.video)
+    print(f"video {v['id']} back at transcribed: its moments will be chosen again (the "
+          f"transcript is kept). Run: clipper/.venv/bin/python -m clipper run --video {v['id']}")
+    return 0
+
+
+def cmd_forget(a):
+    cfg, paths, conn = open_all()
+    title, n, posted = pipeline.forget(conn, paths, a.video, a.including_posted)
+    print(f"forgot video {a.video} ({title}): {n} clip(s) and their files are gone"
+          + (f"; still online, take down by hand if wanted: {', '.join(posted)}" if posted else ""))
+    return 0
+
+
+def cmd_storage(a):
+    cfg, paths, conn = open_all()
+    for what, (n, size) in storage.report(conn, paths).items():
+        print(f"{what:<45} {n:>4}  {storage.mb(size)}")
+    return 0
+
+
+def cmd_cleanup(a):
+    """Finished clips' videos, and with --sources the source videos with
+    nothing left waiting. Lists without --yes; deletes with it."""
+    cfg, paths, conn = open_all()
+    lines, total = storage.cleanup(conn, sources=a.sources, apply=a.yes)
+    for line in lines:
+        print(("deleted " if a.yes else "would delete ") + line)
+    if not lines:
+        print("nothing to delete")
+    elif a.yes:
+        print(f"freed {storage.mb(total)}")
+    else:
+        print(f"{storage.mb(total)} would be freed - run again with --yes to delete")
+    return 0
+
+
+def cmd_retry(a):
+    cfg, paths, conn = open_all()
+    v = conn.execute("SELECT * FROM videos WHERE id = ?", (a.video,)).fetchone()
+    if not v:
+        print(f"no video {a.video}", file=sys.stderr)
+        return 2
+    stage = (v["error"] or "").split(":", 1)[0]
+    if v["stage"] != "failed" or stage not in pipeline.STAGES:
+        print(f"video {a.video} is at {v['stage']}, not failed - `run` picks it up as it is")
+        return 0
+    with conn:
+        conn.execute("UPDATE videos SET stage = ?, attempts = 0 WHERE id = ?", (stage, a.video))
+    print(f"video {a.video} back at {stage}. Run: python3 -m clipper run --video {a.video}")
+    return 0
+
+
+def cmd_status(a):
+    cfg, paths, conn = open_all()
+    rows = conn.execute("SELECT v.*, s.name AS source FROM videos v JOIN sources s "
+                        "ON s.id = v.source_id ORDER BY v.id DESC LIMIT 20").fetchall()
+    if not rows:
+        print("no videos yet")
+    for v in rows:
+        n = conn.execute("SELECT COUNT(*) FROM clips WHERE video_id = ?", (v["id"],)).fetchone()[0]
+        line = f"{v['id']:>3}  {v['stage']:<12} {n} clip(s)  {v['source']:<16} {v['title'][:50]}"
+        if v["error"]:
+            line += f"\n       error: {v['error'][:200]}"
+        print(line)
+    print(f"\nspent today: ${db.spent_today(conn):.4f} of ${cfg['daily_budget_usd']:.2f}")
+    return 0
+
+
+def cmd_clips(a):
+    cfg, paths, conn = open_all()
+    q, args = "SELECT * FROM clips ORDER BY video_id DESC, rank LIMIT 30", ()
+    if a.video is not None:
+        q, args = "SELECT * FROM clips WHERE video_id = ? ORDER BY rank", (a.video,)
+    rows = conn.execute(q, args).fetchall()
+    if not rows:
+        print("no clips yet")
+    for r in rows:
+        m = json.loads(r["meta"])
+        # Where each post stands, so a failed upload is seen here and not only
+        # in the village (2026-10-07: a dropped approval looked like nothing).
+        posts = "".join(
+            f"   post: {p['platform']} {p['status']}"
+            + (f" - {p['url']}" if p["url"] else f" - {p['detail']}" if p["detail"] else "") + "\n"
+            for p in conn.execute("SELECT * FROM publications WHERE clip_id = ? ORDER BY platform",
+                                  (r["id"],)))
+        print(f"CLIP {r['id']} (v{r['video_id']}#{r['rank']})  score {r['score']:.0f}/100  "
+              f"{pipeline.clock(r['start'])}-{pipeline.clock(r['end'])}  {r['status']}\n"
+              f"   why:  {'; '.join(m['reasons'])}\n"
+              + (f"   frame: {m['framing']}\n" if m.get("framing") else "")
+              + posts
+              + f"   file: {r['path']}")
+    return 0
+
+
+def cmd_spot(a):
+    cfg, paths, conn = open_all()
+    r = trends.run(conn, paths, cfg)
+    print(f"Spotter: {r['creators']} trending creators over "
+          f"{int(cfg['spot_min_subscribers']):,} subscribers, {r['clips']} trending clips of them, "
+          f"{r['matched']} found in footage Clip may cut. {r['units']} YouTube units used.")
+    for n in r["note"]:
+        print(f"  note: {n}")
+    print("See them: python3 -m clipper trends   (or Clip's studio in the village)")
+    return 0
+
+
+def cmd_trends(a):
+    cfg, paths, conn = open_all()
+    snap = report.snapshot(conn, paths, cfg)["spotter"]
+    last = snap["last_run"]
+    if not last:
+        print("Spotter has not run yet: python3 -m clipper spot")
+        return 0
+    print(f"Last research: {last['ts']} UTC - {last['units']} units\n\nTRENDING CREATORS")
+    for c in snap["creators"]:
+        ok = "permission" if c["permitted"] else "no permission yet"
+        print(f"  {c['title'][:28]:<28} {c['subscribers'] or 0:>12,} subs  "
+              f"{c['heat']:>10,.0f} views/h  {ok}")
+    print("\nTRENDING CLIPS OF THEM (other people's - never reposted)")
+    for t in snap["trending"]:
+        state = t["state_words"]
+        if t["state"] == "matched":
+            state = (f"IN YOUR FOOTAGE (video {t['match_video_id']} at "
+                     f"{pipeline.clock(t['match_start'])}) -> python3 -m clipper remake {t['id']}")
+        print(f"  #{t['id']:<4} {t['views_per_hour'] or 0:>9,.0f}/h  {t['creator'] or '?'}: "
+              f"{t['title'][:60]}\n         {state}")
+    return 0
+
+
+def show_copy(conn, clip_id):
+    row = conn.execute("SELECT * FROM post_copy WHERE clip_id = ?", (clip_id,)).fetchone()
+    clip = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
+    src = publish._source(conn, clip)
+    words = postcopy.compose(row, src)
+    print(f"clip {clip_id} ({row['generator']})\n  TITLE    {words['youtube']['title']}\n"
+          f"  YOUTUBE  {words['youtube']['description']}\n  TIKTOK   {words['tiktok']}")
+
+
+def cmd_copy(a):
+    cfg, paths, conn = open_all()
+    publish._clip(conn, a.clip)
+    postcopy.write(conn, cfg, a.clip, redo=a.redo)
+    show_copy(conn, a.clip)
+    return 0
+
+
+def cmd_edit(a):
+    cfg, paths, conn = open_all()
+    postcopy.write(conn, cfg, a.clip)
+    postcopy.edit(conn, a.clip, a.title, a.caption, a.tags)
+    show_copy(conn, a.clip)
+    return 0
+
+
+def print_results(results):
+    for platform, status, detail in results:
+        print(f"  {platform}: {status} - {detail}")
+
+
+def cmd_approve(a):
+    cfg, paths, conn = open_all()
+    results = publish.approve(conn, cfg, a.clip, a.note, post=not a.later)
+    if a.later:
+        print(f"clip {a.clip} approved - posting in the background. Reload Clip's studio "
+              f"in a minute or two for the link.")
+        return 0
+    print(f"clip {a.clip} approved.")
+    print_results(results)
+    return 0
+
+
+def cmd_reject(a):
+    cfg, paths, conn = open_all()
+    publish.reject(conn, a.clip, a.why)
+    print(f"clip {a.clip} rejected - reason kept for learning.")
+    return 0
+
+
+def cmd_delete(a):
+    cfg, paths, conn = open_all()
+    was, freed = publish.delete(conn, a.clip)
+    print(f"clip {a.clip} deleted ({storage.mb(freed)} freed)"
+          + (" - it stays posted where it went; take it down there if you want it gone" if was == "posted" else ""))
+    return 0
+
+
+def cmd_publish(a):
+    cfg, paths, conn = open_all()
+    results = publish.publish(conn, cfg)
+    print_results(results) if results else print("nothing waiting to post")
+    return 0
+
+
+def cmd_posted(a):
+    cfg, paths, conn = open_all()
+    publish.mark_posted(conn, a.clip, a.platform, a.url)
+    print(f"clip {a.clip} marked posted on {a.platform}.")
+    return 0
+
+
+def cmd_login(a):
+    youtube.login()
+    return 0
+
+
+def cmd_deck(a):
+    cfg, paths, conn = open_all()
+    print(json.dumps(report.snapshot(conn, paths, cfg)))
+    return 0
+
+
+def cmd_recut(a):
+    cfg, paths, conn = open_all()
+    pipeline.recut(conn, paths, cfg, a.clip)
+    print(f"clip {a.clip} cut again with the current spellings - its subtitles now match them. "
+          f"Reload Clip's studio to see it.")
+    return 0
+
+
+def cmd_subtitles(a):
+    """A clip's captions, one per line - or the owner's corrected ones saved
+    and the clip cut again with them (the village's Fix subtitles box)."""
+    cfg, paths, conn = open_all()
+    if a.reset or a.set_json is not None:
+        texts = None
+        if a.set_json is not None:
+            texts = json.loads(a.set_json)
+            if not isinstance(texts, list):
+                raise ValueError("--set-json takes a JSON list of caption lines")
+        pipeline.set_subtitles(conn, paths, cfg, a.clip, texts, reset=a.reset, remake=not a.save_only)
+        if a.save_only and not a.reset:
+            print(f"clip {a.clip}: your subtitles are saved. The video still has the old ones - "
+                  f"press Update video when you are done, before approving it.")
+            return 0
+        print(f"clip {a.clip} updated with "
+              + ("the transcript's subtitles" if a.reset else "your subtitles")
+              + " - reload Clip's studio to see it.")
+        return 0
+    lines, edited = pipeline.subtitle_lines(conn, paths, cfg, a.clip)
+    clip = pipeline._clip_parts(conn, a.clip)[0]
+    pending = bool(json.loads(clip["meta"]).get("subtitles_pending"))
+    print(json.dumps({"clip": a.clip, "edited": edited, "pending": pending, "lines": lines}))
+    return 0
+
+
+def cmd_holes(a):
+    """Where a clip's captions go quiet while someone is talking: each stretch
+    as loud as the talking with no word in the transcript, and what Whisper
+    hears there when it listens again (transcribe.holes / relisten). Changes
+    nothing. Owner, 2026-10-23: "It's skipping sentences at a time"."""
+    cfg, paths, conn = open_all()
+    clip, video, c = pipeline._clip_parts(conn, a.clip)
+    words = pipeline.clip_words(conn, paths, video, clip)
+    frames = pipeline.frames_of(paths, video)
+    found = transcribe.holes(words, frames, c["start"], c["end"])
+    said = sum(1 for w in words if c["start"] <= w["start"] < c["end"])
+    print(f"clip {a.clip}: {pipeline.clock(c['end'] - c['start'])} long, {said} words captioned; "
+          f"{len(found)} stretch(es) of {transcribe.HOLE_SECONDS:.0f}s or more as loud as the talking "
+          f"with no caption ({sum(b - x for x, b, _ in found):.0f}s in all)")
+    model, heard = None, 0
+    for x, b, share in found:
+        line = (f"  {pipeline.clock(x - c['start'])}-{pipeline.clock(b - c['start'])} "
+                f"({b - x:.1f}s, {share:.0%} at talking level)")
+        if a.listen:
+            try:
+                if model is None:
+                    from faster_whisper import WhisperModel
+                    model = WhisperModel(cfg["whisper_model"], device="cpu", compute_type="int8",
+                                         cpu_threads=int(cfg["whisper_threads"]))
+                got = transcribe.relisten(video["media_path"], x, b, cfg, model=model)
+            except Exception as exc:
+                print(line + f" - could not listen again: {exc}")
+                continue
+            heard += len(got)
+            text = "".join(w["word"] for w in got).strip()
+            line += f" - heard: {text!r}" if text else " - heard nothing sure (a laugh, music, crosstalk?)"
+        print(line)
+    if a.listen and found:
+        print(f"a second listen found {heard} word(s) the transcript is missing")
+    return 0
+
+
+def cmd_fill(a):
+    """Listen again where a video's transcript has talking with no words, and
+    put the words back - for videos transcribed before Clip did it by itself.
+    --recut: then put the new captions in each of its clips not yet posted."""
+    cfg, paths, conn = open_all()
+    video = conn.execute("SELECT * FROM videos WHERE id = ?", (a.video,)).fetchone()
+    if not video:
+        raise ValueError(f"no video {a.video}")
+    before = json.loads((pipeline.folder(paths, video) / "transcript.json").read_text())
+    t = pipeline.fill_transcript(conn, paths, video, cfg)
+    r = t["filled"]
+    print(f"video {a.video}: " + ("already listened to again - " if before.get("filled") else "")
+          + f"{r['holes']} stretch(es) of talking with no words, {r['seconds']:.0f}s; "
+          f"{r['words']} word(s) put back")
+    if not a.recut:
+        return 0
+    for c in conn.execute("SELECT * FROM clips WHERE video_id = ? AND status IN ('rendered', 'approved') "
+                          "ORDER BY rank", (a.video,)).fetchall():
+        if c["subtitles"]:
+            print(f"  clip {c['id']}: kept as it is - it has your own subtitle fixes")
+            continue
+        try:
+            pipeline.recut(conn, paths, cfg, c["id"])
+            print(f"  clip {c['id']}: captions updated")
+        except (ValueError, RuntimeError, OSError) as exc:
+            print(f"  clip {c['id']}: not updated - {exc}")
+    return 0
+
+
+def cmd_progress(a):
+    """How far a clip's remake has got, as JSON - asked by the Fix subtitles
+    box every couple of seconds while Update video runs (progress.py)."""
+    from clipper import progress
+    cfg, paths, conn = open_all()
+    clip = conn.execute("SELECT path FROM clips WHERE id = ?", (a.clip,)).fetchone()
+    print(json.dumps(dict(progress.read(clip["path"]) if clip else {"running": False}, clip=a.clip)))
+    return 0
+
+
+def cmd_framing(a):
+    """Why a clip is framed the way it is: each shot, every face in it - where,
+    how big, how often seen, how much it changed - and what was kept."""
+    from clipper import framing
+    cfg, paths, conn = open_all()
+    clip, video, c = pipeline._clip_parts(conn, a.clip)
+    info = media.probe(video["media_path"])
+    sw, sh = info["width"], info["height"]
+    print(f"clip {a.clip}: video {video['id']}, {pipeline.clock(c['start'])}-{pipeline.clock(c['end'])}, "
+          f"{sw}x{sh}")
+    for s in framing.explain(video["media_path"], c["start"], c["end"], info):
+        print(f"\n{s['t0']:5.1f}-{s['t1']:5.1f}s  {s['layout'].upper()}  ({s['why']})")
+        for f in s["faces"]:
+            cx, cy, _w, h = f["box"]
+            m = "-" if f["motion"] is None else f"{f['motion']:.1f}"
+            print(f"   face {cx / sw:4.0%} across {cy / sh:4.0%} down, {h / sh:4.0%} tall, "
+                  f"seen {f['seen']:4.0%}, change {m:>4}  {'KEPT' if f['kept'] else 'dropped: ' + f['why']}")
+        if not s["faces"]:
+            print("   no face found")
+    print(f"\nA face is dropped as a picture when it changes under {framing.STILL_SHARE:.0%} of the "
+          f"liveliest face, and under {framing.STILL_MAX} - only in a shot whose liveliest face "
+          f"changes {framing.LIVE_MIN} or more. A shot whose faces all change under "
+          f"{framing.STILL_MAX}, or with {framing.MANY_FACES}+ faces, is shown whole.")
+    return 0
+
+
+def cmd_remake(a):
+    cfg, paths, conn = open_all()
+    clip = trends.remake(conn, paths, cfg, a.trend)
+    print(f"remade: clip {clip['id']} ({pipeline.clock(clip['start'])}-{pipeline.clock(clip['end'])}, "
+          f"score {clip['score']:.0f}) -> {clip['path']}")
+    return 0
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="clipper", description="Permitted long videos in, captioned shorts out.")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("source")
+    s.add_argument("action", choices=["add", "channel", "rules", "list"])
+    s.add_argument("name", nargs="?")
+    s.add_argument("--rights", choices=sorted(rights.RIGHTS))
+    s.add_argument("--evidence")
+    s.add_argument("--url")
+    s.add_argument("--attribution")
+    s.add_argument("--channel", help="the creator's YouTube channel id (UC...)")
+    s.add_argument("--tags", help="tags every post from this source must carry")
+    s.add_argument("--credit", help="a line every post from this source must carry")
+    s.add_argument("--watermark", help="a campaign's watermark PNG (file or https link), "
+                                       "overlaid unchanged on every clip from this source")
+    s.add_argument("--cut-out-white", action="store_true",
+                   help="the watermark is drawn on a white canvas: make the canvas see-through")
+    s.add_argument("--cutlist", help="a campaign's Notion page with its clip list (times, hooks, captions)")
+    s.add_argument("--hunt", help="the moments the campaign wants, in its order: "
+                                  "\"Knicks: knicks, chant; Pat Beverley: beverley, beverly\"")
+    s.add_argument("--avoid", help="what clips must stay away from: \"politics, ex-wife\" "
+                                   "(sponsor reads are always skipped; \"\" clears the list)")
+    s.add_argument("--spell", help="names Whisper mishears: \"Trae Young: try young; Knicks: nicks\"")
+    s.add_argument("--watermark-top", type=int,
+                   help="how far down the 1920-high frame the watermark's top edge sits")
+    s.add_argument("--dropbox-folder", help="a Dropbox folder's share link: every video in it is "
+                                            "picked up for this source (\"\" to stop)")
+    s.set_defaults(fn=cmd_source)
+
+    i = sub.add_parser("ingest")
+    i.add_argument("source")
+    i.add_argument("origin")
+    i.add_argument("--title")
+    i.add_argument("--move", action="store_true", help="move the file instead of copying it")
+    i.add_argument("--episode", help="the published YouTube episode this file is (id or link), for a campaign list")
+    i.add_argument("--remote", action="store_true",
+                   help="leave an https video where it is; clips read only their own seconds")
+    i.set_defaults(fn=cmd_ingest)
+
+    q = sub.add_parser("queue", help="a video link for the next pickup to download and clip")
+    q.add_argument("source")
+    q.add_argument("link")
+    q.add_argument("--title")
+    q.add_argument("--hunt", help="this video's hooks: \"Topic: term, term; Topic2: term\"")
+    q.add_argument("--youtube", help="its YouTube page: the moments viewers point at in the comments are favoured")
+    q.set_defaults(fn=cmd_queue)
+    h = sub.add_parser("hooks", help="write a hunt list from a video title (one cheap model call)")
+    h.add_argument("title")
+    h.add_argument("--source")
+    h.add_argument("--youtube", help="the video's YouTube link: its top comments go into the question")
+    h.set_defaults(fn=cmd_hooks)
+    h = sub.add_parser("hunt", help="set one video's own hunt list (\"\" goes back to its source's)")
+    h.add_argument("video", type=int)
+    h.add_argument("hunt")
+    h.set_defaults(fn=cmd_hunt)
+    h = sub.add_parser("inbox", help="the links pasted for clipping, and what became of them")
+    h.add_argument("--retry", type=int, help="queue a failed link again")
+    h.set_defaults(fn=cmd_inbox)
+
+    r = sub.add_parser("run")
+    r.add_argument("--video", type=int)
+    r.set_defaults(fn=cmd_run)
+
+    t = sub.add_parser("retry")
+    t.add_argument("video", type=int)
+    t.set_defaults(fn=cmd_retry)
+    t = sub.add_parser("cuts", help="cut the next moments on the campaign's own list")
+    t.add_argument("video", type=int)
+    t.add_argument("n", type=int, nargs="?", help="how many (default: the campaign's first batch)")
+    t.add_argument("--episode", help="the YouTube episode this video is (id or link)")
+    t.set_defaults(fn=cmd_cuts)
+    t = sub.add_parser("forget", help="remove a video and every clip made from it (a test run)")
+    t.add_argument("video", type=int)
+    t.add_argument("--including-posted", action="store_true",
+                   help="even if some of its clips were posted (they stay online)")
+    t.set_defaults(fn=cmd_forget)
+    t = sub.add_parser("storage", help="where Clip's disk space is going")
+    t.set_defaults(fn=cmd_storage)
+    t = sub.add_parser("cleanup", help="delete finished clips' videos; --sources also finished source videos")
+    t.add_argument("--sources", action="store_true",
+                   help="also source videos with no clip left waiting (no more clips can be cut from them)")
+    t.add_argument("--yes", action="store_true", help="really delete (without it, only lists)")
+    t.set_defaults(fn=cmd_cleanup)
+    t = sub.add_parser("refind", help="choose a video's moments again, e.g. after --hunt")
+    t.add_argument("video", type=int)
+    t.set_defaults(fn=cmd_refind)
+
+    sub.add_parser("status").set_defaults(fn=cmd_status)
+    sub.add_parser("spot").set_defaults(fn=cmd_spot)
+    sub.add_parser("trends").set_defaults(fn=cmd_trends)
+    sub.add_parser("deck", help="JSON for the Command Deck").set_defaults(fn=cmd_deck)
+    x = sub.add_parser("copy")
+    x.add_argument("clip", type=int)
+    x.add_argument("--redo", action="store_true")
+    x.set_defaults(fn=cmd_copy)
+    x = sub.add_parser("edit")
+    x.add_argument("clip", type=int)
+    x.add_argument("--title")
+    x.add_argument("--caption")
+    x.add_argument("--tags")
+    x.set_defaults(fn=cmd_edit)
+    x = sub.add_parser("approve")
+    x.add_argument("clip", type=int)
+    x.add_argument("--note")
+    x.add_argument("--later", action="store_true",
+                   help="record the approval and stop; `publish` posts it (the village runs that in the background)")
+    x.set_defaults(fn=cmd_approve)
+    x = sub.add_parser("reject")
+    x.add_argument("clip", type=int)
+    x.add_argument("--why", required=True)
+    x.set_defaults(fn=cmd_reject)
+    sub.add_parser("publish").set_defaults(fn=cmd_publish)
+    x = sub.add_parser("delete", help="delete a clip: its video goes and it leaves the studio")
+    x.add_argument("clip", type=int)
+    x.set_defaults(fn=cmd_delete)
+    x = sub.add_parser("posted")
+    x.add_argument("clip", type=int)
+    x.add_argument("platform", choices=["tiktok", "youtube"])
+    x.add_argument("--url")
+    x.set_defaults(fn=cmd_posted)
+    sub.add_parser("youtube-login").set_defaults(fn=cmd_login)
+    x = sub.add_parser("pickup", help="ingest new videos from the sources' Dropbox folders")
+    x.add_argument("--run", action="store_true", help="and render them")
+    x.set_defaults(fn=cmd_pickup)
+    x = sub.add_parser("recut", help="cut a clip again with the source's spellings as they are now")
+    x.add_argument("clip", type=int)
+    x.set_defaults(fn=cmd_recut)
+    x = sub.add_parser("subtitles", help="a clip's captions as JSON; --set-json saves your fixed "
+                                         "lines and puts them in the video (--save-only: not yet); "
+                                         "--reset goes back to the transcript")
+    x.add_argument("clip", type=int)
+    x.add_argument("--set-json", dest="set_json", default=None)
+    x.add_argument("--reset", action="store_true")
+    x.add_argument("--save-only", dest="save_only", action="store_true",
+                   help="with --set-json: save the lines, leave the video until you update it")
+    x.set_defaults(fn=cmd_subtitles)
+    x = sub.add_parser("fill", help="listen again where a video's transcript has talking with no words "
+                                    "(--recut: and update its clips' captions)")
+    x.add_argument("video", type=int)
+    x.add_argument("--recut", action="store_true")
+    x.set_defaults(fn=cmd_fill)
+    x = sub.add_parser("holes", help="where a clip's captions go quiet while someone is talking "
+                                     "(--listen: and what a second listen hears there)")
+    x.add_argument("clip", type=int)
+    x.add_argument("--listen", action="store_true")
+    x.set_defaults(fn=cmd_holes)
+    x = sub.add_parser("progress", help="how far a clip's remake (Update video) has got, as JSON")
+    x.add_argument("clip", type=int)
+    x.set_defaults(fn=cmd_progress)
+    x = sub.add_parser("framing", help="why a clip is framed the way it is: every face in every shot")
+    x.add_argument("clip", type=int)
+    x.set_defaults(fn=cmd_framing)
+    m = sub.add_parser("remake")
+    m.add_argument("trend", type=int)
+    m.set_defaults(fn=cmd_remake)
+    c = sub.add_parser("clips")
+    c.add_argument("video", type=int, nargs="?")
+    c.set_defaults(fn=cmd_clips)
+
+    a = p.parse_args(argv)
+    if a.cmd == "source" and a.action == "add" and not (a.name and a.rights):
+        p.error("source add needs NAME and --rights (and --evidence)")
+    if a.cmd == "source" and a.action == "rules" and not a.name:
+        p.error("source rules needs NAME")
+    if a.cmd == "source" and a.action == "channel" and not (a.name and a.channel):
+        p.error("source channel needs NAME and --channel UC...")
+    # Only this command's own: a command run inside another (the tests do)
+    # must not close the outer one's connection.
+    mine = len(_OPEN)
+    try:
+        return a.fn(a)
+    except (ValueError, OSError, RuntimeError) as exc:     # OSError: missing files, and network errors (URLError)
+        print(f"clipper: {exc}", file=sys.stderr)
+        return 2
+    finally:
+        while len(_OPEN) > mine:
+            _OPEN.pop().close()

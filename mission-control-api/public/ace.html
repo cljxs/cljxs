@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a0d16">
+<title>Ace</title>
+<!-- Ace's sportsbook (owner, 2026-10-14: "showing what he is betting and why
+     and vice versa ... the matchup, home and away"). Every number comes from
+     /api/ace/board, which reads Ace's ledger, his book and the context file
+     ace-fetch.py wrote for each game: the page draws, and works nothing out.
+     Opened inside Ace's house in the village (?embed=1) and as its own tab
+     from the Command Deck. -->
+<style>
+  :root{
+    --bg:#0a0d16; --panel:#0e1220; --panel2:#121729; --line:rgba(255,255,255,.07); --line2:rgba(255,255,255,.12);
+    --acc:#5fb3ff; --acc2:#9ed0ff; --ink:#e7eaf2; --mute:#8b90a0; --dim:#596074;
+    --up:#2fd39b; --down:#f0646f; --warn:#f2c14e;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink)}
+  body{font:13px/1.5 var(--mono);-webkit-font-smoothing:antialiased;padding:14px}
+  body.embed{padding:10px;background:rgba(5,7,12,.92)}
+  .frame{max-width:1500px;margin:0 auto;border:1.5px solid var(--acc);border-radius:10px;background:var(--panel);
+    box-shadow:0 0 0 1px rgba(0,0,0,.6),0 18px 60px rgba(0,0,0,.55);overflow:hidden}
+  .num{font-variant-numeric:tabular-nums}
+  .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--mute)}
+  .k{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}
+  button{font:inherit;color:inherit}
+  button:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+
+  /* header: his book in dollars */
+  .head{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:16px 20px;border-bottom:1px solid var(--line)}
+  .title{font-size:24px;font-weight:700;letter-spacing:.18em}
+  .who{color:var(--mute);letter-spacing:.12em;font-size:11.5px;text-transform:uppercase}
+  .sp{flex:1}
+  .acct{display:flex;gap:22px;flex-wrap:wrap;align-items:baseline;margin-left:8px}
+  .acct .l{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}
+  .acct .v{font-size:19px;font-weight:800}
+  .acct .v.big{font-size:22px;color:var(--acc2)}
+  .btn{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink);background:transparent;
+    border:1px solid var(--line);border-radius:6px;padding:8px 14px;cursor:pointer;text-decoration:none}
+  .btn:hover{border-color:var(--acc)}
+
+  .verdict{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;padding:11px 20px;border-bottom:1px solid var(--line);
+    background:rgba(95,179,255,.05)}
+  .verdict b{font-size:14px}
+  .verdict .when{color:var(--mute);font-size:11.5px;letter-spacing:.08em;text-transform:uppercase}
+
+  /* filters */
+  .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:10px 20px;border-bottom:1px solid var(--line)}
+  .chip{font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;padding:6px 11px;border-radius:999px;
+    border:1px solid var(--line2);background:transparent;cursor:pointer;color:var(--mute)}
+  .chip b{color:var(--ink);font-weight:700;margin-left:4px}
+  .chip.on{border-color:var(--acc);color:var(--acc2);background:rgba(95,179,255,.08)}
+  .bar .gap{width:10px}
+
+  /* body */
+  .grid{display:grid;grid-template-columns:minmax(0,1fr) 390px;gap:16px;padding:16px 20px 22px}
+  .games{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px;align-content:start}
+
+  /* a game: away above home, the way a sportsbook lists it */
+  .game{border:1px solid var(--line);border-radius:10px;background:var(--panel2);padding:12px 14px;display:grid;gap:10px;min-width:0}
+  .game.bet{border-color:rgba(95,179,255,.55);box-shadow:inset 3px 0 0 var(--acc)}
+  .gtop{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--mute);font-size:11.5px}
+  .sport{font-weight:700;letter-spacing:.12em;color:var(--ink);border:1px solid var(--line2);border-radius:4px;padding:1px 6px;font-size:10.5px}
+  .gtop .sp{flex:1}
+  .call{font-size:10.5px;letter-spacing:.14em;font-weight:700;padding:3px 8px;border-radius:4px;border:1px solid}
+  .call.bet{color:var(--acc2);border-color:var(--acc)}
+  .call.pass{color:var(--mute);border-color:var(--line2)}
+  .call.open{color:var(--warn);border-color:rgba(242,193,78,.5)}
+
+  .side{display:grid;grid-template-columns:44px minmax(0,1fr) auto;gap:4px 10px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+  .side:first-of-type{border-top:0}
+  .ha{font-size:10px;letter-spacing:.14em;color:var(--dim);text-transform:uppercase}
+  .tn{min-width:0}
+  .tn .name{font-weight:700;font-size:14px;overflow-wrap:anywhere}
+  .tn .rec{color:var(--mute);font-size:11.5px;margin-left:6px}
+  .form{display:inline-flex;gap:3px;margin-left:8px;vertical-align:1px}
+  .form i{display:inline-block;width:7px;height:7px;border-radius:2px;background:var(--dim)}
+  .form i.W{background:var(--up)} .form i.L{background:var(--down)}
+  .px{font-size:16px;font-weight:800;text-align:right}
+  .nums{grid-column:2 / -1;display:flex;gap:4px 14px;flex-wrap:wrap;font-size:11.5px;color:var(--mute)}
+  .nums b{color:var(--ink);font-weight:600}
+  .tag{font-size:10px;letter-spacing:.12em;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:8px;vertical-align:2px}
+  .tag.bet{background:var(--acc);color:#06101c}
+  .tag.passed{border:1px solid var(--line2);color:var(--mute)}
+  .tag.unjudged{border:1px solid rgba(242,193,78,.5);color:var(--warn)}
+
+  .line{font-size:11.5px;color:var(--mute)}
+  .why{display:grid;gap:6px}
+  .why .r{border-left:2px solid var(--line2);padding:3px 0 3px 10px;font-size:12.5px;line-height:1.5}
+  .why .r.bet{border-left-color:var(--acc)}
+  .why .r .who{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);display:block}
+  .why .r.bet .who{color:var(--acc2)}
+  details.news{font-size:12px}
+  details.news summary{cursor:pointer;color:var(--warn);font-size:11.5px;letter-spacing:.06em}
+  details.news ul{margin:6px 0 0;padding-left:18px;color:var(--ink)}
+
+  /* right column: tickets */
+  .right{display:flex;flex-direction:column;gap:12px;min-width:0}
+  .box{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px;min-width:0}
+  .tabs{display:flex;border-bottom:1px solid var(--line);margin:-14px -14px 12px}
+  .tab{flex:1;font-size:11px;letter-spacing:.14em;text-transform:uppercase;padding:11px 6px;color:var(--mute);
+    background:transparent;border:0;border-bottom:2px solid transparent;cursor:pointer}
+  .tab.on{color:var(--acc2);border-bottom-color:var(--acc);background:rgba(95,179,255,.06)}
+  .ticket{border:1px dashed var(--line2);border-radius:8px;padding:10px 12px;margin-bottom:10px;display:grid;gap:5px}
+  .ticket .t1{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+  .ticket .pick{font-weight:800;font-size:15px}
+  .ticket .mu{color:var(--mute);font-size:12px}
+  .ticket .mu b{color:var(--ink);font-weight:600}
+  .ticket .wy{font-size:12px;border-left:2px solid var(--acc);padding-left:8px}
+  .res{font-size:10.5px;letter-spacing:.12em;font-weight:700;padding:2px 7px;border-radius:4px;border:1px solid}
+  .res.won{color:var(--up);border-color:var(--up)} .res.lost{color:var(--down);border-color:var(--down)}
+  .res.push,.res.void{color:var(--mute);border-color:var(--line2)} .res.open{color:var(--acc2);border-color:var(--acc)}
+  .reasons .rw{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;padding:5px 0;border-bottom:1px solid var(--line);font-size:12px}
+  .doc{max-height:70vh;overflow:auto;font-size:12.5px;line-height:1.65}
+  .doc h1,.doc h2,.doc h3{color:var(--acc2);letter-spacing:.06em;font-size:15px;margin:16px 0 6px}
+  .doc table{border-collapse:collapse;width:100%;font-size:11.5px}
+  .doc td,.doc th{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left}
+  .doc code{color:var(--acc2)}
+  .hist{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+  .hist button{background:none;border:1px solid var(--line);border-radius:6px;font-size:11.5px;padding:5px 9px;cursor:pointer}
+  .hist button.on{border-color:var(--acc);color:var(--acc2)}
+  .empty{color:var(--mute);padding:18px 4px;text-align:center}
+
+  /* the no-AI bettors: a tab each beside Ace (2026-10-29) */
+  .whobar{background:rgba(95,179,255,.03)}
+  .lead{width:100%;border-collapse:collapse;font-size:12.5px}
+  .lead th{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);font-weight:400;text-align:right;padding:6px 8px;border-bottom:1px solid var(--line2)}
+  .lead td{text-align:right;padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+  .lead th:first-child,.lead td:first-child{text-align:left}
+  .lead tr[data-who]{cursor:pointer}
+  .lead tr.on td{background:rgba(95,179,255,.08)}
+  .lead tr.on td:first-child{box-shadow:inset 3px 0 0 var(--acc);color:var(--acc2);font-weight:700}
+  .leadwrap{overflow-x:auto}
+  .desc{margin:12px 0 4px;font-size:12.5px;border-left:2px solid var(--acc);padding-left:10px}
+  .note{color:var(--mute);font-size:11.5px;margin-top:8px}
+  .naigrid{display:grid;grid-template-columns:minmax(0,1fr) 390px;gap:16px;padding:16px 20px 22px}
+  @media (max-width:1100px){ .naigrid{grid-template-columns:1fr} .naigrid > .box:last-child{order:-1} }
+  @media (max-width:760px){ .naigrid{padding:10px 12px 16px} }
+  .err{color:var(--down)}
+
+  /* Narrow: his tickets first - what he is betting is the headline - then
+     the games, then the reasons. */
+  @media (max-width:1100px){ .grid{grid-template-columns:1fr} .right{display:contents}
+    .right > .box:first-child{order:-1} #reasons{order:1} }
+  @media (max-width:760px){
+    body{padding:6px} .head,.verdict,.bar{padding-left:12px;padding-right:12px} .grid{padding:10px 12px 16px}
+    .games{grid-template-columns:1fr} .acct{gap:14px;margin-left:0} .acct .v{font-size:16px} .acct .v.big{font-size:18px}
+    .bar{flex-wrap:nowrap;overflow-x:auto} .chip{white-space:nowrap}
+  }
+  @media (prefers-reduced-motion:no-preference){ .game{transition:border-color .15s} }
+</style>
+<script src="/shared/md.js"></script>
+<script src="/shared/busy.js"></script>
+</head>
+<body>
+<div class="frame">
+  <div class="head">
+    <div class="title">ACE</div>
+    <div class="who">sports bettor · paper $10,000</div>
+    <div class="acct" id="acct"></div>
+    <div class="sp"></div>
+    <a class="btn" id="props" href="/ace-props">🎯 Props</a>
+    <a class="btn" id="back" href="/dashboard">← Deck</a>
+    <button class="btn" id="close" style="display:none">✕ Esc</button>
+  </div>
+  <div class="bar whobar" id="who"></div>
+  <div id="acepane">
+  <div class="verdict" id="verdict"><span class="k">loading…</span></div>
+  <div class="bar" id="bar"></div>
+  <div class="grid">
+    <div class="games" id="games"><div class="box empty">loading…</div></div>
+    <div class="right">
+      <div class="box">
+        <div class="tabs" id="tabs">
+          <button class="tab on" data-t="open">Open bets</button>
+          <button class="tab" data-t="results">Results</button>
+          <button class="tab" data-t="report">Report</button>
+        </div>
+        <div id="side"></div>
+      </div>
+      <div class="box reasons" id="reasons"></div>
+    </div>
+  </div>
+  </div>
+  <div id="naipane" style="display:none"></div>
+</div>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const has = v => v !== null && v !== undefined;
+const money = v => has(v) ? (v < 0 ? '-$' : '$') + Math.abs(Number(v)).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—';
+const signed = v => has(v) ? (v > 0 ? '+' : '') + money(v).replace('-$', '−$') : '—';
+const cls = v => !has(v) ? 'flat' : v > 0 ? 'up' : v < 0 ? 'down' : 'flat';
+const price = v => has(v) ? (v > 0 ? '+' + v : String(v)) : '—';
+const pc = v => has(v) ? Number(v).toFixed(1) + '%' : '—';
+const pp = v => has(v) ? (v > 0 ? '+' : '') + Number(v).toFixed(1) + '%' : '—';
+const SPORT = { nfl: 'NFL', cfb: 'NCAAF', mlb: 'MLB', nba: 'NBA', nhl: 'NHL', wnba: 'WNBA', cbb: 'NCAAB', mls: 'MLS' };
+// "2026-10-14T23:30Z" in the viewer's own clock - display only.
+function when(utc) {
+  if (!utc) return '';
+  const d = new Date(utc);
+  if (isNaN(d)) return '';
+  return d.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+}
+
+const EMBED = new URLSearchParams(location.search).has('embed');
+if (EMBED) {
+  document.body.classList.add('embed');
+  $('props').href = '/ace-props?embed=1';
+  $('back').style.display = 'none';
+  $('close').style.display = '';
+  const close = () => parent.postMessage({ type: 'ace-close' }, '*');
+  $('close').onclick = close;
+  addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+}
+
+let B = null, show = 'all', sport = 'all', tab = 'open', reportName = null;
+
+async function load() {
+  try {
+    const r = await fetch('/api/ace/board', { cache: 'no-store' });
+    B = await r.json();
+  } catch (e) {
+    $('verdict').innerHTML = `<span class="err">Could not reach the Deck: ${esc(e.message)}</span>`;
+    return;
+  }
+  draw();
+}
+
+function draw() {
+  if (!B.available) {
+    $('verdict').innerHTML = `<b>${esc(B.reason || 'No ledger yet.')}</b>`;
+    $('games').innerHTML = `<div class="box empty">Ace writes his board each time he wakes: 10:30 and 22:30 Central.</div>`;
+    $('acct').innerHTML = ''; $('bar').innerHTML = ''; drawSide(); $('reasons').innerHTML = '';
+    return;
+  }
+  drawAcct();
+  $('verdict').innerHTML = `<b>${esc(B.verdict || 'Not judged yet this cycle.')}</b>
+    <span class="when">${esc([B.day, B.slot].filter(Boolean).join(' · '))}${B.judged ? '' : ' · awaiting his estimates'}</span>`;
+  drawBar();
+  drawGames();
+  drawSide();
+  drawReasons();
+}
+
+function drawAcct() {
+  const b = B.bankroll;
+  if (!b) { $('acct').innerHTML = ''; return; }
+  const r = b.record || {};
+  const rec = `${r.won || 0}-${r.lost || 0}${r.push ? '-' + r.push : ''}`;
+  $('acct').innerHTML = [
+    ['Bankroll', `<span class="v big num">${money(b.cash)}</span>`],
+    ['In play', `<span class="v num">${money(b.at_risk)}</span>`],
+    ['Settled P/L', `<span class="v num ${cls(b.settled_profit)}">${signed(b.settled_profit)}</span>`],
+    ['Record W-L', `<span class="v num">${rec}</span>`],
+    // Ace Props shares the bankroll (2026-10-26); its bets are not in his record.
+    ...(has(b.props_profit) && (b.props_count || 0) > 0
+      ? [['Props P/L', `<span class="v num ${cls(b.props_profit)}">${signed(b.props_profit)}</span>`]] : []),
+  ].map(([l, v]) => `<div><div class="l">${l}</div>${v}</div>`).join('');
+}
+
+function drawBar() {
+  const c = B.counts;
+  const sports = [...new Set(B.games.map(g => g.sport).filter(Boolean))];
+  if (sport !== 'all' && !sports.includes(sport)) sport = 'all';
+  const chip = (kind, val, label, n) =>
+    `<button class="chip ${(kind === 'show' ? show : sport) === val ? 'on' : ''}" data-${kind}="${esc(val)}">${label}${has(n) ? `<b>${n}</b>` : ''}</button>`;
+  $('bar').innerHTML =
+    chip('show', 'all', 'All games', c.games) + chip('show', 'bet', 'Bets', c.bets) +
+    chip('show', 'pass', 'Passes', c.passes) + (c.open ? chip('show', 'open', 'Not judged', c.open) : '') +
+    (sports.length > 1 ? '<span class="gap"></span>' + chip('sport', 'all', 'Every sport') +
+      sports.map(s => chip('sport', s, SPORT[s] || s.toUpperCase(), B.games.filter(g => g.sport === s).length)).join('') : '');
+}
+$('bar').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.show) show = b.dataset.show;
+  if (b.dataset.sport) sport = b.dataset.sport;
+  drawBar(); drawGames();
+});
+
+function form(f) {
+  return f && f.length ? `<span class="form" title="last ${f.length}, oldest to latest">${f.map(x => `<i class="${esc(x)}"></i>`).join('')}</span>` : '';
+}
+
+const CALL = { bet: 'BET', passed: 'PASS', unjudged: 'NOT JUDGED' };
+
+function sideHtml(g, which) {
+  const t = (g.matchup && g.matchup[which]) || {};
+  const s = g.sides[which];
+  const name = t.name || t.abbr || (s && s.selection) || which;
+  const nums = s ? [
+    `market <b>${pc(s.novig_pct)}</b>`,
+    has(s.sharp_pct) ? `sharp <b>${pc(s.sharp_pct)}</b>` : '',
+    has(s.my_pct) ? `Ace <b>${pc(s.my_pct)}</b>${has(s.p_used) && s.p_used !== s.my_pct ? ` (counts as ${pc(s.p_used)})` : ''}` : '',
+    has(s.ev_pct) ? `EV <b class="${s.clears_bar ? 'up' : ''}">${pp(s.ev_pct)}</b>` : '',
+    s.status === 'bet' && has(s.stake) ? `stake <b>${money(s.stake)}</b>` : '',
+  ].filter(Boolean).map(x => `<span>${x}</span>`).join('') : '<span>no line for this side</span>';
+  return `<div class="side">
+      <span class="ha">${which}</span>
+      <div class="tn"><span class="name">${esc(name)}</span>${t.record ? `<span class="rec">${esc(t.record)}</span>` : ''}${form(t.form)}${
+        s ? `<span class="tag ${esc(s.status)}">${CALL[s.status] || esc(s.status)}</span>` : ''}</div>
+      <div class="px num">${s ? price(s.price) : '—'}</div>
+      <div class="nums num">${nums}</div>
+    </div>`;
+}
+
+function whyHtml(g) {
+  const rows = [];
+  for (const which of ['away', 'home']) {
+    const s = g.sides[which];
+    if (!s || !s.why || !s.why.length) continue;
+    const team = (g.matchup && g.matchup[which] && (g.matchup[which].abbr || g.matchup[which].name)) || s.selection;
+    rows.push({ status: s.status, team, text: s.why.join(' · ') });
+  }
+  // One reason given for both sides is said once.
+  if (rows.length === 2 && rows[0].status === rows[1].status && rows[0].text === rows[1].text) {
+    rows.splice(0, 2, { status: rows[0].status, team: 'both sides', text: rows[0].text });
+  }
+  const verb = st => st === 'bet' ? 'Why he bet' : st === 'passed' ? 'Why he passed' : 'Not judged';
+  return rows.length ? `<div class="why">${rows.map(r =>
+    `<div class="r ${r.status === 'bet' ? 'bet' : ''}"><span class="who">${verb(r.status)} · ${esc(r.team)}</span>${esc(r.text)}</div>`).join('')}</div>` : '';
+}
+
+function gameHtml(g) {
+  const m = g.matchup || {};
+  const bits = [when(g.starts_utc), m.venue].filter(Boolean).map(esc).join(' · ');
+  const line = [m.line, has(m.total) ? `O/U ${m.total}` : '', m.book].filter(Boolean).map(esc).join(' · ');
+  const news = g.injuries && g.injuries.length ? `<details class="news"><summary>${g.injuries.length} injury update${g.injuries.length === 1 ? '' : 's'} in the last day</summary><ul>${
+    g.injuries.map(i => `<li>${esc(i.team)} · ${esc(i.player)}${i.position ? ' (' + esc(i.position) + ')' : ''} · ${esc(i.status)}${has(i.hours_old) ? ` · ${Number(i.hours_old).toFixed(0)}h ago` : ''}</li>`).join('')}</ul></details>` : '';
+  const verdict = { bet: 'BET', pass: 'PASS', open: 'NOT JUDGED' }[g.verdict];
+  return `<article class="game ${esc(g.verdict)}">
+      <div class="gtop"><span class="sport">${esc(SPORT[g.sport] || String(g.sport || '').toUpperCase())}</span><span>${bits}</span>
+        <span class="sp"></span><span class="call ${esc(g.verdict)}">${verdict}</span></div>
+      <div>${sideHtml(g, 'away')}${sideHtml(g, 'home')}</div>
+      ${line ? `<div class="line">${line}</div>` : ''}
+      ${whyHtml(g)}
+      ${news}
+    </article>`;
+}
+
+function drawGames() {
+  const list = B.games.filter(g => (show === 'all' || g.verdict === show) && (sport === 'all' || g.sport === sport));
+  // Bets first within a view, then by kickoff - the server already sorted by kickoff.
+  list.sort((a, b) => (b.verdict === 'bet') - (a.verdict === 'bet'));
+  $('games').innerHTML = list.length ? list.map(gameHtml).join('')
+    : `<div class="box empty">${B.games.length ? 'Nothing in this view.' : 'No games on the slate this cycle.'}</div>`;
+}
+
+function matchupLine(b) {
+  const m = b.matchup;
+  if (!m) return esc(b.match || '');
+  const nm = t => esc(t.name || t.abbr || '');
+  const away = b.side === 'away' ? `<b>${nm(m.away)}</b>` : nm(m.away);
+  const home = b.side === 'home' ? `<b>${nm(m.home)}</b>` : nm(m.home);
+  return `${away} @ ${home}`;
+}
+
+function ticket(b, settled) {
+  const res = settled ? (b.result || 'open') : 'open';
+  return `<div class="ticket">
+      <div class="t1"><span class="pick">${esc(b.selection)} <span class="num">${price(b.price)}</span></span>
+        <span class="res ${esc(res)}">${esc(res.toUpperCase())}</span></div>
+      <div class="mu">${matchupLine(b)}${b.sport ? ' · ' + esc(SPORT[b.sport] || b.sport) : ''}</div>
+      <div class="mu num">${settled
+        ? `stake <b>${money(b.stake)}</b> · ${b.detail ? 'final <b>' + esc(b.detail) + '</b> · ' : ''}<b class="${cls(b.profit)}">${signed(b.profit)}</b>`
+        : `stake <b>${money(b.stake)}</b> · ${esc(when(b.starts_utc))}${has(b.my_pct) ? ` · Ace <b>${pc(b.my_pct)}</b> vs market <b>${pc(b.novig_pct)}</b>` : ''}${has(b.ev_pct) ? ` · EV <b>${pp(b.ev_pct)}</b>` : ''}`}</div>
+      ${b.why ? `<div class="wy">${esc(b.why)}</div>` : ''}
+    </div>`;
+}
+
+async function drawSide() {
+  [...$('tabs').children].forEach(x => x.classList.toggle('on', x.dataset.t === tab));
+  const host = $('side');
+  if (tab === 'open') {
+    const o = (B && B.open_bets) || [];
+    host.innerHTML = o.length ? o.map(b => ticket(b, false)).join('') : '<div class="empty">No bets open right now.</div>';
+  } else if (tab === 'results') {
+    const s = (B && B.settled_bets) || [];
+    host.innerHTML = s.length ? s.map(b => ticket(b, true)).join('') : '<div class="empty">Nothing settled yet.</div>';
+  } else {
+    host.innerHTML = '<div class="empty">loading…</div>';
+    try {
+      const list = await (await fetch('/api/reports/ace', { cache: 'no-store' })).json();
+      const names = (list.reports || []).map(r => r.name).filter(Boolean).slice(0, 6);
+      if (!names.length) { host.innerHTML = '<div class="empty">No reports yet.</div>'; return; }
+      if (!names.includes(reportName)) reportName = names[0];
+      const doc = await (await fetch('/api/reports/ace/' + encodeURIComponent(reportName), { cache: 'no-store' })).json();
+      if (tab !== 'report') return;
+      host.innerHTML = `<div class="hist">${names.map(n => `<button data-r="${esc(n)}" class="${n === reportName ? 'on' : ''}">${esc(n.replace(/\.md$/, ''))}</button>`).join('')}</div>
+        <div class="doc">${typeof mdToHtml === 'function' ? mdToHtml(doc.markdown || '') : esc(doc.markdown || '')}</div>`;
+    } catch (e) {
+      host.innerHTML = `<div class="empty err">Could not load the report: ${esc(e.message)}</div>`;
+    }
+  }
+}
+$('tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); if (b) { tab = b.dataset.t; drawSide(); } });
+$('side').addEventListener('click', e => { const b = e.target.closest('[data-r]'); if (b) { reportName = b.dataset.r; drawSide(); } });
+
+function drawReasons() {
+  const r = B.by_reason || [];
+  $('reasons').innerHTML = `<div class="k" style="margin-bottom:6px">His reasons, most used</div>` + (r.length
+    ? r.map(x => `<div class="rw"><span>${esc(x.key)}</span><span class="num">${x.rows}</span></div>`).join('')
+    : '<div class="empty">No reasons recorded this cycle.</div>');
+}
+
+// ------------------------------------------------------------ the no-AI bettors
+// One tab each beside Ace. Every number comes graded from ace-baselines.py
+// (/api/ace/no-ai); this only lays it out.
+const NAMES = { ace: 'Ace', underdog: 'Underdog', steam: 'Steam', sharp: 'Sharp', news: 'News', favourite: 'Favourite', random: 'Random' };
+const nameOf = s => NAMES[s] || s.charAt(0).toUpperCase() + s.slice(1);
+let N = null, who = 'ace';
+try { who = localStorage.getItem('ace.who') || 'ace'; } catch (e) { /* private window */ }
+
+async function loadNai() {
+  try {
+    const r = await fetch('/api/ace/no-ai', { cache: 'no-store' });
+    const d = await r.json();
+    N = d && d.strategies ? d : { error: (d && d.error) || 'unreadable' };
+  } catch (e) {
+    N = { error: e.message };
+  }
+  drawWho();
+}
+
+function drawWho() {
+  const order = (N && N.order) || ['ace'];
+  if (!order.includes(who)) who = 'ace';
+  $('who').innerHTML = order.map(s => {
+    const p = N && N.strategies && N.strategies[s] && N.strategies[s].record;
+    return `<button class="chip ${s === who ? 'on' : ''}" data-who="${esc(s)}">${esc(nameOf(s))}${p ? `<b class="${cls(p.profit)}">${signed(p.profit)}</b>` : ''}</button>`;
+  }).join('');
+  $('acepane').style.display = who === 'ace' ? '' : 'none';
+  $('naipane').style.display = who === 'ace' ? 'none' : '';
+  if (who !== 'ace') drawNai();
+}
+$('who').addEventListener('click', e => {
+  const b = e.target.closest('[data-who]');
+  if (!b) return;
+  who = b.dataset.who;
+  try { localStorage.setItem('ace.who', who); } catch (err) { /* private window */ }
+  drawWho();
+});
+
+function naiTicket(p) {
+  const res = p.result || 'open';
+  return `<div class="ticket">
+      <div class="t1"><span class="pick">${esc(p.selection)} <span class="num">${price(p.price)}</span></span>
+        <span class="res ${esc(res === 'tie' ? 'push' : res)}">${esc(res.toUpperCase())}</span></div>
+      <div class="mu">${esc(p.match || '')}${p.sport ? ' · ' + esc(SPORT[p.sport] || p.sport) : ''} · ${esc(when(p.starts_utc))}</div>
+      <div class="mu num">stake <b>${money(p.stake)}</b> · market <b>${pc(p.novig_pct)}</b>${has(p.profit) ? ` · <b class="${cls(p.profit)}">${signed(p.profit)}</b>` : ''}${has(p.clv_pct) ? ` · vs close <b class="${cls(p.clv_pct)}">${pp(p.clv_pct)}</b>` : ''}</div>
+      ${p.why ? `<div class="wy">${esc(p.why)}</div>` : ''}
+    </div>`;
+}
+
+function drawNai() {
+  const host = $('naipane');
+  if (!N || N.error) {
+    host.innerHTML = `<div class="box empty ${N ? 'err' : ''}" style="margin:16px 20px">${N ? 'Could not load the no-AI bettors: ' + esc(N.error) : 'loading…'}</div>`;
+    return;
+  }
+  const S = N.strategies, me = S[who];
+  const rows = N.order.filter(s => S[s]).sort((a, b) => (S[b].record.profit || 0) - (S[a].record.profit || 0));
+  const pct = v => has(v) ? v + '%' : '—';
+  const lead = `<div class="leadwrap"><table class="lead num"><thead><tr><th>Bettor</th><th>Bets</th><th>Settled</th><th>Won</th><th>Profit</th><th>Vs close</th><th>Beat close</th></tr></thead><tbody>${
+    rows.map(s => { const r = S[s].record; return `<tr data-who="${esc(s)}" class="${s === who ? 'on' : ''}">
+      <td>${esc(nameOf(s))}</td><td>${r.bets}</td><td>${r.settled}</td><td>${r.won}</td>
+      <td class="${cls(r.profit)}">${signed(r.profit)}</td><td class="${cls(r.avg_clv_pct)}">${pp(r.avg_clv_pct)}</td><td>${pct(r.beat_close_pct)}</td></tr>`; }).join('')
+  }</tbody></table></div>`;
+  const open = me.open || [], settled = me.settled || [];
+  host.innerHTML = `<div class="naigrid">
+      <div class="box">
+        <div class="k">Everyone on the same games, most profit first</div>
+        ${lead}
+        <div class="desc"><b>${esc(nameOf(who))}</b> - ${esc(me.describe)}</div>
+        <div class="note">Plain code, no AI, flat $100 paper bets at the price when it decided. These don't touch Ace's bankroll.
+          "Vs close" is the price taken against the closing price - above zero means it beat the market.</div>
+        <div class="k" style="margin:16px 0 8px">Settled${settled.length ? ` (latest ${settled.length})` : ''}</div>
+        ${settled.length ? settled.map(naiTicket).join('') : '<div class="empty">Nothing settled yet.</div>'}
+      </div>
+      <div class="box">
+        <div class="k" style="margin-bottom:8px">Open now</div>
+        ${open.length ? open.map(naiTicket).join('') : '<div class="empty">Nothing open right now.</div>'}
+      </div>
+    </div>`;
+}
+$('naipane').addEventListener('click', e => {
+  const b = e.target.closest('tr[data-who]');
+  if (!b) return;
+  who = b.dataset.who;
+  try { localStorage.setItem('ace.who', who); } catch (err) { /* private window */ }
+  drawWho();
+});
+
+drawWho();
+load();
+loadNai();
+setInterval(() => { if (tab !== 'report') load(); loadNai(); }, 60000);
+</script>
+</body>
+</html>

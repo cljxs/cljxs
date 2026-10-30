@@ -1,0 +1,157 @@
+{
+ "sport": "nba",
+ "event_id": "401898404",
+ "name": "Brooklyn Nets at Miami Heat",
+ "short": "BKN @ MIA",
+ "start_utc": "2026-10-14T23:30Z",
+ "status": "STATUS_SCHEDULED",
+ "home": {
+  "abbr": "MIA",
+  "name": "Miami Heat",
+  "record": "2-1"
+ },
+ "away": {
+  "abbr": "BKN",
+  "name": "Brooklyn Nets",
+  "record": "3-0"
+ },
+ "odds": {
+  "book": "DraftKings",
+  "details": "MIA -6.5",
+  "over_under": 232.5,
+  "spread": -6.5,
+  "moneyline_home": -270,
+  "moneyline_away": 220,
+  "novig_home_pct": 70.0,
+  "novig_away_pct": 30.0,
+  "vig_pct": 4.2,
+  "_note": "novig_*_pct is the real break-even. It is the ONLY number your estimate is compared against."
+ },
+ "injuries": [
+  {
+   "team": "MIA",
+   "player": "Pelle Larsson",
+   "position": "G",
+   "status": "Day-To-Day",
+   "date": "2026-10-13T17:26Z"
+  },
+  {
+   "team": "MIA",
+   "player": "Kylor Kelley",
+   "position": "C",
+   "status": "Day-To-Day",
+   "date": "2026-10-11T02:48Z"
+  },
+  {
+   "team": "MIA",
+   "player": "Bam Adebayo",
+   "position": "C",
+   "status": "Day-To-Day",
+   "date": "2026-10-10T22:35Z"
+  },
+  {
+   "team": "MIA",
+   "player": "Andrew Wiggins",
+   "position": "F",
+   "status": "Day-To-Day",
+   "date": "2026-10-10T22:32Z"
+  },
+  {
+   "team": "MIA",
+   "player": "Klay Thompson",
+   "position": "G",
+   "status": "Day-To-Day",
+   "date": "2026-10-10T22:31Z"
+  },
+  {
+   "team": "BKN",
+   "player": "Joshua Jefferson",
+   "position": "F",
+   "status": "Day-To-Day",
+   "date": "2026-10-12T15:02Z"
+  },
+  {
+   "team": "BKN",
+   "player": "Mikel Brown Jr.",
+   "position": "G",
+   "status": "Day-To-Day",
+   "date": "2026-10-12T14:57Z"
+  }
+ ],
+ "last_five": [
+  {
+   "team": "MIA",
+   "result": "W",
+   "score": "143-117",
+   "opponent": "ATL"
+  },
+  {
+   "team": "MIA",
+   "result": "L",
+   "score": "127-126 OT",
+   "opponent": "CHA"
+  },
+  {
+   "team": "MIA",
+   "result": "W",
+   "score": "129-105",
+   "opponent": "TOR"
+  },
+  {
+   "team": "MIA",
+   "result": "W",
+   "score": "128-118",
+   "opponent": "NO"
+  },
+  {
+   "team": "MIA",
+   "result": "L",
+   "score": "125-124",
+   "opponent": "MIN"
+  },
+  {
+   "team": "BKN",
+   "result": "L",
+   "score": "125-108",
+   "opponent": "MIL"
+  },
+  {
+   "team": "BKN",
+   "result": "L",
+   "score": "136-101",
+   "opponent": "TOR"
+  },
+  {
+   "team": "BKN",
+   "result": "W",
+   "score": "124-90",
+   "opponent": "CHA"
+  },
+  {
+   "team": "BKN",
+   "result": "W",
+   "score": "114-108",
+   "opponent": "PHI"
+  },
+  {
+   "team": "BKN",
+   "result": "W",
+   "score": "131-122",
+   "opponent": "WSH"
+  }
+ ],
+ "against_the_spread": [
+  {
+   "team": "BKN",
+   "records": []
+  },
+  {
+   "team": "MIA",
+   "records": []
+  }
+ ],
+ "venue": "Kaseya Center",
+ "weather": {},
+ "probable_pitchers": [],
+ "fetched_utc": "2026-10-14 18:41:45"
+}

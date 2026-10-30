@@ -1,0 +1,14 @@
+[Unit]
+Description=Three coaches (Belfort, Bolt, Ace): the week's review and proposed rule changes (one question each on the Claude plan; applies nothing)
+Documentation=https://github.com/cljxs/cljxs
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+WorkingDirectory=/root/ecosystem
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/coach.py weekly
+# Three questions in turn since 2026-10-23, up to 300 seconds each.
+TimeoutStartSec=1200
+StandardOutput=journal
+StandardError=journal

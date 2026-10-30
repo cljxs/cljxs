@@ -1,0 +1,11 @@
+[Unit]
+Description=Ace Props: closing prices and settling, every 10 minutes 12:00-23:50 Eastern
+
+[Timer]
+# Only open bets' games are priced, and only until they tip off, so most runs
+# make one scoreboard call. A late final settles at the next day's first run.
+OnCalendar=*-*-* 12..23:00/10 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

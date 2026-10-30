@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a0d16">
+<title>Ace Props</title>
+<!-- Ace Props (owner, 2026-10-26): NBA player points milestones, picked by
+     plain code from a TikTok rule - an opponent bottom 10 at defending the
+     player's position, and his hit rate against such defences beating the
+     price - with the guards of option A. Two bets a day at most, $100 each,
+     on Ace's bankroll but out of his record, his cap and his stops. Every
+     number comes from /api/ace-props (scripts/ace-props.py); the page draws.
+     Opened from Ace's page and the village menu (?embed=1). -->
+<style>
+  :root{
+    --bg:#0a0d16; --panel:#0e1220; --panel2:#121729; --line:rgba(255,255,255,.07); --line2:rgba(255,255,255,.12);
+    --acc:#ff9f43; --acc2:#ffc58a; --ink:#e7eaf2; --mute:#8b90a0; --dim:#596074;
+    --up:#2fd39b; --down:#f0646f; --warn:#f2c14e;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink)}
+  body{font:13px/1.5 var(--mono);-webkit-font-smoothing:antialiased;padding:14px}
+  body.embed{padding:10px;background:rgba(5,7,12,.92)}
+  .frame{max-width:1200px;margin:0 auto;border:1.5px solid var(--acc);border-radius:10px;background:var(--panel);
+    box-shadow:0 0 0 1px rgba(0,0,0,.6),0 18px 60px rgba(0,0,0,.55);overflow:hidden}
+  .num{font-variant-numeric:tabular-nums}
+  .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--mute)}
+  .k{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}
+  .muted{color:var(--mute)}
+  button{font:inherit;color:inherit}
+  .head{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:16px 20px;border-bottom:1px solid var(--line)}
+  .title{font-size:22px;font-weight:700;letter-spacing:.16em}
+  .who{color:var(--mute);letter-spacing:.1em;font-size:11.5px;text-transform:uppercase}
+  .sp{flex:1}
+  .acct{display:flex;gap:20px;flex-wrap:wrap;align-items:baseline}
+  .acct .l{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}
+  .acct .v{font-size:18px;font-weight:800}
+  .btn{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink);background:transparent;
+    border:1px solid var(--line);border-radius:6px;padding:8px 14px;cursor:pointer;text-decoration:none;white-space:nowrap}
+  .btn:hover{border-color:var(--acc)}
+  .rule{padding:10px 20px;border-bottom:1px solid var(--line);background:rgba(255,159,67,.06);color:#e9d6c2;font-size:12px}
+  .stop{padding:10px 20px;border-bottom:1px solid var(--line);background:rgba(240,100,111,.12);color:#ffb3b9;font-weight:700}
+  .tabs{display:flex;gap:4px;padding:0 14px;border-bottom:1px solid var(--line);overflow-x:auto}
+  .tab{background:none;border:0;border-bottom:2px solid transparent;color:var(--mute);padding:11px 10px;cursor:pointer;
+    letter-spacing:.1em;text-transform:uppercase;font-size:12px;white-space:nowrap}
+  .tab.on{color:var(--acc2);border-bottom-color:var(--acc)}
+  .tab .n{margin-left:6px;color:var(--ink)}
+  .body{padding:14px 20px 22px}
+  .card{border:1px solid var(--line2);border-radius:8px;background:var(--panel2);padding:12px 14px;margin-bottom:12px}
+  .card h3{margin:0 0 4px;font-size:14px;letter-spacing:.06em}
+  .row{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) auto;gap:10px;padding:8px 0;border-top:1px solid var(--line);align-items:baseline}
+  .row:first-of-type{border-top:0}
+  .tag{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;padding:2px 7px;border-radius:5px;border:1px solid var(--line2);white-space:nowrap}
+  .tag.bet{color:var(--acc2);border-color:var(--acc)} .tag.won{color:var(--up);border-color:rgba(47,211,155,.5)}
+  .tag.lost{color:var(--down);border-color:rgba(240,100,111,.5)}
+  .why{color:var(--mute);font-size:12px}
+  details{margin-top:6px} summary{cursor:pointer;color:var(--mute);font-size:12px}
+  ul{margin:6px 0;padding-left:18px} li{margin:2px 0}
+  .defs{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+  @media (max-width:640px){ .row{grid-template-columns:1fr} .head{padding:12px 14px} .body{padding:12px 14px} }
+</style>
+<script src="/shared/busy.js"></script>
+</head>
+<body>
+<div class="frame">
+  <div class="head">
+    <div><div class="title">ACE PROPS</div><div class="who">NBA points milestones · on Ace's bankroll</div></div>
+    <div class="acct" id="acct"></div>
+    <div class="sp"></div>
+    <a class="btn" id="ace" href="/ace">← Ace</a>
+    <button class="btn" id="close" style="display:none">✕ Esc</button>
+  </div>
+  <div class="rule" id="rule">loading…</div>
+  <div id="stop"></div>
+  <div class="tabs" id="tabs"></div>
+  <div class="body" id="body"></div>
+</div>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const has = v => v !== null && v !== undefined;
+const money = v => has(v) ? (v < 0 ? '-$' : '$') + Math.abs(Number(v)).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—';
+const signed = v => has(v) ? (v > 0 ? '+' : '') + money(v) : '—';
+const cls = v => !has(v) ? 'flat' : v > 0 ? 'up' : v < 0 ? 'down' : 'flat';
+const price = v => has(v) ? (v > 0 ? '+' + v : String(v)) : '—';
+const pc = v => has(v) ? Number(v).toFixed(1) + '%' : '—';
+const pp = v => has(v) ? (v > 0 ? '+' : '') + Number(v).toFixed(1) : '—';
+const when = u => { const d = new Date(String(u || '').replace(' ', 'T') + (/Z$/.test(u || '') ? '' : 'Z'));
+  return isNaN(d) ? '' : d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }); };
+
+const EMBED = new URLSearchParams(location.search).has('embed');
+if (EMBED) {
+  document.body.classList.add('embed');
+  $('ace').href = '/ace?embed=1';
+  $('close').style.display = '';
+  const close = () => parent.postMessage({ type: 'aceprops-close' }, '*');
+  $('close').onclick = close;
+  addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+}
+
+let D = null, tab = 'board';
+
+async function load() {
+  try { D = await (await fetch('/api/ace-props', { cache: 'no-store' })).json(); }
+  catch (e) { $('rule').textContent = 'Could not reach the Deck - it may be restarting.'; return; }
+  draw();
+}
+
+function draw() {
+  const s = D.summary || {}, r = D.rules || {};
+  $('acct').innerHTML = [
+    ['Bankroll (shared)', `<span class="v num">${money(s.bankroll)}</span>`],
+    ['Props P/L', `<span class="v num ${cls(s.profit)}">${signed(s.profit)}</span>`],
+    ['W-L', `<span class="v num">${s.won || 0}-${s.lost || 0}${s.void ? ` · ${s.void} void` : ''}</span>`],
+    ['Today', `<span class="v num">${s.today || 0}/${s.cap || 2}</span>`],
+    ['Beat the close', `<span class="v num">${has(s.avg_clv_pct) ? `${pp(s.avg_clv_pct)}%` : '—'}</span>`],
+  ].map(([l, v]) => `<div><div class="l">${l}</div>${v}</div>`).join('');
+  $('rule').innerHTML = `The opponent must be bottom ${r.bottom} at defending the player's position (G, F or C, its last
+    ${r.defense_games} games). His hit rate against those defences is pulled ${Math.round((r.shrink || 0) * 100)}% toward the
+    price, needs ${r.min_games}+ games, and must beat the price by ${r.gap_min_pts} pts; prices ${r.max_favourite} to
+    +${r.max_longshot} only. At most ${r.cap} bets a day, ${money(r.stake)} each, from Ace's bankroll - kept out of his
+    own record, his 4-bet cap and his stops. Props pause after ${money(-r.stop_usd)}.`;
+  $('stop').innerHTML = s.stopped ? `<div class="stop">PAUSED: ${esc(s.stopped)}</div>` : '';
+  const games = ((D.board || {}).games || []);
+  $('tabs').innerHTML = [['board', "Today's board", games.length], ['open', 'Open bets', (D.open || []).length],
+    ['results', 'Results', (D.settled || []).length], ['defense', 'Defences', null]]
+    .map(([k, l, n]) => `<button class="tab ${tab === k ? 'on' : ''}" data-t="${k}">${l}${has(n) ? `<span class="n">${n}</span>` : ''}</button>`).join('');
+  $('body').innerHTML = tab === 'board' ? board(games) : tab === 'open' ? openBets() : tab === 'results' ? results() : defences();
+}
+
+function rung(r) {
+  return `${r.line}+ at ${price(r.price)} · hit ${pc(r.hit_pct)} of ${r.games} · counted ${pc(r.p_used)} vs ${pc(r.market_pct)} · edge ${pp(r.edge_pts)}`;
+}
+
+function board(games) {
+  const b = D.board || {};
+  if (!games.length) return `<div class="muted">No board yet today. It is drawn at 12:30 and 17:30 Eastern${b.day ? ` (last: ${esc(b.day)})` : ''}.</div>`;
+  const bet = new Set((D.open || []).concat(D.settled || []).map(x => `${x.match}|${x.athlete}`));
+  return `<div class="muted" style="margin-bottom:10px">${esc(b.day || '')} · box scores: ${b.store ? b.store.games : 0} games to ${esc((b.store || {}).latest || '—')}</div>` +
+    games.map(g => {
+      const ps = g.players || [];
+      const clear = ps.filter(p => p.best), other = ps.filter(p => !p.best);
+      return `<div class="card"><h3>${esc(g.match)} <span class="muted">${esc(when(g.starts_utc))}</span></h3>
+        ${g.note ? `<div class="why">${esc(g.note)}</div>` : ''}
+        ${clear.map(p => `<div class="row"><div><b>${esc(p.name)}</b> <span class="muted">${esc(p.team)} ${esc(p.pos)} vs ${esc(p.opp)} (rank ${p.opp_rank})</span></div>
+          <div class="num">${esc(rung(p.best))}</div>
+          <div>${bet.has(`${g.match}|${p.name}`) ? '<span class="tag bet">bet</span>' : '<span class="tag">clears</span>'}</div></div>`).join('')
+          || '<div class="why">Nobody clears the bar in this game.</div>'}
+        ${other.length ? `<details><summary>${other.length} more player(s) and why not</summary><ul>${other.map(p =>
+          `<li><b>${esc(p.name || p.athlete_id)}</b> - ${esc(p.why)}</li>`).join('')}</ul></details>` : ''}
+      </div>`;
+    }).join('');
+}
+
+function betRow(x, settled) {
+  return `<div class="row"><div><b>${esc(x.selection)}</b> <span class="muted">${esc(x.match)} · ${esc(when(x.starts_utc))}</span>
+      <div class="why">${esc(x.why)}</div></div>
+    <div class="num">${price(x.price)} · $${Math.round(x.stake || 0)}${has(x.close_price) ? ` · closed ${price(x.close_price)} (${pp(x.clv_pct)}%)` : ''}
+      ${settled ? `<div class="${cls(x.profit)}">${signed(x.profit)} · ${esc(x.detail || '')}</div>` : ''}</div>
+    <div>${settled ? `<span class="tag ${esc(x.result)}">${esc(x.result)}</span>` : '<span class="tag bet">open</span>'}</div></div>`;
+}
+
+function openBets() {
+  const o = D.open || [];
+  return o.length ? `<div class="card">${o.map(x => betRow(x, false)).join('')}</div>` : '<div class="muted">No props bet open.</div>';
+}
+
+function results() {
+  const s = D.settled || [], m = D.summary || {};
+  if (!s.length) return '<div class="muted">No props bet has settled yet.</div>';
+  const clv = has(m.avg_clv_pct) ? `Closing-line value ${pp(m.avg_clv_pct)}% a bet over ${m.with_close}, beat the close on ${m.beat_close}. ` : '';
+  return `<div class="muted" style="margin-bottom:10px">${clv}Wins on a few bets say little; the close says more, sooner.</div>
+    <div class="card">${s.map(x => betRow(x, true)).join('')}</div>`;
+}
+
+function defences() {
+  const d = (D.board || {}).defense || {};
+  const names = { G: 'Guards', F: 'Forwards', C: 'Centres' };
+  return `<div class="muted" style="margin-bottom:10px">The ${(D.rules || {}).bottom} teams that allow the most points a game to each position, over their last ${(D.rules || {}).defense_games} games.</div>
+    <div class="defs">${Object.entries(d).map(([pos, x]) => `<div class="card"><h3>${names[pos] || pos}</h3><ul>${(x.bottom || []).map((t, i) =>
+      `<li>${i + 1}. ${esc(t)} <span class="muted">${x.allowed[t]} a game</span></li>`).join('')}</ul></div>`).join('')
+      || '<div class="muted">No box scores yet.</div>'}</div>`;
+}
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-t]');
+  if (!t) return;
+  tab = t.dataset.t;
+  draw();
+});
+load();
+</script>
+</body>
+</html>

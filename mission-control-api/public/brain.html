@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<title>Brain map</title>
+<!-- The brain map (owner, 2026-10-30: "I've always wanted my agents to be
+     able to talk to each other ... a physical way to see it"). Every agent,
+     the GM, Fury, the knowledge store and you, and what really passes
+     between them - all of it from scripts/brain.py through /api/brain;
+     nothing is worked out on this page. Dashed lines are standing wires
+     (each one a line of code a test finds); solid, moving lines are what
+     moved in the last week. Read-only: it changes nothing.
+     Opened from the village frame's navigation (?embed=1). -->
+<style>
+  :root{
+    --bg:#0b1020; --panel:#10172a; --card:#131b31; --line:rgba(148,163,184,.16);
+    --ink:#e6e9f2; --mute:#94a0b8; --dim:#5f6b85;
+    --fresh:#4ade80; --quiet:#f59e0b; --failed:#f43f5e; --unknown:#64748b;
+    --wire:rgba(148,163,184,.45); --report:rgba(148,163,184,.22); --fixes:#34d399; --tasks:#38bdf8; --knowledge:#a78bfa; --proposals:#facc15; --waiting:#fb923c;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink)}
+  body{font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased;padding:16px}
+  body.embed{padding:10px;background:rgba(5,8,16,.94)}
+  .frame{max-width:1100px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    box-shadow:0 20px 70px rgba(0,0,0,.5);overflow:hidden}
+  .head{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;padding:20px 22px 10px}
+  .head h1{margin:0;font-size:26px}
+  .sub{color:var(--mute);margin-top:2px}
+  .sp{flex:1}
+  .btn{font:600 13px var(--sans);color:var(--ink);background:transparent;border:1px solid var(--line);
+    border-radius:8px;padding:9px 14px;cursor:pointer;text-decoration:none;white-space:nowrap}
+  .legend{display:flex;flex-wrap:wrap;gap:6px 14px;padding:0 22px 8px;font-size:12px;color:var(--mute)}
+  .legend i{display:inline-block;width:18px;height:0;border-top:3px solid;vertical-align:middle;margin-right:5px}
+  .legend i.dash{border-top-style:dashed;border-top-width:2px}
+  .legend b{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:-1px;margin-right:5px}
+  .map{padding:0 10px}
+  svg{display:block;width:100%;height:auto;max-height:78vh;touch-action:manipulation}
+  .edge{fill:none;stroke-linecap:round}
+  .edge.wire{stroke:var(--wire);stroke-dasharray:6 7}
+  .edge.report{stroke-dasharray:2 6}
+  .edge.flow{stroke-dasharray:10 12;animation:flow 1.6s linear infinite}
+  @keyframes flow{to{stroke-dashoffset:-44}}
+  @media (prefers-reduced-motion: reduce){.edge.flow{animation:none;stroke-dasharray:none}}
+  .node{cursor:pointer}
+  .node circle.core{fill:var(--card);stroke-width:4}
+  .node text{fill:var(--ink);font:600 22px var(--sans);text-anchor:middle;pointer-events:none}
+  .node text.sm{fill:var(--mute);font:500 17px var(--sans)}
+  .node.dim{opacity:.28}
+  .edge.dim{opacity:.12}
+  .node.alone circle.core{stroke-dasharray:5 6}
+  .detail{margin:8px 22px 18px;padding:14px 16px;background:var(--card);border:1px solid var(--line);border-radius:12px}
+  .detail h2{margin:0 0 2px;font-size:18px}
+  .detail ul{margin:8px 0 0;padding-left:18px} .detail li{margin:3px 0}
+  .muted{color:var(--mute)}
+  .k{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute);font-weight:600;margin-top:10px}
+  .pill{display:inline-block;font-size:12px;padding:1px 8px;border-radius:999px;border:1px solid var(--line);margin-left:6px}
+  .all{margin:0 22px 22px}
+  .all summary{cursor:pointer;color:var(--mute);font-weight:600}
+  .alone{margin:0 22px 14px;padding:10px 14px;border:1px solid rgba(251,146,60,.35);border-radius:10px;background:rgba(251,146,60,.07);font-size:13px}
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="head">
+    <div><h1>Brain map</h1>
+      <div class="sub">Every agent, and what really passes between them. Tap one to see its connections.</div></div>
+    <div class="sp"></div>
+    <button class="btn" id="refresh">Refresh</button>
+    <a class="btn" id="back" href="/dashboard">← Deck</a>
+    <button class="btn" id="close" style="display:none">Close</button>
+  </div>
+  <div class="legend" id="legend"></div>
+  <div class="map"><svg id="svg" viewBox="0 0 1000 1000" role="img" aria-label="The brain map"></svg></div>
+  <div id="alone"></div>
+  <div class="detail" id="detail"><span class="muted">Loading the map…</span></div>
+  <details class="all" id="all"></details>
+</div>
+<script src="/shared/busy.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const when = u => { const d = new Date(u || ''); return isNaN(d) ? 'no run seen'
+  : d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
+const STATE = { fresh: ['var(--fresh)', 'ran recently'], quiet: ['var(--quiet)', 'quiet a while'],
+  failed: ['var(--failed)', 'a run failed'], unknown: ['var(--unknown)', 'no timer to read'] };
+const KIND = { wire: ['var(--wire)', 'standing wire'], report: ['var(--report)', 'reports to Fury'],
+  fixes: ['var(--fixes)', "Fury's fixes"], tasks: ['var(--tasks)', 'tasks handed over'],
+  knowledge: ['var(--knowledge)', 'lessons shared'], proposals: ['var(--proposals)', 'GM proposals'],
+  waiting: ['var(--waiting)', 'waiting on you'] };
+let D = null, picked = null;
+
+if (new URLSearchParams(location.search).get('embed') === '1') {
+  document.body.classList.add('embed');
+  $('back').style.display = 'none';
+  $('close').style.display = '';
+  const close = () => parent.postMessage({ type: 'brain-close' }, '*');
+  $('close').onclick = close;
+  addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+}
+
+$('legend').innerHTML = Object.entries(KIND).map(([k, [c, l]]) =>
+    `<span><i class="${k === 'wire' || k === 'report' ? 'dash' : ''}" style="border-top-color:${c}"></i>${l}</span>`).join('')
+  + Object.entries(STATE).map(([, [c, l]]) => `<span><b style="background:${c}"></b>${l}</span>`).join('');
+
+async function load() {
+  try { D = await (await fetch('/api/brain', { cache: 'no-store' })).json(); }
+  catch (e) { $('detail').innerHTML = '<span class="muted">Could not reach the Deck - it may be restarting.</span>'; return; }
+  if (!D || !D.nodes) { $('detail').innerHTML = `<span class="muted">The map could not be read: ${esc((D || {}).error)}</span>`; return; }
+  draw();
+}
+
+const P = n => [n.x * 10 * 0.86 + 70, n.y * 10 * 0.86 + 70];       // a margin so names never touch the edge
+
+// On a phone the 1000-unit map is drawn about a third of its size, so the
+// circles and names are drawn larger there to stay readable.
+let S = 1;
+
+function draw() {
+  S = $('svg').getBoundingClientRect().width < 600 ? 1.5 : 1;
+  const byId = Object.fromEntries(D.nodes.map(n => [n.id, n]));
+  const pairs = {};
+  const lines = D.edges.map(e => {
+    const a = byId[e.from], b = byId[e.to];
+    const key = [e.from, e.to].sort().join('|');
+    const i = pairs[key] = (pairs[key] ?? -1) + 1;                    // several lines between one pair fan out
+    const [x1, y1] = P(a), [x2, y2] = P(b);
+    const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1;
+    const bend = (i % 2 ? -1 : 1) * (18 + 26 * Math.ceil(i / 2));
+    const cx = mx - dy / len * bend, cy = my + dx / len * bend;
+    const still = e.kind === 'wire' || e.kind === 'report';
+    const w = (still ? 2 : Math.min(9, 2.5 + Math.log2(1 + (e.count || 0)) * 1.6)) * S;
+    const touches = !picked || e.from === picked || e.to === picked;
+    return `<path class="edge ${still ? 'wire ' + e.kind : 'flow'}${touches ? '' : ' dim'}" d="M${x1},${y1} Q${cx},${cy} ${x2},${y2}"
+      stroke="${KIND[e.kind][0]}" stroke-width="${w}" marker-end="url(#arr-${e.kind})"><title>${esc(byId[e.from].name)} → ${esc(byId[e.to].name)}: ${esc(e.label)}${e.count != null ? ' ×' + e.count : ''}</title></path>`;
+  }).join('');
+  const linked = new Set(D.edges.filter(e => e.from === picked || e.to === picked).flatMap(e => [e.from, e.to]));
+  const alone = new Set(D.alone || []);
+  const nodes = D.nodes.map(n => {
+    const [x, y] = P(n), you = n.id === 'you', r = (you ? 54 : 40) * S;
+    const ring = you ? 'var(--proposals)' : STATE[n.state] ? STATE[n.state][0] : 'var(--unknown)';
+    const dim = picked && n.id !== picked && !linked.has(n.id);
+    return `<g class="node${dim ? ' dim' : ''}${alone.has(n.id) ? ' alone' : ''}" data-id="${n.id}" tabindex="0" role="button" aria-label="${esc(n.name)}">
+      <circle cx="${x}" cy="${y}" r="${r + 16}" fill="transparent"/>
+      <circle class="core" cx="${x}" cy="${y}" r="${r}" stroke="${ring}"/>
+      ${label(n.name, x, y)}</g>`;
+  }).join('');
+  const marks = Object.entries(KIND).map(([k, [c]]) => `<marker id="arr-${k}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="${c}"/></marker>`).join('');
+  $('svg').innerHTML = `<defs>${marks}</defs>${lines}${nodes}`;
+  $('svg').querySelectorAll('.node').forEach(g => {
+    const go = () => { picked = picked === g.dataset.id ? null : g.dataset.id; draw(); };
+    g.onclick = go;
+    g.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
+  });
+  $('alone').innerHTML = (D.alone || []).length ? `<div class="alone"><b>Working alone:</b> ${D.alone.map(a => esc(byId[a].name)).join(', ')} - they report to Fury, but nothing passes between them and any other agent. This is where agents could start talking to each other.</div>` : '';
+  detail(byId);
+  $('all').innerHTML = `<summary>Every connection (${D.edges.length}) · traffic is the last ${D.window_days} days · as of ${esc(when(D.asof_utc))}</summary>
+    <ul>${D.edges.map(e => `<li>${esc(byId[e.from].name)} → ${esc(byId[e.to].name)}: ${esc(e.label)}${e.count != null ? ` <span class="pill">×${e.count}</span> <span class="muted">${esc(e.detail)}</span>` : ' <span class="muted">(standing wire)</span>'}</li>`).join('')}</ul>`;
+}
+
+// The whole name inside its circle: a word a line, smaller as it gets longer.
+function label(name, x, y) {
+  const words = name.split(' '), longest = Math.max(...words.map(w => w.length));
+  const size = (longest <= 5 ? 22 : longest <= 7 ? 19 : 16) * S, gap = size + 2;
+  const top = y + size * 0.36 - (words.length - 1) * gap / 2;
+  return words.map((w, i) => `<text x="${x}" y="${top + i * gap}" style="font-size:${size}px">${esc(w)}</text>`).join('');
+}
+
+function detail(byId) {
+  if (!picked) {
+    const moving = D.edges.filter(e => e.kind !== 'wire' && e.kind !== 'report');
+    $('detail').innerHTML = `<h2>The whole picture</h2><div class="muted">${D.nodes.length - 1} parts, ${D.edges.filter(e => e.kind === 'wire').length} standing wires,
+      ${moving.length} line(s) with traffic this week. Every agent reports to Fury. Tap an agent to see who it talks to.</div>`;
+    return;
+  }
+  const n = byId[picked];
+  const row = e => `<li>${e.from === picked ? '→ ' + esc(byId[e.to].name) : '← ' + esc(byId[e.from].name)}: ${esc(e.label)}${e.count != null ? ` <span class="pill">×${e.count}</span> <span class="muted">${esc(e.detail)}</span>` : ''}</li>`;
+  const mine = D.edges.filter(e => e.from === picked || e.to === picked);
+  const st = STATE[n.state] || STATE.unknown;
+  $('detail').innerHTML = `<h2>${esc(n.name)}</h2><div class="muted">${esc(n.what)}</div>
+    ${n.id === 'you' || !n.units.length ? '' : `<div class="k">Last run</div><div><span style="color:${st[0]}">●</span> ${esc(when(n.last_run_utc))} · ${esc(st[1])}${n.failed.length ? ' · failed: ' + n.failed.map(esc).join(', ') : ''}</div>`}
+    <div class="k">Connections</div>${mine.length ? `<ul>${mine.map(row).join('')}</ul>` : '<div class="muted">None - it works on its own.</div>'}
+    ${n.page ? `<div style="margin-top:10px"><a class="btn" href="${esc(n.page)}">Open ${esc(n.name)}'s page</a></div>` : ''}`;
+}
+
+$('refresh').onclick = load;
+addEventListener('resize', () => { if (D) draw(); });
+load();
+setInterval(load, 120000);
+</script>
+</body>
+</html>

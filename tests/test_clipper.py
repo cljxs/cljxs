@@ -1,0 +1,3848 @@
+"""Clipper, Phase 1. No dependencies: the transcriber is swapped for the
+"file" provider and fed real faster-whisper output captured 2026-09-28
+(tests/fixtures/clipper-words-librivox.json, a public-domain LibriVox
+reading). The end-to-end test needs ffmpeg and skips without it.
+"""
+
+import contextlib
+import fcntl
+import importlib.util
+import io
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import types
+import warnings
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+sys.path.insert(0, str(ROOT))
+
+from clipper import captions, cli, config, db, media, moments, pipeline, render, rights, score, transcribe  # noqa: E402
+
+WORDS = json.loads((FIXTURES / "clipper-words-librivox.json").read_text())["words"]
+CFG = dict(config.DEFAULTS)
+
+# No test asks the real Claude plan - on the droplet the login is there, and
+# every stage_find would read its transcript for real. Tests of the reading
+# itself pass their own ask.
+from clipper import stories  # noqa: E402
+stories._ask = lambda q: (False, "the plan is not asked in tests")
+from clipper import inbox as _inbox  # noqa: E402
+_inbox._plan = lambda q: (False, "the plan is not asked in tests")
+
+
+def w(start, end, word):
+    return {"start": start, "end": end, "word": word, "p": 0.9}
+
+
+class Rights(unittest.TestCase):
+    """Nothing gets in without a named permission and written evidence."""
+
+    def test_the_gate(self):
+        self.assertIn("unknown rights", rights.check("found-it-online", "x"))
+        self.assertIn("evidence is required", rights.check("permission", "  "))
+        self.assertIn("commercial", rights.check("cc-by-nc", "link", "credit"))
+        self.assertIsNone(rights.check("cc-by-nc", "link", "credit", allow_noncommercial=True))
+        self.assertIn("requires credit", rights.check("cc-by", "link"))
+        self.assertIsNone(rights.check("cc-by", "link", "Clip from X (CC BY)"))
+        self.assertIsNone(rights.check("own", "my channel"))
+
+
+class Config(unittest.TestCase):
+    def test_a_misspelt_setting_is_an_error_not_a_no_op(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "config.json"
+            p.write_text(json.dumps({"max_clip_second": 45}))
+            with self.assertRaisesRegex(ValueError, "max_clip_second"):
+                config.load(p)
+            p.write_text(json.dumps({"max_clip_seconds": 45}))
+            self.assertEqual(config.load(p)["max_clip_seconds"], 45)
+
+
+class Database(unittest.TestCase):
+    def test_migrations_run_once(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "c.db"
+            conn = db.connect(path)
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], len(db.MIGRATIONS))
+            conn.close()
+            conn = db.connect(path)          # a second open must not re-run CREATE TABLE
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], len(db.MIGRATIONS))
+
+    def test_the_spend_guard_refuses_before_spending(self):
+        with tempfile.TemporaryDirectory() as d:
+            conn = db.connect(Path(d) / "c.db")
+            cfg = dict(CFG, daily_budget_usd=0.10)
+            db.spend_guard(conn, cfg, 0.05)
+            db.record_cost(conn, "groq", "transcribe", 0.08)
+            with self.assertRaisesRegex(db.OverBudget, r"\$0\.10 daily cap"):
+                db.spend_guard(conn, cfg, 0.05)
+
+
+class Sentences(unittest.TestCase):
+    """Clips are runs of whole sentences, so these rules are the ones that
+    decide whether a clip can start or stop mid-thought."""
+
+    def setUp(self):
+        self.sents = moments.sentences(WORDS, CFG["sentence_pause_seconds"])
+
+    def test_no_word_is_lost_or_repeated(self):
+        covered = [i for s in self.sents for i in range(s["first"], s["last"] + 1)]
+        self.assertEqual(covered, list(range(len(WORDS))))
+
+    def test_every_sentence_ends_on_punctuation_or_a_pause(self):
+        for s in self.sents[:-1]:
+            self.assertTrue(moments.ends_sentence(WORDS[s["last"]]["word"])
+                            or s["pause_after"] >= CFG["sentence_pause_seconds"], s["text"])
+
+    def test_a_pause_splits_where_whisper_wrote_no_full_stop(self):
+        ws = [w(0, 0.4, " so"), w(0.5, 0.9, " anyway"), w(2.0, 2.3, " next"), w(2.4, 2.8, " thing.")]
+        self.assertEqual([s["text"] for s in moments.sentences(ws, 0.8)], ["so anyway", "next thing."])
+
+    def test_a_closing_quote_does_not_hide_the_full_stop(self):
+        self.assertTrue(moments.ends_sentence(' said "no."'))
+        self.assertTrue(moments.ends_sentence(" really?)"))
+        self.assertFalse(moments.ends_sentence(" Mr"))
+
+
+class Windows(unittest.TestCase):
+    def setUp(self):
+        self.sents = moments.sentences(WORDS, 0.8)
+
+    def test_windows_are_whole_sentences_within_the_length_bounds(self):
+        wins = moments.windows(self.sents, 20, 60)
+        self.assertGreater(len(wins), 20)
+        for i, j in wins:
+            dur = self.sents[j]["end"] - self.sents[i]["start"]
+            self.assertTrue(20 <= dur <= 60, (i, j, dur))
+
+    def test_choose_never_overlaps_and_respects_the_limits(self):
+        scored = score.score_windows(self.sents, moments.windows(self.sents, 20, 60), WORDS, [], CFG)
+        chosen = moments.choose(scored, 4, 0)
+        self.assertEqual(len(chosen), 4)
+        for a in chosen:
+            for b in chosen:
+                if a is not b:
+                    self.assertFalse(moments.overlaps(a, b))
+        self.assertEqual(chosen[0]["score"], max(c["score"] for c in scored))
+        self.assertEqual(moments.choose(scored, 4, 101), [], "nothing clears an impossible bar")
+
+    def test_the_cut_never_reaches_into_the_next_word(self):
+        ws = [w(10.0, 10.5, " end."), w(10.6, 11.0, " Next")]
+        start, end = moments.cut_points(ws, 0, 0)
+        self.assertEqual(start, 9.85)
+        self.assertLessEqual(end, 10.55)
+        self.assertGreaterEqual(end, 10.5)
+
+
+class Scoring(unittest.TestCase):
+    def one(self, text_words, loud=()):
+        ws, t = [], 0.0
+        for x in text_words:
+            ws.append(w(t, t + 0.3, x))
+            t += 0.35
+        s = moments.sentences(ws, 0.8)
+        return score.features(s, 0, len(s) - 1, ws, list(loud), -30.0, CFG)
+
+    def test_an_opener_that_needs_earlier_context_scores_lower(self):
+        dangling = self.one([" And", " then", " he", " left."])
+        clean = self.one([" The", " captain", " left."])
+        self.assertLess(dangling["standalone"], clean["standalone"])
+
+    def test_a_question_is_a_hook(self):
+        self.assertGreater(self.one([" Why", " did", " it", " fail?"])["hook"],
+                           self.one([" It", " failed", " quietly."])["hook"])
+
+    def test_loud_moments_score_energy_against_this_video_not_an_absolute(self):
+        f = self.one([" Look", " at", " that!"], loud=[-20.0] * 3)   # 10 dB over the -30 median
+        self.assertEqual(f["energy"], 1.0)
+
+    def test_every_score_is_explained_by_stored_features(self):
+        sents = moments.sentences(WORDS, 0.8)
+        for c in score.score_windows(sents, moments.windows(sents, 20, 60), WORDS, [], CFG):
+            self.assertEqual(set(c["features"]), set(score.WEIGHTS))
+            self.assertTrue(0 <= c["score"] <= 100)
+            self.assertEqual(c["score"], score.total(c["features"]))
+
+
+class Captions(unittest.TestCase):
+    def setUp(self):
+        self.ass = captions.build(WORDS, 38.0, 75.0)
+        self.events = [l for l in self.ass.splitlines() if l.startswith("Dialogue:")]
+
+    @staticmethod
+    def secs(t):
+        h, m, s = t.split(":")
+        return int(h) * 3600 + int(m) * 60 + float(s)
+
+    def test_timestamps(self):
+        self.assertEqual(captions.ts(0), "0:00:00.00")
+        self.assertEqual(captions.ts(3725.456), "1:02:05.46")
+
+    def test_one_caption_at_a_time_all_inside_the_clip(self):
+        spans = [(self.secs(e.split(",")[1]), self.secs(e.split(",")[2])) for e in self.events]
+        self.assertGreater(len(spans), 30)
+        for (s1, e1), (s2, e2) in zip(spans, spans[1:]):
+            self.assertLess(s1, e1)
+            self.assertLessEqual(e1, s2 + 1e-6, "two captions on screen at once")
+        self.assertGreaterEqual(spans[0][0], 0)
+        self.assertLessEqual(spans[-1][1], 37.0 + 1e-6)
+
+    def test_exactly_one_word_is_lit_per_event(self):
+        for e in self.events:
+            self.assertEqual(e.count(captions.STYLES["bold-yellow"]["highlight"]), 1, e)
+
+    def test_a_caption_never_runs_one_sentence_into_the_next(self):
+        ws = [w(0, 0.3, " Done."), w(0.35, 0.6, " Next"), w(0.65, 0.9, " one")]
+        self.assertEqual([[x["word"] for x in c] for c in captions.chunks(ws)],
+                         [[" Done."], [" Next", " one"]])
+
+    def test_braces_cannot_become_ass_override_codes(self):
+        self.assertEqual(captions.clean(" {\\b1}hi", True), "(/B1)HI")
+
+
+class Loudness(unittest.TestCase):
+    """Parsed from real ffmpeg ebur128 output, which writes "M:-120.7" and
+    "M: -16.0" depending on the number's width."""
+
+    def test_the_real_log(self):
+        text = (FIXTURES / "clipper-ebur128.log").read_text()
+        frames = media.parse_ebur128(text)
+        # Counted from the file, not restated: every per-frame line, and none
+        # of the summary lines (whose "I:" must not be read as a reading).
+        self.assertEqual(len(frames), sum(1 for l in text.splitlines() if " t: " in l))
+        self.assertTrue(all(-121 <= lufs <= 0 for _, lufs in frames))
+        per = media.loudness_per_second(frames)
+        self.assertEqual(len(per), int(frames[-1][0]) + 1)
+        self.assertEqual(per[1], max(l for t, l in frames if 1 <= t < 2))
+
+    def test_both_spacings(self):
+        self.assertEqual(media.parse_ebur128("t: 1.2  TARGET:-23 LUFS    M:-120.7 S:-1\n"
+                                             "t: 1.3  TARGET:-23 LUFS    M: -16.0 S:-1"),
+                         [(1.2, -120.7), (1.3, -16.0)])
+
+
+class Crop(unittest.TestCase):
+    def test_center_crop_boxes(self):
+        self.assertEqual(render.center_crop(1920, 1080), (606, 1080, 657, 0))
+        self.assertEqual(render.center_crop(1280, 720), (404, 720, 438, 0))
+        self.assertEqual(render.center_crop(1080, 1920), (1080, 1920, 0, 0))
+        self.assertEqual(render.center_crop(1080, 1080), (606, 1080, 237, 0))
+        w_, h_, _, _ = render.center_crop(1279, 719)
+        self.assertEqual((w_ % 2, h_ % 2), (0, 0), "x264 needs even dimensions")
+
+    def test_unknown_mode_is_refused(self):
+        with self.assertRaises(ValueError):
+            render.video_filter("zoom", 1920, 1080, "a.ass", 30)
+
+
+from clipper import framing  # noqa: E402
+
+try:
+    import cv2  # noqa: F401
+    HAVE_CV2 = True
+except ImportError:
+    HAVE_CV2 = False
+
+
+class FramingLayouts(unittest.TestCase):
+    """Owner, 2026-10-07: "In every clip of Gil's Arena it cuts to this camera
+    angle showing nothing" - the middle strip of a wide shot whose hosts sit
+    at the ends of a couch. Each shot is framed on its people instead."""
+
+    SW, SH = 1920, 1080
+
+    def test_nobody_found_shows_the_whole_frame(self):
+        self.assertEqual(framing.layout([], self.SW, self.SH)["layout"], "full")
+
+    def test_one_face_is_centred_and_kept_inside_the_frame(self):
+        got = framing.layout([(1250, 500, 240, 320)], self.SW, self.SH)
+        self.assertEqual(got["layout"], "crop")
+        w, h, x, y = got["box"]
+        self.assertEqual((w, h), (606, 1080))
+        self.assertLess(abs(x + w / 2 - 1250), 2)
+        edge = framing.layout([(1880, 500, 120, 160)], self.SW, self.SH)["box"]
+        self.assertEqual(edge[2] + edge[0], self.SW, "clamped at the edge, not past it")
+
+    def test_two_close_share_a_strip_two_apart_split(self):
+        self.assertEqual(framing.layout([(860, 800, 110, 140), (1060, 800, 110, 140)],
+                                        self.SW, self.SH)["layout"], "crop")
+        got = framing.layout([(170, 760, 120, 150), (1750, 760, 120, 150)], self.SW, self.SH)
+        self.assertEqual(got["layout"], "split")
+        (w1, h1, x1, y1), (w2, h2, x2, y2) = got["boxes"]
+        self.assertEqual((w1, h1), (w2, h2), "both halves at the same zoom")
+        self.assertTrue(x1 <= 170 <= x1 + w1 and x2 <= 1750 <= x2 + w2, "each half holds its person")
+        self.assertTrue(y1 <= 760 <= y1 + h1)
+        self.assertLess(h1, self.SH, "zoomed to the faces, not the whole height")
+
+    def test_three_across_the_frame_show_it_all(self):
+        self.assertEqual(framing.layout([(200, 700, 100, 130), (960, 700, 100, 130), (1700, 700, 100, 130)],
+                                        self.SW, self.SH)["layout"], "full")
+
+    def test_a_flicker_is_not_a_person(self):
+        samples = [(k / 5, [(400, 500, 100, 130)]) for k in range(10)]
+        samples[3] = (0.6, [(400, 500, 100, 130), (1500, 500, 100, 130)])     # once in ten
+        self.assertEqual([round(p[0]) for p in framing.people(samples, self.SW)], [400])
+
+    def test_a_flash_of_a_shot_joins_the_one_before(self):
+        self.assertEqual(framing.shots([2.0, 2.3, 5.0], 8.0), [(0.0, 2.3), (2.3, 5.0), (5.0, 8.0)])
+        self.assertEqual(framing.shots([], 8.0), [(0.0, 8.0)])
+
+    def test_the_filter_cuts_each_shot_and_joins_them(self):
+        plan = [{"t0": 0.0, "t1": 2.0, "layout": "split", "boxes": [(658, 584, 0, 300), (658, 584, 1262, 300)]},
+                {"t0": 2.0, "t1": 4.0, "layout": "crop", "box": (606, 1080, 946, 0)},
+                {"t0": 4.0, "t1": 8.0, "layout": "full"}]
+        f = render.video_filter("faces", 1920, 1080, "a.ass", 30, plan=plan)
+        self.assertIn("[0:v]split=3[i0][i1][i2]", f)
+        self.assertIn("trim=start=2.000:end=4.000", f)
+        self.assertIn("[i2]trim=start=4.000,setpts", f, "the last shot runs on to the clip's end")
+        self.assertIn("concat=n=3:v=1:a=0", f)
+        self.assertIn("vstack", f)
+        self.assertTrue(f.endswith(",fps=30,ass=a.ass[v]"))
+
+
+@unittest.skipUnless(HAVE_CV2 and shutil.which("ffmpeg"), "needs OpenCV and ffmpeg")
+class FramingOnRealFaces(unittest.TestCase):
+    """Four shots made from NASA crew portraits (public domain,
+    tests/fixtures/faces): the couch, a close-up off centre, an empty set, two
+    side by side. The empty shot is the one ffmpeg's scene score alone missed."""
+
+    FACES = Path(__file__).parent / "fixtures" / "faces"
+
+    @classmethod
+    def setUpClass(cls):
+        import numpy as np
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.video = Path(cls.tmp.name) / "shots.mp4"
+        P = [cv2.imread(str(cls.FACES / f"person{i}.jpg")) for i in (1, 2, 3, 4)]
+
+        def frame(bg, people, n=0):
+            # Each person sways a few pixels and the light on them flickers,
+            # frame by frame: a real person moves, and since 2026-10-20 a shot
+            # whose faces never change is read as a wall of pictures.
+            img = np.full((1080, 1920, 3), bg, np.uint8)
+            cv2.rectangle(img, (0, 700), (1920, 1080), tuple(int(c * 0.5) for c in bg), -1)
+            for p, cx, k in people:
+                q = cv2.resize(p, None, fx=k, fy=k)
+                # Faces are looked at every 6th frame (30 fps, SAMPLE_FPS 10,
+                # DETECT_EVERY 2), so the movement changes on that beat.
+                beat = n // 6
+                q = np.clip(q.astype(np.int16) + (14 if beat % 2 else -14), 0, 255).astype(np.uint8)
+                h, w = q.shape[:2]
+                x = int(cx - w / 2) + (beat % 3 - 1) * 4
+                img[1080 - h - 60:1020, x:x + w] = q
+            return img
+        shots = [((40, 20, 60), [(P[0], 170, 1.0), (P[1], 1750, 1.0)]),
+                 ((20, 60, 40), [(P[2], 1250, 2.4)]),
+                 ((70, 70, 20), []),
+                 ((30, 30, 80), [(P[3], 860, 1.1), (P[0], 1060, 1.1)])]
+        w = subprocess.Popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24",
+                              "-s", "1920x1080", "-r", "30", "-i", "-", "-f", "lavfi", "-i",
+                              "sine=frequency=300:duration=8", "-shortest", "-c:v", "libx264",
+                              "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", str(cls.video)],
+                             stdin=subprocess.PIPE)
+        for bg, people in shots:
+            for n in range(60):
+                w.stdin.write(frame(bg, people, n).tobytes())
+        w.stdin.close()
+        w.wait()
+        cls.info = media.probe(cls.video)
+        cls.plan = framing.plan(cls.video, 0.0, 8.0, cls.info)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_each_shot_gets_its_own_layout(self):
+        got = [(s["layout"], round(s["t0"], 1), round(s["t1"], 1)) for s in self.plan]
+        self.assertEqual(got, [("split", 0.0, 2.0), ("crop", 2.0, 4.0), ("full", 4.0, 6.0), ("crop", 6.0, 8.0)])
+
+    def test_the_crops_are_on_the_people(self):
+        w, _, x, _ = self.plan[1]["box"]
+        self.assertLess(abs(x + w / 2 - 1250), 40, "the close-up, off centre")
+        w, _, x, _ = self.plan[3]["box"]
+        self.assertLess(abs(x + w / 2 - 960), 40, "between the two side by side")
+
+    def test_it_renders_and_says_how(self):
+        out = Path(self.tmp.name) / "out" / "01.mp4"
+        cfg = dict(config.DEFAULTS, x264_preset="ultrafast")
+        info = render.render(self.video, out, 0.0, 8.0, "[Script Info]\nScriptType: v4.00+\n", cfg)
+        self.assertEqual((info["width"], info["height"]), (1080, 1920))
+        self.assertAlmostEqual(info["duration"], 8.0, delta=0.2)
+        self.assertEqual(info["framing"], "4 shot(s): split 0-2s, crop 2-4s, full 4-6s, crop 6-8s")
+
+
+class AWallOfFacesIsNotTheShow(unittest.TestCase):
+    """Owner, 2026-10-20: the clip cropped onto the set's wall of printed
+    players' faces while the show played game footage."""
+
+    def test_many_faces_in_one_strip_is_shown_whole(self):
+        wall = [(1500 + 40 * i, 300 + 90 * i, 70, 90) for i in range(framing.MANY_FACES)]
+        got = framing.layout(wall, 1920, 1080)
+        self.assertEqual(got["layout"], "full")
+        self.assertIn("wall of faces", got["why"])
+
+    def test_the_hosts_are_still_cropped(self):
+        two = [(860, 800, 110, 140), (1060, 800, 110, 140)]
+        self.assertEqual(framing.layout(two, 1920, 1080)["layout"], "crop")
+
+    @unittest.skipUnless(HAVE_CV2 and shutil.which("ffmpeg"), "needs OpenCV and ffmpeg")
+    def test_on_footage_a_screen_beside_a_wall_of_portraits_is_shown_whole(self):
+        # The shot from the owner's screenshot, made from the public-domain
+        # portraits: game footage on a "screen" at the left (moving colour),
+        # a wall of printed faces at the right, nobody real in the shot.
+        import numpy as np
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        out = Path(tmp.name) / "wall.mp4"
+        faces = Path(__file__).parent / "fixtures" / "faces"
+        P = [cv2.resize(cv2.imread(str(faces / f"person{i}.jpg")), None, fx=0.45, fy=0.45) for i in (1, 2, 3, 4)]
+        w = subprocess.Popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24",
+                              "-s", "1920x1080", "-r", "30", "-i", "-", "-c:v", "libx264", "-preset",
+                              "ultrafast", "-pix_fmt", "yuv420p", str(out)], stdin=subprocess.PIPE)
+        for n in range(90):
+            img = np.full((1080, 1920, 3), 25, np.uint8)
+            img[120:640, 80:1180] = ((n * 7) % 255, 120, 200 - (n * 5) % 150)       # the game on the screen
+            for k in range(6):
+                p = P[k % 4]
+                h, wd = p.shape[:2]
+                y, x = 60 + (k // 2) * (h + 20), 1350 + (k % 2) * (wd + 20)
+                img[y:y + h, x:x + wd] = p
+            w.stdin.write(img.tobytes())
+        w.stdin.close()
+        w.wait()
+        plan = framing.plan(out, 0.0, 3.0, media.probe(out))
+        self.assertEqual([s["layout"] for s in plan], ["full"], plan)
+
+
+class APictureOfAFaceIsNotAPerson(unittest.TestCase):
+    """Owner, 2026-10-09: a Gil's Arena clip split the screen between a host
+    and the mural behind the couch (LeBron and Harden, printed). A real face
+    changes between sightings; a printed one does not."""
+
+    @staticmethod
+    def face(cx, motion, t):
+        import numpy as np
+        rng = np.random.default_rng(int(cx))
+        base = rng.integers(60, 200, (framing.THUMB, framing.THUMB)).astype(np.float32)
+        thumb = np.clip(base + (motion if t % 2 else 0), 0, 255).astype(np.uint8)
+        return (cx, 500, 120, 150, thumb)
+
+    def samples(self, *faces):
+        return [(k / 5, [self.face(cx, m, k) for cx, m in faces]) for k in range(10)]
+
+    @unittest.skipUnless(HAVE_CV2, "needs numpy")
+    def test_a_still_face_beside_a_live_one_is_dropped(self):
+        got = framing.people(self.samples((300, 0.0), (1400, 8.0)), 1920)
+        self.assertEqual([round(p[0]) for p in got], [1400])
+
+    @unittest.skipUnless(HAVE_CV2, "needs numpy")
+    def test_every_face_and_why_it_was_dropped_is_reported(self):
+        # 2026-10-15: a clip framed on the mural again. `clipper framing CLIP`
+        # prints this, so the next fix starts from what was measured.
+        detail = []
+        framing.people(self.samples((300, 0.0), (1400, 8.0)), 1920, detail=detail)
+        self.assertEqual([(round(f["box"][0]), f["kept"]) for f in detail], [(300, False), (1400, True)])
+        self.assertIn("a picture", detail[0]["why"])
+
+    @unittest.skipUnless(HAVE_CV2, "needs numpy")
+    def test_a_quiet_listener_is_still_a_person(self):
+        # 3.4 beside 7.8 on the interview: 44% of the speaker - kept.
+        got = framing.people(self.samples((300, 3.4), (1400, 7.8)), 1920)
+        self.assertEqual([round(p[0]) for p in got], [300, 1400])
+
+    @unittest.skipUnless(HAVE_CV2, "needs numpy")
+    def test_a_quiet_face_beside_a_very_animated_one_stays(self):
+        # 2.0 is under 30% of 15, but over STILL_MAX: in doubt, a person.
+        got = framing.people(self.samples((300, 2.0), (1400, 15.0)), 1920)
+        self.assertEqual(len(got), 2)
+
+    @unittest.skipUnless(HAVE_CV2, "needs numpy")
+    def test_a_shot_of_only_still_faces_has_nobody_in_it(self):
+        # Owner, 2026-10-20: "Whenever they play a video the framing is off by
+        # a lot" - the camera on the set's screen beside a wall of printed
+        # faces, nobody real in the shot, and the strip cropped onto the wall.
+        # These were all kept ("nothing to tell real faces by"); now the shot
+        # is shown whole.
+        detail = []
+        got = framing.people(self.samples((300, 0.0), (1400, 1.0)), 1920, detail=detail)
+        self.assertEqual(got, [])
+        self.assertTrue(all("pictures, nobody real" in f["why"] for f in detail))
+        self.assertEqual(framing.layout(got, 1920, 1080)["layout"], "full")
+
+    @unittest.skipUnless(HAVE_CV2, "needs numpy")
+    def test_two_quiet_people_are_still_people(self):
+        # Both under LIVE_MIN but over STILL_MAX: a calm two-shot, kept.
+        got = framing.people(self.samples((300, 2.0), (1400, 2.5)), 1920)
+        self.assertEqual(len(got), 2)
+
+    @unittest.skipUnless(HAVE_CV2 and shutil.which("ffmpeg"), "needs OpenCV and ffmpeg")
+    def test_on_real_footage_the_mural_is_ignored(self):
+        # A public-domain interview (fixtures/faces/talking.mp4) with a still
+        # portrait pasted beside her: one live face, one picture of a face.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        out = Path(tmp.name) / "mural.mp4"
+        faces = Path(__file__).parent / "fixtures" / "faces"
+        subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(faces / "talking.mp4"),
+                        "-loop", "1", "-i", str(faces / "person1.jpg"), "-filter_complex",
+                        "color=c=0x302040:s=1920x1080:d=4[bg];[0:v]scale=960:-2[t];[1:v]scale=-2:420[p];"
+                        "[bg][t]overlay=900:400[a];[a][p]overlay=60:330:shortest=1",
+                        "-t", "4", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(out)],
+                       check=True)
+        info = media.probe(out)
+        cuts, seen = framing.look(out, 0.0, 4.0, info)
+        report = []
+        folk = framing.people(seen, info["width"], report)
+        self.assertGreaterEqual(len(report), 2, "the portrait and she are both found")
+        self.assertLess(min(report), 0.5, "the portrait does not change")
+        self.assertGreater(max(report), framing.LIVE_MIN, "she does")
+        self.assertFalse([p for p in folk if p[0] < 600], "the portrait is not a person")
+        self.assertTrue([p for p in folk if p[0] > 900], "she is")
+        plan = framing.plan(out, 0.0, 4.0, info)
+        self.assertEqual([s["layout"] for s in plan], ["crop"], "no split with a picture")
+
+
+class ClipsHouseLoadsStillsNotVideos(unittest.TestCase):
+    """Owner, 2026-10-15: clips "hardly load in the pixel village". The studio
+    drew all 24 clips as <video>, and Safari fetched part of every one before
+    showing any. Now each is a small still, and a video loads when tapped."""
+
+    API = ROOT / "mission-control-api"
+
+    def test_the_grid_has_no_video_until_one_is_tapped(self):
+        html = (self.API / "public" / "village.html").read_text()
+        grid = html.split("$('clipClips').innerHTML = clips.length", 1)[1].split("$('clipPickup')", 1)[0]
+        self.assertNotIn("<video", grid)
+        self.assertIn("/api/clip/poster/", grid)
+        self.assertIn("function playClip(", html)
+
+    def test_download_shows_its_progress(self):
+        # "It struggles mightily to open": a plain link said nothing for the
+        # whole transfer. The link is fetched with progress, then saved.
+        html = (self.API / "public" / "village.html").read_text()
+        dl = html.split("const dl = `", 1)[1].split("`;", 1)[0]
+        self.assertIn("data-dl=", dl)
+        handler = html.split("$('clipClips').onclick", 1)[1].split("};", 1)[0]
+        self.assertIn("downloadClip(", handler)
+        body = html.split("async function downloadClip(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("Downloading", body)
+        self.assertIn("location.href", body, "falls back to the plain link")
+
+    @unittest.skipUnless(shutil.which("node") and shutil.which("ffmpeg")
+                         and (ROOT / "mission-control-api" / "node_modules" / "express").is_dir(),
+                         "needs node, the Deck's node_modules and ffmpeg")
+    def test_a_poster_is_made_once_and_served_small(self):
+        with tempfile.TemporaryDirectory() as d:
+            clips = Path(d) / "clips" / "3"
+            clips.mkdir(parents=True)
+            subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i",
+                            "testsrc2=size=1080x1920:rate=30", "-t", "2", "-c:v", "libx264",
+                            "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(clips / "01.mp4")], check=True)
+            js = (f"const express=require({json.dumps(str(self.API / 'node_modules' / 'express'))});"
+                  f"const clip=require({json.dumps(str(self.API / 'clip.js'))});"
+                  "const http=require('http');const app=express();clip.register(app);"
+                  "const srv=app.listen(0,'127.0.0.1',async()=>{const port=srv.address().port;"
+                  "const go=p=>new Promise(ok=>http.get({host:'127.0.0.1',port,path:p},r=>{let n=0;"
+                  "r.on('data',c=>n+=c.length);r.on('end',()=>ok([r.statusCode,r.headers['content-type']||'',n]));}));"
+                  "const out={a:await go('/api/clip/poster/3/1'),b:await go('/api/clip/poster/3/1'),"
+                  "none:await go('/api/clip/poster/3/9'),bad:await go('/api/clip/poster/3/..%2F1')};"
+                  "process.stdout.write(JSON.stringify(out));srv.close();});")
+            r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=120,
+                               env=dict(os.environ, CLIPPER_HOME=d))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            out = json.loads(r.stdout)
+            self.assertEqual(out["a"][:2], [200, "image/jpeg"])
+            self.assertTrue((clips / "01.poster.jpg").is_file(), "kept beside the clip, made once")
+            self.assertEqual(media.probe(clips / "01.poster.jpg")["width"], 360, "a grid tile, not the clip")
+            self.assertEqual(out["b"], out["a"])
+            self.assertEqual(out["none"][0], 404)
+            self.assertEqual(out["bad"][0], 400)
+
+
+class FramingFallsBackToTheCentre(unittest.TestCase):
+    def test_no_opencv_is_a_centre_crop_said_out_loud(self):
+        real = framing.plan
+
+        def missing(*a, **k):
+            raise framing.FramingUnavailable("OpenCV is not installed")
+        framing.plan = missing
+        try:
+            calls = []
+            real_run, real_probe = media.run, media.probe
+            media.run = lambda cmd, cwd=None, **kw: calls.append(cmd)
+            media.probe = lambda p: {"width": 1920, "height": 1080, "has_video": True, "duration": 8.0}
+            with tempfile.TemporaryDirectory() as d:
+                (Path(d) / "01.part.mp4").write_bytes(b"x")
+                info = render.render("in.mp4", Path(d) / "01.mp4", 0.0, 8.0, "", dict(config.DEFAULTS))
+        finally:
+            framing.plan, media.run, media.probe = real, real_run, real_probe
+        self.assertEqual(info["framing"], "centre crop - OpenCV is not installed")
+        vf = calls[0][calls[0].index("-filter_complex") + 1]
+        self.assertIn("crop=606:1080:657:0", vf)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "needs ffmpeg")
+class EndToEnd(unittest.TestCase):
+    """The whole Phase 1 path through the real CLI: rights gate, ingest,
+    duplicate refusal, transcribe (from the real fixture), find, render, and
+    a failure that is retried rather than lost."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name) / "home"
+        self.old = os.environ.get("CLIPPER_HOME")
+        os.environ["CLIPPER_HOME"] = str(self.home)
+        self.addCleanup(self.restore)
+        self.home.mkdir()
+        # Small and fast so CI can afford it: 60 s of video, one clip, ultrafast.
+        (self.home / "config.json").write_text(json.dumps({
+            "transcriber": "file", "max_clips_per_video": 1, "min_score": 0,
+            "x264_preset": "ultrafast", "max_clip_seconds": 30,
+            # Framing has its own tests (FramingOnRealFaces); on these it found
+            # no faces in a test pattern and added minutes to the suite.
+            "crop_mode": "center",
+            # On the droplet the OpenRouter key is real: a test must never
+            # spend it. Drafting by model is tested with a stand-in call.
+            "copy_model": None}))
+        self.video = Path(self.tmp.name) / "talk.mp4"
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error",
+                        "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30",
+                        "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=16000",
+                        "-t", "60", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
+                        str(self.video)], check=True)
+        self.words = [x for x in WORDS if x["end"] <= 59.0]
+
+    def restore(self):
+        if self.old is None:
+            os.environ.pop("CLIPPER_HOME", None)
+        else:
+            os.environ["CLIPPER_HOME"] = self.old
+
+    def cli(self, *args):
+        out = io.StringIO()
+        # A connection another test left open can be collected mid-command,
+        # and Python prints a ResourceWarning for it into what is captured
+        # here - not the command's output; it failed exact checks at random
+        # (2026-10-22). Clip's own commands close theirs (cli.main).
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out), warnings.catch_warnings():
+            warnings.simplefilter("ignore", ResourceWarning)
+            code = cli.main(list(args))
+        return code, out.getvalue()
+
+    def give_words(self, vid):
+        folder = self.home / "media" / str(vid)
+        (folder / "audio.wav.words.json").write_text(json.dumps({
+            "provider": "file", "model": "fixture", "language": "en", "duration": 60,
+            "words": self.words}))
+
+    def test_permitted_video_in_captioned_short_out(self):
+        code, said = self.cli("ingest", "nobody", str(self.video))
+        self.assertEqual(code, 2)
+        self.assertIn("no active source", said)
+
+        code, said = self.cli("source", "add", "pd", "--rights", "public-domain")
+        self.assertEqual(code, 2, "no evidence, no source")
+        self.assertEqual(self.cli("source", "add", "pd", "--rights", "public-domain",
+                                  "--evidence", "LibriVox, public domain")[0], 0)
+        self.assertEqual(self.cli("ingest", "pd", str(self.video), "--title", "Talk")[0], 0)
+        code, said = self.cli("ingest", "pd", str(self.video))
+        self.assertIn("already have it: video 1", said)
+
+        self.give_words(1)
+        code, said = self.cli("run")
+        self.assertEqual(code, 0, said)
+        self.assertIn("video 1 done: 1 clip(s)", said)
+
+        clip = self.home / "clips" / "1" / "01.mp4"
+        info = media.probe(clip)
+        self.assertEqual((info["width"], info["height"]), (1080, 1920))
+        self.assertTrue(info["has_audio"])
+        meta = json.loads(clip.with_suffix(".json").read_text())
+        self.assertEqual(meta["rights"], "public-domain")
+        self.assertAlmostEqual(info["duration"], meta["end"] - meta["start"], delta=0.2)
+        self.assertIn("CLIP #1", (self.home / "clips" / "1" / "README.md").read_text())
+
+        conn = db.connect(self.home / "clipper.db")
+        n_cands = conn.execute("SELECT COUNT(*) FROM candidates").fetchone()[0]
+        self.assertGreater(n_cands, 1, "the losers are kept too - they are what learning needs")
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM candidates WHERE selected = 1").fetchone()[0], 1)
+        self.assertEqual(self.cli("run")[1].strip(), "nothing pending")
+
+    def test_a_failing_stage_is_retried_then_parked_then_retryable(self):
+        self.cli("source", "add", "pd", "--rights", "public-domain", "--evidence", "x")
+        self.cli("ingest", "pd", str(self.video))
+        conn = db.connect(self.home / "clipper.db")
+        for attempt in range(1, pipeline.MAX_ATTEMPTS + 1):
+            code, said = self.cli("run")      # no words file: the transcriber fails
+            self.assertEqual(code, 1)
+        v = conn.execute("SELECT * FROM videos WHERE id = 1").fetchone()
+        self.assertEqual(v["stage"], "failed")
+        self.assertTrue(v["error"].startswith("ingested:"), v["error"])
+        self.assertTrue((self.home / "media" / "1" / "audio.wav").exists(),
+                        "the audio made before the failure is kept, not redone")
+        self.assertIn("back at ingested", self.cli("retry", "1")[1])
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+# ---------------------------------------------------------------- Spotter
+
+from datetime import datetime, timezone  # noqa: E402
+import urllib.parse  # noqa: E402
+import urllib.request  # noqa: E402
+
+from clipper import report, trends  # noqa: E402
+
+NOW = datetime(2026, 9, 28, 12, 0, tzinfo=timezone.utc)
+TAO = "UC" + "a" * 22          # the creator Clip has permission for
+BIG = "UC" + "b" * 22          # a bigger creator Clip has no permission for
+TINY = "UC" + "c" * 22         # charting, but under the subscriber floor
+
+
+def fake_youtube(search_title="He suddenly came to a grove of blossoming peach trees"):
+    """The Data API's documented response shapes - counts are strings, a
+    chart can be missing for a category. NOT captured from the live API (no
+    key on this machine); the first real `spot` on the droplet is the check."""
+    calls = []
+
+    def fetch(url):
+        ep = url.split("/v3/", 1)[1].split("?", 1)[0]
+        q = dict(urllib.parse.parse_qsl(url.split("?", 1)[1]))
+        calls.append((ep, q))
+        vid = lambda i, ch, title, views, t: {"id": i, "snippet": {
+            "channelId": ch, "channelTitle": {TAO: "Tao Reads", BIG: "Mega Streamer",
+                                              TINY: "Small One"}.get(ch, "ClipGuy"),
+            "title": title, "description": "", "publishedAt": t}, "statistics": {"viewCount": views}}
+        if ep == "videos" and q.get("chart"):
+            if q["videoCategoryId"] == "17":
+                return {"error": {"code": 404, "message": "chart not found",
+                                  "errors": [{"reason": "videoChartNotFound"}]}}
+            return {"items": [vid("t1", TAO, "a", "240000", "2026-09-28T00:00:00Z"),
+                              vid("t2", BIG, "b", "1200000", "2026-09-28T06:00:00Z"),
+                              vid("t3", TINY, "c", "999999", "2026-09-28T11:00:00Z")]}
+        if ep == "channels":
+            stats = {TAO: "2000000", BIG: "30000000", TINY: "40000"}
+            return {"items": [{"id": i, "snippet": {"customUrl": "@x"},
+                               "statistics": {"subscriberCount": stats[i], "viewCount": "1"}}
+                              for i in q["id"].split(",")]}
+        if ep == "search":
+            name = q["q"]
+            return {"items": [{"id": {"kind": "youtube#video", "videoId": "s-" + name[:3]}}]}
+        if ep == "videos" and q.get("id"):
+            title = search_title if q["id"] == "s-Tao" else "insane moment on stream"
+            return {"items": [vid(q["id"], "UC" + "z" * 22, title, "50000", "2026-09-28T02:00:00Z")]}
+        raise AssertionError(url)
+    return fetch, calls
+
+
+class SpotterPure(unittest.TestCase):
+    def test_counts_arrive_as_strings_and_hidden_ones_are_none(self):
+        self.assertEqual(trends.as_int("1234"), 1234)
+        self.assertIsNone(trends.as_int(None))
+
+    def test_views_per_hour(self):
+        self.assertEqual(trends.views_per_hour(1200, "2026-09-28T00:00:00Z", NOW), 100.0)
+        self.assertEqual(trends.views_per_hour(50, "2026-09-28T11:59:00Z", NOW), 50.0,
+                         "under an hour old counts as one hour, not a huge rate")
+
+    def test_creators_are_ranked_by_heat_above_the_floor(self):
+        v = lambda ch, views, t: {"snippet": {"channelId": ch, "channelTitle": ch, "publishedAt": t},
+                                  "statistics": {"viewCount": views}}
+        chans = {TAO: {"statistics": {"subscriberCount": "2000000"}},
+                 BIG: {"statistics": {"subscriberCount": "30000000"}},
+                 TINY: {"statistics": {"subscriberCount": "40000"}},
+                 "UChidden": {"statistics": {"hiddenSubscriberCount": True, "subscriberCount": "9000000"}}}
+        ranked = trends.rank_creators(
+            [v(TAO, "240000", "2026-09-28T00:00:00Z"), v(TAO, "240000", "2026-09-28T00:00:00Z"),
+             v(BIG, "120000", "2026-09-28T00:00:00Z"), v(TINY, "9999999", "2026-09-28T11:00:00Z"),
+             v("UChidden", "9999999", "2026-09-28T11:00:00Z")], chans, NOW, 500000)
+        self.assertEqual([c["channel_id"] for c in ranked], [TAO, BIG],
+                         "two fast videos beat one; small and hidden-count channels are left out")
+        self.assertEqual(ranked[0]["heat"], 40000.0)
+        self.assertEqual(ranked[0]["trending_videos"], 2)
+
+
+class SpotterMatching(unittest.TestCase):
+    """Against the real LibriVox transcript."""
+
+    def setUp(self):
+        self.sents = moments.sentences(WORDS, 0.8)
+
+    def test_a_trending_title_finds_its_moment(self):
+        sc, i, j = trends.match("He came to a grove of blossoming peach trees 🌸 #shorts", self.sents)
+        self.assertGreaterEqual(sc, 0.5)
+        self.assertIn("grove of blossoming peach trees", " ".join(s["text"] for s in self.sents[i:j + 1]))
+
+    def test_an_unrelated_title_does_not(self):
+        sc, i, j = trends.match("insane clutch play on stream, chat goes wild", self.sents)
+        self.assertLess(sc, 0.5)
+
+    def test_the_creators_own_name_is_not_evidence(self):
+        # Their name is in every clip title about them; matching on it would
+        # "find" any moment where anyone says it.
+        sc, *_ = trends.match("LibriVox recording", self.sents, drop={"librivox", "recording"})
+        self.assertEqual(sc, 0.0)
+
+    def test_widen_keeps_the_moment_and_the_bounds(self):
+        sc, i, j = trends.match("grove of blossoming peach trees", self.sents)
+        a, b = trends.widen(self.sents, i, j, 20, 35, 60)
+        self.assertLessEqual(a, i)
+        self.assertGreaterEqual(b, j)
+        dur = self.sents[b]["end"] - self.sents[a]["start"]
+        self.assertTrue(20 <= dur <= 60, dur)
+
+
+class SpotterRun(EndToEnd):
+    """Research, a match in permitted footage, and a remake, through the CLI
+    and the Deck snapshot. Inherits EndToEnd's 60 s video and settings."""
+
+    test_permitted_video_in_captioned_short_out = None
+    test_a_failing_stage_is_retried_then_parked_then_retryable = None
+
+    def ready(self):
+        self.cli("source", "add", "tao", "--rights", "permission", "--evidence", "campaign page",
+                 "--channel", TAO)
+        self.cli("ingest", "tao", str(self.video))
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        self.conn = db.connect(self.home / "clipper.db")
+        self.cfg = config.load()
+        self.paths = config.paths()
+
+    def spot(self, **kw):
+        fetch, calls = fake_youtube(**kw)
+        yt = trends.YouTube(self.conn, self.cfg, key="k", fetch=fetch)
+        return trends.run(self.conn, self.paths, self.cfg, yt=yt, now=NOW), calls
+
+    def test_research_matches_a_trending_moment_in_permitted_footage(self):
+        self.ready()
+        r, calls = self.spot()
+        self.assertEqual(r["creators"], 2)
+        searched = [q["q"] for ep, q in calls if ep == "search"]
+        self.assertEqual(searched, ["Tao Reads"],
+                         "only the permitted creator is searched - the others are leads")
+        self.assertEqual(r["matched"], 1)
+        snap = report.snapshot(self.conn, self.paths, self.cfg)["spotter"]
+        states = {t["creator"]: t["state"] for t in snap["trending"]}
+        self.assertEqual(states, {"Tao Reads": "matched"})
+        leads = {c["title"]: c["permitted"] for c in snap["creators"]}
+        self.assertEqual(leads, {"Tao Reads": True, "Mega Streamer": False})
+        units = sum(trends.UNITS[ep] for ep, _ in calls)
+        self.assertEqual(trends.units_today(self.conn), units, "every call is on the ledger")
+        self.assertEqual(r["units"], units)
+
+    def test_with_no_permitted_creator_nothing_is_searched(self):
+        self.cli("source", "add", "pd", "--rights", "public-domain", "--evidence", "x")
+        self.conn = db.connect(self.home / "clipper.db")
+        self.cfg, self.paths = config.load(), config.paths()
+        r, calls = self.spot()
+        self.assertFalse(any(ep == "search" for ep, _ in calls), "no quota spent on leads")
+        self.assertIn("no permitted creators", " ".join(r["note"]))
+        self.assertEqual(r["creators"], 2, "the leads are still listed")
+
+    def test_a_permitted_creator_off_the_charts_is_still_researched(self):
+        self.cli("source", "add", "quiet", "--rights", "permission", "--evidence", "x",
+                 "--channel", "UC" + "q" * 22)
+        self.conn = db.connect(self.home / "clipper.db")
+        self.cfg, self.paths = config.load(), config.paths()
+        fetch, calls = fake_youtube()
+        real = fetch
+
+        def with_quiet(url):
+            if "/v3/channels" in url and "UC" + "q" * 22 in url:
+                return {"items": [{"id": "UC" + "q" * 22, "snippet": {"title": "Quiet Creator"},
+                                   "statistics": {"subscriberCount": "90000"}}]}
+            return real(url)
+        yt = trends.YouTube(self.conn, self.cfg, key="k", fetch=with_quiet)
+        trends.run(self.conn, self.paths, self.cfg, yt=yt, now=NOW)
+        self.assertEqual([q["q"] for ep, q in calls if ep == "search"], ["Quiet Creator"])
+
+    def test_the_unit_cap_stops_before_the_call(self):
+        self.ready()
+        self.cfg["spot_daily_units"] = 105      # 5 charts + 1 channel lookup = 6; a 100-unit search would make 106
+        r, calls = self.spot()
+        self.assertFalse(any(ep == "search" for ep, _ in calls))
+        self.assertIn("units today", " ".join(r["note"]))
+
+    def test_a_bad_key_is_an_error_not_an_empty_result(self):
+        self.ready()
+        yt = trends.YouTube(self.conn, self.cfg, key="k", fetch=lambda url: {"error": {
+            "code": 400, "message": "API key not valid", "errors": [{"reason": "keyInvalid"}]}})
+        with self.assertRaises(trends.ApiError):
+            trends.run(self.conn, self.paths, self.cfg, yt=yt, now=NOW)
+
+    def test_remake_cuts_our_own_version_and_never_overwrites_a_clip(self):
+        self.ready()
+        self.spot()
+        first = self.home / "clips" / "1" / "01.mp4"
+        before = first.stat().st_mtime_ns
+        # A trending clip of a creator with no permission (as an older,
+        # search-everyone Spotter would have stored) is still refused.
+        with self.conn:
+            bad = self.conn.execute(
+                "INSERT INTO trending_clips (yt_id, creator_id, title, seen_at) VALUES "
+                "('old', ?, 'He suddenly came to a grove of blossoming peach trees', ?)",
+                (BIG, db.now())).lastrowid
+        code, said = self.cli("remake", str(bad))
+        self.assertEqual(code, 2)
+        self.assertIn("not found in any footage Clip has permission for", said)
+
+        tid = self.conn.execute("SELECT id FROM trending_clips WHERE creator_id = ?", (TAO,)).fetchone()[0]
+        code, said = self.cli("remake", str(tid))
+        self.assertEqual(code, 0, said)
+        clip = self.conn.execute("SELECT * FROM clips ORDER BY id DESC LIMIT 1").fetchone()
+        self.assertEqual(clip["rank"], 2, "the next free number, not a number already on disk")
+        self.assertEqual(first.stat().st_mtime_ns, before, "clip 01 untouched")
+        meta = json.loads(clip["meta"])
+        self.assertTrue(meta["reasons"][0].startswith("same moment as a trending clip"))
+        self.assertIn("grove", meta["text"])
+        self.assertEqual(media.probe(clip["path"])["height"], 1920)
+        self.assertIn("already remade", self.cli("remake", str(tid))[1])
+
+
+class ClipCredentials(unittest.TestCase):
+    def test_set_credential_writes_clips_key_beside_its_data(self):
+        spec = importlib.util.spec_from_file_location("set_credential_clip", ROOT / "scripts" / "set-credential.py")
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        with tempfile.TemporaryDirectory() as d:
+            old = os.environ.get("CLIPPER_HOME")
+            os.environ["CLIPPER_HOME"] = d
+            try:
+                self.assertEqual(m.ELSEWHERE["clip"](), Path(d) / "credentials.env")
+                m.write(m.ELSEWHERE["clip"](), "YOUTUBE_API_KEY", "abc123")
+                self.assertEqual(trends.api_key(), "abc123")
+            finally:
+                if old is None:
+                    os.environ.pop("CLIPPER_HOME", None)
+                else:
+                    os.environ["CLIPPER_HOME"] = old
+
+    def test_a_handle_is_not_a_channel_id(self):
+        from clipper import ingest
+        with self.assertRaisesRegex(ValueError, "not a channel id"):
+            ingest.check_channel("@taoreads")
+        ingest.check_channel(TAO)
+
+
+# ---------------------------------------------------------------- posting
+
+from clipper import postcopy, publish, youtube  # noqa: E402
+
+CLIP_TEXT = "Once, while following a stream, he forgot how far he had gone. It lined both banks for 300 paces."
+
+
+class PostCopyRules(unittest.TestCase):
+    def test_a_title_may_not_invent_a_number(self):
+        with self.assertRaisesRegex(ValueError, "says 5"):
+            postcopy.check_draft({"title": "5 reasons he got lost", "caption": "x"}, CLIP_TEXT)
+        t, c, tags = postcopy.check_draft({"title": "300 paces of peach blossom", "caption": "x",
+                                           "hashtags": ["#Peach Blossom", "story", "🌸", "story", "a",
+                                                        "one", "two", "three", "four"]}, CLIP_TEXT)
+        self.assertEqual(t, "300 paces of peach blossom")
+        self.assertEqual(tags, ["PeachBlossom", "story", "one", "two", "three"],
+                         "cleaned, deduplicated, single letters and emoji dropped, five at most")
+
+    def test_long_text_is_cut_at_a_word(self):
+        t = postcopy.cut("word " * 40, 30)
+        self.assertLessEqual(len(t), 30)
+        self.assertTrue(t.endswith("word…"))
+
+    def test_the_plain_draft_is_the_first_sentence(self):
+        self.assertEqual(postcopy.template(CLIP_TEXT)[0],
+                         "Once, while following a stream, he forgot how far he had gone.")
+
+    def test_every_post_carries_the_sources_tags_and_credit(self):
+        row = {"title": "T", "caption": "C", "hashtags": json.dumps(["story", "Clipping"])}
+        src = {"post_tags": "#clipping #TaoReads", "credit": "Clip from @taoreads",
+               "attribution": "CC BY Tao"}
+        w = postcopy.compose(row, src)
+        self.assertEqual(w["tags"], ["clipping", "TaoReads", "story"], "required first, no repeats")
+        for text in (w["youtube"]["description"], w["tiktok"]):
+            self.assertIn("Clip from @taoreads", text)
+            self.assertIn("CC BY Tao", text)
+            self.assertIn("#clipping #TaoReads #story", text)
+        self.assertIn("#Shorts", w["youtube"]["description"])
+        self.assertEqual(w["youtube"]["tags"], ["clipping", "TaoReads", "story"])
+
+    def test_platform_limits(self):
+        row = {"title": "T", "caption": "C" * 300, "hashtags": json.dumps(["t" + str(i) * 20 for i in range(40)])}
+        src = {"post_tags": None, "credit": "x" * 3000, "attribution": None}
+        w = postcopy.compose(row, src)
+        self.assertLessEqual(len(w["tiktok"]), postcopy.TIKTOK_MAX)
+        self.assertLessEqual(sum(len(t) + 1 for t in w["youtube"]["tags"]), postcopy.YT_TAGS_MAX)
+
+
+class Posting(EndToEnd):
+    """Approve -> the words -> each platform, on a real rendered clip."""
+
+    test_permitted_video_in_captioned_short_out = None
+    test_a_failing_stage_is_retried_then_parked_then_retryable = None
+
+    def ready(self):
+        self.cli("source", "add", "tao", "--rights", "permission", "--evidence", "campaign page")
+        self.cli("source", "rules", "tao", "--tags", "#clipping #TaoReads", "--credit", "Clip from @taoreads")
+        self.cli("ingest", "tao", str(self.video))
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        self.conn = db.connect(self.home / "clipper.db")
+        self.cfg = config.load()
+        self.clip = self.conn.execute("SELECT * FROM clips").fetchone()
+        self.sent = []
+
+    def upload(self, path, meta, privacy, category):
+        self.sent.append((path, meta, privacy, category))
+        return {"id": "abc123", "url": "https://youtube.com/shorts/abc123", "privacy": "private"}
+
+    def pubs(self):
+        return {r["platform"]: r for r in self.conn.execute(
+            "SELECT * FROM publications WHERE clip_id = ?", (self.clip["id"],))}
+
+    def test_the_render_drafts_its_words_without_a_model_in_tests(self):
+        self.ready()
+        row = self.conn.execute("SELECT * FROM post_copy WHERE clip_id = ?", (self.clip["id"],)).fetchone()
+        self.assertEqual(row["generator"], "template", "copy_model is null here: no key is ever spent")
+
+    def test_a_model_draft_is_checked_and_costed(self):
+        self.ready()
+        cfg = dict(self.cfg, copy_model="openai/gpt-5-mini")
+        good = lambda text, src, key, slug: ({"title": "He forgot how far he had gone", "caption": "A stream, a grove.",
+                                              "hashtags": ["story", "#peach"]}, 0.0012)
+        row = postcopy.write(self.conn, cfg, self.clip["id"], redo=True, call=good, key="k", left=0.5)
+        self.assertEqual(row["generator"], "llm:openai/gpt-5-mini")
+        self.assertEqual(json.loads(row["hashtags"]), ["story", "peach"])
+        self.assertAlmostEqual(db.spent_today(self.conn), 0.0012)
+
+        liar = lambda *a: ({"title": "7 secrets of the grove", "caption": "x"}, 0.001)
+        row = postcopy.write(self.conn, cfg, self.clip["id"], redo=True, call=liar, key="k", left=0.5)
+        self.assertEqual(row["generator"], "template", "an invented number falls back, never posts")
+
+        # A stand-in that raises would prove nothing: write() catches every
+        # error and falls back. It records instead, and the list must stay empty.
+        calls = []
+        never = lambda *a: calls.append(a) or ({"title": "x", "caption": "x"}, 0.0)
+        row = postcopy.write(self.conn, cfg, self.clip["id"], redo=True, call=never, key="k", left=0.01)
+        self.assertEqual((row["generator"], calls), ("template", []), "shared allowance spent: no call")
+        row = postcopy.write(self.conn, dict(cfg, copy_model=None), self.clip["id"], redo=True,
+                             call=never, key="k", left=0.5)
+        self.assertEqual((row["generator"], calls), ("template", []), "switched off: no call, even with a key")
+
+    def test_a_new_draft_uses_the_spellings_added_after_the_cut(self):
+        # 2026-10-09: "Kamehna" for Kuminga, "Amber Woolf" for Wolves - fixed
+        # in the source's spellings, and New draft must see the fix.
+        self.ready()
+        with self.conn:
+            meta = json.loads(self.clip["meta"])
+            meta["text"] = "a clutch Kamehna role around Amber Woolf's style"
+            self.conn.execute("UPDATE clips SET meta = ? WHERE id = ?", (json.dumps(meta), self.clip["id"]))
+        self.cli("source", "rules", "tao", "--spell", "Kuminga: kamehna; Wolves: amber woolf")
+        seen = []
+        def model(text, src, key, slug):
+            seen.append(text)
+            return {"title": "Kuminga and the Wolves", "caption": "x"}, 0.0
+        cfg = dict(self.cfg, copy_model="openai/gpt-5-mini")
+        postcopy.write(self.conn, cfg, self.clip["id"], redo=True, call=model, key="k", left=0.5)
+        self.assertIn("a clutch Kuminga role around Wolves's style", seen[0])
+
+    def test_recut_burns_in_the_spellings_fixed_since(self):
+        # 2026-10-09: the post said Wolves, the video still said "Amber Woolf".
+        from unittest import mock
+        self.ready()
+        word = next(x for x in json.loads(self.clip["meta"])["text"].split() if len(x.strip(".,")) > 5).strip(".,")
+        self.cli("source", "rules", "tao", "--spell", f"Zebrafish: {word.lower()}")
+        path, mtime = Path(self.clip["path"]), Path(self.clip["path"]).stat().st_mtime_ns
+        seen = []
+        real = captions.build
+        def spy(words, *a, **k):
+            seen.append(" ".join(w["word"].strip() for w in words))
+            return real(words, *a, **k)
+        with mock.patch.object(captions, "build", spy):
+            code, said = self.cli("recut", str(self.clip["id"]))
+        self.assertEqual(code, 0, said)
+        self.assertIn("Zebrafish", seen[0], "the subtitles were built from the corrected words")
+        row = self.conn.execute("SELECT * FROM clips WHERE id = ?", (self.clip["id"],)).fetchone()
+        self.assertEqual((row["rank"], row["path"]), (self.clip["rank"], self.clip["path"]), "same number, same file")
+        self.assertNotEqual(path.stat().st_mtime_ns, mtime, "the file was cut again")
+        self.assertIn("Zebrafish", json.loads(row["meta"])["text"])
+        self.assertFalse(list(path.parent.glob("*.recut.*")), "no half-made file left behind")
+        self.assertIn("zebrafish", path.with_suffix(".ass").read_text().lower(), "the clip's own subtitle file")
+
+    # Fix subtitles (owner, 2026-10-12): "a text box of all the subtitles from
+    # the video and i can fix them manually... remake video".
+
+    def subs(self, *more):
+        code, said = self.cli("subtitles", str(self.clip["id"]), *more)
+        self.assertEqual(code, 0, said)
+        return said
+
+    def listing(self):
+        return json.loads(self.subs().strip().splitlines()[-1])
+
+    def dialogue(self):
+        ass = Path(self.clip["path"]).with_suffix(".ass").read_text()
+        # ASS: ten fields, the text last - commas inside it stay in it.
+        return [l.split(",", 9)[9] for l in ass.splitlines() if l.startswith("Dialogue: 0,")]
+
+    def test_the_box_holds_exactly_the_captions_burned_in(self):
+        self.ready()
+        got = self.listing()
+        self.assertFalse(got["edited"])
+        # Each caption is on screen once per word (the lit word moves), so the
+        # distinct captions, in order, are what the box lists.
+        shown = []
+        for d in self.dialogue():
+            text = re.sub(r"\{[^}]*\}", "", d).lower()
+            if not shown or shown[-1] != text:
+                shown.append(text)
+        self.assertEqual([l["text"].lower() for l in got["lines"]], shown)
+
+    def test_your_lines_are_burned_in_and_kept(self):
+        self.ready()
+        lines = [l["text"] for l in self.listing()["lines"]]
+        first_was, gone = lines[0], lines[1]
+        lines[0], lines[1] = "Zebra fish", ""
+        self.subs("--set-json", json.dumps(lines))
+        caps = " ".join(re.sub(r"\{[^}]*\}", "", d) for d in self.dialogue())
+        self.assertIn("ZEBRA FISH", caps, "the clip was cut again with your words")
+        self.assertNotIn(gone.upper(), caps.replace("ZEBRA FISH", ""), "an empty line removes its caption")
+        after = self.listing()
+        self.assertTrue(after["edited"])
+        self.assertEqual(after["lines"][0]["text"], "Zebra fish")
+        self.assertEqual(len(after["lines"]), len(lines) - 1)
+        row = self.conn.execute("SELECT * FROM clips WHERE id = ?", (self.clip["id"],)).fetchone()
+        self.assertEqual(row["path"], self.clip["path"], "same number, same file")
+        # The fixed line keeps its moment: it starts when the caption it replaced did.
+        own = json.loads(row["subtitles"])
+        self.assertEqual(own[0]["word"], "Zebra")
+        self.assertNotEqual(first_was, "Zebra fish")
+
+    def test_a_box_with_lines_added_or_lost_is_refused_and_nothing_saved(self):
+        self.ready()
+        lines = [l["text"] for l in self.listing()["lines"]]
+        code, said = self.cli("subtitles", str(self.clip["id"]), "--set-json", json.dumps(lines + ["extra"]))
+        self.assertNotEqual(code, 0)
+        self.assertIn("keep one line per caption", said)
+        self.assertIsNone(self.conn.execute("SELECT subtitles FROM clips WHERE id = ?",
+                                            (self.clip["id"],)).fetchone()[0])
+
+    def test_back_to_the_transcript(self):
+        self.ready()
+        lines = [l["text"] for l in self.listing()["lines"]]
+        self.subs("--set-json", json.dumps(["Zebra fish"] + lines[1:]))
+        self.subs("--reset")
+        self.assertFalse(self.listing()["edited"])
+        self.assertNotIn("ZEBRA", " ".join(self.dialogue()))
+
+    def test_a_posted_clip_is_never_recut(self):
+        self.ready()
+        publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
+        code, said = self.cli("recut", str(self.clip["id"]))
+        self.assertNotEqual(code, 0)
+        self.assertIn("already posted", said)
+        code, said = self.cli("subtitles", str(self.clip["id"]), "--set-json", "[]")
+        self.assertNotEqual(code, 0)
+        self.assertIn("already posted", said, "nor its subtitles changed")
+
+    # Owner, 2026-10-20: "make the changes be save able without having to
+    # remake the entire video". Save keeps the lines and leaves the video;
+    # Update video burns new subtitles onto the copy kept without them.
+
+    def row(self):
+        return self.conn.execute("SELECT * FROM clips WHERE id = ?", (self.clip["id"],)).fetchone()
+
+    def test_update_video_reports_how_far_it_has_got(self):
+        # Owner, 2026-10-22: "When I click update video I need a percentage
+        # or something showing ... progress". Read the way the page reads
+        # it, from inside the real ffmpeg run, then again after it.
+        from clipper import progress, render
+        self.ready()
+        path = Path(self.clip["path"])
+        seen, real = [], media.run
+
+        def watched(cmd, cwd=None, timeout=None, progress_file=None):
+            r = real(cmd, cwd=cwd, timeout=timeout, progress_file=progress_file)
+            if progress_file:
+                seen.append((progress.read(path), Path(progress_file).read_text()))
+                code, said = self.cli("progress", str(self.clip["id"]))
+                seen.append(json.loads(said.strip().splitlines()[-1]))
+            return r
+        media.run = watched
+        self.addCleanup(setattr, media, "run", real)
+        lines = [l["text"] for l in self.listing()["lines"]]
+        self.subs("--set-json", json.dumps(["Zebra fish"] + lines[1:]))
+        (during, report), said = seen
+        self.assertEqual((during["running"], during["step"]), (True, "putting in the subtitles"))
+        self.assertIn("out_time_us=", report, "ffmpeg's own report, as it writes it")
+        self.assertEqual(during["percent"], 99, "all of it written: 99 until the file is in place")
+        self.assertEqual((said["running"], said["percent"]), (True, 99), "the command the Deck asks")
+        self.assertEqual(progress.read(path), {"running": False}, "nothing shown once it is done")
+        self.assertFalse(any(f.exists() for f in progress.files(path)), "its files go with it")
+        # A clip with no copy kept is cut whole: the steps say so.
+        render.clean_path(path).unlink()
+        seen.clear()
+        self.subs("--reset")
+        self.assertEqual(seen[0][0]["step"], "cutting the clip")
+
+    def test_save_leaves_the_video_and_approval_waits_for_the_update(self):
+        from clipper import render
+        self.ready()
+        path = Path(self.clip["path"])
+        clean = render.clean_path(path)
+        self.assertTrue(clean.is_file(), "the first render keeps a copy without subtitles")
+        lines = [l["text"] for l in self.listing()["lines"]]
+        before = path.stat().st_mtime_ns
+        self.subs("--set-json", json.dumps(["Zebra fish", ""] + lines[2:]), "--save-only")
+        self.assertEqual(path.stat().st_mtime_ns, before, "Save does not touch the video")
+        got = self.listing()
+        self.assertTrue(got["pending"] and got["edited"])
+        self.assertEqual(got["lines"][0]["text"], "Zebra fish")
+        snap = report.snapshot(self.conn, config.paths(), self.cfg)
+        self.assertTrue(next(c for c in snap["clips"] if c["id"] == self.clip["id"])["subtitles_pending"])
+        with self.assertRaises(ValueError) as e:
+            publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
+        self.assertIn("not in the video yet", str(e.exception))
+        self.assertEqual(self.sent, [], "nothing posted with the old subtitles")
+
+    def test_update_video_redoes_the_subtitles_only(self):
+        from unittest import mock
+        from clipper import framing, render
+        self.ready()
+        path = Path(self.clip["path"])
+        clean = render.clean_path(path)
+        kept = clean.stat().st_mtime_ns
+        lines = [l["text"] for l in self.listing()["lines"]]
+        self.subs("--set-json", json.dumps(["Zebra fish"] + lines[1:]), "--save-only")
+        whole = mock.Mock(side_effect=AssertionError("the whole clip was cut again"))
+        with mock.patch.object(render, "render", whole), mock.patch.object(framing, "plan", whole):
+            self.subs("--set-json", json.dumps([l["text"] for l in self.listing()["lines"]]))
+        self.assertIn("ZEBRA FISH", " ".join(re.sub(r"\{[^}]*\}", "", d) for d in self.dialogue()))
+        self.assertFalse(self.listing()["pending"])
+        self.assertEqual(clean.stat().st_mtime_ns, kept, "the copy without subtitles is left as it was")
+        info = media.probe(path)
+        self.assertEqual((info["width"], info["height"]), (1080, 1920))
+        self.assertTrue(info["has_audio"], "the sound is carried over")
+        self.assertAlmostEqual(info["duration"], json.loads(self.row()["meta"])["duration"], places=1)
+        publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
+
+    def test_a_clip_made_before_copies_were_kept_is_cut_whole_once(self):
+        from unittest import mock
+        from clipper import render
+        self.ready()
+        path = Path(self.clip["path"])
+        clean = render.clean_path(path)
+        clean.unlink()
+        code, said = self.cli("recut", str(self.clip["id"]))
+        self.assertEqual(code, 0, said)
+        self.assertTrue(clean.is_file(), "cut whole, and the copy is kept from now on")
+        self.assertFalse(list(path.parent.glob("*.recut*")), "nothing half-named left behind")
+        self.assertTrue(path.is_file() and path.stat().st_size > 0)
+        with mock.patch.object(render, "render", mock.Mock(side_effect=AssertionError("cut whole again"))):
+            self.assertEqual(self.cli("recut", str(self.clip["id"]))[0], 0)
+
+    # Owner, 2026-10-20: "I want to delete the clips because I'm assuming they
+    # take up unnecessary storage space". A clip's video goes once it is out
+    # everywhere or rejected; its record stays, so it is never posted twice.
+
+    def test_a_rejected_clip_lets_go_of_its_video(self):
+        from clipper import render
+        self.ready()
+        path = Path(self.clip["path"])
+        clean = render.clean_path(path)
+        publish.reject(self.conn, self.clip["id"], "not funny")
+        self.assertFalse(path.exists() or clean.exists(), "a rejected clip's video is not needed again")
+        self.assertTrue(path.with_suffix(".json").is_file(), "its record stays")
+        snap = report.snapshot(self.conn, config.paths(), self.cfg)
+        self.assertFalse(next(c for c in snap["clips"] if c["id"] == self.clip["id"])["has_video"])
+
+    def test_a_clip_out_everywhere_lets_go_of_its_video_and_only_then(self):
+        self.ready()
+        path = Path(self.clip["path"])
+        cfg = dict(self.cfg, platforms=["youtube", "tiktok"])
+        publish.approve(self.conn, cfg, self.clip["id"], upload=self.upload)
+        self.assertTrue(path.is_file(), "TikTok still needs it downloaded and posted by hand")
+        publish.mark_posted(self.conn, self.clip["id"], "tiktok", "https://tiktok.com/@x/video/1")
+        self.assertFalse(path.exists(), "posted everywhere: the video goes")
+        self.assertEqual(self.row()["status"], "posted", "the record stays")
+        with self.assertRaises(ValueError):
+            publish.mark_posted(self.conn, self.clip["id"], "tiktok")
+
+    def test_cleanup_lists_first_and_takes_sources_only_when_asked(self):
+        self.ready()
+        path = Path(self.clip["path"])
+        with self.conn:      # rejected before clips let go of their videos
+            self.conn.execute("UPDATE clips SET status = 'rejected' WHERE id = ?", (self.clip["id"],))
+        src = Path(self.conn.execute("SELECT media_path FROM videos").fetchone()[0])
+        code, said = self.cli("cleanup")
+        self.assertEqual(code, 0, said)
+        self.assertIn(f"would delete clip {self.clip['id']} (rejected)", said)
+        self.assertTrue(path.is_file(), "without --yes it only lists")
+        self.cli("cleanup", "--yes")
+        self.assertFalse(path.exists())
+        self.assertTrue(src.is_file(), "a source goes only with --sources")
+        code, said = self.cli("storage")
+        self.assertIn("source videos with nothing left waiting", said)
+        self.assertEqual(self.cli("cleanup", "--sources", "--yes")[0], 0)
+        self.assertFalse(src.exists())
+        video = self.conn.execute("SELECT * FROM videos").fetchone()
+        c = self.conn.execute("SELECT * FROM candidates WHERE id = ?", (self.clip["candidate_id"],)).fetchone()
+        srow = self.conn.execute("SELECT * FROM sources WHERE id = ?", (video["source_id"],)).fetchone()
+        with self.assertRaises(ValueError) as e:
+            pipeline.cut_clip(self.cfg, video, srow, c, [], path.with_name("99.mp4"), self.conn)
+        self.assertIn("deleted to save space", str(e.exception), "a later cut says why, not an ffmpeg error")
+
+    # Owner, 2026-10-20: "I want a delete option by the videos so I can
+    # manually delete the clips".
+
+    def test_delete_takes_the_video_and_the_card_and_keeps_the_record(self):
+        self.ready()
+        path = Path(self.clip["path"])
+        code, said = self.cli("delete", str(self.clip["id"]))
+        self.assertEqual(code, 0, said)
+        self.assertFalse(path.exists())
+        self.assertEqual(self.row()["status"], "deleted", "kept, so the moment is never cut again")
+        snap = report.snapshot(self.conn, config.paths(), self.cfg)
+        self.assertNotIn(self.clip["id"], [c["id"] for c in snap["clips"]], "it leaves the studio")
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM reviews WHERE clip_id = ?",
+                                           (self.clip["id"],)).fetchone()[0], 0, "not a rejection to learn from")
+        with self.assertRaises(ValueError):
+            publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
+        self.assertNotEqual(self.cli("recut", str(self.clip["id"]))[0], 0)
+        self.assertNotEqual(self.cli("delete", str(self.clip["id"]))[0], 0)
+
+    def test_a_deleted_clip_waiting_to_post_is_never_posted(self):
+        self.ready()
+        publish.approve(self.conn, self.cfg, self.clip["id"], post=False)
+        publish.delete(self.conn, self.clip["id"])
+        publish.publish(self.conn, self.cfg, upload=self.upload)
+        self.assertEqual(self.sent, [], "deleted before its upload: never uploaded")
+
+    def test_deleting_a_posted_clip_says_it_is_still_up(self):
+        self.ready()
+        publish.approve(self.conn, dict(self.cfg, platforms=["youtube"]), self.clip["id"], upload=self.upload)
+        code, said = self.cli("delete", str(self.clip["id"]))
+        self.assertIn("stays posted where it went", said)
+        self.assertEqual(self.pubs()["youtube"]["status"], "posted", "its post is still on record")
+
+    def test_a_source_with_a_clip_waiting_is_kept(self):
+        self.ready()
+        src = Path(self.conn.execute("SELECT media_path FROM videos").fetchone()[0])
+        self.cli("cleanup", "--sources", "--yes")
+        self.assertTrue(src.is_file() and Path(self.clip["path"]).is_file(), "clip 1 is still waiting for you")
+
+    def test_your_edit_is_never_overwritten(self):
+        self.ready()
+        postcopy.edit(self.conn, self.clip["id"], title="My title", hashtags="#mine")
+        row = postcopy.write(self.conn, self.cfg, self.clip["id"])
+        self.assertEqual((row["title"], row["generator"], json.loads(row["hashtags"])),
+                         ("My title", "owner", ["mine"]))
+
+    def test_approve_posts_with_the_composed_words(self):
+        self.ready()
+        results = publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
+        self.assertEqual(len(self.sent), 1)
+        path, meta, privacy, category = self.sent[0]
+        self.assertEqual(path, self.clip["path"])
+        self.assertIn("Clip from @taoreads", meta["description"])
+        self.assertEqual(meta["tags"][:2], ["clipping", "TaoReads"])
+        self.assertEqual((privacy, category), ("public", "24"))
+        p = self.pubs()
+        self.assertEqual((p["youtube"]["status"], p["youtube"]["url"]), ("posted", "https://youtube.com/shorts/abc123"))
+        self.assertIn("private until the Google Cloud project passes", p["youtube"]["detail"],
+                      "asked public, YouTube kept it private: the page must say so")
+        self.assertEqual(p["tiktok"]["status"], "manual")
+        clip = lambda: self.conn.execute("SELECT status FROM clips WHERE id = ?", (self.clip["id"],)).fetchone()[0]
+        self.assertEqual(clip(), "approved", "TikTok is still waiting for you, so not 'posted'")
+        publish.mark_posted(self.conn, self.clip["id"], "tiktok")
+        self.assertEqual(clip(), "posted")
+        self.assertEqual(self.conn.execute("SELECT verdict FROM reviews").fetchone()[0], "approve")
+        with self.assertRaisesRegex(ValueError, "already"):
+            publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
+        self.assertEqual(len(self.sent), 1, "never posted twice")
+
+    def test_approve_later_records_now_and_posts_on_the_next_publish(self):
+        # 2026-10-07: Approve waited for the upload, Safari gave up first
+        # ("Load failed") and the approval was never recorded. --later answers
+        # at once; the village then runs `publish` in the background.
+        self.ready()
+        code, said = self.cli("approve", str(self.clip["id"]), "--later")
+        self.assertEqual(code, 0, said)
+        self.assertIn("posting in the background", said)
+        self.assertEqual(self.sent, [], "--later must not upload in the request")
+        status = self.conn.execute("SELECT status FROM clips WHERE id = ?", (self.clip["id"],)).fetchone()[0]
+        self.assertEqual((status, self.pubs()["youtube"]["status"]), ("approved", "queued"))
+        publish.publish(self.conn, self.cfg, upload=self.upload)
+        self.assertEqual((len(self.sent), self.pubs()["youtube"]["status"]), (1, "posted"))
+        # `clipper clips` shows the id approve takes, and where each post stands.
+        said = self.cli("clips")[1]
+        self.assertIn(f"CLIP {self.clip['id']} (v", said)
+        self.assertIn("post: youtube posted - https://youtube.com/shorts/abc123", said)
+        self.assertIn("post: tiktok manual - TikTok posting needs", said)
+
+    def test_publish_holds_the_lock_while_it_uploads(self):
+        # Two quick approvals start two background publishes; without the lock
+        # both find the same queued post and upload it twice.
+        self.ready()
+        held = []
+        def check(*a):
+            with open(config.home() / "publish.lock", "w") as f:
+                try:
+                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    held.append(False)
+                    fcntl.flock(f, fcntl.LOCK_UN)
+                except BlockingIOError:
+                    held.append(True)
+            return self.upload(*a)
+        publish.approve(self.conn, self.cfg, self.clip["id"], upload=check)
+        self.assertEqual(held, [True], "another publish could have started this upload too")
+        with open(config.home() / "publish.lock", "w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)      # released afterwards
+
+    def test_youtubes_daily_limit_holds_the_post_then_the_timer_sends_it(self):
+        self.ready()
+        tries = []
+        def limit(*a):
+            tries.append(1)
+            raise youtube.UploadLimit("YouTube's daily upload limit (400): exceeded the number of videos")
+        publish.approve(self.conn, self.cfg, self.clip["id"], upload=limit)
+        p = self.pubs()["youtube"]
+        self.assertEqual(p["status"], "queued", "held, not failed - it was never the clip's fault")
+        self.assertIn("daily upload limit", p["detail"])
+        self.assertTrue(publish.youtube_held())
+        self.assertEqual(publish.waiting(self.conn), 1)
+        publish.publish(self.conn, self.cfg, upload=limit)
+        self.assertEqual(len(tries), 1, "no second try while the hold lasts")
+        (self.home / "youtube-hold").write_text("2000-01-01 00:00:00\n")
+        self.assertIsNone(publish.youtube_held())
+        from unittest import mock
+        with mock.patch.object(publish.youtube, "upload", self.upload):
+            code, said = self.cli("pickup", "--run")
+        self.assertEqual(code, 0, said)
+        self.assertEqual((self.pubs()["youtube"]["status"], publish.waiting(self.conn)), ("posted", 0),
+                         "the 15-minute timer sent it once the hold was over")
+
+    def test_not_signed_in_waits_then_goes_out(self):
+        self.ready()
+        def not_yet(*a):
+            raise youtube.NotSetUp("YouTube is not set up")
+        publish.approve(self.conn, self.cfg, self.clip["id"], upload=not_yet)
+        self.assertEqual(self.pubs()["youtube"]["status"], "needs_setup")
+        publish.publish(self.conn, self.cfg, upload=self.upload)
+        self.assertEqual(self.pubs()["youtube"]["status"], "posted")
+
+    def test_the_daily_cap_holds_a_post_for_tomorrow(self):
+        self.ready()
+        publish.approve(self.conn, dict(self.cfg, max_daily_uploads=0), self.clip["id"], upload=self.upload)
+        self.assertEqual(self.pubs()["youtube"]["status"], "queued")
+        self.assertEqual(self.sent, [])
+
+    def test_permission_withdrawn_blocks_the_post(self):
+        self.ready()
+        with self.conn:
+            self.conn.execute("UPDATE sources SET active = 0")
+        with self.assertRaisesRegex(ValueError, "permission withdrawn"):
+            publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
+        self.assertEqual(self.sent, [])
+
+    def test_reject_needs_a_reason_and_keeps_it(self):
+        self.ready()
+        with self.assertRaisesRegex(ValueError, "say why"):
+            publish.reject(self.conn, self.clip["id"], " ")
+        publish.reject(self.conn, self.clip["id"], "starts mid-joke")
+        self.assertEqual(self.conn.execute("SELECT verdict, reason FROM reviews").fetchone()[:],
+                         ("reject", "starts mid-joke"))
+        with self.assertRaisesRegex(ValueError, "rejected"):
+            publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
+
+
+class YouTubeSignInAndUpload(unittest.TestCase):
+    """Against Google's documented request/reply shapes - no Google account
+    was available to capture real ones. The first youtube-login is the check."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.old = os.environ.get("CLIPPER_HOME")
+        os.environ["CLIPPER_HOME"] = self.tmp.name
+        self.addCleanup(lambda: os.environ.pop("CLIPPER_HOME", None) if self.old is None
+                        else os.environ.__setitem__("CLIPPER_HOME", self.old))
+        (Path(self.tmp.name) / "credentials.env").write_text(
+            "YOUTUBE_CLIENT_ID=cid.apps.googleusercontent.com\nYOUTUBE_CLIENT_SECRET=sec\n")
+
+    def test_the_device_flow_waits_slows_down_and_saves_the_token(self):
+        replies = iter([(200, {"device_code": "dc", "user_code": "ABCD-EFGH", "interval": 5,
+                               "expires_in": 1800, "verification_url": "https://www.google.com/device"}),
+                        (428, {"error": "authorization_pending"}),
+                        (428, {"error": "slow_down"}),
+                        (200, {"access_token": "at", "refresh_token": "rt-123"})])
+        posted, slept, said = [], [], []
+        ok = youtube.login(post=lambda url, f: (posted.append((url, f)), next(replies))[1],
+                           sleep=slept.append, say=said.append)
+        self.assertTrue(ok)
+        self.assertEqual(posted[0][1]["scope"], "https://www.googleapis.com/auth/youtube")
+        self.assertEqual(posted[1][1]["grant_type"], "urn:ietf:params:oauth:grant-type:device_code")
+        self.assertEqual(slept, [5, 5, 10], "slow_down adds five seconds")
+        self.assertIn("ABCD-EFGH", said[0])
+        self.assertEqual(youtube.creds()["YOUTUBE_REFRESH_TOKEN"], "rt-123")
+        self.assertEqual(oct((Path(self.tmp.name) / "credentials.env").stat().st_mode & 0o777), "0o600")
+        self.assertEqual(youtube.creds()["YOUTUBE_CLIENT_SECRET"], "sec", "other keys kept")
+
+    def test_declining_says_so(self):
+        replies = iter([(200, {"device_code": "dc", "user_code": "X", "interval": 1}),
+                        (403, {"error": "access_denied"})])
+        with self.assertRaisesRegex(RuntimeError, "declined"):
+            youtube.login(post=lambda u, f: next(replies), sleep=lambda s: None, say=lambda s: None)
+
+    def test_a_revoked_sign_in_asks_for_a_new_one(self):
+        with open(Path(self.tmp.name) / "credentials.env", "a") as f:
+            f.write("YOUTUBE_REFRESH_TOKEN=old\n")
+        with self.assertRaisesRegex(youtube.NotSetUp, "youtube-login"):
+            youtube.access_token(post=lambda u, f: (400, {"error": "invalid_grant"}))
+
+    def test_upload_is_the_resumable_two_step(self):
+        video = Path(self.tmp.name) / "c.mp4"
+        video.write_bytes(b"x" * 1234)
+        seen = []
+
+        def send(req, timeout):
+            seen.append(req)
+            if req.get_method() == "POST":
+                return 200, {"Location": "https://upload.example/session1"}, b""
+            return 200, {}, json.dumps({"id": "vid9", "status": {"privacyStatus": "private"}}).encode()
+        out = youtube.upload(video, {"title": "T", "description": "D", "tags": ["a"]}, "public", "24",
+                             token="tok", send=send)
+        self.assertEqual(out, {"id": "vid9", "url": "https://youtube.com/shorts/vid9", "privacy": "private"})
+        first = json.loads(seen[0].data)
+        self.assertEqual(first["snippet"]["title"], "T")
+        self.assertEqual(first["status"]["privacyStatus"], "public")
+        self.assertEqual(seen[0].get_header("X-upload-content-length"), "1234")
+        self.assertEqual(seen[1].full_url, "https://upload.example/session1")
+
+    def test_the_channels_daily_limit_is_its_own_error(self):
+        # The words YouTube sent on 2026-10-08, in the documented error shape.
+        video = Path(self.tmp.name) / "c.mp4"
+        video.write_bytes(b"x")
+        body = {"error": {"code": 400, "message": "The user has exceeded the number of videos they may upload.",
+                          "errors": [{"domain": "youtube.video", "reason": "uploadLimitExceeded",
+                                      "message": "The user has exceeded the number of videos they may upload."}]}}
+        for raw in (body, {"error": {"message": body["error"]["message"]}}):
+            with self.assertRaises(youtube.UploadLimit):
+                youtube.upload(video, {"title": "T", "description": "D", "tags": []}, "public", "24",
+                               token="tok", send=lambda req, t, raw=raw: (400, {}, json.dumps(raw).encode()))
+
+    def test_a_refused_upload_is_an_error_with_googles_words(self):
+        video = Path(self.tmp.name) / "c.mp4"
+        video.write_bytes(b"x")
+        refuse = lambda req, t: (403, {}, json.dumps({"error": {"message": "quotaExceeded"}}).encode())
+        with self.assertRaisesRegex(RuntimeError, "quotaExceeded"):
+            youtube.upload(video, {"title": "T", "description": "D", "tags": []}, "public", "24",
+                           token="tok", send=refuse)
+
+
+# ---------------------------------------------------------------- Curious Mike's rules
+
+from clipper import ingest  # noqa: E402
+
+
+def pixel(video, t, x, y):
+    """(r, g, b) of one pixel of one frame, straight from ffmpeg."""
+    # 2x2 at even co-ordinates: a yuv420p frame has one colour sample per 2x2
+    # block, and a 1x1 crop of it has no colour at all (ffmpeg refuses it).
+    r = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-ss", f"{t:.3f}", "-i", str(video),
+                        "-frames:v", "1", "-vf", f"crop=2:2:{x // 2 * 2}:{y // 2 * 2}", "-f", "rawvideo",
+                        "-pix_fmt", "rgb24", "-"], capture_output=True, check=True)
+    return tuple(r.stdout[:3])
+
+
+def close(a, b, tol=40):
+    return all(abs(p - q) <= tol for p, q in zip(a, b))
+
+
+MAGENTA = (255, 0, 255)
+
+
+def half_magenta_png(path, w=400, h=100):
+    """Left half solid magenta, right half fully transparent: shows both that
+    the mark is drawn and that its transparency is kept (a lost alpha channel
+    turns the right half black - a changed watermark)."""
+    subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi",
+                    "-i", f"color=c=magenta:s={w}x{h},format=rgba",
+                    "-vf", f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lt(X,{w // 2}),255,0)'",
+                    "-frames:v", "1", str(path)], check=True)
+    return path
+
+
+class WatermarkPlace(unittest.TestCase):
+    """Rule 6: the mark goes where no overlay covers it, at its own shape."""
+
+    def test_centred_at_its_own_size(self):
+        w, h, x, y = render.watermark_box(400, 100, 300, 600)
+        self.assertEqual((w, h, y), (400, 100, 300))
+        self.assertEqual(x + w / 2, render.W / 2, "centred - never a corner")
+
+    def test_too_wide_is_shrunk_evenly_never_stretched(self):
+        w, h, x, y = render.watermark_box(1200, 300, 300, 600)
+        self.assertEqual((w, h), (600, 150))
+        self.assertLessEqual(x + w, render.RIGHT_CLEAR, "clear of TikTok's buttons")
+
+    def test_refuses_the_status_bar_and_the_captions(self):
+        with self.assertRaisesRegex(ValueError, "status bar"):
+            render.watermark_box(400, 100, 100, 600)
+        with self.assertRaisesRegex(ValueError, "into the captions"):
+            render.watermark_box(400, 100, render.CAPTION_TOP - 50, 600)
+        with self.assertRaisesRegex(ValueError, "buttons"):
+            render.watermark_box(1000, 50, 300, 2000)
+
+    def test_the_caption_band_comes_from_the_captions(self):
+        # Captions sit MARGIN_V up from the bottom; the band must start above
+        # that by at least one line of the largest style, so a mark placed just
+        # above it is not under a word.
+        self.assertLess(render.CAPTION_TOP, render.H - captions.MARGIN_V
+                        - max(s["size"] for s in captions.STYLES.values()))
+        render.watermark_box(400, 100, config.DEFAULTS["watermark_top"],
+                             config.DEFAULTS["watermark_max_width"])   # the default spot is legal
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class WatermarkRender(unittest.TestCase):
+    """The mark is in the rendered file, first frame to last, unchanged."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        d = Path(cls.tmp.name)
+        cls.src = d / "src.mp4"
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error",
+                        "-f", "lavfi", "-i", "color=c=0x303030:s=640x360:r=30",
+                        "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=16000",
+                        "-t", "8", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
+                        str(cls.src)], check=True)
+        cls.png = half_magenta_png(d / "mark.png")
+        cls.cfg = dict(CFG, x264_preset="ultrafast")
+        cls.out = render.render(cls.src, d / "out" / "01.mp4", 2.0, 6.0, captions.build([], 2.0, 6.0), cls.cfg, watermark=cls.png)
+        cls.plain = render.render(cls.src, d / "plain" / "01.mp4", 2.0, 6.0, captions.build([], 2.0, 6.0), cls.cfg)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_on_screen_for_the_whole_clip(self):
+        w, h, x, y = render.watermark_box(400, 100, self.cfg["watermark_top"],
+                                          self.cfg["watermark_max_width"])
+        clip = Path(self.tmp.name) / "out" / "01.mp4"
+        for t in (0.0, 1.9, self.out["duration"] - 0.1):
+            self.assertTrue(close(pixel(clip, t, x + w // 4, y + h // 2), MAGENTA),
+                            f"watermark missing at {t:.1f}s")
+
+    def test_its_transparency_is_kept(self):
+        w, h, x, y = render.watermark_box(400, 100, self.cfg["watermark_top"],
+                                          self.cfg["watermark_max_width"])
+        here = (x + 3 * w // 4, y + h // 2)
+        self.assertTrue(close(pixel(Path(self.tmp.name) / "out" / "01.mp4", 1.0, *here),
+                              pixel(Path(self.tmp.name) / "plain" / "01.mp4", 1.0, *here), tol=12),
+                        "the transparent half shows the video, not a black box")
+
+    def test_the_image_does_not_shorten_the_clip(self):
+        # -t read as the image's length (an -i after it) or the image ending
+        # the overlay would cut the clip to one frame.
+        self.assertAlmostEqual(self.out["duration"], 4.0, delta=0.15)
+        self.assertAlmostEqual(self.out["duration"], self.plain["duration"], delta=0.05)
+
+    def test_only_the_png_the_campaign_supplied(self):
+        jpg = Path(self.tmp.name) / "mark.jpg"
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(self.png), str(jpg)], check=True)
+        with self.assertRaisesRegex(ValueError, "PNG"):
+            render.check_watermark(jpg, self.cfg)
+        with self.assertRaisesRegex(media.MediaError, "missing"):
+            render.check_watermark(Path(self.tmp.name) / "gone.png", self.cfg)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class WatermarkEverywhere(EndToEnd):
+    """Through the CLI: a source's watermark is on every clip it makes, and a
+    missing watermark stops the render rather than make an unpaid clip."""
+
+    def setUp(self):
+        super().setUp()
+        self.png = half_magenta_png(Path(self.tmp.name) / "yt-mpj.png")
+        self.cli("source", "add", "mike", "--rights", "permission", "--evidence", "campaign page")
+
+    def test_every_clip_carries_it(self):
+        code, said = self.cli("source", "rules", "mike", "--watermark", str(self.png))
+        self.assertEqual(code, 0, said)
+        self.assertIn("watermark kept: 400x100", said)
+        self.png.unlink()                      # the source keeps its own copy
+        self.cli("ingest", "mike", str(self.video))
+        self.give_words(1)
+        code, said = self.cli("run")
+        self.assertEqual(code, 0, said)
+        clip = self.home / "clips" / "1" / "01.mp4"
+        self.assertEqual(json.loads(clip.with_suffix(".json").read_text())["watermark"], "mike.png")
+        w, h, x, y = render.watermark_box(400, 100, 300, 600)
+        self.assertTrue(close(pixel(clip, 0.5, x + 50, y + 50), MAGENTA))
+
+    def test_a_lost_watermark_stops_the_render(self):
+        self.cli("source", "rules", "mike", "--watermark", str(self.png))
+        (self.home / "watermarks" / "mike.png").unlink()
+        self.cli("ingest", "mike", str(self.video))
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 1)
+        self.assertFalse((self.home / "clips" / "1" / "01.mp4").exists(), "no clip without the mark")
+        err = db.connect(self.home / "clipper.db").execute("SELECT error FROM videos").fetchone()[0]
+        self.assertIn("watermark", err)
+
+    def test_a_bad_file_is_refused_when_set_not_hours_later(self):
+        bad = Path(self.tmp.name) / "notes.txt"
+        bad.write_text("YT: @mpj")
+        code, said = self.cli("source", "rules", "mike", "--watermark", str(bad))
+        self.assertEqual(code, 2)
+        self.assertFalse(list((self.home / "watermarks").glob("*")), "nothing half-kept")
+
+
+class DropboxLinks(unittest.TestCase):
+    # The shape of a Dropbox share link as copied from the app in 2026: a
+    # /scl/fi/ path, an rlkey, an st, and dl=0 (the preview page, not the file).
+    LINK = ("https://www.dropbox.com/scl/fi/jx035jv80zkn4oh835who/CURIOUS-MIKE-TRAE-YOUNG.mp4"
+            "?rlkey=abc123def456&st=xyz789&dl=0")
+
+    def test_a_share_link_becomes_the_file(self):
+        got = urllib.parse.urlsplit(ingest.direct(self.LINK))
+        q = dict(urllib.parse.parse_qsl(got.query))
+        self.assertEqual(q["dl"], "1")
+        self.assertEqual((q["rlkey"], q["st"]), ("abc123def456", "xyz789"), "the key is kept")
+        self.assertEqual(got.path, "/scl/fi/jx035jv80zkn4oh835who/CURIOUS-MIKE-TRAE-YOUNG.mp4")
+        self.assertEqual(ingest.direct(self.LINK.replace("&dl=0", ""))[-4:], "dl=1")
+
+    def test_a_folder_link_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "folder"):
+            ingest.direct("https://www.dropbox.com/scl/fo/abc/def?rlkey=x&dl=0")
+
+    def test_other_links_are_left_alone(self):
+        u = "https://example.com/video.mp4?dl=0"
+        self.assertEqual(ingest.direct(u), u)
+
+
+class CaptionsAskAQuestion(unittest.TestCase):
+    """Rule 2: comments count, and a question is what gets them."""
+
+    def test_a_draft_without_a_question_gets_one(self):
+        _, c, _ = postcopy.check_draft({"title": "Peach blossoms", "caption": "He got lost."}, CLIP_TEXT)
+        self.assertEqual(c, "He got lost. " + postcopy.QUESTION)
+        self.assertTrue(postcopy.template(CLIP_TEXT)[1].endswith("?"))
+
+    def test_a_question_already_there_is_left_alone(self):
+        _, c, _ = postcopy.check_draft({"title": "T", "caption": "Would you have kept walking?"}, CLIP_TEXT)
+        self.assertEqual(c, "Would you have kept walking?")
+
+    def test_still_within_the_limit(self):
+        _, c, _ = postcopy.check_draft({"title": "T", "caption": "word " * 100}, CLIP_TEXT)
+        self.assertLessEqual(len(c), postcopy.CAPTION_MAX)
+        self.assertTrue(c.endswith(postcopy.QUESTION))
+
+
+class WatermarkMustBeSeeThrough(unittest.TestCase):
+    # Captured 2026-09-29 from the Curious Mike guidelines page on Notion:
+    # "YT: @mpj" in off-white with a grey glow, on a solid white 1568x523
+    # canvas, no alpha. Overlaid as it is, it is a white box over the video.
+    FLAT = FIXTURES / "clipper-watermark-notion-flattened.png"
+
+    def test_the_flattened_campaign_image_is_refused(self):
+        self.assertFalse(render.has_transparency(self.FLAT))
+        with self.assertRaisesRegex(ValueError, "transparent"):
+            render.check_watermark(self.FLAT, CFG)
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+    def test_a_real_alpha_channel_is_recognised(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertTrue(render.has_transparency(half_magenta_png(Path(d) / "m.png")))
+            pal = Path(d) / "pal.png"     # palette PNG, transparency in a tRNS chunk
+            subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(Path(d) / "m.png"),
+                            "-vf", "split[a][b];[a]palettegen=reserve_transparent=1[p];[b][p]paletteuse",
+                            "-frames:v", "1", str(pal)], check=True)
+            self.assertTrue(render.has_transparency(pal))
+            render.check_watermark(pal, CFG)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("openssl"), "needs ffmpeg and openssl")
+class RemoteFootage(EndToEnd):
+    """ingest --remote: a video too big for the disk (a 27 GB 4K episode on a
+    droplet with 44 GB free) is left on the rights holder's server, read over
+    https with its certificate checked, and never copied."""
+
+    def setUp(self):
+        super().setUp()
+        import http.server
+        import ssl
+        import threading
+        d = Path(self.tmp.name)
+        self.cert = d / "cert.pem"
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                        "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1",
+                        "-keyout", str(d / "key.pem"), "-out", str(self.cert)],
+                       check=True, capture_output=True)
+        serve = str(d)
+
+        test = self
+
+        class Quiet(http.server.SimpleHTTPRequestHandler):
+            """Answers Range requests the way Dropbox does (206 and the slice);
+            the standard handler ignores them and sends everything."""
+            def __init__(self, *a, **k):
+                super().__init__(*a, directory=serve, **k)
+
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                rng = self.headers.get("Range")
+                if not (rng and test.ranges):
+                    return super().do_GET()
+                path = Path(self.translate_path(self.path))
+                size = path.stat().st_size
+                a, _, b = rng.split("=", 1)[1].partition("-")
+                a, b = int(a), min(int(b) if b else size - 1, size - 1)
+                self.send_response(206)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Content-Range", f"bytes {a}-{b}/{size}")
+                self.send_header("Content-Length", str(b - a + 1))
+                self.end_headers()
+                with open(path, "rb") as f:
+                    f.seek(a)
+                    try:
+                        self.wfile.write(f.read(b - a + 1))
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+
+        self.ranges = True
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Quiet)
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(self.cert, d / "key.pem")
+        self.server.socket = ctx.wrap_socket(self.server.socket, server_side=True)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.url = f"https://127.0.0.1:{self.server.server_address[1]}/talk.mp4?rlkey=k&st=one&dl=0"
+        old = os.environ.get("SSL_CERT_FILE")
+        self.trust(self.cert)
+        self.addCleanup(lambda: self.trust(old))
+        self.cli("source", "add", "mike", "--rights", "permission", "--evidence", "campaign page")
+
+    @staticmethod
+    def trust(cert):
+        """Trust only this certificate for the rest of the process. From
+        Python 3.12 urllib's shared opener builds its TLS context once and
+        keeps it, so changing SSL_CERT_FILE alone left the previous test's
+        certificate in force: CI failed test_clipped_without_a_copy with
+        "self-signed certificate" straight after the untrusted-certificate
+        test. Each Clip command on the droplet is a fresh process, so this
+        is the tests' problem, not Clip's; dropping the opener fixes it."""
+        if cert:
+            os.environ["SSL_CERT_FILE"] = str(cert)
+        else:
+            os.environ.pop("SSL_CERT_FILE", None)
+        urllib.request.install_opener(None)
+
+    def test_clipped_without_a_copy(self):
+        code, said = self.cli("ingest", "mike", self.url, "--remote")
+        self.assertEqual(code, 0, said)
+        self.assertIn("left in place", said)
+        v = db.connect(self.home / "clipper.db").execute("SELECT * FROM videos").fetchone()
+        self.assertEqual(v["media_path"], self.url, "kept as a link (dl=1 is for Dropbox hosts only)")
+        self.assertEqual(list((self.home / "media" / "1").iterdir()), [], "nothing downloaded")
+        code, said = self.cli("ingest", "mike", self.url.replace("st=one", "st=two"), "--remote")
+        self.assertIn("already have it", said, "a re-copied link is the same video")
+        self.give_words(1)
+        code, said = self.cli("run")
+        self.assertEqual(code, 0, said)
+        clip = self.home / "clips" / "1" / "01.mp4"
+        meta = json.loads(clip.with_suffix(".json").read_text())
+        self.assertAlmostEqual(media.probe(clip)["duration"], meta["end"] - meta["start"], delta=0.2)
+        self.assertFalse((self.home / "media" / "1" / "source.mp4").exists())
+
+    def test_an_untrusted_certificate_is_refused(self):
+        other = Path(self.tmp.name) / "other.pem"
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                        "-subj", "/CN=someone-else", "-keyout", str(Path(self.tmp.name) / "k2.pem"),
+                        "-out", str(other)], check=True, capture_output=True)
+        self.trust(other)
+        # ffmpeg itself, not only the range check before it: ffmpeg checks no
+        # certificate unless told to, and every clip is read through it.
+        with self.assertRaises(media.MediaError):
+            media.probe(self.url)
+        code, said = self.cli("ingest", "mike", self.url, "--remote")
+        self.assertEqual(code, 2, said)
+        self.assertEqual(db.connect(self.home / "clipper.db").execute(
+            "SELECT COUNT(*) FROM videos").fetchone()[0], 0)
+
+    def test_every_read_of_a_clip_checks_the_certificate(self):
+        # The probe before a render checks it too, so a render command that
+        # dropped the check would still pass every other test here.
+        info = {"width": 640, "height": 360}
+        cmd = render.command(self.url, "o.mp4", 1, 5, info, "o.ass", CFG)
+        before = cmd[:cmd.index(self.url)]
+        self.assertEqual(before[before.index("-tls_verify") + 1], "1")
+        self.assertIn("-ca_file", before)
+        local = render.command("talk.mp4", "o.mp4", 1, 5, info, "o.ass", CFG)
+        self.assertIn(str(Path("talk.mp4").resolve()), local,
+                      "a local path is made absolute - ffmpeg runs in the clip's folder")
+
+    def test_a_server_that_ignores_ranges_is_refused(self):
+        self.ranges = False
+        code, said = self.cli("ingest", "mike", self.url, "--remote")
+        self.assertEqual(code, 2, said)
+        self.assertIn("whole file", said)
+
+    def test_only_https(self):
+        code, said = self.cli("ingest", "mike", self.url.replace("https", "http"), "--remote")
+        self.assertEqual(code, 2)
+        self.assertIn("https", said)
+
+    def test_a_too_big_download_says_how_to_leave_it_in_place(self):
+        with self.assertRaisesRegex(RuntimeError, "--remote"):
+            ingest.need_space(self.home, 10 ** 15, ingest.REMOTE_HINT)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class WatermarkCutOutOfWhite(unittest.TestCase):
+    """The campaign's own pixels, minus the white canvas - not a retyped copy,
+    which its rules forbid, and not a white box over the clip."""
+    FLAT = WatermarkMustBeSeeThrough.FLAT
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.out = Path(self.tmp.name) / "cut.png"
+
+    def rgb(self, path, over, w, h):
+        vf = f"color=c={over}:s={w}x{h},format=rgb24[bg];[bg][0:v]overlay=format=rgb,format=rgb24"
+        r = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-filter_complex", vf,
+                            "-frames:v", "1", "-f", "rawvideo", "-"], capture_output=True, check=True)
+        return r.stdout
+
+    def test_over_white_it_is_the_supplied_file(self):
+        from clipper import cutout
+        w, h, (x0, y0) = cutout.cut_out_white(self.FLAT, self.out)
+        self.assertTrue(render.has_transparency(self.out))
+        mine = self.rgb(self.out, "white", w, h)
+        orig = subprocess.run(["ffmpeg", "-v", "error", "-i", str(self.FLAT), "-vf",
+                               f"crop={w}:{h}:{x0}:{y0},format=rgb24", "-f", "rawvideo", "-"],
+                              capture_output=True, check=True).stdout
+        self.assertEqual(len(mine), len(orig))
+        self.assertLessEqual(max(abs(a - b) for a, b in zip(mine, orig)), 1,
+                             "no pixel of the mark changed: over white it is the original")
+
+    def test_the_letters_are_solid_and_the_canvas_is_gone(self):
+        from clipper import cutout
+        w, h, _ = cutout.cut_out_white(self.FLAT, self.out)
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(self.out), "-f", "rawvideo",
+                              "-pix_fmt", "rgba", "-"], capture_output=True, check=True).stdout
+        alpha = raw[3::4]
+        self.assertGreater(sum(1 for a in alpha if a == 255), 20000,
+                           "the nine glyph parts (about 21,000 pixels) stay fully opaque")
+        for corner in (0, w - 1, (h - 1) * w, h * w - 1):
+            self.assertLessEqual(alpha[corner], cutout.TRIM_ALPHA + 1)
+        self.assertLess((w, h), (1568, 523), "the empty canvas is trimmed")
+        render.watermark_box(w, h, 880, 600)   # fits low-middle, clear of the captions
+
+    def test_a_mark_not_on_white_is_refused(self):
+        from clipper import cutout
+        with self.assertRaisesRegex(ValueError, "not white"):
+            cutout.cut_out_white(half_magenta_png(Path(self.tmp.name) / "m.png"), self.out)
+        blank = Path(self.tmp.name) / "blank.png"
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=white:s=300x100",
+                        "-frames:v", "1", str(blank)], check=True)
+        with self.assertRaisesRegex(ValueError, "no lettering"):
+            cutout.cut_out_white(blank, self.out)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class WatermarkPerSource(EndToEnd):
+    def setUp(self):
+        super().setUp()
+        self.cli("source", "add", "mike", "--rights", "permission", "--evidence", "campaign page")
+
+    def test_the_flattened_campaign_file_through_the_cli(self):
+        flat = str(WatermarkMustBeSeeThrough.FLAT)
+        code, said = self.cli("source", "rules", "mike", "--watermark", flat)
+        self.assertEqual(code, 2)
+        self.assertIn("--cut-out-white", said, "the refusal says what to do")
+        code, said = self.cli("source", "rules", "mike", "--watermark", flat, "--cut-out-white",
+                              "--watermark-top", "880")
+        self.assertEqual(code, 0, said)
+        self.assertIn("watermark kept: 543x162, centred at 268,880", said)
+        self.assertTrue(render.has_transparency(self.home / "watermarks" / "mike.png"))
+        self.assertEqual(sorted(p.name for p in (self.home / "watermarks").iterdir()), ["mike.png"])
+
+    def test_replacing_a_flattened_watermark_along_with_its_position(self):
+        # The droplet's real order of events: the Notion image was stored by
+        # the first version (before transparency was checked), then replaced
+        # with --cut-out-white and --watermark-top in one command - which was
+        # refused, because the position was checked against the old file.
+        old = self.home / "watermarks" / "mike.png"
+        old.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(WatermarkMustBeSeeThrough.FLAT, old)
+        with db.connect(self.home / "clipper.db") as conn:
+            conn.execute("UPDATE sources SET watermark = ? WHERE name = 'mike'", (str(old),))
+        code, said = self.cli("source", "rules", "mike", "--watermark",
+                              str(WatermarkMustBeSeeThrough.FLAT), "--cut-out-white",
+                              "--watermark-top", "880")
+        self.assertEqual(code, 0, said)
+        self.assertIn("centred at 268,880", said)
+        s = db.connect(self.home / "clipper.db").execute("SELECT * FROM sources").fetchone()
+        self.assertEqual(s["watermark_top"], 880)
+        self.assertTrue(render.has_transparency(s["watermark"]))
+
+    def test_a_position_under_the_captions_is_refused(self):
+        self.cli("source", "rules", "mike", "--watermark", str(WatermarkMustBeSeeThrough.FLAT),
+                 "--cut-out-white")
+        code, said = self.cli("source", "rules", "mike", "--watermark-top", "1100")
+        self.assertEqual(code, 2)
+        self.assertIn("captions", said)
+        top = db.connect(self.home / "clipper.db").execute(
+            "SELECT watermark_top FROM sources").fetchone()[0]
+        self.assertIsNone(top, "a refused position is not kept")
+
+    def test_clips_use_the_sources_own_position(self):
+        png = half_magenta_png(Path(self.tmp.name) / "m.png")
+        self.assertEqual(self.cli("source", "rules", "mike", "--watermark", str(png),
+                                  "--watermark-top", "700")[0], 0)
+        self.cli("ingest", "mike", str(self.video))
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        clip = self.home / "clips" / "1" / "01.mp4"
+        w, h, x, y = render.watermark_box(400, 100, 700, 600)
+        self.assertTrue(close(pixel(clip, 0.5, x + 50, y + 50), MAGENTA), "at 700, not the default 300")
+
+
+# ---------------------------------------------------------------- a campaign's own list
+
+LONG_RUN = json.loads((FIXTURES / "clipper-long-run-timings.json").read_text())["words"]
+
+
+class LongUnpunctuatedRuns(unittest.TestCase):
+    """Whisper wrote 39 of the Trae Young episode's 80 minutes as runs with no
+    full stop and (mostly) no gap between words; one ran 525 s. A window is
+    whole sentences, so none of it could be clipped."""
+
+    def test_the_real_525_second_run_becomes_clippable(self):
+        sents = moments.sentences(LONG_RUN, 0.8)
+        self.assertGreater(len(sents), 17)
+        self.assertLessEqual(max(s["end"] - s["start"] for s in sents), moments.LONGEST)
+        self.assertTrue(all(s["last"] - s["first"] + 1 >= moments.MIN_PIECE_WORDS for s in sents))
+        self.assertEqual([k for s in sents for k in range(s["first"], s["last"] + 1)],
+                         list(range(len(LONG_RUN))), "every word once, in order")
+        wins = moments.windows(sents, 20, 60)
+        covered = {int(t) for i, j in wins for t in range(int(sents[i]["start"]), int(sents[j]["end"]))}
+        self.assertGreater(len(covered), 0.95 * (LONG_RUN[-1]["end"] - LONG_RUN[0]["start"]))
+
+    def test_a_real_point_eight_second_pause_is_a_pause(self):
+        # The run's one 0.8 s gap is 0.79999999999972 in floating point.
+        k = max(range(len(LONG_RUN) - 1), key=lambda k: LONG_RUN[k + 1]["start"] - LONG_RUN[k]["end"])
+        self.assertLess(LONG_RUN[k + 1]["start"] - LONG_RUN[k]["end"], 0.8)
+        sents = moments.sentences(LONG_RUN, 0.8, longest=10 ** 6)     # pauses only
+        self.assertIn(k, [s["last"] for s in sents])
+
+    def test_with_no_gaps_it_splits_near_the_middle(self):
+        # The real runs are 99% zero gaps: a tie must not cut three words off
+        # the front, over and over, into a string of useless fragments.
+        ws = [w(t, t + 1.0, "x") for t in range(0, 80)]
+        pieces = moments.split_long(ws, list(range(80)), 50)
+        self.assertEqual(len(pieces), 2, [len(p) for p in pieces])
+        self.assertLessEqual(abs(len(pieces[0]) - len(pieces[1])), 2, [len(p) for p in pieces])
+
+    def test_splits_at_the_biggest_gap(self):
+        ws = [w(t, t + 0.5, "x") for t in range(0, 40)]
+        ws[25] = w(25.4, 25.9, "x")                      # 0.9 s after word 24, the one gap
+        pieces = moments.split_long(ws, list(range(40)), 30)
+        self.assertEqual(pieces[0][-1], 24)
+
+
+class CampaignTopics(unittest.TestCase):
+    HUNT = "Knicks: knicks, nicks, chant; Pat Beverley: pat bev, beverly; dunk"
+
+    def test_parse_keeps_the_campaigns_order(self):
+        h = score.parse_hunt(self.HUNT)
+        self.assertEqual([t["name"] for t in h], ["Knicks", "Pat Beverley", "dunk"])
+        self.assertEqual(h[1]["terms"], ["pat bev", "beverly"])
+
+    def test_whole_words_with_endings(self):
+        h = score.parse_hunt(self.HUNT + "; AI: ai")
+        self.assertEqual(score.topics("they started chanting at the Knicks' game", h), ["Knicks"])
+        self.assertEqual(score.topics("he was dunking on people", h), ["dunk"])
+        self.assertEqual(score.topics("I said it to Nick's brother", h), [], "nick is not nicks; ai not in said")
+        self.assertEqual(score.topics("the beef with you and pat bev", h), ["Pat Beverley"])
+        self.assertEqual(score.topics("the knicks won", score.parse_hunt("Nick: nicks")), [],
+                         "a term inside a longer word is not a mention")
+
+    def words_saying(self, text, at=0.0, step=1.0):
+        return [w(at + k * step, at + k * step + 0.9, " " + t + ("." if k % 6 == 5 else ""))
+                for k, t in enumerate(text.split())]
+
+    def test_a_mention_at_the_very_end_does_not_count(self):
+        # The real case: the best "Knicks" window ended just after "the nicks",
+        # before the story. 30 words, the topic word last.
+        ws = self.words_saying(" ".join(["talk"] * 29 + ["knicks"]))
+        sents = moments.sentences(ws, 0.8)
+        got = score.score_windows(sents, [(0, len(sents) - 1)], ws, [], CFG, score.parse_hunt(self.HUNT))
+        self.assertEqual(got[0]["topics"], [])
+        ws = self.words_saying(" ".join(["talk"] * 18 + ["knicks"] + ["talk"] * 11))
+        sents = moments.sentences(ws, 0.8)
+        got = score.score_windows(sents, [(0, len(sents) - 1)], ws, [], CFG, score.parse_hunt(self.HUNT))
+        self.assertEqual(got[0]["topics"], [], "60% of the way in: the clip ends on its setup")
+        ws = self.words_saying(" ".join(["talk"] * 5 + ["knicks"] + ["talk"] * 24))
+        sents = moments.sentences(ws, 0.8)
+        got = score.score_windows(sents, [(0, len(sents) - 1)], ws, [], CFG, score.parse_hunt(self.HUNT))
+        self.assertEqual(got[0]["topics"], ["Knicks"])
+        plain = score.score_windows(sents, [(0, len(sents) - 1)], ws, [], CFG)[0]["score"]
+        self.assertEqual(got[0]["score"], min(100.0, round(plain + score.TOPIC_BONUS, 1)))
+        self.assertIn("on the campaign's list: Knicks", got[0]["reasons"][0])
+
+    def test_a_clip_opening_on_like_is_mid_thought(self):
+        # The real case: "like in the first quarter ... they started chanting"
+        # won over the window that opened on the setup, until "like" counted.
+        for opener, standalone in (("like", 0.25), ("my", 1.0)):
+            ws = self.words_saying(opener + " first playoff series was the knicks and they chanted")
+            sents = moments.sentences(ws, 0.8)
+            f = score.score_windows(sents, [(0, len(sents) - 1)], ws, [], CFG)[0]["features"]
+            self.assertEqual(f["standalone"], standalone, opener)
+
+    def test_every_topic_gets_a_clip_before_the_rest_go_by_score(self):
+        h = score.parse_hunt(self.HUNT)
+        c = lambda s, e, sc, t: {"start": s, "end": e, "score": sc, "topics": t}
+        scored = [c(0, 30, 99, ["Knicks"]), c(40, 70, 98, ["Knicks"]), c(80, 110, 97, ["Knicks"]),
+                  c(120, 150, 60, ["dunk"]), c(160, 190, 90, []), c(125, 155, 95, ["Knicks"])]
+        got = moments.choose(scored, 3, 40, h)
+        self.assertEqual(sorted((x["start"] for x in got)), [0, 40, 120],
+                         "Knicks' best, then dunk's best (not a fourth Knicks), then by score")
+        self.assertEqual([x["start"] for x in moments.choose(scored, 3, 40)], [0, 40, 80],
+                         "without a list: score alone")
+
+
+class NeverClipped(unittest.TestCase):
+    """Owner, 2026-10-07, before the first Gil's Arena episode: how do we tell
+    Clip what it should or shouldn't clip? A sponsor read - on a sports show
+    often a betting app - is never a clip, and the owner can name more."""
+
+    def words_saying(self, text):
+        return [w(k * 1.0, k * 1.0 + 0.9, " " + t + ("." if k % 6 == 5 else ""))
+                for k, t in enumerate(text.split())]
+
+    def scored(self, text, avoid=()):
+        ws = self.words_saying(text)
+        sents = moments.sentences(ws, 0.8)
+        return score.score_windows(sents, [(0, len(sents) - 1)], ws, [], CFG,
+                                   score.parse_hunt("Knicks: knicks"), avoid)[0]
+
+    def test_a_sponsor_read_scores_zero_even_on_a_topic(self):
+        got = self.scored("the knicks are rolling and this episode is brought to you by our friends "
+                          "so use code GIL for your first deposit match today")
+        self.assertEqual((got["score"], got["topics"]), (0.0, []))
+        self.assertIn("(a sponsor read)", got["reasons"][0])
+        self.assertEqual(moments.choose([got], 3, 1, score.parse_hunt("Knicks: knicks")), [],
+                         "not even as the topic's pick")
+
+    def test_talking_about_a_sportsbook_is_not_an_ad(self):
+        got = self.scored("fanduel had the knicks as big favourites and everybody lost money on that one")
+        self.assertGreater(got["score"], 0)
+
+    def test_the_owners_own_list(self):
+        avoid = score.parse_avoid("politics, ex-wife; betting odds")
+        self.assertEqual(avoid, ["politics", "ex-wife", "betting odds"])
+        got = self.scored("we are not doing politics on this show but the knicks need a center", avoid)
+        self.assertEqual(got["score"], 0.0)
+        self.assertIn("'politics' (on the avoid list)", got["reasons"][0])
+        self.assertIsNone(score.avoided("the knicks were better between the two halves", ["bet"]),
+                          "whole words: better and between are not bet")
+        self.assertEqual(score.avoided("he bets on the knicks", ["bet"]), "bet", "an ending still counts")
+
+
+class Spellings(unittest.TestCase):
+    RULES = transcribe.parse_spellings("Trae Young: try young; Trae: tray; Knicks: nicks; "
+                                       "chanting F Trae Young: chin fluck try young")
+
+    def test_longest_first(self):
+        self.assertEqual(self.RULES[0], [["chin", "fluck", "try", "young"], "chanting F Trae Young"])
+
+    def test_the_real_mishearing_is_fixed_in_step_with_the_audio(self):
+        # From the episode at 67:50: "...and like they started chin fluck try young you know"
+        ws = [w(0.0, 0.3, " they"), w(0.3, 0.6, " started"), w(0.6, 0.9, " chin"),
+              w(0.9, 1.2, " fluck"), w(1.2, 1.5, " try"), w(1.5, 2.0, " young."), w(2.0, 2.3, " you")]
+        got = transcribe.respell(ws, self.RULES)
+        self.assertEqual("".join(x["word"] for x in got), " they started chanting F Trae Young. you")
+        new = got[2:6]
+        self.assertEqual((new[0]["start"], new[-1]["end"]), (0.6, 2.0), "the same span of audio")
+        self.assertTrue(moments.ends_sentence(new[-1]["word"]), "the full stop moves with it")
+
+    def test_only_whole_listed_phrases(self):
+        ws = [w(0, 1, " I'll"), w(1, 2, " try"), w(2, 3, " it,"), w(3, 4, " Tray,"), w(4, 5, " NICKS")]
+        self.assertEqual("".join(x["word"] for x in transcribe.respell(ws, self.RULES)),
+                         " I'll try it, Trae, Knicks")
+
+
+class SpellingsAreAddedNotReplaced(EndToEnd):
+    """2026-10-08: setting LaMelo's spellings for one Gil's Arena episode
+    wiped KAT's, set the day before for another."""
+
+    test_permitted_video_in_captioned_short_out = None
+    test_a_failing_stage_is_retried_then_parked_then_retryable = None
+
+    def rules(self):
+        conn = db.connect(self.home / "clipper.db")
+        return {" ".join(w): r for w, r in json.loads(conn.execute("SELECT spellings FROM sources").fetchone()[0] or "[]")}
+
+    def test_kept_updated_and_cleared(self):
+        self.cli("source", "add", "gils", "--rights", "permission", "--evidence", "campaign page")
+        self.cli("source", "rules", "gils", "--spell", "KAT: cat; Brunson: brunsen")
+        self.cli("source", "rules", "gils", "--spell", "LaMelo: la melo; Jalen Brunson: brunsen")
+        self.assertEqual(self.rules(), {"cat": "KAT", "brunsen": "Jalen Brunson", "la melo": "LaMelo"})
+        code, said = self.cli("source", "rules", "gils", "--spell", "")
+        self.assertEqual(said.count("captions say"), 0)
+        conn = db.connect(self.home / "clipper.db")
+        self.assertIsNone(conn.execute("SELECT spellings FROM sources").fetchone()[0])
+
+
+class SpellingsCatchThePossessive(unittest.TestCase):
+    """2026-10-08: the rule was "KAT: cat", Whisper wrote "Cat's", and the
+    post went out as "Cats speaks out as Knicks juggle contract extensions"."""
+    RULES = transcribe.parse_spellings("KAT: cat; Karl-Anthony Towns: carl anthony towns")
+
+    def said(self, *words):
+        ws = [w(i, i + 1, " " + x) for i, x in enumerate(words)]
+        return "".join(x["word"] for x in transcribe.respell(ws, self.RULES))
+
+    def test_cats_and_cats_possessive_become_kats(self):
+        self.assertEqual(self.said("Cat's", "frustrated."), " KAT's frustrated.")
+        self.assertEqual(self.said("Cats", "speaks"), " KAT's speaks")
+        self.assertEqual(self.said("Carl", "Anthony", "Towns'", "deal"), " Karl-Anthony Towns' deal")
+
+    def test_the_plain_word_and_other_words_are_unchanged(self):
+        self.assertEqual(self.said("cat", "said"), " KAT said")
+        self.assertEqual(self.said("category", "catch", "cast"), " category catch cast")
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class SourceRulesEndToEnd(EndToEnd):
+    """Was a second class named CampaignListEndToEnd, so the later one of that
+    name replaced it and none of these ran (found 2026-10-07)."""
+    def setUp(self):
+        super().setUp()
+        self.cli("source", "add", "tao", "--rights", "public-domain", "--evidence", "LibriVox")
+
+    def test_spellings_reach_the_burned_in_captions(self):
+        # "the" is in every clip of the fixture; respelling it proves the
+        # captions and the scored text both come through the spellings.
+        self.assertEqual(self.cli("source", "rules", "tao", "--spell", "Thee: the")[0], 0)
+        self.cli("ingest", "tao", str(self.video))
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        ass = (self.home / "clips" / "1" / "01.ass").read_text()
+        text = json.loads((self.home / "clips" / "1" / "01.json").read_text())["text"]
+        self.assertIn("THEE", ass)
+        self.assertNotRegex(ass, r"[ }]THE[ {]|[ }]THE$")
+        self.assertIn("Thee", text)
+        self.assertNotRegex(text, r"\bthe\b")
+
+    def test_one_clip_per_topic_even_over_the_cap(self):
+        # max_clips_per_video is 1 here; the list names two moments.
+        self.cli("source", "rules", "tao", "--hunt", "LibriVox: librivox; Fisherman: fisherman")
+        self.cli("ingest", "tao", str(self.video))
+        self.give_words(1)
+        code, said = self.cli("run")
+        self.assertEqual(code, 0, said)
+        self.assertIn("2 clip(s)", said)
+        ev = db.connect(self.home / "clipper.db").execute(
+            "SELECT msg FROM events WHERE stage = 'find'").fetchone()[0]
+        self.assertIn("campaign topics clipped: Fisherman, LibriVox", ev)
+        self.assertNotIn("not found", ev)
+
+    def test_an_avoid_list_is_kept_and_cleared(self):
+        code, said = self.cli("source", "rules", "tao", "--avoid", "Politics, fisherman")
+        self.assertEqual(code, 0, said)
+        self.assertIn("never clipping: politics, fisherman", said)
+        conn = db.connect(self.home / "clipper.db")
+        self.assertEqual(json.loads(conn.execute("SELECT avoid FROM sources").fetchone()[0]),
+                         ["politics", "fisherman"])
+        self.cli("ingest", "tao", str(self.video))
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        rows = conn.execute("SELECT text, score, selected FROM candidates").fetchall()
+        named = [r for r in rows if "fisherman" in r[0].lower()]
+        self.assertTrue(named, "the fixture must mention it, or this tests nothing")
+        self.assertTrue(all(r[1] == 0 and not r[2] for r in named), "an avoided moment is never picked")
+        self.assertEqual(self.cli("source", "rules", "tao", "--avoid", "")[0], 0)
+        self.assertIsNone(conn.execute("SELECT avoid FROM sources").fetchone()[0])
+
+    def test_a_list_set_after_searching_is_used_by_refind(self):
+        self.cli("ingest", "tao", str(self.video))
+        self.give_words(1)
+        conn = db.connect(self.home / "clipper.db")
+        pipeline.advance(conn, config.paths(), config.load(), conn.execute("SELECT * FROM videos").fetchone())
+        # (the render made a clip: refind must refuse, it would renumber it)
+        code, said = self.cli("refind", "1")
+        self.assertEqual(code, 2)
+        self.assertIn("renumber", said)
+        with conn:
+            conn.execute("DELETE FROM post_copy")
+            conn.execute("DELETE FROM clips")
+            conn.execute("UPDATE videos SET stage = 'found'")
+        self.assertEqual(self.cli("source", "rules", "tao", "--hunt", "Blossom: blossom, blossoms")[0], 0)
+        self.assertEqual(self.cli("refind", "1")[0], 0)
+        self.assertEqual(conn.execute("SELECT stage FROM videos").fetchone()[0], "transcribed")
+        self.assertEqual(self.cli("run")[0], 0)
+        ev = conn.execute("SELECT msg FROM events WHERE stage = 'find' ORDER BY id DESC").fetchone()[0]
+        self.assertIn("campaign topics clipped: Blossom", ev)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class TranscribedInPieces(unittest.TestCase):
+    """The whole 81-minute episode at once peaked at 4.9 GB and the droplet's
+    kernel killed the run. Pieces of whisper_chunk_seconds, cut in quiet."""
+
+    def test_cuts_land_in_the_quiet_and_cover_everything(self):
+        with tempfile.TemporaryDirectory() as d:
+            wav = Path(d) / "a.wav"
+            quiet = [(9.1, 9.5), (20.6, 21.0), (30.2, 30.6)]
+            gate = "*".join(f"(1-between(t,{a},{b}))" for a, b in quiet)
+            subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                            f"aevalsrc='0.5*sin(2*PI*220*t)*{gate}':s=16000:d=35",
+                            "-ac", "1", "-c:a", "pcm_s16le", str(wav)], check=True)
+            b = transcribe.chunks(wav, 10, search=2)
+            self.assertEqual(b[0][0], 0)
+            self.assertEqual(b[-1][1], 35 * 16000)
+            self.assertTrue(all(x[1] == y[0] for x, y in zip(b, b[1:])), "no gap, no overlap")
+            for (_, cut), (a, z) in zip(b, quiet):
+                self.assertTrue(a <= cut / 16000 <= z, f"cut at {cut / 16000:.2f}s, not in {a}-{z}")
+
+    def test_only_the_wav_extract_audio_writes(self):
+        with tempfile.TemporaryDirectory() as d:
+            wav = Path(d) / "s.wav"
+            subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=d=1", "-ac", "2",
+                            "-c:a", "pcm_s16le", str(wav)], check=True)
+            with self.assertRaisesRegex(ValueError, "16-bit mono"):
+                transcribe.chunks(wav, 10)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class AudioIsNotKept(EndToEnd):
+    """The audio is only for transcribing and measuring loudness: 155 MB for
+    the 81-minute Trae Young episode, and nothing reads it afterwards."""
+
+    def test_gone_once_transcribed_and_measured(self):
+        self.cli("source", "add", "pd", "--rights", "public-domain", "--evidence", "LibriVox")
+        self.cli("ingest", "pd", str(self.video))
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        f = self.home / "media" / "1"
+        self.assertFalse((f / "audio.wav").exists())
+        self.assertTrue((f / "transcript.json").exists() and (f / "loudness.json").exists())
+        loud = json.loads((f / "loudness.json").read_text())
+        self.assertGreater(len(loud), 50, "measured before the audio went")
+
+    def test_a_video_from_before_this_is_measured_again(self):
+        # Transcribed by an older Clip: no loudness.json, and no audio either.
+        self.cli("source", "add", "pd", "--rights", "public-domain", "--evidence", "LibriVox")
+        self.cli("ingest", "pd", str(self.video))
+        self.give_words(1)
+        conn = db.connect(self.home / "clipper.db")
+        pipeline.advance(conn, config.paths(), config.load(), conn.execute("SELECT * FROM videos").fetchone())
+        f = self.home / "media" / "1"
+        (f / "loudness.json").unlink()
+        with conn:
+            conn.execute("DELETE FROM post_copy")
+            conn.execute("DELETE FROM clips")
+            conn.execute("UPDATE videos SET stage = 'transcribed'")
+        self.assertEqual(self.cli("run")[0], 0)
+        self.assertTrue((f / "loudness.json").exists())
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class ForgetATestVideo(EndToEnd):
+    """2026-09-30: the LibriVox story from setup kept its 5 clips in the
+    village beside the 7 real Curious Mike ones. `forget` removes a video
+    and everything made from it, and nothing else."""
+
+    # The base end-to-end tests expect an empty Clip; they run in their own class.
+    test_permitted_video_in_captioned_short_out = None
+    test_a_failing_stage_is_retried_then_parked_then_retryable = None
+
+    def two_videos(self):
+        self.cli("source", "add", "setup-test", "--rights", "public-domain", "--evidence", "LibriVox")
+        self.cli("source", "add", "mike", "--rights", "permission", "--evidence", "campaign page")
+        self.real = Path(self.tmp.name) / "episode.mp4"
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error",
+                        "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30",
+                        "-f", "lavfi", "-i", "sine=frequency=330:sample_rate=16000",
+                        "-t", "60", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
+                        str(self.real)], check=True)
+        self.cli("ingest", "setup-test", str(self.video), "--title", "story")   # video 1, the test
+        self.cli("ingest", "mike", str(self.real), "--title", "Trae Young")  # video 2, the real one
+        self.give_words(1); self.give_words(2)
+        code, said = self.cli("run")
+        self.assertEqual(code, 0, said)
+        self.conn = db.connect(self.home / "clipper.db")
+        with self.conn:
+            self.conn.execute("INSERT INTO trending_clips (yt_id, creator_id, title, seen_at, match_video_id, "
+                              "match_start, match_end) VALUES ('t1', 'UC', 'x', ?, 1, 1.0, 20.0)", (db.now(),))
+            db.record_cost(self.conn, "openrouter", "copy", 0.002, video_id=1)
+
+    def count(self, sql, *a):
+        return self.conn.execute(sql, a).fetchone()[0]
+
+    def test_the_test_video_goes_and_the_real_one_stays(self):
+        self.two_videos()
+        before = self.count("SELECT COUNT(*) FROM clips WHERE video_id = 2")
+        self.assertGreater(before, 0)
+        code, said = self.cli("forget", "1")
+        self.assertEqual(code, 0, said)
+        self.assertIn("forgot video 1 (story)", said)
+        self.assertEqual(self.count("SELECT COUNT(*) FROM clips WHERE video_id = 1"), 0)
+        self.assertEqual(self.count("SELECT COUNT(*) FROM candidates WHERE video_id = 1"), 0)
+        self.assertEqual(self.count("SELECT COUNT(*) FROM videos WHERE id = 1"), 0)
+        self.assertFalse((self.home / "clips" / "1").exists())
+        self.assertFalse((self.home / "media" / "1").exists())
+        # the real video is untouched, on disk and in what the village shows
+        self.assertEqual(self.count("SELECT COUNT(*) FROM clips WHERE video_id = 2"), before)
+        self.assertTrue((self.home / "clips" / "2" / "01.mp4").exists())
+        deck = report.snapshot(self.conn, config.paths(), config.load())
+        self.assertEqual({c["video_id"] for c in deck["clips"]}, {2})
+        # history stays: what was spent, and a note of what was forgotten
+        self.assertEqual(self.count("SELECT COUNT(*) FROM costs WHERE video_id = 1"), 1)
+        self.assertIn("forgot video 1", self.conn.execute(
+            "SELECT msg FROM events WHERE stage = 'forget'").fetchone()[0])
+        # Spotter no longer points at footage that is gone
+        self.assertIsNone(self.count("SELECT match_video_id FROM trending_clips WHERE yt_id = 't1'"))
+
+    def test_a_posted_clip_is_not_forgotten_by_accident(self):
+        self.two_videos()
+        cid = self.count("SELECT id FROM clips WHERE video_id = 1 ORDER BY rank LIMIT 1")
+        with self.conn:
+            self.conn.execute("INSERT INTO publications (clip_id, platform, status, url, created_at) "
+                              "VALUES (?, 'youtube', 'posted', 'https://youtu.be/test1', ?)", (cid, db.now()))
+        code, said = self.cli("forget", "1")
+        self.assertEqual(code, 2)
+        self.assertIn("https://youtu.be/test1", said)
+        self.assertIn("--including-posted", said)
+        self.assertGreater(self.count("SELECT COUNT(*) FROM clips WHERE video_id = 1"), 0, "nothing removed")
+        code, said = self.cli("forget", "1", "--including-posted")
+        self.assertEqual(code, 0, said)
+        self.assertIn("still online", said)
+        self.assertEqual(self.count("SELECT COUNT(*) FROM publications"), 0)
+
+    def test_not_while_a_run_is_going(self):
+        self.two_videos()
+        import fcntl
+        with open(config.paths()["lock"], "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            code, said = self.cli("forget", "1")
+        self.assertEqual(code, 2)
+        self.assertIn("in progress", said)
+        self.assertGreater(self.count("SELECT COUNT(*) FROM clips WHERE video_id = 1"), 0)
+
+
+# ---------------------------------------------------------------- a campaign's own clip list
+
+from clipper import campaign  # noqa: E402
+
+NOTION = json.loads((FIXTURES / "clipper-campaign-notion.json").read_text())
+
+
+class CampaignListParsing(unittest.TestCase):
+    """The real page's structure, both episodes' lists (text blanked)."""
+
+    def setUp(self):
+        self.eps = campaign.parse(NOTION["blocks"], NOTION["page"])
+
+    def test_both_episodes_by_their_youtube_links(self):
+        self.assertEqual(sorted(self.eps), ["mx2XmltF8ZE", "uf0q07QagUs"])
+        for ep in self.eps.values():
+            self.assertEqual(len(ep["entries"]), 50)
+            self.assertEqual(len({e["key"] for e in ep["entries"]}), 50)
+
+    def test_the_campaigns_start_here_order_comes_first(self):
+        trae = self.eps["uf0q07QagUs"]["entries"]
+        self.assertEqual([e["first_batch"] for e in trae].count(True), 10)
+        self.assertEqual(trae[0]["key"], "C45", "the Knicks one - 'start there'")
+        self.assertEqual((trae[0]["start"], trae[0]["end"]), (4032.0, 4101.0))   # 01:07:12-01:08:21
+        chandler = self.eps["mx2XmltF8ZE"]["entries"]
+        self.assertEqual([e["key"] for e in chandler[:6]], ["2", "4", "3", "9", "1", "13"])
+        self.assertTrue(all(e["first_batch"] for e in chandler[:6]))
+        self.assertFalse(any(e["first_batch"] for e in chandler[6:]))
+        rest = [int(e["key"]) for e in chandler[6:]]
+        self.assertEqual(rest, sorted(rest), "after the first batch, in the list's own numbering")
+
+    def test_times_hooks_captions_and_directions_by_column_name(self):
+        c13 = next(e for e in self.eps["mx2XmltF8ZE"]["entries"] if e["key"] == "13")
+        self.assertEqual((c13["start"], c13["end"]), (4067.0, 4095.0))        # "01:07:47 - 01:08:15"
+        self.assertEqual((c13["hook"], c13["caption"], c13["direction"]), ("hook 13", "caption 13", "how 13"))
+        self.assertTrue(all(e["direction"] for e in self.eps["mx2XmltF8ZE"]["entries"]))
+
+    def test_keys_and_page_links(self):
+        self.assertEqual([campaign.norm_key(k) for k in ("#02", "02", "2", "c45", " C45 ")],
+                         ["2", "2", "2", "C45", "C45"])
+        pid = "3e2f2311-2cb0-81d0-aa31-d058376acc1d"
+        for url in ("https://x.notion.site/3e2f23112cb081d0aa31d058376acc1d",
+                    "https://x.notion.site/Curious-Mike-Guidelines-3e2f23112cb081d0aa31d058376acc1d?pvs=4",
+                    f"https://x.notion.site/{pid}"):
+            self.assertEqual(campaign.page_id(url), pid)
+        with self.assertRaises(ValueError):
+            campaign.page_id("https://x.notion.site/guidelines")
+
+
+class CampaignSnapping(unittest.TestCase):
+    def test_rough_times_land_on_sentence_edges(self):
+        sents = moments.sentences(WORDS, 0.8)
+        target = next(k for k, s in enumerate(sents) if s["end"] - s["start"] > 5)   # long enough to be rough about
+        s0, s1 = sents[target]["start"], sents[target + 1]["end"]
+        i, j = campaign.snap(WORDS, sents, s0 + 1.3, s1 - 1.1)      # a campaign's whole seconds
+        self.assertEqual((i, j), (target, target + 1))
+        self.assertLessEqual(sents[i]["start"], s0 + 1.3)
+        self.assertGreaterEqual(sents[j]["end"], s1 - 1.1, "never trimmed short of what it names")
+
+
+class HookPlacement(unittest.TestCase):
+    def test_under_the_status_bar_or_below_a_high_watermark(self):
+        self.assertEqual(render.hook_top(None), captions.HOOK_TOP)
+        self.assertEqual(render.hook_top((543, 162, 268, 880)), captions.HOOK_TOP, "a low mark is no bother")
+        self.assertEqual(render.hook_top((400, 100, 340, 300)), 300 + 100 + 20)
+        with self.assertRaisesRegex(ValueError, "no room"):
+            render.hook_top((400, 700, 340, 300))       # a mark so tall the hook is pushed into the captions
+
+    def test_the_hook_is_on_screen_the_whole_clip_and_wraps(self):
+        ass = captions.build(WORDS, 10, 30, hook="He spent hours rehearsing what could go wrong.", hook_top=250)
+        line = next(l for l in ass.splitlines() if l.startswith("Dialogue: 1,") and ",Hook," in l)
+        self.assertTrue(line.startswith("Dialogue: 1,0:00:00.00,0:00:20.00,Hook,"))
+        self.assertIn("{\\q0}He spent hours", line, "its own case, and wrapped")
+        self.assertIn("Style: Hook,", ass)
+        self.assertRegex(ass, r"Style: Hook,[^\n]*,8,90,90,250,1")
+        self.assertNotIn(",Hook,", captions.build(WORDS, 10, 30))
+
+
+def mini_list(episode, rows, first=()):
+    """A page shaped like the campaign's: a section, a clip table, a priority table."""
+    cols = ["a", "b", "c", "d"]
+    blocks, n = {}, [0]
+
+    def blk(kind, **kw):
+        n[0] += 1
+        i = f"b{n[0]}"
+        blocks[i] = dict(id=i, type=kind, **kw)
+        return i
+
+    def row(*cells):
+        return blk("table_row", properties={c: v for c, v in zip(cols, cells)})
+
+    def link(t, s):
+        return [[t, [["a", f"https://youtu.be/{episode}?t={int(s)}"]]]]
+
+    clip = blk("table", format={"table_block_column_order": cols}, content=[
+        row([["ID"]], [["Timestamp"]], [["Hook (on screen)"]], [["Caption (in the post)"]])] + [
+        row([[k]], link(f"{int(a) // 60:02d}:{int(a) % 60:02d}-{int(b) // 60:02d}:{int(b) % 60:02d}", a),
+            [[hook]], [[cap]]) for k, a, b, hook, cap in rows])
+    prio = blk("table", format={"table_block_column_order": cols[:3]}, content=[
+        row([["#"]], [["ID"]], [["Timestamp"]])] + [row([[str(k + 1)]], [[key]], [["0:00-0:01"]]) for k, key in enumerate(first)])
+    sec = blk("sub_header", properties={"title": [["the clip list"]]}, content=[prio, clip])
+    blocks["page"] = {"id": "page", "type": "page", "content": [sec]}
+    return "page", blocks
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class CampaignListEndToEnd(EndToEnd):
+    """Ingest an episode the campaign has listed: its first batch is cut, with
+    its hooks on screen and its captions posted word for word - nothing of
+    Clip's own choosing - and `cuts` queues more."""
+
+    test_permitted_video_in_captioned_short_out = None
+    test_a_failing_stage_is_retried_then_parked_then_retryable = None
+
+    def setUp(self):
+        super().setUp()
+        self.cli("source", "add", "mike", "--rights", "permission", "--evidence", "campaign page")
+        sents = moments.sentences(self.words, 0.8)
+        # three listed moments, whole-second times as a campaign writes them
+        rows = [("C1", 1.5, 24.8, "The first hook", "The campaign's first caption."),
+                ("C2", 29.7, 49.3, "The second hook", "Its second caption, word for word."),
+                ("C3", 39.0, 58.2, "The third hook", "A third caption.")]
+        conn = db.connect(self.home / "clipper.db")
+        got = campaign.import_list(conn, "mike", "https://x.notion.site/page",
+                                   fetched=mini_list("AAAAAAAAAAA", rows, first=["C2", "C1"]))
+        self.assertEqual(got["AAAAAAAAAAA"][1:], (3, 2))
+        self.conn = conn
+        del sents
+
+    def test_the_first_batch_with_hooks_and_the_campaigns_words(self):
+        code, said = self.cli("ingest", "mike", str(self.video), "--episode", "https://youtu.be/AAAAAAAAAAA")
+        self.assertEqual(code, 0, said)
+        self.assertIn("the campaign lists 3 moments", said)
+        self.give_words(1)
+        code, said = self.cli("run")
+        self.assertEqual(code, 0, said)
+        clips = self.conn.execute("SELECT * FROM clips ORDER BY rank").fetchall()
+        self.assertEqual([json.loads(c["meta"])["campaign_key"] for c in clips], ["C2", "C1"],
+                         "the campaign's first batch, in its order - none of Clip's own picks")
+        c1 = clips[0]
+        self.assertAlmostEqual(c1["start"], 29.7, delta=0.5)
+        ass = Path(c1["path"]).with_suffix(".ass").read_text()
+        self.assertIn("{\\q0}The second hook", ass)
+        post = self.conn.execute("SELECT * FROM post_copy WHERE clip_id = ?", (c1["id"],)).fetchone()
+        self.assertEqual((post["title"], post["caption"], post["generator"]),
+                         ("The second hook", "Its second caption, word for word.", "campaign"))
+        self.assertNotIn(postcopy.QUESTION, post["caption"])
+        # more, one at a time, then the list is used up
+        code, said = self.cli("cuts", "1", "1")
+        self.assertEqual(code, 0, said)
+        self.assertIn("#C3", said)
+        self.assertEqual(self.cli("run")[0], 0)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM clips").fetchone()[0], 3)
+        self.assertIn("has been cut", self.cli("cuts", "1", "5")[1])
+
+    def test_cuts_needs_a_transcript_and_a_list(self):
+        self.cli("ingest", "mike", str(self.video))
+        code, said = self.cli("cuts", "1")
+        self.assertEqual(code, 2)
+        self.assertIn("no campaign list", said)
+        code, said = self.cli("cuts", "1", "--episode", "AAAAAAAAAAA")
+        self.assertEqual(code, 2)
+        self.assertIn("not transcribed yet", said)
+
+
+# ---------------------------------------------------------------- Dropbox pickup
+
+from clipper import dropbox  # noqa: E402
+
+
+class TheTimerClipsAVideoAddedByHand(EndToEnd):
+    """2026-10-08: the Ant-Man & LaMelo episode was added with `ingest` and sat
+    unclipped for a day. The 15-minute timer (`pickup --run`) ran the pipeline
+    only when Dropbox brought a new file, and nothing told anyone to run it."""
+
+    test_permitted_video_in_captioned_short_out = None
+    test_a_failing_stage_is_retried_then_parked_then_retryable = None
+
+    def test_a_waiting_video_is_run_with_nothing_new_in_dropbox(self):
+        from unittest import mock
+        self.cli("source", "add", "tao", "--rights", "permission", "--evidence", "campaign page")
+        code, said = self.cli("ingest", "tao", str(self.video))
+        self.assertIn("within 15 minutes", said, "the owner is told it will happen")
+        ran = []
+        nothing = {"new": [], "skipped": 0, "failed": 0}
+        with mock.patch.object(cli.dropbox, "pickup", return_value=nothing), \
+             mock.patch.object(cli.pipeline, "run", side_effect=lambda *a, **k: ran.append(1)):
+            code, said = self.cli("pickup", "--run")
+        self.assertEqual((code, ran), (0, [1]), said)
+        self.assertIn("video 1: ingested", said)
+        with mock.patch.object(cli.dropbox, "pickup", return_value=nothing), \
+             mock.patch.object(cli.pipeline, "run", side_effect=lambda *a, **k: ran.append(2)):
+            conn = db.connect(self.home / "clipper.db")
+            with conn:
+                conn.execute("UPDATE videos SET stage = 'done'")
+            self.cli("pickup", "--run")
+        self.assertEqual(ran, [1], "nothing waiting: no run")
+
+
+# ---------------------------------------------------------------- the Dropbox folder pickup
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class DropboxPickup(EndToEnd):
+    """A folder of clips in, one video each, rendered whole."""
+
+    test_permitted_video_in_captioned_short_out = None
+    test_a_failing_stage_is_retried_then_parked_then_retryable = None
+    FOLDER = "https://www.dropbox.com/scl/fo/abc123/AAAxyz?rlkey=k1&dl=0"
+
+    def setUp(self):
+        super().setUp()
+        self.cli("source", "add", "pbm", "--rights", "permission", "--evidence", "campaign page")
+        self.assertEqual(self.cli("source", "rules", "pbm", "--dropbox-folder", self.FOLDER)[0], 0)
+        self.conn = db.connect(self.home / "clipper.db")
+        # Twitch clips are at most 60 s; this one is 25.
+        self.clip = Path(self.tmp.name) / "twitch-clip.mp4"
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error",
+                        "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30",
+                        "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=16000",
+                        "-t", "25", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
+                        str(self.clip)], check=True)
+        self.folder = [{".tag": "file", "name": "PBM laughing.mp4", "id": "id:1", "content_hash": "h1",
+                        "size": self.clip.stat().st_size}]
+        self.fetched = []
+
+    def pick(self):
+        def fetch(link, name, dest, auth, size):
+            self.fetched.append((link, name))
+            shutil.copy(self.clip if name.endswith(".mp4") else __file__, dest)
+        return dropbox.pickup(self.conn, config.paths(), config.load(), auth="Basic x",
+                              lister=lambda link, auth: list(self.folder), fetch=fetch)
+
+    def test_a_new_clip_becomes_one_video_and_is_rendered_whole(self):
+        r = self.pick()
+        self.assertEqual(r["new"], [1])
+        self.assertEqual(self.fetched, [(self.FOLDER, "PBM laughing.mp4")])
+        v = self.conn.execute("SELECT v.*, s.name AS source FROM videos v JOIN sources s ON s.id = v.source_id").fetchone()
+        self.assertEqual((v["source"], v["title"], v["origin"]),
+                         ("pbm", "PBM laughing", "dropbox: pbm/PBM laughing.mp4"))
+        self.words = [x for x in WORDS if x["end"] <= 24.0]
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        # Bug guarded: the moment finder would pick its "best 20-30 s" of a
+        # clip somebody already cut, as if it were an episode. A clip is one
+        # candidate, cut by trim.py around its own moment.
+        cands = self.conn.execute("SELECT * FROM candidates").fetchall()
+        self.assertEqual(len(cands), 1)
+        c = cands[0]
+        self.assertEqual((c["selected"], c["scorer"]), (1, trim.SCORER))
+        self.assertTrue(0 <= c["start"] < c["end"] <= v["duration"] + 0.01)
+        info = media.probe(self.home / "clips" / "1" / "01.mp4")
+        self.assertEqual((info["width"], info["height"]), (1080, 1920))
+        self.assertAlmostEqual(info["duration"], c["end"] - c["start"], delta=0.3)
+
+    def test_with_trimming_off_a_clip_is_kept_whole(self):
+        cfg = json.loads((self.home / "config.json").read_text())
+        (self.home / "config.json").write_text(json.dumps(dict(cfg, trim_clips=False)))
+        self.pick()
+        self.words = [x for x in WORDS if x["end"] <= 24.0]
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        c = self.conn.execute("SELECT * FROM candidates").fetchone()
+        self.assertEqual((c["start"], c["scorer"]), (0, "whole"))
+        self.assertAlmostEqual(media.probe(self.home / "clips" / "1" / "01.mp4")["duration"], 25, delta=0.3)
+
+    def test_each_file_once_and_new_content_again(self):
+        self.pick()
+        self.assertEqual(self.pick()["new"], [], "the same file is not picked up twice")
+        self.assertEqual(len(self.fetched), 1, "and not even downloaded again")
+        # the same name re-uploaded with different content is new
+        self.folder[0]["content_hash"] = "h2"
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "testsrc2=size=1280x720:rate=30", "-f", "lavfi", "-i", "sine=frequency=550",
+                        "-t", "20", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
+                        str(self.clip)], check=True)
+        self.assertEqual(self.pick()["new"], [2])
+
+    def test_not_a_video_is_noted_once(self):
+        self.folder.append({".tag": "file", "name": "notes.txt", "id": "id:2", "content_hash": "h3", "size": 5})
+        self.pick(); self.pick()
+        self.assertEqual([n for _, n in self.fetched], ["PBM laughing.mp4"], "the text file is never fetched")
+        notes = [r[0] for r in self.conn.execute("SELECT msg FROM events WHERE stage = 'pickup'")]
+        self.assertEqual(sum("notes.txt" in m for m in notes), 1, notes)
+
+    def test_a_failure_is_retried_but_said_once(self):
+        # Bug guarded: a file that cannot be ingested (the disk is full) must
+        # be tried again next time, without one warning every 15 minutes.
+        real = ingest.need_space
+
+        def full(folder, nbytes, hint=""):
+            raise RuntimeError("not enough disk: 0.1 GB free")
+        ingest.need_space = full
+        self.addCleanup(setattr, ingest, "need_space", real)
+        self.assertEqual(self.pick()["failed"], 1)
+        self.assertEqual(self.pick()["failed"], 1)
+        warns = self.conn.execute("SELECT COUNT(*) FROM events WHERE stage = 'pickup'").fetchone()[0]
+        self.assertEqual(warns, 1)
+        ingest.need_space = real
+        self.assertEqual(self.pick()["new"], [1])
+
+    def test_forgetting_a_picked_up_video_does_not_bring_it_back(self):
+        self.pick()
+        self.assertEqual(self.cli("forget", "1")[0], 0)
+        self.assertEqual(self.pick()["new"], [])
+        self.assertEqual(self.conn.execute("SELECT detail FROM pickups").fetchone()[0], "forgotten")
+
+    def test_a_long_video_is_still_searched_for_moments(self):
+        # Only a clip is used whole: the 60 s test video is longer than
+        # this config's 30 s clips, so it is searched as before.
+        self.cli("ingest", "pbm", str(self.video))
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        self.assertGreater(self.conn.execute("SELECT COUNT(*) FROM candidates").fetchone()[0], 1)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM candidates WHERE scorer = 'whole'")
+                         .fetchone()[0], 0)
+
+
+class WatermarkSavedAsWebP(EndToEnd):
+    """2026-09-30: the plaqueboymax watermark, held and saved in Safari on
+    the iPad, arrived as image.webp - clipping.net serves its images as
+    WebP - and Clip refused it for not being a PNG."""
+
+    test_permitted_video_in_captioned_short_out = None
+    test_a_failing_stage_is_retried_then_parked_then_retryable = None
+
+    def setUp(self):
+        super().setUp()
+        self.cli("source", "add", "pbm", "--rights", "permission", "--evidence", "campaign page")
+        d = Path(self.tmp.name)
+        self.alpha, self.flat = d / "image.webp", d / "flat.webp"
+        # a white mark on a see-through canvas, and the same on solid white
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                        "color=c=black@0.0:s=400x100,format=rgba,drawbox=x=20:y=20:w=200:h=50:color=white@1:t=fill",
+                        "-frames:v", "1", "-c:v", "libwebp", str(self.alpha)], check=True)
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                        "color=c=white:s=400x100,drawbox=x=20:y=20:w=200:h=50:color=black:t=fill",
+                        "-frames:v", "1", "-c:v", "libwebp", str(self.flat)], check=True)
+
+    def kept(self):
+        conn = db.connect(self.home / "clipper.db")
+        return Path(conn.execute("SELECT watermark FROM sources WHERE name = 'pbm'").fetchone()[0])
+
+    def test_a_webp_with_transparency_is_kept_as_a_png(self):
+        code, said = self.cli("source", "rules", "pbm", "--watermark", str(self.alpha))
+        self.assertEqual(code, 0, said)
+        self.assertIn("watermark kept: 400x100", said)
+        png = self.kept()
+        self.assertEqual(png.read_bytes()[:8], render.PNG_SIGNATURE)
+        self.assertTrue(render.has_transparency(png))
+
+    def test_a_flat_webp_is_still_refused(self):
+        # Converting must not invent transparency: a flat image made RGBA
+        # would pass the check and burn a white box into every clip.
+        code, said = self.cli("source", "rules", "pbm", "--watermark", str(self.flat))
+        self.assertEqual(code, 2)
+        self.assertIn("transparent", said)
+
+    def test_not_an_image_says_so(self):
+        text = Path(self.tmp.name) / "image.webp.txt"
+        text.write_text("not a picture")
+        code, said = self.cli("source", "rules", "pbm", "--watermark", str(text))
+        self.assertEqual(code, 2)
+        self.assertIn("not an image Clip can read", said)
+        self.assertEqual(list((self.home / "watermarks").glob("*")), [], "nothing half-written left behind")
+
+
+# ---------------------------------------------------------------- trimming a clip to its moment
+
+from clipper import trim  # noqa: E402
+
+
+def say(t, text):
+    """A sentence as transcript words, 0.35 s a word."""
+    return [{"start": round(t + i * 0.35, 2), "end": round(t + i * 0.35 + 0.3, 2), "word": " " + w, "p": 0.9}
+            for i, w in enumerate(text.split())]
+
+
+STREAM = [(3.2, "Okay chat listen to this."), (6.5, "So he walks in the studio."),
+          (10.0, "Nobody knew who he was."), (13.5, "And then he grabs the mic."),
+          (17.0, "He starts rapping over the beat."), (20.5, "Bro what is he doing!"),
+          (22.5, "No way no way."), (24.5, "Oh my god."), (27.5, "That was crazy."),
+          (31.0, "Anyway back to the beats."), (35.0, "Let me load the next one."),
+          (39.0, "This one is hard."), (42.0, "Okay.")]
+CALM = [(3.2, "Okay chat listen to this."), (10.0, "Here is the next beat."),
+        (20.0, "It has a nice bassline."), (30.0, "Let me turn it up."), (42.0, "Okay.")]
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class TrimToTheMoment(unittest.TestCase):
+    """"Can we figure out a way for Clip to trim the videos correctly? Based
+    around the funny or crazy thing that happened?" (2026-10-01)
+
+    A 50 s clip as a stream sounds: dead air, talking, a burst of yelling,
+    talking, dead air. The loudness is measured by the real ffmpeg path
+    (media.loudness) from generated audio; the words are written to match."""
+
+    def loudness(self, burst=(22, 26)):
+        with tempfile.TemporaryDirectory() as d:
+            wav = Path(d) / "a.wav"
+            expr = (f"if(between(t,3,45),1,0)*if(between(t,{burst[0]},{burst[1]}),0.6,0.03)"
+                    f"*sin(2*PI*220*t)") if burst else "if(between(t,3,45),0.03,0)*sin(2*PI*220*t)"
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                            f"aevalsrc='{expr}':s=16000:d=50", str(wav)], check=True)
+            return media.loudness(wav)
+
+    def words(self, script):
+        return [w for t, s in script for w in say(t, s)]
+
+    def test_setup_moment_and_reaction(self):
+        start, end, why = trim.pick(self.words(STREAM), self.loudness(), 50.0, CFG)
+        self.assertEqual((start, end), (9.7, 29.3))
+        self.assertIn("the moment at 0:22", why[0])
+        # it opens on a whole sentence and keeps "That was crazy."
+        self.assertEqual(start, round(10.0 - trim.LEAD, 2))
+        self.assertEqual(end, round(28.5 + trim.TAIL, 2))
+
+    def test_it_does_not_open_on_and_or_so(self):
+        # The moment at 25: the sentence nearest 12 s before it is "And then
+        # he grabs the mic." - a clip that opens on "And" opens mid-thought.
+        start, end, why = trim.pick(self.words(STREAM), self.loudness((25, 29)), 50.0, CFG)
+        self.assertEqual(start, round(10.0 - trim.LEAD, 2))
+
+    def test_no_moment_only_loses_the_dead_air(self):
+        start, end, why = trim.pick(self.words(CALM), self.loudness(None), 50.0, CFG)
+        self.assertEqual((start, end), (round(3.2 - trim.LEAD, 2), round(42.3 + trim.TAIL, 2)))
+        self.assertIn("only the dead air", why[0])
+
+    def test_without_a_loud_burst_the_strongest_words_stand_in(self):
+        start, end, why = trim.pick(self.words(STREAM), self.loudness(None), 50.0, CFG)
+        self.assertIn("strongest reaction in what is said", why[0])
+        self.assertLess(end, 42.3, "not just the dead air: cut around 'That was crazy'")
+
+    def test_too_short_takes_more_setup(self):
+        words = self.words([(5.0, "Watch this guy right here."), (25.5, "Go."), (27.0, "Yes.")])
+        start, end, why = trim.pick(words, self.loudness((30, 32)), 50.0, CFG)
+        self.assertGreaterEqual(end - start, trim.MIN_LENGTH)
+        self.assertEqual(start, round(5.0 - trim.LEAD, 2))
+
+    def test_no_words_is_kept_whole(self):
+        self.assertEqual(trim.pick([], self.loudness(), 50.0, CFG)[:2], (0.0, 50.0))
+
+
+class FunnyMomentsToo(unittest.TestCase):
+    """Owner, 2026-10-13: "Is there a way we can get him to clip funny
+    moments along with his regular clips?" Whisper writes no words for a
+    laugh - its voice filter drops it - so a laugh is a pause in the talking
+    that is as loud as the talking. The fixture is real: five minutes of
+    "Our Miss Brooks" (1948, live studio audience; archive.org OurMissBrooks,
+    Public Domain Mark), transcribed by Clip's own faster-whisper provider
+    and measured by its own ebur128 pass."""
+
+    def setUp(self):
+        t = json.loads((FIXTURES / "clipper-laughs-ourmissbrooks.words.json").read_text())
+        self.words = t["words"]
+        self.frames = json.loads((FIXTURES / "clipper-laughs-ourmissbrooks.frames.json").read_text())
+        self.loud = media.loudness_per_second(self.frames)
+
+    def heard(self):
+        return {self.words[k]["word"].strip() for k in score.laughs(self.words, self.frames)}
+
+    def test_the_punchlines_get_their_laugh_and_plain_pauses_do_not(self):
+        got = self.heard()
+        for line in ("month.", "weapons?", "leg.", "bark."):
+            self.assertIn(line, got, f"the laugh after {line!r}: {sorted(got)}")
+        # "...to get along." (16.6 s) is a pause of 0.9 s: measured from its
+        # first reading it hears the word itself, and reads as a laugh.
+        for quiet in ("bite.", "fork.", "breakfast.", "subpoena.", "surprise.", "along."):
+            self.assertNotIn(quiet, got, "a pause where nobody laughed")
+
+    def test_the_theme_music_is_not_a_laugh(self):
+        # 9.4 s of music after "...to get along." (59.6 s): loud, and far too long.
+        k = next(i for i, x in enumerate(self.words) if x["word"].strip() == "along."
+                 and 59 < x["end"] < 60)
+        gap = self.words[k + 1]["start"] - self.words[k]["end"]
+        self.assertGreater(gap, score.LAUGH_MAX_GAP)
+        self.assertNotIn(k, score.laughs(self.words, self.frames))
+
+    def test_under_a_music_bed_no_pause_is_a_laugh(self):
+        # Every pause as loud as the talking: none of them means anything.
+        flat = [[t, -20.0] for t, _v in self.frames]
+        self.assertEqual(score.laughs(self.words, flat), {})
+
+    def chosen(self, funny):
+        sents = moments.sentences(self.words, CFG["sentence_pause_seconds"])
+        wins = moments.windows(sents, CFG["min_clip_seconds"], CFG["max_clip_seconds"])
+        scored = score.score_windows(sents, wins, self.words, self.loud, CFG, [], (), self.frames)
+        return moments.choose(scored, CFG["max_clips_per_video"], CFG["min_score"], [], funny)
+
+    def test_two_funny_clips_on_top_of_the_regular_five(self):
+        plain, both = self.chosen(0), self.chosen(2)
+        self.assertEqual(len(both), len(plain) + 2, "along with, not instead of")
+        funny = [c for c in both if c.get("picked_for") == "funny"]
+        self.assertEqual(len(funny), 2)
+        for c in funny:
+            self.assertGreater(c["laugh_tail"], 0, "ends on the line that got the laugh")
+            self.assertIn("gets a laugh at the end", c["reasons"])
+        self.assertFalse(any(c.get("picked_for") for c in plain))
+        for a in both:
+            for b in both:
+                self.assertTrue(a is b or not moments.overlaps(a, b), "never the same moment twice")
+
+    def test_no_laughs_means_no_extra_clips(self):
+        c = lambda s, sc: {"start": s, "end": s + 30, "score": sc, "topics": [], "laughs": 0}
+        scored = [c(0, 90), c(40, 80), c(80, 70)]
+        self.assertEqual(len(moments.choose(scored, 2, 40, None, 2)), 2)
+
+    def test_a_funny_pick_still_has_to_clear_the_bar(self):
+        c = {"start": 0, "end": 30, "score": 10, "topics": [], "laughs": 1, "laugh_tail": 1.5}
+        self.assertEqual(moments.choose([c], 2, 40, None, 2), [])
+
+    def test_the_laugh_is_cut_into_the_clip(self):
+        ws = [w(0, 1, " Setup"), w(1, 2, " punchline."), w(3.8, 4.5, " Next.")]
+        self.assertEqual(moments.cut_points(ws, 0, 1)[1], 2.35, "a beat after, normally")
+        self.assertEqual(moments.cut_points(ws, 0, 1, tail=moments.LAUGH_TAIL)[1], 3.75,
+                         "the laugh, up to the next word")
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class TheFunnyPickKeepsItsLaugh(EndToEnd):
+    """A funny pick that ends on its punchline is cut with the laugh after
+    it - the laugh is the payoff - and the Deck says why it was picked."""
+
+    def test_through_the_find_stage(self):
+        self.cli("source", "add", "pd", "--rights", "public-domain", "--evidence", "LibriVox")
+        self.cli("ingest", "pd", str(self.video))
+        self.give_words(1)
+        paths, cfg = config.paths(), dict(config.load(), funny_clips_per_video=1)
+        conn = db.connect(self.home / "clipper.db")
+        pipeline.stage_transcribe(conn, paths, cfg, conn.execute("SELECT * FROM videos").fetchone())
+        ws = self.words
+        # One pause after a full stop laughs: after "fisherman." (37.65 s),
+        # far enough in for a 20-30 s clip to end on it.
+        k = next(i for i in range(len(ws) - 1) if ws[i]["end"] > 30 and ws[i]["word"].strip().endswith(".")
+                 and 0.8 <= ws[i + 1]["start"] - ws[i]["end"] <= 6)
+        a, b = ws[k]["end"], ws[k + 1]["start"]
+
+        def level(t):
+            if a + score.MOMENTARY <= t <= b:
+                return -18.0
+            return -20.0 if any(x["start"] <= t <= x["end"] + 0.3 for x in ws) else -45.0
+        frames = [[round(n / 10, 1), level(n / 10)] for n in range(1, 600)]
+        (self.home / "media" / "1" / "loudness-frames.json").write_text(json.dumps(frames))
+
+        pipeline.stage_find(conn, paths, cfg, conn.execute("SELECT * FROM videos").fetchone())
+        rows = conn.execute("SELECT * FROM candidates WHERE selected = 1").fetchall()
+        funny = [r for r in rows if "one of the funny picks" in r["reasons"]]
+        self.assertEqual(len(funny), 1, [dict(r) for r in rows])
+        self.assertIn("gets a laugh at the end", funny[0]["reasons"])
+        self.assertAlmostEqual(funny[0]["end"], min(a + moments.LAUGH_TAIL, b - 0.05), places=3)
+        said = conn.execute("SELECT msg FROM events WHERE stage = 'find'").fetchall()[-1][0]
+        self.assertIn("funny: 1 of 1 (1 laughs heard)", said)
+
+    def test_a_video_measured_before_frames_were_kept_is_measured_again(self):
+        # Transcribed by an older Clip: loudness.json, no frames, no audio.
+        self.cli("source", "add", "pd", "--rights", "public-domain", "--evidence", "LibriVox")
+        self.cli("ingest", "pd", str(self.video))
+        self.give_words(1)
+        paths, conn = config.paths(), db.connect(self.home / "clipper.db")
+        video = conn.execute("SELECT * FROM videos").fetchone()
+        pipeline.stage_transcribe(conn, paths, config.load(), video)
+        f = self.home / "media" / "1"
+        self.assertTrue((f / "loudness-frames.json").exists(), "kept when first measured")
+        (f / "loudness-frames.json").unlink()
+        frames = pipeline.frames_of(paths, video)
+        self.assertGreater(len(frames), 500, "ten a second, for 60 s")
+        self.assertTrue((f / "loudness-frames.json").exists())
+        self.assertFalse((f / "audio.wav").exists(), "and the audio is not left behind")
+
+
+# ---------------------------------------------------------------- the inbox: a link pasted in Clip's house
+
+from clipper import inbox, ingest  # noqa: E402
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class TheCleanCopyStopsWithTheClip(unittest.TestCase):
+    """2026-10-21: the copy without subtitles had no -t of its own (an output
+    option belongs to the output after it), so it ran on to the end of the
+    source. On the hour-long Teague episode ffmpeg held the frames the
+    finished clip no longer took until the server killed it, three times."""
+
+    def test_both_files_are_the_clip_long(self):
+        from clipper import render
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        src = tmp / "src.mp4"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30",
+                        "-f", "lavfi", "-i", "sine=f=300:sample_rate=48000", "-t", "40",
+                        "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", str(src)], check=True)
+        cfg = dict(config.DEFAULTS, crop_mode="center", x264_preset="ultrafast")
+        out = tmp / "01.mp4"
+        render.render(src, out, 2.0, 6.0, captions.build([], 2.0, 6.0), cfg, clean=True)
+        for f in (out, render.clean_path(out)):
+            self.assertAlmostEqual(media.probe(f)["duration"], 4.0, delta=0.3, msg=f.name)
+        # And in the command: each output has its own -t.
+        cmd = render.command(src, "o.mp4", 2.0, 6.0, media.probe(src), "c.ass", cfg, clean_name="c.mp4")
+        self.assertIn("-t", cmd[cmd.index("o.mp4"):cmd.index("c.mp4")])
+
+
+class AKilledFfmpegSaysWhy(unittest.TestCase):
+    """2026-10-21: "ffmpeg failed (-9):" and nothing else - the server had
+    stopped it, which ffmpeg cannot say on stderr."""
+
+    def test_killed_and_stopped_are_named(self):
+        with self.assertRaisesRegex(media.MediaError, r"\(-9\): it was killed .* out of memory"):
+            media.run(["sh", "-c", "kill -9 $$"])
+        with self.assertRaisesRegex(media.MediaError, r"\(-15\): it was stopped"):
+            media.run(["sh", "-c", "kill -15 $$"])
+        with self.assertRaisesRegex(media.MediaError, r"failed \(3\): boom$"):
+            media.run(["sh", "-c", "echo boom >&2; exit 3"])
+
+
+class InboxLinks(unittest.TestCase):
+    """2026-10-14: a box in Clip's house for a video's Dropbox link. What
+    cannot work is refused when it is pasted, not fifteen minutes later."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.conn = db.connect(Path(self.tmp.name) / "clipper.db")
+        ingest.add_source(self.conn, CFG, "mike", "permission", "campaign brief")
+
+    def test_what_is_refused_and_why(self):
+        for url, said in (("http://x.com/a.mp4", "https://"),
+                          ("https://www.youtube.com/watch?v=abc", "YouTube"),
+                          ("https://youtu.be/abc", "YouTube"),
+                          ("https://www.dropbox.com/scl/fo/abc/xyz?rlkey=1&dl=0", "folder link")):
+            with self.assertRaises(ValueError) as ctx:
+                inbox.queue(self.conn, "mike", url)
+            self.assertIn(said, str(ctx.exception), url)
+        with self.assertRaises(ValueError) as ctx:
+            inbox.queue(self.conn, "nobody", "https://www.dropbox.com/scl/fi/a/b.mp4?rlkey=k")
+        self.assertIn("permission", str(ctx.exception))
+
+    def test_a_link_is_saved_with_its_own_hooks(self):
+        r = inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/ep.mp4?rlkey=k&dl=0",
+                        "LeBron's 76ers", "Embiid: embiid, joel; LeBron: lebron")
+        self.assertEqual(r["state"], "queued")
+        self.assertEqual(json.loads(r["hunt"]), score.parse_hunt("Embiid: embiid, joel; LeBron: lebron"))
+
+    def test_the_same_link_copied_twice_is_one_video(self):
+        # Dropbox's st and dl change every time a link is copied.
+        inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/ep.mp4?rlkey=k&st=1&dl=0")
+        with self.assertRaises(ValueError) as ctx:
+            inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/ep.mp4?rlkey=k&st=2&dl=1")
+        self.assertIn("already in the inbox", str(ctx.exception))
+
+    def ingester(self, calls, fail=None):
+        def go(conn, paths, source, url, title, remote=False):
+            calls.append((url, remote))
+            if fail and fail(remote):
+                raise fail(remote)
+            src = conn.execute("SELECT id FROM sources WHERE name = ?", (source,)).fetchone()
+            with conn:
+                cur = conn.execute("INSERT INTO videos (source_id, title, origin, sha256, media_path, duration, "
+                                   "created_at, updated_at) VALUES (?, ?, ?, ?, '', 60, ?, ?)",
+                                   (src["id"], title, url, url, db.now(), db.now()))
+            return conn.execute("SELECT * FROM videos WHERE id = ?", (cur.lastrowid,)).fetchone(), True
+        return go
+
+    def test_one_link_a_pickup_oldest_first_and_its_hooks_reach_the_video(self):
+        a = inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/1.mp4?rlkey=k", "One", "Embiid: embiid")
+        inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/2.mp4?rlkey=k", "Two")
+        calls = []
+        got = inbox.drain_one(self.conn, {}, CFG, self.ingester(calls))
+        self.assertEqual((got["id"], got["state"]), (a["id"], "done"))
+        self.assertEqual(len(calls), 1, "one link a pickup")
+        v = self.conn.execute("SELECT hunt FROM videos WHERE id = ?", (got["video_id"],)).fetchone()
+        self.assertEqual(json.loads(v["hunt"])[0]["name"], "Embiid")
+        self.assertEqual(inbox.drain_one(self.conn, {}, CFG, self.ingester(calls))["title"], "Two")
+        self.assertIsNone(inbox.drain_one(self.conn, {}, CFG, self.ingester(calls)))
+
+    def test_a_failure_is_kept_with_its_reason_and_can_be_retried(self):
+        r = inbox.queue(self.conn, "mike", "https://example.com/a.mp4", "A")
+        got = inbox.drain_one(self.conn, {}, CFG, self.ingester([], fail=lambda remote: ValueError("needs both video and audio")))
+        self.assertEqual((got["state"], got["note"]), ("failed", "needs both video and audio"))
+        inbox.retry(self.conn, r["id"])
+        self.assertEqual(self.conn.execute("SELECT state FROM inbox").fetchone()[0], "queued")
+        with self.assertRaises(ValueError):
+            inbox.retry(self.conn, r["id"])
+
+    def test_a_downloaded_link_says_what_its_video_is_doing(self):
+        # 2026-10-21: the Teague episode's link read "in the studio" (the
+        # inbox's "done" = downloaded) while it was still being transcribed,
+        # and the owner went looking for clips that did not exist yet.
+        inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/t.mp4?rlkey=k", "Teague")
+        vid = inbox.drain_one(self.conn, {}, CFG, self.ingester([]))["video_id"]
+        said = lambda: inbox.recent(self.conn)[0]["progress"]
+        self.assertIn("writing down what is said", said())
+        self.conn.execute("UPDATE videos SET stage = 'transcribed' WHERE id = ?", (vid,))
+        self.assertIn("finding the moments", said())
+        self.conn.execute("UPDATE videos SET stage = 'found', error = 'render: ffmpeg died' WHERE id = ?", (vid,))
+        self.assertIn("making the clips", said())
+        self.assertIn("ffmpeg died", said())
+        self.conn.execute("UPDATE videos SET stage = 'failed' WHERE id = ?", (vid,))
+        self.assertTrue(said().startswith("failed: render: ffmpeg died"))
+        self.conn.execute("UPDATE videos SET stage = 'done', error = NULL WHERE id = ?", (vid,))
+        self.assertIn("no moment scored", said())
+        for rank, status in ((1, "rendered"), (2, "rendered"), (3, "deleted")):
+            cand = self.conn.execute("INSERT INTO candidates (video_id, start, end, text, score, scorer, features, "
+                                     "reasons) VALUES (?, 0, 30, '', 50, 't', '{}', '[]')", (vid,)).lastrowid
+            self.conn.execute("INSERT INTO clips (video_id, candidate_id, rank, path, start, end, score, status, "
+                              "meta, created_at) VALUES (?, ?, ?, '', 0, 30, 50, ?, '{}', ?)",
+                              (vid, cand, rank, status, db.now()))
+        self.assertEqual(said(), "2 clip(s) ready")
+        # A queued link has no video yet: the house keeps its own words.
+        inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/u.mp4?rlkey=k", "Next")
+        self.assertIsNone(said())
+
+    def test_too_big_for_the_disk_is_read_from_dropbox_instead(self):
+        inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/big.mp4?rlkey=k", "Big")
+        calls = []
+        full = lambda remote: None if remote else RuntimeError("not enough disk: 3.0 GB free")
+        got = inbox.drain_one(self.conn, {}, CFG, self.ingester(calls, fail=full))
+        self.assertEqual(got["state"], "done")
+        self.assertEqual([r for _u, r in calls], [False, True])
+        # Not for a link that cannot be read in place.
+        inbox.queue(self.conn, "mike", "https://example.com/big.mp4", "Big2")
+        got = inbox.drain_one(self.conn, {}, CFG, self.ingester([], fail=full))
+        self.assertEqual(got["state"], "failed")
+
+
+class HooksFromATitle(unittest.TestCase):
+    """The hunt list is matched against the transcript word for word, so
+    code keeps only words a speaker would say about that moment."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.conn = db.connect(Path(self.tmp.name) / "clipper.db")
+        self.cfg = dict(CFG, copy_model="m", daily_budget_usd=0.25)
+
+    DRAFT = {"topics": [{"name": "Embiid", "terms": ["Embiid", "joel", "the process", "game"]},
+                        {"name": "LeBron: the king", "terms": ["lebron", "bron;", "good"]},
+                        {"name": "Nothing useful", "terms": ["team", "season"]}]}
+
+    def test_generic_words_and_empty_topics_go(self):
+        got = inbox.check_hooks(self.DRAFT)
+        self.assertEqual(got, [{"name": "Embiid", "terms": ["embiid", "joel", "the process"]},
+                               {"name": "LeBron the king", "terms": ["lebron", "bron"]}])
+        # What the owner sees is exactly what the hunt parser reads back.
+        self.assertEqual(score.parse_hunt(inbox.hooks_text(got)),
+                         [{"name": n["name"], "terms": n["terms"]} for n in got])
+
+    # Club 520, 2026-10-20 - the owner: "The hooks were gibberish, they didn't
+    # make any sense". The draft as the model wrote it, read off the Deck:
+    # commenters' wording as terms, reactions and slashes in the names.
+    CLUB_520 = {"topics": [
+        {"name": "b-hen mucinex", "terms": ["b-hen", "mucinex", "evan turner"]},
+        {"name": "bandwagoneer / band wagon", "terms": ["bandwagoneer", "band wagon", "uggh he a bandwagoneer"]},
+        {"name": "theme song / volume", "terms": ["turn my volume up", "theme song", "full blast"]},
+        {"name": "sixers / eagles sacrifice", "terms": ["sixers", "eagles sacrificed their season", "jeff hate the sixers"]},
+        # "anthony black what" is the draft's own label, as a term: three
+        # words, so only the reaction rule stops it.
+        {"name": "anthony black WHAT", "terms": ["anthony black", "what in anthony black", "anthony black what"]},
+        {"name": "bayou barbie", "terms": ["bayou barbie", "shoutout bayou barbie"]},
+        {"name": "no limit tank", "terms": ["no limit tank", "dj hilarious"]}]}
+
+    def test_a_viewers_words_are_not_a_speakers(self):
+        got = {t["name"]: t["terms"] for t in inbox.check_hooks(self.CLUB_520)}
+        self.assertEqual(got["Bandwagoneer"], ["bandwagoneer", "band wagon"], "a reaction is not a term")
+        self.assertEqual(got["Theme Song"], ["theme song", "full blast"], "four words is a sentence, not a term")
+        self.assertEqual(got["Sixers"], ["sixers"])
+        self.assertEqual(got["Anthony Black"], ["anthony black"], "WHAT is not part of his name")
+        self.assertEqual(got["Bayou Barbie"], ["bayou barbie", "shoutout bayou barbie"])
+
+    def test_the_question_says_whose_words(self):
+        self.assertIn("never a viewer's wording", inbox.HOOKS_PROMPT)
+        self.assertIn("Never copy their words", inbox.comments_block([{"text": "lol", "likes": 3}]))
+
+    def test_too_few_topics_is_a_failure_not_a_guess(self):
+        with self.assertRaises(ValueError):
+            inbox.check_hooks({"topics": [{"name": "Embiid", "terms": ["embiid"]}]})
+        with self.assertRaises(ValueError):
+            inbox.check_hooks(None)
+
+    def test_a_draft_is_paid_for_only_within_both_caps(self):
+        calls = []
+        call = lambda prompt, key, slug: (calls.append(prompt) or (self.DRAFT, 0.0012))
+        with self.assertRaises(ValueError):
+            inbox.hooks(self.conn, self.cfg, "LeBron's 76ers", call=call, key="k", left=0.0)
+        self.assertEqual(calls, [], "no allowance, no call")
+        db.record_cost(self.conn, "openrouter", "copy", 0.249)
+        with self.assertRaises(db.OverBudget):
+            inbox.hooks(self.conn, self.cfg, "LeBron's 76ers", call=call, key="k", left=1.0)
+        self.assertEqual(calls, [])
+        with self.conn:
+            self.conn.execute("DELETE FROM costs")
+        text, cost = inbox.hooks(self.conn, self.cfg, "LeBron's 76ers Look Elite", "mike", call=call, key="k", left=1.0)
+        self.assertTrue(text.startswith("Embiid: embiid, joel"))
+        self.assertIn("LeBron's 76ers Look Elite", calls[0])
+        self.assertAlmostEqual(db.spent_today(self.conn), 0.0012, "the real cost is recorded")
+
+    def test_no_title_no_call(self):
+        with self.assertRaises(ValueError):
+            inbox.hooks(self.conn, self.cfg, "  ", call=lambda *a: self.fail("called"), key="k", left=1.0)
+
+
+class HooksFromTheComments(unittest.TestCase):
+    """Owner, 2026-10-20: "We need to create better hooks. Can you access
+    comments of the video to see what they are talking about?" The video's
+    top comments, read through YouTube's API (one unit a hundred), go into
+    the hooks question; the timestamps viewers wrote are counted by code and
+    shown to the owner. Nothing anyone wrote is kept."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.conn = db.connect(Path(self.tmp.name) / "clipper.db")
+        self.cfg = dict(CFG, copy_model="m", daily_budget_usd=0.25)
+
+    @staticmethod
+    def thread(text, likes):
+        # The shape of a commentThreads item (part=snippet, textFormat=plainText).
+        return {"snippet": {"topLevelComment": {"snippet": {"textOriginal": text, "likeCount": likes}},
+                            "totalReplyCount": 0}}
+
+    PAGES = [{"items": [], "nextPageToken": "p2"}, {"items": []}]
+
+    def yt(self, pages, error=None):
+        asked = []
+
+        def fetch(url):
+            asked.append(url)
+            if error:
+                return {"error": {"code": 403, "message": "disabled", "errors": [{"reason": error}]}}
+            return pages[len(asked) - 1]
+        return trends.YouTube(self.conn, self.cfg, key="k", fetch=fetch), asked
+
+    def test_any_youtube_link_gives_its_id(self):
+        for url in ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=30s", "https://youtu.be/dQw4w9WgXcQ?si=x",
+                    "https://www.youtube.com/shorts/dQw4w9WgXcQ", "https://m.youtube.com/live/dQw4w9WgXcQ"):
+            self.assertEqual(inbox.video_id(url), "dQw4w9WgXcQ", url)
+        with self.assertRaises(ValueError):
+            inbox.video_id("https://www.dropbox.com/scl/fi/a/b.mp4?v=dQw4w9WgXcQ")
+
+    def test_two_pages_most_relevant_first_one_unit_each(self):
+        pages = [{"items": [self.thread("Wemby blocked him at 12:40 lmao", 300)], "nextPageToken": "p2"},
+                 {"items": [self.thread("the Duncan comparison  is crazy", 40)]}]
+        yt, asked = self.yt(pages)
+        got = inbox.read_comments(self.conn, self.cfg, "https://youtu.be/dQw4w9WgXcQ", yt)
+        self.assertEqual(got, [{"text": "Wemby blocked him at 12:40 lmao", "likes": 300},
+                               {"text": "the Duncan comparison is crazy", "likes": 40}])
+        self.assertIn("commentThreads?", asked[0])
+        self.assertIn("order=relevance", asked[0])
+        self.assertIn("pageToken=p2", asked[1])
+        self.assertEqual(trends.units_today(self.conn), 2, "counted against Spotter's daily cap")
+
+    def test_comments_turned_off_is_said_in_words(self):
+        yt, _ = self.yt([], error="commentsDisabled")
+        with self.assertRaises(ValueError) as e:
+            inbox.read_comments(self.conn, self.cfg, "https://youtu.be/dQw4w9WgXcQ", yt)
+        self.assertIn("comments are turned off", str(e.exception))
+
+    def test_the_timestamps_viewers_wrote(self):
+        c = [{"text": "12:40 the block!! and again at 12:40", "likes": 300},
+             {"text": "12:51 that block tho", "likes": 20},
+             {"text": "1:02:15 when he called Shaq out", "likes": 90},
+             {"text": "watching at 3:30 pm on my break", "likes": 500}]
+        got = inbox.timestamps(c)
+        self.assertEqual(got[0], (760, 2, 320), "12:40 and 12:51 are one moment; a comment counts once")
+        self.assertEqual(got[1], (3735, 1, 90))
+        self.assertEqual(len(got), 2, "3:30 pm is a clock, not a moment in the video")
+        self.assertEqual(inbox.clock_of(3735), "1:02:15")
+
+    def test_the_question_carries_them_and_the_owner_sees_the_moments(self):
+        pages = [{"items": [self.thread("12:40 that block on Giannis", 300),
+                            self.thread("12:45 BLOCKED", 80), self.thread("alien behaviour", 5)]}]
+        yt, _ = self.yt(pages)
+        prompts, notes = [], []
+        call = lambda prompt, key, slug: (prompts.append(prompt) or (HooksFromATitle.DRAFT, 0.002))
+        inbox.hooks(self.conn, self.cfg, "WEMBY IS ABOUT TO DOMINATE", call=call, key="k", left=1.0,
+                    youtube="https://youtu.be/dQw4w9WgXcQ", yt=yt, notes=notes)
+        self.assertIn("(300 likes) 12:40 that block on Giannis", prompts[0])
+        self.assertIn("Moments viewers pointed at", prompts[0])
+        self.assertEqual(notes[:2], ["read 3 comments", "viewers pointed at 12:40 (2 comments)"])
+        self.assertIn("Claude plan could not answer", notes[2], "and who wrote them, when not the plan")
+
+    def test_without_comments_the_title_still_works(self):
+        yt, _ = self.yt([], error="commentsDisabled")
+        notes = []
+        call = lambda prompt, key, slug: (HooksFromATitle.DRAFT, 0.001)
+        text, _cost = inbox.hooks(self.conn, self.cfg, "WEMBY", call=call, key="k", left=1.0,
+                                  youtube="https://youtu.be/dQw4w9WgXcQ", yt=yt, notes=notes)
+        self.assertTrue(text.startswith("Embiid"))
+        self.assertIn("comments not read", notes[0])
+
+    def test_a_window_holding_a_moment_viewers_pointed_at_scores_higher(self):
+        # Owner, 2026-10-20: "Yes add that and well see how well it works".
+        sents = moments.sentences(WORDS, 0.8)
+        wins = moments.windows(sents, 20, 60)
+        plain = score.score_windows(sents, wins, WORDS, [], CFG)
+        t = sents[5]["start"] + 1.0
+        pinned = score.score_windows(sents, wins, WORDS, [], CFG, pins=[[t, 9, 340]])
+        for a, b in zip(plain, pinned):
+            inside = a["start"] - score.PIN_LEAD <= t <= a["end"]
+            self.assertEqual(b["score"], min(100.0, round(a["score"] + score.PIN_BONUS, 1)) if inside else a["score"])
+            if inside:
+                self.assertIn("(9 comments)", b["reasons"][0])
+        self.assertLess(score.PIN_BONUS, score.TOPIC_BONUS, "a timestamp says when, not what")
+
+    def test_pickup_keeps_the_moments_as_numbers_and_clips_either_way(self):
+        ingest.add_source(self.conn, CFG, "mike", "permission", "campaign brief")
+        with self.assertRaises(ValueError):
+            inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/1.mp4?rlkey=k",
+                        youtube="https://example.com/watch?v=dQw4w9WgXcQ")
+        inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/1.mp4?rlkey=k", "Wemby",
+                    youtube="https://youtu.be/dQw4w9WgXcQ")
+
+        def ingester(conn, paths, source, url, title, remote=False):
+            src = conn.execute("SELECT id FROM sources WHERE name = ?", (source,)).fetchone()
+            with conn:
+                cur = conn.execute("INSERT INTO videos (source_id, title, origin, sha256, media_path, duration, "
+                                   "created_at, updated_at) VALUES (?, ?, ?, ?, '', 60, ?, ?)",
+                                   (src["id"], title, url, url, db.now(), db.now()))
+            return conn.execute("SELECT * FROM videos WHERE id = ?", (cur.lastrowid,)).fetchone(), True
+        yt, _ = self.yt([{"items": [self.thread("12:40 the block", 300), self.thread("12:44 BLOCKED", 5)]}])
+        got = inbox.drain_one(self.conn, {}, self.cfg, ingester, yt=yt)
+        self.assertEqual(got["state"], "done")
+        self.assertIn("viewers pointed at 12:40", got["note"])
+        pins = self.conn.execute("SELECT pins FROM videos WHERE id = ?", (got["video_id"],)).fetchone()["pins"]
+        self.assertEqual(json.loads(pins), [[760, 2, 305]], "numbers only - no comment is kept")
+        inbox.queue(self.conn, "mike", "https://www.dropbox.com/scl/fi/a/2.mp4?rlkey=k", "Two",
+                    youtube="https://youtu.be/dQw4w9WgXcQ")
+        yt, _ = self.yt([], error="commentsDisabled")
+        got = inbox.drain_one(self.conn, {}, self.cfg, ingester, yt=yt)
+        self.assertEqual(got["state"], "done", "no comments, still clipped")
+        self.assertIn("comments not read", got["note"])
+        src = (ROOT / "clipper" / "pipeline.py").read_text()
+        self.assertIn("score_windows(sents, wins, words, loud, cfg, hunt, avoid, frames, pins)", src,
+                      "the moments reach the scorer when clips are chosen")
+
+    def test_the_house_and_the_deck_pass_the_link(self):
+        page = (ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        self.assertIn('id="caYoutube"', page)
+        self.assertIn("{ title, source: $('caSource').value, youtube }", page)
+        js = (ROOT / "mission-control-api" / "clip.js").read_text()
+        self.assertIn("args.push('--youtube', youtube)", js)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class AVideosOwnHooks(EndToEnd):
+    """A video's own list (pasted with its link) is hunted, not its source's -
+    two videos from one source each get the hooks their titles promise."""
+
+    test_permitted_video_in_captioned_short_out = None
+    test_a_failing_stage_is_retried_then_parked_then_retryable = None
+
+    def test_the_pasted_hooks_are_used_and_the_pickup_clips_it(self):
+        from unittest import mock
+        self.cli("source", "add", "tao", "--rights", "permission", "--evidence", "campaign page")
+        self.cli("source", "rules", "tao", "--hunt", "Blossom: blossom, blossoms")
+        code, said = self.cli("queue", "tao", "https://www.dropbox.com/scl/fi/a/talk.mp4?rlkey=k",
+                              "--title", "Talk", "--hunt", "Fisherman: fisherman")
+        self.assertEqual(code, 0, said)
+        self.assertIn("next pickup", said)
+        real = ingest.ingest
+        local = lambda conn, paths, source, url, title=None, remote=False: real(conn, paths, source, str(self.video), title)
+        nothing = {"new": [], "skipped": 0, "failed": 0}
+        with mock.patch.object(inbox.ingest, "ingest", side_effect=local), \
+             mock.patch.object(cli.dropbox, "pickup", return_value=nothing), \
+             mock.patch.object(cli.pipeline, "run", side_effect=lambda *a, **k: None):
+            code, said = self.cli("pickup", "--run")
+        self.assertEqual(code, 0, said)
+        self.assertIn("inbox #1: done - video 1", said)
+        self.assertIn("video 1: ingested", said, "the same tick sends it to be clipped")
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        ev = db.connect(self.home / "clipper.db").execute(
+            "SELECT msg FROM events WHERE stage = 'find'").fetchone()[0]
+        self.assertIn("campaign topics clipped: Fisherman", ev)
+        self.assertNotIn("Blossom", ev)
+
+    def test_hunt_sets_and_clears_a_videos_list(self):
+        self.cli("source", "add", "tao", "--rights", "permission", "--evidence", "campaign page")
+        self.cli("ingest", "tao", str(self.video))
+        code, said = self.cli("hunt", "1", "Fisherman: fisherman")
+        self.assertEqual(code, 0, said)
+        conn = db.connect(self.home / "clipper.db")
+        self.assertEqual(json.loads(conn.execute("SELECT hunt FROM videos").fetchone()[0])[0]["name"], "Fisherman")
+        self.cli("hunt", "1", "")
+        self.assertIsNone(conn.execute("SELECT hunt FROM videos").fetchone()[0])
+        self.assertEqual(self.cli("hunt", "9", "x")[0], 2)
+
+    def test_the_pickup_only_drains_the_inbox_when_it_runs(self):
+        from unittest import mock
+        self.cli("source", "add", "tao", "--rights", "permission", "--evidence", "campaign page")
+        self.cli("queue", "tao", "https://www.dropbox.com/scl/fi/a/talk.mp4?rlkey=k")
+        nothing = {"new": [], "skipped": 0, "failed": 0}
+        with mock.patch.object(inbox, "drain_one") as drain, \
+             mock.patch.object(cli.dropbox, "pickup", return_value=nothing):
+            self.cli("pickup")
+        drain.assert_not_called()
+
+
+# ---------------------------------------------------------------- complete thoughts (stories.py)
+
+class CompleteThoughts(unittest.TestCase):
+    """Owner, 2026-10-21: "these clips cut off in the middle of someone's
+    story or train of thought ... I need complete thoughts". A model marks
+    where each story, argument and bit starts and ends; code checks the
+    marks, makes each a candidate, and skips any window cutting through one."""
+
+    def setUp(self):
+        self.sents = moments.sentences(WORDS, 0.8)
+        self.cfg = dict(CFG, story_max_seconds=90.0)
+
+    def test_the_stretches_cover_everything_and_overlap(self):
+        sents = [{"start": t, "end": t + 4.0, "text": "x."} for t in range(0, 3600, 5)]
+        parts = stories.stretches(sents)
+        self.assertEqual(parts[0][0], 0)
+        self.assertEqual(parts[-1][1], len(sents) - 1, "the end of the episode is read")
+        for (a0, a1), (b0, b1) in zip(parts, parts[1:]):
+            shared = sents[a1]["end"] - sents[b0]["start"]
+            self.assertGreaterEqual(shared, 90.0, "a 90 s moment on an edge is whole in one stretch")
+
+    def test_only_usable_marks_are_kept(self):
+        ok = next(j for j in range(len(self.sents)) if self.sents[j]["end"] - self.sents[3]["start"] >= 30)
+        doc = {"moments": [{"first": 3, "last": ok, "kind": "Story", "rating": 8, "title": "  The   fisherman "},
+                           {"first": 3, "last": 4, "kind": "funny", "rating": 9},           # too short
+                           {"first": 0, "last": len(self.sents) - 1, "rating": 9},          # too long
+                           {"first": 200, "last": 210, "rating": 9},                        # not shown
+                           {"first": "three", "last": 9}]}
+        good, dropped = stories.check(doc, self.sents, 0, 60, self.cfg)
+        self.assertEqual([(m["i"], m["j"], m["kind"], m["title"]) for m in good], [(3, ok, "story", "The fisherman")])
+        self.assertEqual(len(dropped), 4)
+
+    def test_the_same_moment_from_two_stretches_is_kept_once(self):
+        a = {"i": 10, "j": 20, "rating": 6}
+        b = {"i": 12, "j": 22, "rating": 8}
+        c = {"i": 30, "j": 40, "rating": 5}
+        self.assertEqual(stories.merge([a, b, c]), [b, c])
+
+    def test_a_marked_moment_wins_and_a_window_cutting_it_is_skipped(self):
+        m = {"i": 5, "j": 9, "kind": "story", "rating": 8, "title": "The lead-up and the payoff", "why": ""}
+        scored = [{"i": 5, "j": 9, "start": 5.0, "end": 9.5, "score": 50.0, "reasons": [], "topics": []},
+                  {"i": 7, "j": 12, "start": 7.0, "end": 12.5, "score": 70.0, "reasons": [], "topics": ["Knicks"], "laughs": 1},   # ends after, starts inside
+                  {"i": 2, "j": 6, "start": 2.0, "end": 6.5, "score": 70.0, "reasons": [], "topics": []},                       # stops before the payoff
+                  {"i": 4, "j": 10, "start": 4.0, "end": 10.5, "score": 55.0, "reasons": [], "topics": []},                      # holds it whole
+                  {"i": 20, "j": 25, "start": 20.0, "end": 25.5, "score": 60.0, "reasons": [], "topics": []},                     # elsewhere
+                  {"i": 6, "j": 8, "start": 6.0, "end": 8.5, "score": 0.0, "reasons": ["skipped: says 'use code'"], "topics": [], "avoided": True}]
+        stories.apply(scored, [m])
+        self.assertEqual(scored[0]["score"], 50.0 + stories.BONUS_BASE + stories.BONUS_PER * 8)
+        self.assertIn("a complete story (8/10)", scored[0]["reasons"][0])
+        for c in scored[1:3]:
+            self.assertEqual(c["score"], 0.0)
+            self.assertIn("cuts into a story", c["reasons"][0])
+        self.assertEqual(scored[1]["topics"], [], "no topic credit for the cut-off version")
+        self.assertEqual((scored[3]["score"], scored[4]["score"]), (55.0, 60.0))
+        self.assertEqual(scored[5]["reasons"], ["skipped: says 'use code'"], "the avoid list still wins")
+        chosen = moments.choose(scored, 3, 40)
+        self.assertEqual([(c["i"], c["j"]) for c in chosen], [(5, 9), (20, 25)])
+
+    def test_the_question_numbers_the_sentences_and_asks_for_whole_thoughts(self):
+        q = stories.question(self.sents, 2, 6, self.cfg, "club-520", "Teague's season preview",
+                             [{"name": "MVP Picks", "terms": ["mvp"]}])
+        self.assertIn(f"2 [0:{int(self.sents[2]['start']):02d}] {self.sents[2]['text']}", q)
+        self.assertNotIn(self.sents[7]["text"], q)
+        for said in ("COMPLETE", "20 to 90 seconds", "MVP Picks", "Teague's season preview", "lead-up"):
+            self.assertIn(said, q)
+
+    def test_kept_once_read_and_a_refusal_is_said_not_raised(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        j = next(j for j in range(len(self.sents)) if self.sents[j]["end"] - self.sents[3]["start"] >= 40)
+        asked = []
+
+        def ask(q):
+            asked.append(q)
+            return True, 'Here you go: ```json\n{"moments": [{"first": 3, "last": %d, "kind": "argument", "rating": 7}]}\n```' % j
+        marks, note = stories.read(self.sents, self.cfg, ask=ask, cache=tmp / "stories.json")
+        self.assertEqual([(m["i"], m["j"], m["kind"]) for m in marks], [(3, j, "argument")])
+        self.assertIn("1 complete moments marked", note)
+        again, note = stories.read(self.sents, self.cfg, ask=lambda q: self.fail("asked again"),
+                                   cache=tmp / "stories.json")
+        self.assertEqual(again, marks)
+        self.assertIn("kept from before", note)
+        none, note = stories.read(self.sents, self.cfg, ask=lambda q: (False, "usage limit reached"))
+        self.assertIsNone(none)
+        self.assertIn("clipped by score alone", note)
+        self.assertIn("usage limit reached", note)
+        self.assertEqual(stories.read(self.sents, dict(self.cfg, story_reading=False))[0], None)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class CompleteThoughtsThroughTheFindStage(EndToEnd):
+    """The marked moment becomes a clip as it was marked - longer than
+    max_clip_seconds (30 here) when it needs to be - and no clip cuts it."""
+
+    # EndToEnd's own test runs once, in EndToEnd: here it only doubled the
+    # suite's time, and its exact-output check caught other tests' unclosed
+    # connections being collected mid-run.
+    test_permitted_video_in_captioned_short_out = None
+
+    def ready(self):
+        self.cli("source", "add", "pd", "--rights", "public-domain", "--evidence", "LibriVox")
+        self.cli("ingest", "pd", str(self.video))
+        self.give_words(1)
+        self.paths, self.cfg = config.paths(), dict(config.load(), max_clips_per_video=3)
+        self.conn = db.connect(self.home / "clipper.db")
+        self.addCleanup(self.conn.close)
+        pipeline.stage_transcribe(self.conn, self.paths, self.cfg, self.video_row())
+        self.sents = moments.sentences(pipeline.words_of(self.conn, self.paths, self.video_row()),
+                                       self.cfg["sentence_pause_seconds"])
+        self.i = next(k for k, s in enumerate(self.sents) if s["start"] >= 5)
+        self.j = next(k for k in range(self.i, len(self.sents))
+                      if self.sents[k]["end"] - self.sents[self.i]["start"] >= 38)
+        old = stories._ask
+        self.addCleanup(setattr, stories, "_ask", old)
+
+    def video_row(self):
+        return self.conn.execute("SELECT * FROM videos").fetchone()
+
+    def test_the_marked_story_is_cut_whole_and_nothing_cuts_into_it(self):
+        self.ready()
+        asked = []
+        stories._ask = lambda q: (asked.append(q) or (True, json.dumps({"moments": [
+            {"first": self.i, "last": self.j, "kind": "story", "rating": 9, "title": "The fisherman's tale"}]})))
+        pipeline.stage_find(self.conn, self.paths, self.cfg, self.video_row())
+        self.assertEqual(len(asked), 1, "a minute of video is one stretch")
+        rows = self.conn.execute("SELECT * FROM candidates WHERE selected = 1").fetchall()
+        story = [r for r in rows if "a complete story" in r["reasons"]]
+        self.assertEqual(len(story), 1, [dict(r) for r in rows])
+        self.assertEqual(story[0]["scorer"], f"{score.SCORER}+{stories.READER}")
+        self.assertGreater(story[0]["end"] - story[0]["start"], self.cfg["max_clip_seconds"],
+                           "a story may run past the usual longest clip")
+        a, b = self.sents[self.i]["start"], self.sents[self.j]["end"]
+        self.assertLessEqual(story[0]["start"], a)
+        self.assertGreaterEqual(story[0]["end"], b)
+        for r in rows:
+            inside = r["start"] < b and a < r["end"]
+            whole = r["start"] <= a + 0.01 and r["end"] >= b - 0.01
+            self.assertTrue(not inside or whole, f"clip {r['start']}-{r['end']} cuts into the story {a}-{b}")
+        said = self.conn.execute("SELECT msg FROM events WHERE stage = 'find'").fetchall()[-1][0]
+        self.assertIn("1 complete moments marked", said)
+        self.assertIn("1 chosen are marked moments", said)
+        self.assertTrue((self.home / "media" / "1" / "stories.json").is_file())
+
+    def test_without_the_plan_it_clips_as_before(self):
+        self.ready()
+        stories._ask = lambda q: (False, "no CLAUDE_CODE_OAUTH_TOKEN")
+        pipeline.stage_find(self.conn, self.paths, self.cfg, self.video_row())
+        self.assertTrue(self.conn.execute("SELECT COUNT(*) FROM candidates WHERE selected = 1").fetchone()[0])
+        said = self.conn.execute("SELECT msg FROM events WHERE stage = 'find'").fetchall()[-1][0]
+        self.assertIn("clipped by score alone", said)
+
+
+class HooksSearchTheWebOnThePlan(unittest.TestCase):
+    """Owner, 2026-10-22: hooks for "common knowledge things that would be
+    discussed" (Jordan vs LeBron), and "search the web on what would be funny
+    or talked about". Asked of Sonnet on the plan with web search; the cheap
+    model, which cannot search, only when the plan cannot answer."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.conn = db.connect(Path(self.tmp.name) / "clipper.db")
+        self.addCleanup(self.conn.close)
+        self.cfg = dict(CFG)
+
+    def test_the_plan_searches_and_its_draft_is_checked_by_code(self):
+        asked, notes = [], []
+        reply = ('I searched first. {"topics": [{"name": "GOAT Debate", "terms": ["jordan", "lebron", "goat"]}, '
+                 '{"name": "MVP Picks", "terms": ["mvp", "jokic", "lol"]}]}')
+        text, cost = inbox.hooks(self.conn, self.cfg, "Teague's MVP picks", "club-520", notes=notes,
+                                 ask=lambda q: (asked.append(q) or (True, reply)),
+                                 call=lambda *a: self.fail("the cheap model was called"), key="k", left=1.0)
+        self.assertEqual(text, "GOAT Debate: jordan, lebron, goat; MVP Picks: mvp, jokic")
+        self.assertEqual(cost, 0.0)
+        self.assertEqual(db.spent_today(self.conn), 0.0, "nothing spent")
+        self.assertIn("search the web", asked[0])
+        self.assertIn("jordan, lebron, goat", asked[0], "the debates these shows always have")
+        self.assertIn("Teague's MVP picks", asked[0])
+        self.assertEqual(notes, ["written on your Claude plan, after a web search"])
+
+    def test_when_the_plan_cannot_answer_the_cheap_model_writes_them_without_searching(self):
+        prompts, notes = [], []
+        call = lambda prompt, key, slug: (prompts.append(prompt) or (HooksFromATitle.DRAFT, 0.001))
+        text, cost = inbox.hooks(self.conn, self.cfg, "LeBron's 76ers", notes=notes, call=call, key="k", left=1.0,
+                                 ask=lambda q: (False, "usage limit reached"))
+        self.assertTrue(text.startswith("Embiid"))
+        self.assertNotIn("search the web", prompts[0])
+        self.assertIn("jordan, lebron, goat", prompts[0])
+        self.assertNotIn("EVERGREEN", prompts[0])
+        self.assertIn("usage limit reached", notes[0])
+
+    def test_the_ask_names_web_search_and_only_it(self):
+        w = postcopy._script("wake_clip_test", "wake.py")
+        seen = []
+        res = json.dumps({"type": "result", "is_error": False, "result": "{}"})
+        old = (w.claude_bin, w.plan_token)
+        self.addCleanup(lambda: (setattr(w, "claude_bin", old[0]), setattr(w, "plan_token", old[1])))
+        w.claude_bin, w.plan_token = (lambda: "/bin/claude"), (lambda: "plan-login-placeholder")
+        w.ask("clip", "q?", tools=("WebSearch",), run=lambda cmd, **kw: seen.append(cmd) or
+              types.SimpleNamespace(returncode=0, stdout=res, stderr=""))
+        cmd = seen[0]
+        self.assertEqual(cmd[cmd.index("--tools") + 1], "WebSearch")
+        self.assertEqual(cmd[cmd.index("--allowedTools") + 1], "WebSearch")
+        self.assertEqual(cmd[cmd.index("--model") + 1], "sonnet")
+        self.assertEqual(cmd[cmd.index("--max-turns") + 1], "8", "room to search, from tasks/engines.json")
+        doc = json.loads((config.ROOT / "tasks" / "engines.json").read_text())
+        self.assertEqual(doc["agents"]["clip"]["fallback"], "none", "never a bill instead")
+
+
+class ProgressReports(unittest.TestCase):
+    """progress.read on ffmpeg's real -progress report (captured by
+    Posting.test_update_video_reports_how_far_it_has_got), and the page's
+    use of it."""
+
+    def test_halfway_unmeasured_and_stale(self):
+        from clipper import progress
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        clip = tmp / "03.mp4"
+        with progress.Progress(clip, 40.0) as p:
+            p.step("finding the people in each shot")
+            got = progress.read(clip)
+            self.assertEqual((got["running"], got["percent"]), (True, None), "no percentage before ffmpeg starts")
+            p.step("cutting the clip", measured=True)
+            p.ffmpeg.write_text("frame=300\nout_time_us=N/A\nprogress=continue\n"
+                                "frame=600\nout_time_us=20020000\nout_time=00:00:20.020000\nprogress=continue\n")
+            self.assertEqual(progress.read(clip)["percent"], 50)
+            self.assertEqual(progress.read(clip, now=p.started + progress.STALE_SECONDS + 1),
+                             {"running": False, "stale": True}, "a killed remake is not shown as running")
+        self.assertEqual(progress.read(clip), {"running": False})
+
+    def test_the_page_asks_while_it_waits(self):
+        html = (config.ROOT / "mission-control-api" / "public" / "village.html").read_text()
+        body = html.split("function editSubtitles(", 1)[1].split("\nasync function clipCard(", 1)[0]
+        self.assertIn("/api/clip/progress/${encodeURIComponent(id)}", body)
+        self.assertIn("$('sedSave').onclick = () => update({ lines: read() });", body,
+                      "Update video waits in the box, with the bar")
+        self.assertIn('<div id="sedBar" hidden>', html)
+        js = (config.ROOT / "mission-control-api" / "clip.js").read_text()
+        self.assertIn("app.get('/api/clip/progress/:id'", js)
+        self.assertIn("clipper(['progress', req.params.id]", js)
+
+
+class TalkingWithNoCaptions(unittest.TestCase):
+    """Owner, 2026-10-23: "The captions aren't ... doing every sentence. It's
+    skipping sentences at a time." A caption is a word Whisper wrote, so a
+    skipped sentence is a stretch as loud as the talking with no word in it.
+    On the real "Our Miss Brooks" words and loudness."""
+
+    def setUp(self):
+        t = json.loads((FIXTURES / "clipper-laughs-ourmissbrooks.words.json").read_text())
+        self.words = t["words"]
+        self.frames = json.loads((FIXTURES / "clipper-laughs-ourmissbrooks.frames.json").read_text())
+        self.sents = moments.sentences(self.words, 0.8)
+
+    def test_a_skipped_sentence_is_found_where_it_was(self):
+        s = self.sents[46]          # "But if I were the goat responsible for this concoction, ..." 102.1-106.3 s
+        cut = [w for k, w in enumerate(self.words) if not s["first"] <= k <= s["last"]]
+        found = transcribe.holes(cut, self.frames, 90.0, 120.0)
+        self.assertEqual(len(found), 1, found)
+        a, b, share = found[0]
+        self.assertLessEqual(a, s["start"])
+        self.assertGreaterEqual(b, s["end"])
+        self.assertGreaterEqual(share, transcribe.HOLE_LOUD_SHARE)
+        self.assertEqual(transcribe.holes(self.words, self.frames, 90.0, 120.0), [],
+                         "with the sentence in the transcript, nothing is missing there")
+
+    def test_a_quiet_pause_is_not_a_hole(self):
+        quiet = [[t, -60.0] for t, _v in self.frames]
+        loud = [[t, -14.0] for t, _v in self.frames]
+        gap = [dict(w) for w in self.words if w["end"] < 100 or w["start"] > 110]
+        talk = [[t, (-14.0 if any(w["start"] <= t <= w["end"] for w in gap) else -60.0)] for t, _v in self.frames]
+        self.assertEqual(transcribe.holes(gap, talk, 95.0, 115.0), [], "silence between words is a pause")
+        self.assertTrue(transcribe.holes(gap, loud, 95.0, 115.0))
+        self.assertEqual(transcribe.holes([], quiet, 0.0, 10.0), [], "no words, no talking level to compare")
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class HolesCommand(EndToEnd):
+    """`clipper holes CLIP` names each stretch in the clip's own clock."""
+
+    test_permitted_video_in_captioned_short_out = None
+
+    def test_the_missing_sentence_is_named(self):
+        self.cli("source", "add", "pd", "--rights", "public-domain", "--evidence", "LibriVox")
+        self.cli("ingest", "pd", str(self.video))
+        self.give_words(1)
+        self.assertEqual(self.cli("run")[0], 0)
+        conn = db.connect(self.home / "clipper.db")
+        self.addCleanup(conn.close)
+        c = conn.execute("SELECT * FROM clips").fetchone()
+        # The test video's sound is a steady tone, so the reader's own pauses
+        # count too: what matters is the one the skipped sentence adds.
+        before = self.cli("holes", str(c["id"]))[1]
+        # Whisper skips a sentence inside the clip: its words are not in the transcript.
+        f = self.home / "media" / "1" / "transcript.json"
+        t = json.loads(f.read_text())
+        sents = moments.sentences(t["words"], 0.8)
+        gone = next(x for x in sents if x["start"] > c["start"] + 2 and x["end"] < c["end"] - 2
+                    and x["end"] - x["start"] >= 3)
+        t["words"] = [w for k, w in enumerate(t["words"]) if not gone["first"] <= k <= gone["last"]]
+        f.write_text(json.dumps(t))
+        code, said = self.cli("holes", str(c["id"]))
+        self.assertEqual(code, 0, said)
+        total = lambda text: int(text.split("s in all)")[0].rsplit("(", 1)[1])
+        self.assertGreaterEqual(total(said) - total(before), int(gone["end"] - gone["start"]) - 1, said)
+        secs = lambda m: int(m.split(":")[0]) * 60 + int(m.split(":")[1])
+        spans = [tuple(secs(x) for x in line.split()[0].split("-")) for line in said.splitlines()[1:]]
+        at = gone["start"] - c["start"]
+        self.assertTrue(any(a <= at + 1 and at + (gone["end"] - gone["start"]) - 1 <= b for a, b in spans),
+                        f"no stretch covers {at:.1f}s: {said}")
+        # `clipper fill 1 --recut` puts it back and into the clip's captions.
+        lost = [w for k, w in enumerate(json.loads(json.dumps(self.words)))
+                if gone["first"] <= k <= gone["last"]]
+        shown = lambda: Path(c["path"]).with_suffix(".ass").read_text()
+        word = max((w["word"].strip().upper().strip(".,?!") for w in lost), key=len)
+        self.assertEqual(self.cli("recut", str(c["id"]))[0], 0)
+        self.assertNotIn(word, shown(), "the clip as Whisper left it")
+        old = transcribe.listener
+        self.addCleanup(setattr, transcribe, "listener", old)
+        transcribe.listener = lambda src, cfg: (lambda a, b: [w for w in lost if a < w["start"] < b])
+        code, said = self.cli("fill", "1", "--recut")
+        self.assertEqual(code, 0, said)
+        self.assertIn(f"{len(lost)} word(s) put back", said)
+        self.assertIn(f"clip {c['id']}: captions updated", said)
+        self.assertEqual(self.cli("holes", str(c["id"]))[1].split(";")[1], before.split(";")[1],
+                         "the clip is back to the reader's own pauses")
+        self.assertIn(word, shown(), "and the words are in its captions")
+        self.assertIn("already listened to again", self.cli("fill", "1")[1])
+
+
+class TheDroppedSentencesArePutBack(unittest.TestCase):
+    """Clip 106 (2026-10-23): 24 s of talking with no caption - Whisper's
+    voice filter had dropped the crosstalk. Each such stretch is listened to
+    again (relisten, checked by hand on a real live-audience recording: three
+    removed sentences came back near word for word) and the words put in."""
+
+    def setUp(self):
+        t = json.loads((FIXTURES / "clipper-laughs-ourmissbrooks.words.json").read_text())
+        self.words = t["words"]
+        self.frames = json.loads((FIXTURES / "clipper-laughs-ourmissbrooks.frames.json").read_text())
+        s = moments.sentences(self.words, 0.8)[46]      # 102.1-106.3 s, "But if I were the goat ..."
+        self.gone = [w for k, w in enumerate(self.words) if s["first"] <= k <= s["last"]]
+        self.cut = [w for w in self.words if w not in self.gone]
+
+    def listen(self, asked):
+        # What the second listen hears: the words that were really said there.
+        return lambda a, b: asked.append((a, b)) or [dict(w) for w in self.gone if a < w["start"] < b]
+
+    def test_the_missing_sentence_is_back_in_order_and_marked(self):
+        asked = []
+        out, report = transcribe.fill(self.cut, self.frames, "src.mp4", CFG, listen=self.listen(asked),
+                                      start=90.0, end=120.0)
+        self.assertEqual("".join(w["word"] for w in out), "".join(w["word"] for w in self.words),
+                         "the transcript reads as it was said again")
+        self.assertEqual([w["word"] for w in out if w.get("filled")], [w["word"] for w in self.gone],
+                         "and the words put back say so")
+        self.assertEqual(report["words"], len(self.gone))
+        self.assertEqual(len(asked), 1, "one stretch, one second listen")
+
+    def test_a_long_stretch_is_left_alone(self):
+        asked = []
+        loud = [[t, -14.0] for t in [n / 10 for n in range(0, 3000)]]
+        words = [{"start": 1.0, "end": 1.5, "word": " Hi."}, {"start": 200.0, "end": 200.5, "word": " Bye."}]
+        out, report = transcribe.fill(words, loud, "src.mp4", CFG, listen=lambda a, b: asked.append(1) or [])
+        self.assertEqual((asked, report["long_skipped"]), ([], 1), "an intro song or a break, not a sentence")
+
+    def test_what_is_kept_from_a_second_listen(self):
+        W = lambda s, e, word, p: types.SimpleNamespace(start=s, end=e, word=word, probability=p)
+        seg = lambda *ws: types.SimpleNamespace(words=list(ws))
+        got = transcribe.heard([
+            seg(W(0.0, 0.3, " before.", 0.99),                     # the word before the hole, heard again
+                W(1.0, 1.3, " somebody", 0.7), W(1.3, 1.6, " come", 0.4), W(1.6, 2.0, " up", 0.8)),
+            seg(W(3.0, 3.4, " Iceman.", 0.45)),                    # one unsure word over a laugh
+            seg(W(4.0, 4.3, " Yes.", 0.9))], 0.5, 4.6, 0.0)
+        self.assertEqual([w["word"] for w in got], [" somebody", " come", " up", " Yes."],
+                         "a sentence it is fairly sure of whole; a lone word only if sure of it")
+
+    def test_once_per_video_and_only_for_whispers_own_transcripts(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        paths = {"media": tmp}
+        video = {"id": 7, "media_path": str(tmp / "ep.mp4")}
+        (tmp / "7").mkdir()
+        (tmp / "7" / "transcript.json").write_text(json.dumps({"provider": "faster-whisper", "words": self.cut}))
+        (tmp / "7" / "loudness-frames.json").write_text(json.dumps(self.frames))
+        conn = db.connect(tmp / "c.db")
+        self.addCleanup(conn.close)
+        asked = []
+        t = pipeline.fill_transcript(conn, paths, video, CFG, src=str(tmp / "audio.wav"), listen=self.listen(asked))
+        self.assertGreaterEqual(t["filled"]["words"], len(self.gone))
+        self.assertEqual(json.loads((tmp / "7" / "transcript.json").read_text())["filled"]["by"], transcribe.FILLER)
+        n = len(asked)
+        pipeline.fill_transcript(conn, paths, video, CFG, listen=self.listen(asked))
+        self.assertEqual(len(asked), n, "a transcript is listened to again once")
+        said = conn.execute("SELECT msg FROM events WHERE stage = 'transcribe'").fetchone()[0]
+        self.assertIn("word(s) put back", said)
