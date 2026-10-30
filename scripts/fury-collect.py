@@ -125,8 +125,11 @@ def state_summary(d):
     return None
 
 
-def units_for(agent):
-    return [u for u in (f"{agent}-cycle.service", f"{agent}-fetch.service") if u]
+def _brain():
+    spec = importlib.util.spec_from_file_location("brain_collect", Path(__file__).resolve().parent / "brain.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 # ---------------------------------------------------------------- briefing
@@ -336,24 +339,18 @@ def collect(now=None):
             "data_asof": (read_json(d / "data" / "_meta.json") or {}).get("asof_utc"),
         }
 
-    # systemd: what ran, what failed, what is next
-    for a in agents:
-        for unit in units_for(a):
-            active = sh(f"systemctl is-active {unit} 2>/dev/null")
-            if not active:
-                continue
-            failed = sh(f"systemctl is-failed {unit} 2>/dev/null")
-            props = sh(f"systemctl show {unit} -p ExecMainStatus -p ExecMainExitTimestamp 2>/dev/null")
-            info = dict(l.split("=", 1) for l in props.splitlines() if "=" in l)
-            entry = {"state": active,
-                     "failed": failed == "failed",
-                     "last_exit_code": info.get("ExecMainStatus"),
-                     "last_finished": info.get("ExecMainExitTimestamp") or None}
-            report["services"][unit] = entry
-            if entry["failed"] or (entry["last_exit_code"] not in (None, "", "0")):
-                report["failures"].append(
-                    {"unit": unit, "exit_code": entry["last_exit_code"],
-                     "last_finished": entry["last_finished"]})
+    # What ran and what failed: every agent's units, read the way
+    # health-check.py reads them, through brain.py's map of which unit is
+    # whose (2026-10-30). This read only each agent folder's -cycle and
+    # -fetch units before, so the Coach, Clip, Peter, the TikTok kits and
+    # half of Belfort's and Scout's timers could fail without a word.
+    try:
+        report["runs"] = _brain().runs(now=now)
+    except Exception as exc:
+        report["runs"], report["runs_error"] = {}, str(exc)[:160]
+    for node, r in sorted(report["runs"].items()):
+        for unit in r.get("failed") or []:
+            report["failures"].append({"unit": f"{unit}.service", "agent": node})
 
     timers = sh("systemctl list-timers '*-cycle.timer' '*-fetch.timer' --no-pager 2>/dev/null")
     report["timers_raw"] = timers.splitlines()[:14] if timers else []

@@ -117,8 +117,9 @@ class WhatRanAndWhatMoved(Base):
         con.commit()
         con.close()
         got = self.b.knowledge_traffic(db, NOW)
-        self.assertEqual(got, [("gm", "knowledge", "lessons added", 1, "1 proposed"),
-                               ("scout", "knowledge", "lessons added", 2, "1 accepted, 1 proposed")])
+        self.assertEqual(got, [("fury", "knowledge", "lessons added", 1, "1 proposed"),
+                               ("scout", "knowledge", "lessons added", 2, "1 accepted, 1 proposed")],
+                         "what the GM filed is Fury's: the GM is retired into him")
 
     def test_the_gms_proposals_and_your_answers(self):
         d = self.root / "gm"
@@ -128,9 +129,9 @@ class WhatRanAndWhatMoved(Base):
             {"who": "owner", "decision": None},
             {"who": "emily", "decision": {"verdict": "decline"}}]}))
         (d / "2026-10-01.json").write_text(json.dumps({"proposals": [{"who": "scout"}]}))
-        self.assertEqual(self.b.gm_traffic(d, NOW), [("gm", "emily", "proposals", 1, "1 declined"),
-                                                     ("gm", "scout", "proposals", 1, "1 approved"),
-                                                     ("gm", "you", "proposals", 1, "1 waiting")])
+        self.assertEqual(self.b.gm_traffic(d, NOW), [("fury", "emily", "proposals", 1, "1 declined"),
+                                                     ("fury", "scout", "proposals", 1, "1 approved"),
+                                                     ("fury", "you", "proposals", 1, "1 waiting")])
 
     def test_what_waits_on_you(self):
         att = {"stan": {"n": 2, "tone": "todo", "why": ["2 problems to approve or reject"]},
@@ -143,7 +144,10 @@ class WhatRanAndWhatMoved(Base):
         b = self.b.brain(now=NOW, facts=lambda u: ("?", None, "not-found"), db=self.root / "none.db",
                          kdb=self.root / "none-k.db", gm_dir=self.root / "none", att={"stan": {"n": 1, "why": ["x"]}})
         self.assertEqual(len(b["nodes"]), len(self.b.NODES))
-        self.assertEqual(sum(1 for e in b["edges"] if e["kind"] == "wire"), len(self.b.WIRES))
+        self.assertEqual(sum(1 for e in b["edges"] if e["kind"] in ("wire", "report")), len(self.b.WIRES))
+        reports = {e["from"] for e in b["edges"] if e["kind"] == "report"}
+        self.assertEqual(reports, set(self.b.node_ids()) - {"you", "fury", "knowledge"},
+                         "every agent reports to Fury (owner, 2026-10-30)")
         self.assertIn("paul", b["alone"])
         self.assertIn("clip", b["alone"])
         self.assertNotIn("stan", b["alone"])

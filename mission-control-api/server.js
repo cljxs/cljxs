@@ -327,6 +327,10 @@ app.get('/brain', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'brain.html'));
 });
 
+app.get('/fury', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'fury.html'));
+});
+
 app.get('/ace-props', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'ace-props.html'));
 });

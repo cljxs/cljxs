@@ -110,7 +110,7 @@ the server at `/root/ecosystem`. Every script resolves that root from
 | **Emily** | turns an approved idea into a product: artwork, a Printify product, listing text. **Never publishes** - the owner presses Publish | yes |
 | **Paul** | finds local businesses with weak websites, builds a preview site for each the owner approves, drafts a pitch. **Never contacts anyone** | yes |
 | **Fury** | writes the morning briefing | no - pure code |
-| **GM** | a "general manager" brief that proposes jobs for the owner to approve | yes |
+| **Fury** | the manager (the GM retired into him, 2026-10-30): every agent reports to him; a daily debrief that proposes jobs for the owner to approve, and safe re-runs he makes himself | yes |
 | **Clip** (`clipper/`) | cuts permitted videos into captioned short clips | partly |
 
 New this week (the Shop): `scripts/tiktok-kit.py` makes one ready-to-post

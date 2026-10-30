@@ -60,7 +60,7 @@ on disk**, not by what the agent says.
 
 Other agents (not yours, but they share the server, the budget and the web
 app): Peter (NFL/NBA props), Scout and Emily (Etsy shop), Paul (local-business
-websites), Clip (video clips), Stan, the Agent Room, Fury and the GM. ROUTING.md
+websites), Clip (video clips), Stan, the Agent Room, and Fury, the manager (the GM was retired into him on 2026-10-30). ROUTING.md
 has a row for each.
 
 **Which engine wakes a model** is `tasks/engines.json`, read only by

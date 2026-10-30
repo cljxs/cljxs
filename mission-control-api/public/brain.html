@@ -18,7 +18,7 @@
     --bg:#0b1020; --panel:#10172a; --card:#131b31; --line:rgba(148,163,184,.16);
     --ink:#e6e9f2; --mute:#94a0b8; --dim:#5f6b85;
     --fresh:#4ade80; --quiet:#f59e0b; --failed:#f43f5e; --unknown:#64748b;
-    --wire:rgba(148,163,184,.45); --tasks:#38bdf8; --knowledge:#a78bfa; --proposals:#facc15; --waiting:#fb923c;
+    --wire:rgba(148,163,184,.45); --report:rgba(148,163,184,.22); --fixes:#34d399; --tasks:#38bdf8; --knowledge:#a78bfa; --proposals:#facc15; --waiting:#fb923c;
     --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
   }
   *{box-sizing:border-box}
@@ -41,6 +41,7 @@
   svg{display:block;width:100%;height:auto;max-height:78vh;touch-action:manipulation}
   .edge{fill:none;stroke-linecap:round}
   .edge.wire{stroke:var(--wire);stroke-dasharray:6 7}
+  .edge.report{stroke-dasharray:2 6}
   .edge.flow{stroke-dasharray:10 12;animation:flow 1.6s linear infinite}
   @keyframes flow{to{stroke-dashoffset:-44}}
   @media (prefers-reduced-motion: reduce){.edge.flow{animation:none;stroke-dasharray:none}}
@@ -86,7 +87,8 @@ const when = u => { const d = new Date(u || ''); return isNaN(d) ? 'no run seen'
   : d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
 const STATE = { fresh: ['var(--fresh)', 'ran recently'], quiet: ['var(--quiet)', 'quiet a while'],
   failed: ['var(--failed)', 'a run failed'], unknown: ['var(--unknown)', 'no timer to read'] };
-const KIND = { wire: ['var(--wire)', 'standing wire'], tasks: ['var(--tasks)', 'tasks handed over'],
+const KIND = { wire: ['var(--wire)', 'standing wire'], report: ['var(--report)', 'reports to Fury'],
+  fixes: ['var(--fixes)', "Fury's fixes"], tasks: ['var(--tasks)', 'tasks handed over'],
   knowledge: ['var(--knowledge)', 'lessons shared'], proposals: ['var(--proposals)', 'GM proposals'],
   waiting: ['var(--waiting)', 'waiting on you'] };
 let D = null, picked = null;
@@ -101,7 +103,7 @@ if (new URLSearchParams(location.search).get('embed') === '1') {
 }
 
 $('legend').innerHTML = Object.entries(KIND).map(([k, [c, l]]) =>
-    `<span><i class="${k === 'wire' ? 'dash' : ''}" style="border-top-color:${c}"></i>${l}</span>`).join('')
+    `<span><i class="${k === 'wire' || k === 'report' ? 'dash' : ''}" style="border-top-color:${c}"></i>${l}</span>`).join('')
   + Object.entries(STATE).map(([, [c, l]]) => `<span><b style="background:${c}"></b>${l}</span>`).join('');
 
 async function load() {
@@ -129,9 +131,10 @@ function draw() {
     const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1;
     const bend = (i % 2 ? -1 : 1) * (18 + 26 * Math.ceil(i / 2));
     const cx = mx - dy / len * bend, cy = my + dx / len * bend;
-    const w = (e.kind === 'wire' ? 2 : Math.min(9, 2.5 + Math.log2(1 + (e.count || 0)) * 1.6)) * S;
+    const still = e.kind === 'wire' || e.kind === 'report';
+    const w = (still ? 2 : Math.min(9, 2.5 + Math.log2(1 + (e.count || 0)) * 1.6)) * S;
     const touches = !picked || e.from === picked || e.to === picked;
-    return `<path class="edge ${e.kind === 'wire' ? 'wire' : 'flow'}${touches ? '' : ' dim'}" d="M${x1},${y1} Q${cx},${cy} ${x2},${y2}"
+    return `<path class="edge ${still ? 'wire ' + e.kind : 'flow'}${touches ? '' : ' dim'}" d="M${x1},${y1} Q${cx},${cy} ${x2},${y2}"
       stroke="${KIND[e.kind][0]}" stroke-width="${w}" marker-end="url(#arr-${e.kind})"><title>${esc(byId[e.from].name)} → ${esc(byId[e.to].name)}: ${esc(e.label)}${e.count != null ? ' ×' + e.count : ''}</title></path>`;
   }).join('');
   const linked = new Set(D.edges.filter(e => e.from === picked || e.to === picked).flatMap(e => [e.from, e.to]));
@@ -152,7 +155,7 @@ function draw() {
     g.onclick = go;
     g.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
   });
-  $('alone').innerHTML = (D.alone || []).length ? `<div class="alone"><b>Working alone:</b> ${D.alone.map(a => esc(byId[a].name)).join(', ')} - no wire and nothing passed this week. This is where agents could start talking to each other.</div>` : '';
+  $('alone').innerHTML = (D.alone || []).length ? `<div class="alone"><b>Working alone:</b> ${D.alone.map(a => esc(byId[a].name)).join(', ')} - they report to Fury, but nothing passes between them and any other agent. This is where agents could start talking to each other.</div>` : '';
   detail(byId);
   $('all').innerHTML = `<summary>Every connection (${D.edges.length}) · traffic is the last ${D.window_days} days · as of ${esc(when(D.asof_utc))}</summary>
     <ul>${D.edges.map(e => `<li>${esc(byId[e.from].name)} → ${esc(byId[e.to].name)}: ${esc(e.label)}${e.count != null ? ` <span class="pill">×${e.count}</span> <span class="muted">${esc(e.detail)}</span>` : ' <span class="muted">(standing wire)</span>'}</li>`).join('')}</ul>`;
@@ -168,9 +171,9 @@ function label(name, x, y) {
 
 function detail(byId) {
   if (!picked) {
-    const moving = D.edges.filter(e => e.kind !== 'wire');
-    $('detail').innerHTML = `<h2>The whole picture</h2><div class="muted">${D.nodes.length - 1} parts, ${D.edges.length - moving.length} standing wires,
-      ${moving.length} line(s) with traffic this week. Tap an agent to see who it talks to.</div>`;
+    const moving = D.edges.filter(e => e.kind !== 'wire' && e.kind !== 'report');
+    $('detail').innerHTML = `<h2>The whole picture</h2><div class="muted">${D.nodes.length - 1} parts, ${D.edges.filter(e => e.kind === 'wire').length} standing wires,
+      ${moving.length} line(s) with traffic this week. Every agent reports to Fury. Tap an agent to see who it talks to.</div>`;
     return;
   }
   const n = byId[picked];

@@ -3520,9 +3520,9 @@ function openHallPanel(){
   openAgent = HALL_DOOR;
   $('card').innerHTML = `
     <h2>${esc(HALL_DOOR)}</h2>
-    <div class="sub">today's AI budget · the GM's proposals · what the ecosystem has learned</div>
+    <div class="sub">today's AI budget · Fury's debrief and proposals · what the ecosystem has learned</div>
     <div id="hallBudget"><div class="muted">reading the budget…</div></div>
-    <div class="sect">This morning's GM</div>
+    <div class="sect">Fury's debrief this morning</div>
     <div id="hallGm"><div class="muted">loading…</div></div>
     <div class="sect">Knowledge</div>
     <div id="hallTabs" class="ptabs"></div>
@@ -3584,11 +3584,11 @@ function drawBudget(b){
 
 function drawGm(g){
   if (!g || g.status === 'none') {
-    return `<div class="muted">The GM has not run yet. It runs each morning after Fury's
-      briefing; to run it now: <b>python3 scripts/gm.py run</b></div>`;
+    return `<div class="muted">Fury has not written a debrief yet. He writes one each morning after
+      collecting every agent's report; to run it now: <b>python3 scripts/gm.py run</b></div>`;
   }
   if (g.status === 'unreadable') {
-    return `<div class="verdict">The GM's morning could not be read${g.reason ? ' — ' + esc(g.reason) : ''}.</div>`;
+    return `<div class="verdict">Fury's debrief could not be read${g.reason ? ' — ' + esc(g.reason) : ''}.</div>`;
   }
   const head = `<div class="muted">${esc(g.day)} · ${esc(g.status)}` +
     (g.cost_usd !== null && g.cost_usd !== undefined ? ` · cost $${Number(g.cost_usd).toFixed(4)}` : '') +
@@ -3641,17 +3641,23 @@ function drawGm(g){
     ? `<div class="muted" style="margin-top:8px">Knowledge it suggested (see Proposed below):</div>` +
       g.knowledge.map(x => `<div class="muted">${esc(x.title)} — ${esc(x.result)}</div>`).join('')
     : '';
-  return head + (g.summary ? `<div class="quote">${esc(g.summary)}</div>` : '') +
+  const needs = (g.attention || []).length
+    ? `<div class="muted" style="margin-top:6px"><b>Needs you</b></div>` +
+      g.attention.map(a => `<div class="w">• ${esc(a.text)}</div>`).join('') : '';
+  const fixed = (g.fixes || []).length
+    ? `<div class="muted" style="margin-top:6px"><b>Fury fixed himself</b></div>` +
+      g.fixes.map(x => `<div class="w">• re-ran ${esc(x.unit)} — ${esc(x.status)}: ${esc(x.why)}</div>`).join('') : '';
+  return head + (g.summary ? `<div class="quote">${esc(g.summary)}</div>` : '') + needs + fixed +
     (cards || '<div class="muted">No proposals this morning.</div>') + dropped + know;
 }
 
 async function actOnProposal(day, n, verdict, sends){
   if (hallBusy) return;
   const ask = verdict === 'decline'
-    ? 'Why not? The GM reads this tomorrow so it does not propose it again.'
+    ? 'Why not? Fury reads this tomorrow so he does not propose it again.'
     : sends
-    ? 'This sends the job now. Note for the GM (optional):'
-    : 'This one is yours to do. Note for the GM (optional):';
+    ? 'This sends the job now. Note for Fury (optional):'
+    : 'This one is yours to do. Note for Fury (optional):';
   const note = window.prompt(ask, '');
   if (note === null) return;
   if (verdict === 'decline' && !note.trim()) return;
@@ -3769,7 +3775,7 @@ function closePanel() { closeMarkets(); openAgent = null; $('panel').style.displ
 const FRAMES = { belfort: '/markets?embed=1', ace: '/ace?embed=1', peter: '/peter?embed=1', bolt: '/bolt?embed=1',
                  paul: '/paul?embed=1', shop: '/shop?embed=1', agentroom: '/agentroom?embed=1',
                  stan: '/stan?embed=1', coach: '/coach?embed=1', emily: '/emily?embed=1',
-                 aceprops: '/ace-props?embed=1', brain: '/brain?embed=1' };
+                 aceprops: '/ace-props?embed=1', brain: '/brain?embed=1', fury: '/fury?embed=1' };
 function openFrame(agent) {
   closeMarkets();
   openAgent = agent;
@@ -3789,7 +3795,7 @@ function closeMarkets() {
 }
 window.addEventListener('message', e => {
   if (e.origin === location.origin && e.data
-      && ['markets-close', 'ace-close', 'peter-close', 'bolt-close', 'paul-close', 'shop-close', 'agentroom-close', 'stan-close', 'coach-close', 'emily-close', 'aceprops-close', 'brain-close'].includes(e.data.type)) closeMarkets();
+      && ['markets-close', 'ace-close', 'peter-close', 'bolt-close', 'paul-close', 'shop-close', 'agentroom-close', 'stan-close', 'coach-close', 'emily-close', 'aceprops-close', 'brain-close', 'fury-close'].includes(e.data.type)) closeMarkets();
 });
 $('panel').addEventListener('click', e => { if (e.target.id === 'panel') closePanel(); });
 
@@ -3901,13 +3907,13 @@ function boot() {
 
 // Who each one is, for the agents list. Display only.
 const ROLE = { ace: 'Sports bettor', belfort: 'Stock trader', bolt: 'Crypto trader', emily: 'Etsy designer',
-  fury: 'Morning briefing', paul: 'Website builder', scout: 'Market research', stan: 'Idea hunter' };
+  fury: 'Manager', paul: 'Website builder', scout: 'Market research', stan: 'Idea hunter' };
 const HUE = { ace: '#f28c28', belfort: '#7fa7ff', bolt: '#f7931a', emily: '#ff8fc0', fury: '#ff6b6b',
   paul: '#5ad1e8', scout: '#9bd36a', stan: '#ff8a3d' };
 const STATUS = { active: ['#38e1ff', 'Active'], idle: ['#9b8cff', 'Idle'], stale: ['#ff5a6e', 'Stale'],
   waiting: ['#7f8bb0', 'Waiting'] };
 // The Deck's pages, opened over the village as the houses open them.
-const NAV = [['deck', '🛰', 'Command Deck'], ['ace', '🏀', 'Ace'], ['aceprops', '🎯', 'Ace Props'], ['peter', '📈', 'Peter'],
+const NAV = [['deck', '🛰', 'Command Deck'], ['fury', '🧭', "Fury's debrief"], ['ace', '🏀', 'Ace'], ['aceprops', '🎯', 'Ace Props'], ['peter', '📈', 'Peter'],
   ['belfort', '🏦', 'Markets'], ['bolt', '⚡', 'Bolt'], ['coach', '📓', 'Trading Coach'], ['paul', '📐', "Paul's Studio"], ['emily', '🎨', "Emily's Studio"], ['shop', '🛍', 'Shop'],
   ['stan', '💡', 'Stan'], ['agentroom', '🧩', 'Agent Room'], ['brain', '🧠', 'Brain map']];
 // attention.py's tabs and the Deck's stale rule, keyed the way NAV is.

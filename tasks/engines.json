@@ -22,6 +22,8 @@
     "clip is Python; only its reading of a transcript (stories.py: where each story",
     "and argument starts and ends, a few questions an episode, no tools) and Write",
     "hooks (web search, up to max_turns) ask the plan. Neither falls back to a bill.",
+    "fury is the manager's morning (scripts/gm.py run): one question on Sonnet, no tools;",
+    "his safe fixes are plain-code re-runs and wake no model.",
     "reddit is scripts/reddit_search.py: Reddit read through web search for Scout,",
     "Stan and Belfort, one question a day each, web search only, never billed."
   ],
@@ -67,6 +69,12 @@
       "engine": "claude",
       "model": "sonnet",
       "max_turns": 8,
+      "fallback": "none"
+    },
+    "fury": {
+      "engine": "claude",
+      "model": "sonnet",
+      "max_turns": 1,
       "fallback": "none"
     },
     "reddit": {

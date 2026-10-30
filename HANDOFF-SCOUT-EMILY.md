@@ -64,7 +64,7 @@ and wakes the agent). Agents do their work by calling Python scripts in
 `scripts/`, and **code judges the work by what is on disk**, never by what the
 agent says. Other agents share the server, the budget and the web app: Ace,
 Belfort, Bolt (paper trading), Peter (sports props), Paul (local-business
-websites), Clip (video clips), Stan, the Agent Room, Fury and the GM.
+websites), Clip (video clips), Stan, the Agent Room, and Fury, the manager (the GM was retired into him on 2026-10-30).
 ROUTING.md has a row for each.
 
 **Which engine wakes a model** is `tasks/engines.json`, read only by

@@ -64,7 +64,7 @@ the heaviest thing on it), repo cloned at `/root/ecosystem`. Agents wake on
 **systemd timers** and code judges their work by what is on disk. Other agents
 share the server, the budget and the web app: Ace, Belfort, Bolt (paper
 trading), Peter (sports props), Scout and Emily (Etsy shop), Paul (local
-websites), Stan, the Agent Room, Fury and the GM. ROUTING.md has a row for each.
+websites), Stan, the Agent Room, and Fury, the manager (the GM was retired into him on 2026-10-30). ROUTING.md has a row for each.
 
 **Clip is mostly code, not a model.** Transcription is local (faster-whisper,
 free); moments are scored by formulas; rendering is ffmpeg. A model is used

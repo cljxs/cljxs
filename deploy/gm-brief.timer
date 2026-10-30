@@ -1,5 +1,5 @@
 [Unit]
-Description=Wake the GM each morning, after Fury's briefing
+Description=Fury's morning debrief, after his collector's briefing
 
 [Timer]
 # 08:50 CENTRAL (the user's clock). Fury writes the briefing the GM reads at

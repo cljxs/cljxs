@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-gm.py — the GM's morning: the day's facts in, a few proposals out.
+gm.py — Fury's brain: every agent's report in, the owner's debrief out.
 
     python3 scripts/gm.py run                  # the morning run (the timer does this)
     python3 scripts/gm.py run --dry-run        # print the facts and prompt, call nothing
@@ -9,7 +9,29 @@ gm.py — the GM's morning: the day's facts in, a few proposals out.
     python3 scripts/gm.py decide 2026-09-26 1 approve --note "yes, today"
     python3 scripts/gm.py decide 2026-09-26 2 decline --note "not while totes-only"
 
-THE GM PROPOSES; THE OWNER DECIDES; CODE SENDS. The GM itself creates no
+FURY IS THE MANAGER (owner, 2026-10-30: "I want Fury to be a manager agent so
+every single other agent give reports to him. I want daily debriefs from him
+on what needs my attention, what i should be doing ... capable of assigning
+tasks to other agents to fix things"). This was the GM's morning; the GM is
+retired into Fury, so there is one manager and no second opinion. Fury's
+collector (fury-collect.py) still reads the system in plain code; this is
+the part that thinks - one question on the owner's Claude plan, Sonnet
+(tasks/engines.json "fury"), never billed to OpenRouter. Each morning:
+
+  * every agent reports: Fury's briefing, each agent's last run and any
+    failed timer (brain.py's map, read the way health-check.py reads
+    systemd), what waits on the owner (attention.py), Scout's ideas, the
+    budget, the knowledge store and the owner's last answers;
+  * the debrief: what needs the owner, and proposals - the owner's to-dos
+    and jobs for agents - every one citing the facts it rests on;
+  * SAFE FIXES, done by Fury himself (the owner's choice: "safe fixes
+    alone, rest asks"): only a re-run of a unit in SAFE_FIXES - plain-code
+    fetches that spend nothing and decide nothing - and only when a fact he
+    cites says that unit failed; at most FIXES_PER_DAY, each unit once a
+    day. Anything that spends money, changes a rule, publishes or contacts
+    anyone is a proposal and waits for the owner's tap.
+
+THE MANAGER PROPOSES; THE OWNER DECIDES; CODE SENDS. The GM itself creates no
 task and wakes no agent. Each proposal is for the owner or for one agent, and
 an agent proposal must name one of that agent's TASKS - the only jobs that
 exist for it to be handed. When the owner approves an agent proposal, code
@@ -88,20 +110,36 @@ ea = budget.preflight.ea                       # the OpenRouter URL and cost_of(
 fury = _load("fury_collect", "fury-collect.py") # the system's state, and the briefing
 new_build = _load("emily_new_build", "emily-new-build.py")  # what a build is booked at
 
-# openai/gpt-5-mini is a slug captured from OpenRouter's own model list
-# (tests/fixtures/openrouter-models.json), not typed from memory. At its
-# captured rates a morning of a few thousand tokens is about a cent.
-DEFAULT_MODEL = "openai/gpt-5-mini"
-# gpt-5-mini reasons before it answers, and the reasoning counts against
-# max_tokens: a cap that is all thinking returns an empty answer. Low effort
-# plus this room keeps the worst case near a cent and a half.
-MAX_TOKENS = 6000
-REASONING = {"effort": "low"}
+# Fury thinks on the owner's Claude plan ("fury" in tasks/engines.json,
+# Sonnet). Until 2026-10-30 the GM was openai/gpt-5-mini on OpenRouter and
+# slept whenever the day's OpenRouter allowance ran low; on the plan the
+# debrief is written whatever OpenRouter has left, and the budget only
+# decides whether a job that spends it can be sent.
+ENGINE = "fury"
+# gm-brief.service gives the whole morning 300 seconds (420 once reinstalled):
+# the question gets 240 of them, the facts and the fixes the rest.
+PLAN_TIMEOUT = 240
 
-# Dollars of today's AI allowance the GM needs before it will wake. A morning
-# costs about a cent; this leaves room for a long reply without being the call
-# that takes the agents' day to zero.
+# Dollars of today's OpenRouter allowance a job must find before it is sent.
 MIN_LEFT = 0.10
+ATTENTION_MAX = 5
+
+# THE ONLY THINGS FURY DOES WITHOUT ASKING. Each is a unit that re-reads data
+# in plain code: no model, no money, no trade, nothing published or sent to
+# anyone - re-running one does what its own timer would do, sooner. Tools
+# that spend (an image, a paid scene, Odds API close credits), trade, or
+# wake an agent's model are not here and never run on Fury's say-so.
+SAFE_FIXES = {
+    "belfort-fetch": "re-read Belfort's stock quotes and news (Yahoo, free)",
+    "ace-fetch": "re-read Ace's games, odds and injuries (ESPN, free)",
+    "stan-fetch": "re-read Hacker News for Stan (free)",
+    "scout-niches": "re-measure the oldest Etsy niches (Etsy API, free)",
+    "peter-defense": "rebuild Peter's defense-vs-position tables (ESPN, free)",
+    "coach-daily": "rewrite the coaches' daily journals (plain code, free)",
+    "fury-collect": "re-collect the whole system's state (plain code, free)",
+}
+FIXES_PER_DAY = 3
+FIX_TIMEOUT = 30
 
 MAX_PROPOSALS = 5
 # Knowledge the GM may propose each morning. Zero since its first real run
@@ -126,7 +164,8 @@ ROLES = {
     "scout":   "searches the Etsy market and proposes product ideas for the owner to review.",
     "belfort": "paper-trades stocks on its own schedule.",
     "ace":     "places paper sports bets on its own schedule.",
-    "fury":    "writes the morning briefing, in plain code.",
+    "fury":    "the manager: reads every agent's report each morning, writes the owner's "
+               "debrief, re-runs failed data fetches himself and proposes everything else.",
     "bolt":    "paper-trades crypto every 10 minutes, in plain code - no model.",
     "paul":    "finds local businesses for the owner to approve, builds a preview "
                "website for each one approved, and drafts a pitch for the owner to send. "
@@ -161,8 +200,17 @@ TASKS = {
 SEND_TIMEOUT = 110
 
 
+def _wake():
+    return _load("wake_fury", "wake.py")
+
+
 def model():
-    return os.environ.get("GM_MODEL", "").strip() or DEFAULT_MODEL
+    """What Fury thinks with, as the day's record says it."""
+    try:
+        s = _wake().setting(ENGINE)
+        return f"{s.get('model')} on the Claude plan" if s.get("engine") == "claude" else "not on the plan"
+    except BaseException as exc:            # setting() exits on a broken engines.json
+        return f"unknown ({str(exc)[:80]})"
 
 
 def utc_now():
@@ -276,11 +324,44 @@ def idea_facts(ideas):
             f"({i.get('product') or 'product not given'})." for i in ideas]
 
 
-def compile_facts(b, con, day, now=None, briefing=None, days=None, ideas=()):
-    """Every fact the GM is given, read at the moment it runs."""
+def _brain():
+    return _load("brain_fury", "brain.py")
+
+
+def health_facts(runs, now=None):
+    """Every agent's report on whether it ran: its last run and any failed
+    unit, from brain.py's map (health-check.py's reader). A failed unit's
+    fact names the unit - that is what a safe fix must cite."""
+    names = {n[0]: n[1] for n in _brain().NODES}
+    out = []
+    for nid, r in sorted((runs or {}).items()):
+        if nid == "you" or r.get("state") == "unknown" and not r.get("failed"):
+            continue
+        when = et_time.to_eastern(r.get("last_run_utc"))
+        at = when.strftime("%a %b %-d %-I:%M %p ET") if when else "never"
+        for u in r.get("failed") or []:
+            out.append(f"Health: {names.get(nid, nid)}'s {u} failed on its last run.")
+        if not r.get("failed"):
+            word = "ran recently" if r.get("state") == "fresh" else "has been quiet"
+            out.append(f"Health: {names.get(nid, nid)} {word} - last run {at}.")
+    return out
+
+
+def waiting_facts(att):
+    """What is waiting on the owner on each Deck tab (attention.py)."""
+    out = []
+    for tab, a in sorted((att or {}).items()):
+        if (a or {}).get("n"):
+            why = "; ".join(str(w) for w in a.get("why") or []) or f"{a['n']} item(s)"
+            out.append(f"Waiting on the owner ({tab}): {why}.")
+    return out
+
+
+def compile_facts(b, con, day, now=None, briefing=None, days=None, ideas=(), health=None, att=None):
+    """Every fact Fury is given, read at the moment he runs."""
     text = (briefing or live_briefing)(now)
-    return (briefing_facts(text) + idea_facts(ideas) + budget_facts(b)
-            + knowledge_facts(con, now) + decision_facts(previous(day, days)))
+    return (briefing_facts(text) + health_facts(health, now) + waiting_facts(att) + idea_facts(ideas)
+            + budget_facts(b) + knowledge_facts(con, now) + decision_facts(previous(day, days)))
 
 
 # ------------------------------------------------------------------ the call
@@ -342,8 +423,10 @@ def messages(facts, rules, day, cap):
                            '"title": "...", "body": "...", "evidence": "...", "confidence": "observed"}]')
     else:
         knowledge_rule, knowledge_shape = "", ""
-    system = f"""You are the GM of a small business run by one owner and a few AI agents.
-Each morning you read the facts below and propose what should happen today.
+    fixable = "\n".join(f"   {u}: {why}" for u, why in SAFE_FIXES.items())
+    system = f"""You are Fury, the manager of a small business run by one owner and a team of AI agents.
+Every agent reports to you. Each morning you read the facts below - every agent's
+report - and write the owner's debrief: what needs them, and what should happen today.
 
 You propose; the owner approves or declines each proposal. An approved
 proposal for an agent is sent to that agent as the task you named. An
@@ -373,9 +456,18 @@ Rules - code checks the first four and drops any proposal that breaks them:
 10. Learn from the owner's decisions on the last proposals. Do not re-propose
     something declined unless a fact has changed.
 11. Keep "action" and "why" under {ASK_MAX} characters each.
+12. "attention": at most {ATTENTION_MAX} things the owner must know about today, most
+    urgent first - something broken, waiting on them, or going wrong - each citing facts,
+    with no number that is not in a fact it cites. Not a repeat of a proposal.
+13. "fixes": the only thing you may do yourself is re-run one of these, and only when a
+    fact you cite says that exact unit failed. At most {FIXES_PER_DAY}. Everything else
+    is a proposal for the owner to approve.
+{fixable}
 {knowledge_rule}
 Reply with one JSON object and nothing else:
 {{"summary": "two or three sentences on the state of things",
+  "attention": [{{"text": "...", "facts": ["F2"]}}],
+  "fixes": [{{"unit": "belfort-fetch", "why": "...", "facts": ["F3"]}}],
   "proposals": [{{"title": "...", "dept": "...", "who": "...",
                  "task": "build_idea | run_scout | leave out for the owner",
                  "idea": 7,
@@ -385,30 +477,20 @@ Reply with one JSON object and nothing else:
     user = (f"Today is {day} (Eastern).\n\nFACTS\n{numbered}\n\n"
             f"ACCEPTED KNOWLEDGE\n{rules or '(none accepted yet)'}\n\n"
             f"TEAM - who each one is, and what each can be sent\n{roster()}\n")
+    # The plan takes one question: Fury's rules and the morning, in that order.
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def call_model(msgs, key, slug, timeout=180):
-    """One chat call through OpenRouter. Returns (text, usage)."""
-    body = {"model": slug, "messages": msgs, "max_tokens": MAX_TOKENS,
-            "response_format": {"type": "json_object"},
-            "reasoning": REASONING,
-            "usage": {"include": True}}
-    req = urllib.request.Request(
-        ea.OR_URL, data=json.dumps(body).encode(),
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
-                 "HTTP-Referer": "https://github.com/cljxs/cljxs", "X-Title": "gm"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        data = json.loads(r.read())
-    if data.get("error"):
-        raise RuntimeError(f"OpenRouter: {str(data['error'])[:200]}")
-    choice = (data.get("choices") or [{}])[0]
-    text = (choice.get("message") or {}).get("content") or ""
-    usage = dict(data.get("usage") or {})
-    # Why the reply ended. "length" beside an empty answer means the cap went
-    # on reasoning - the one failure that looks like the model saying nothing.
-    usage["finish_reason"] = choice.get("finish_reason")
-    return text, usage
+def call_model(msgs, key=None, slug=None, timeout=PLAN_TIMEOUT):
+    """One question on the owner's Claude plan (wake.py ask, no tools).
+    Returns (text, usage); the plan is not billed per call, so usage is
+    empty. `key` and `slug` are unused - kept so a test's stand-in keeps
+    its shape."""
+    question = msgs[0]["content"] + "\n\n" + msgs[1]["content"]
+    ok, text = _wake().ask(ENGINE, question, timeout)
+    if not ok:
+        raise RuntimeError(f"the Claude plan did not answer: {str(text)[:200]}")
+    return text, {}
 
 
 # ----------------------------------------------------------------- the reply
@@ -540,6 +622,95 @@ def check_reply(doc, facts, waiting=frozenset()):
     return summary, kept, dropped, ks
 
 
+def _cited(raw, facts):
+    """[fact numbers] from a list like ["F1", "F3"], or None if any is not a
+    fact that was given."""
+    ids = []
+    for c in raw if isinstance(raw, list) else []:
+        m = re.fullmatch(r"[Ff](\d+)", str(c).strip())
+        if not m or not 1 <= int(m.group(1)) <= len(facts):
+            return None
+        ids.append(int(m.group(1)))
+    return sorted(set(ids))
+
+
+def check_attention(doc, facts):
+    """(kept, dropped) for what Fury says needs the owner: each cites real
+    facts and uses no number that is not in one of them."""
+    kept, dropped = [], []
+    for a in doc.get("attention") if isinstance(doc.get("attention"), list) else []:
+        text = _text((a or {}).get("text") if isinstance(a, dict) else a, TEXT_MAX)
+        if not text:
+            continue
+        ids = _cited((a or {}).get("facts") if isinstance(a, dict) else None, facts)
+        why = ("cites no facts it was given" if not ids
+               else "over the limit" if len(kept) >= ATTENTION_MAX else None)
+        if not why:
+            grounded = set().union(*(numbers(facts[i - 1]) for i in ids))
+            extra = sorted(numbers(text) - grounded)
+            if extra:
+                why = f"uses {', '.join(f'{n:g}' for n in extra)}, which is in none of the facts it cites"
+        if why:
+            dropped.append({"title": text[:TITLE_MAX], "reason": f"attention: {why}"})
+        else:
+            kept.append({"text": text, "facts": [f"F{i}" for i in ids]})
+    return kept, dropped
+
+
+def fixes_done(day, days=None):
+    """The units Fury re-ran on `day` - kept apart from the day's record, so
+    a forced re-run of the debrief cannot buy him a second round."""
+    path = Path(days or DAYS) / "fixes.jsonl"
+    try:
+        rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    except (OSError, ValueError):
+        return []
+    return [r["unit"] for r in rows if r.get("day") == day and r.get("status") == "started"]
+
+
+def check_fixes(doc, facts, done=()):
+    """(fixes to make, dropped). A fix is a re-run of a SAFE_FIXES unit that a
+    cited fact says failed, at most FIXES_PER_DAY a day counting `done`, each
+    unit once a day."""
+    kept, dropped = [], []
+    for x in doc.get("fixes") if isinstance(doc.get("fixes"), list) else []:
+        if not isinstance(x, dict):
+            continue
+        unit = str(x.get("unit") or "").strip().removesuffix(".service")
+        ids = _cited(x.get("facts"), facts)
+        if unit not in SAFE_FIXES:
+            why = f"{unit or 'nothing'} is not a safe fix - only {', '.join(SAFE_FIXES)} are"
+        elif not ids or not any(re.search(rf"\b{re.escape(unit)}\b failed", facts[i - 1]) for i in ids):
+            why = f"no fact it cites says {unit} failed"
+        elif unit in done or unit in [k["unit"] for k in kept]:
+            why = f"{unit} was already re-run today"
+        elif len(done) + len(kept) >= FIXES_PER_DAY:
+            why = f"over the limit of {FIXES_PER_DAY} fixes a day"
+        else:
+            why = None
+        if why:
+            dropped.append({"title": f"re-run {unit}", "reason": f"fix: {why}"})
+        else:
+            kept.append({"unit": unit, "why": _text(x.get("why"), TEXT_MAX) or SAFE_FIXES[unit],
+                         "facts": [f"F{i}" for i in ids]})
+    return kept, dropped
+
+
+def make_fixes(fixes, day, days=None, runner=None, now=None):
+    """Start each checked fix and record it - on the fix, and in the day's
+    ledger the limit is counted from."""
+    at = (now or utc_now()).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ledger = Path(days or DAYS) / "fixes.jsonl"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    for x in fixes:
+        code, out, err = (runner or run_command)(["systemctl", "start", "--no-block", f"{x['unit']}.service"])
+        x.update(status="started" if code == 0 else "not started",
+                 detail=(_tail(out) or "re-run started") if code == 0 else (_tail(err) or f"exit {code}"), at=at)
+        with ledger.open("a") as f:
+            f.write(json.dumps({"day": day, "unit": x["unit"], "status": x["status"], "at": at}) + "\n")
+    return fixes
+
+
 def file_knowledge(con, suggestions):
     """Hand the GM's suggestions to knowledge.py, which proposes or refuses."""
     out = []
@@ -590,10 +761,12 @@ def latest(days=None):
 
 
 def run(force=False, dry_run=False, now=None, days=None, con=None,
-        read_budget=None, call=None, key=None, briefing=None, ideas=None):
+        read_budget=None, call=None, key=None, briefing=None, ideas=None,
+        health=None, att=None, runner=None):
     """The morning. Returns (exit code, the day's record). Injectable parts
     are what the tests replace: the budget read, the briefing, Scout's
-    waiting ideas, the model call and the key."""
+    waiting ideas, each agent's runs, what waits on the owner, the model
+    call, and the runner that starts a fix."""
     now = now or utc_now()
     day = et_time.day(et_time.to_eastern(now))
     existing = read_day(day_path(day, days))
@@ -602,7 +775,8 @@ def run(force=False, dry_run=False, now=None, days=None, con=None,
 
     doc = {"day": day, "generated_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
            "model": model(), "status": None, "reason": None, "cost_usd": None,
-           "facts": [], "summary": "", "proposals": [], "dropped": [], "knowledge": []}
+           "facts": [], "summary": "", "attention": [], "fixes": [], "proposals": [],
+           "dropped": [], "knowledge": []}
 
     def finish(status, reason=None, code=0):
         doc["status"], doc["reason"] = status, reason
@@ -610,21 +784,26 @@ def run(force=False, dry_run=False, now=None, days=None, con=None,
             write_day(doc, days)
         return code, doc
 
+    # The budget is a fact, not a gate: Fury thinks on the Claude plan, and a
+    # job that would spend OpenRouter's allowance is checked again when sent.
     try:
         b = (read_budget or budget.read)()
-    except Exception as exc:
-        return finish("skipped", f"the budget could not be read ({exc}) - "
-                                 f"the GM does not spend against an unknown budget")
-    if b.get("state") != "ok":
-        return finish("skipped", f"the budget says {b.get('state')!r}")
-    if b.get("ai_left_today") is None or b["ai_left_today"] < MIN_LEFT:
-        return finish("skipped", f"less than ${MIN_LEFT:.2f} of today's AI allowance is left")
+    except Exception:
+        b = {"state": "unreadable"}
 
     own_con = con is None
     con = con or knowledge.connect()
     try:
         waiting = (ideas or waiting_ideas)()
-        facts = compile_facts(b, con, day, now, briefing, days, waiting)
+        try:
+            runs = health() if health else _brain().runs(now=now)
+        except Exception:
+            runs = {}
+        try:
+            waiting_now = att() if att else _load("attention_fury", "attention.py").attention()
+        except Exception:
+            waiting_now = {}
+        facts = compile_facts(b, con, day, now, briefing, days, waiting, runs, waiting_now)
         rules = knowledge.brief(con, knowledge.EVERY)
         doc["facts"] = facts
         msgs = messages(facts, rules, day, b.get("cap"))
@@ -632,9 +811,6 @@ def run(force=False, dry_run=False, now=None, days=None, con=None,
             print(msgs[0]["content"] + "\n\n" + msgs[1]["content"])
             return 0, doc
 
-        key = key if key is not None else budget.preflight.openrouter_key()
-        if not key:
-            return finish("failed", "no OPENROUTER_API_KEY found", 1)
         try:
             text, usage = (call or call_model)(msgs, key, model())
         except Exception as exc:
@@ -651,6 +827,10 @@ def run(force=False, dry_run=False, now=None, days=None, con=None,
         numbers_waiting = {idea_number(i.get("id")) for i in waiting}
         doc["summary"], doc["proposals"], doc["dropped"], ks = check_reply(
             reply, facts, numbers_waiting)
+        doc["attention"], gone = check_attention(reply, facts)
+        fixes, gone2 = check_fixes(reply, facts, fixes_done(day, days))
+        doc["dropped"] += gone + gone2
+        doc["fixes"] = make_fixes(fixes, day, days, runner, now)
         doc["knowledge"] = file_knowledge(con, ks)
         return finish("ran")
     finally:
@@ -747,13 +927,17 @@ def decide(day, n, verdict, note="", days=None, now=None, **send_kw):
 
 def lines(doc):
     if not doc:
-        return ["The GM has not run yet."]
-    out = [f"GM, {doc['day']} - {doc['status']}"
+        return ["Fury has not written a debrief yet."]
+    out = [f"Fury's debrief, {doc['day']} - {doc['status']}"
            + (f" (${doc['cost_usd']:.4f}, {doc['model']})" if doc.get("cost_usd") is not None else "")]
     if doc.get("reason"):
         out.append(f"  {doc['reason']}")
     if doc.get("summary"):
         out.append(f"  {doc['summary']}")
+    for a in doc.get("attention") or []:
+        out.append(f"  ! {a['text']} ({', '.join(a['facts'])})")
+    for x in doc.get("fixes") or []:
+        out.append(f"  fixed: re-ran {x['unit']} - {x.get('status')}: {x.get('detail')} ({x['why']})")
     for p in doc.get("proposals") or []:
         d = p.get("decision")
         state = "waiting" if not d else ("approved" if d["verdict"] == "approve" else "declined")

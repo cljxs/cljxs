@@ -20,8 +20,9 @@ the files and databases that own it - nothing here decides or sends anything:
           agent (tasks/queue.db), lessons added to the knowledge store and
           by whom, the GM's proposals and the owner's answers, and what is
           waiting on the owner now (attention.py).
-  ALONE   agents with no wire and no traffic: they work on their own. That
-          is where "talking to each other" would start.
+  ALONE   agents that talk to no one but Fury - every agent reports its
+          runs to him (gm.py health_facts), so that line does not count.
+          That is where "talking to each other" would start.
 
 Free: no model, no network. Read-only.
 """
@@ -44,8 +45,8 @@ FRESH_HOURS = 26           # ran within this: lit; a daily agent misses by more 
 #  where it sits on the map: x, y in a 100 x 100 box)
 NODES = [
     ("you", "You", "the owner: approves, declines, decides", [], None, (50, 50)),
-    ("gm", "GM", "reads the morning's facts, proposes", ["gm-brief"], None, (50, 25)),
-    ("fury", "Fury", "collects every agent's state each morning", ["fury-cycle", "fury-collect"], None, (30, 10)),
+    ("fury", "Fury", "the manager: every agent reports to him; your daily debrief, safe fixes, proposals",
+     ["fury-cycle", "fury-collect", "gm-brief"], "/fury", (50, 22)),
     ("knowledge", "Knowledge", "what the ecosystem has learned, once you accept it", [], None, (70, 10)),
     ("scout", "Scout", "Etsy niches and ideas", ["scout-cycle", "scout-niches"], None, (12, 36)),
     ("emily", "Emily", "designs into Printify drafts", ["redraw-art"], "/emily", (12, 58)),
@@ -73,11 +74,14 @@ WIRES = [
     ("ace", "coach", "his settled bets and closing lines", "scripts/coach.py", "ace-book.py"),
     ("ace", "aceprops", "one bankroll, two books", "scripts/ace-props.py", "ace-book.py"),
     ("stan", "agentroom", "a pain you approve becomes a plan", "scripts/stan.py", "agentroom"),
-    ("fury", "gm", "the morning briefing", "scripts/gm.py", "fury"),
-    ("scout", "gm", "ideas waiting on you", "scripts/gm.py", "fury.scout.load_ideas"),
-    ("knowledge", "gm", "accepted lessons", "scripts/gm.py", "knowledge_facts"),
-    ("gm", "you", "proposals for you to approve", "scripts/gm.py", "def decide"),
+    ("scout", "fury", "ideas waiting on you", "scripts/gm.py", "fury.scout.load_ideas"),
+    ("knowledge", "fury", "accepted lessons", "scripts/gm.py", "knowledge_facts"),
+    ("fury", "you", "the daily debrief: what needs you, proposals to approve", "scripts/gm.py", "def decide"),
 ]
+# Every agent reports to Fury (owner, 2026-10-30): its runs and failures,
+# through gm.py's health_facts.
+WIRES += [(nid, "fury", "reports its runs and failures", "scripts/gm.py", "health_facts")
+          for nid, *_ in NODES if nid not in ("you", "fury", "knowledge")]
 
 ATTENTION_NODE = {"shop": "shop", "stan": "stan", "agentroom": "agentroom", "bolt": "bolt"}
 
@@ -166,6 +170,7 @@ def knowledge_traffic(db=None, now=None):
     known, out = set(node_ids()), {}
     for e in rows:
         src = str(e.get("source") or "")
+        src = "fury" if src == "gm" else src        # the GM is Fury since 2026-10-30
         src = src if src in known else "you" if src in ("owner", "you", "") else None
         if not src:
             continue
@@ -176,7 +181,7 @@ def knowledge_traffic(db=None, now=None):
 
 
 def gm_traffic(days_dir=None, now=None):
-    """[("gm", who, label, count, detail)]: the GM's proposals in the window,
+    """[("fury", who, label, count, detail)]: Fury's proposals in the window,
     to you or to an agent, and what you said."""
     d = Path(days_dir or ROOT / "tasks" / "gm")
     if not d.is_dir():
@@ -197,8 +202,28 @@ def gm_traffic(days_dir=None, now=None):
             state = "waiting" if not dec else "approved" if dec.get("verdict") == "approve" else "declined"
             c = out.setdefault(who, {})
             c[state] = c.get(state, 0) + 1
-    return [("gm", who, "proposals", sum(c.values()), ", ".join(f"{v} {s}" for s, v in sorted(c.items())))
-            for who, c in sorted(out.items())]
+    return [("fury", who, "proposals", sum(c.values()), ", ".join(f"{v} {s}" for s, v in sorted(c.items())))
+            for who, c in sorted(out.items()) if who != "fury"]
+
+
+def fix_traffic(days_dir=None, now=None):
+    """[("fury", node, label, count, detail)]: the re-runs Fury made himself
+    in the window (gm.py's ledger), drawn to the agent the unit belongs to."""
+    path = Path(days_dir or ROOT / "tasks" / "gm") / "fixes.jsonl"
+    try:
+        rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    except (OSError, ValueError):
+        return []
+    first = ((now or datetime.now(timezone.utc)) - timedelta(days=WINDOW_DAYS)).strftime("%Y-%m-%d")
+    owner = {u: nid for nid, _n, _w, units, _p, _xy in NODES for u in units}
+    out = {}
+    for r in rows:
+        nid = owner.get(r.get("unit"))
+        if nid and str(r.get("day") or "") >= first:
+            c = out.setdefault(nid, {})
+            c[r.get("status")] = c.get(r.get("status"), 0) + 1
+    return [("fury", nid, "safe fixes (re-runs)", sum(c.values()), ", ".join(f"{v} {k}" for k, v in sorted(c.items())))
+            for nid, c in sorted(out.items())]
 
 
 def waiting(att=None):
@@ -222,13 +247,17 @@ def brain(now=None, facts=None, db=None, kdb=None, gm_dir=None, att=None):
     lit = runs(facts, now)
     nodes = [{"id": nid, "name": name, "what": what, "page": page, "x": x, "y": y, "units": units, **lit[nid]}
              for nid, name, what, units, page, (x, y) in NODES]
-    edges = [{"from": a, "to": b, "kind": "wire", "label": label, "count": None, "detail": f"{f}: {needle}"}
+    edges = [{"from": a, "to": b, "kind": "report" if (b == "fury" and needle == "health_facts") else "wire",
+              "label": label, "count": None, "detail": f"{f}: {needle}"}
              for a, b, label, f, needle in WIRES]
     for kind, rows in (("tasks", task_traffic(db, now)), ("knowledge", knowledge_traffic(kdb, now)),
-                       ("proposals", gm_traffic(gm_dir, now)), ("waiting", waiting(att))):
+                       ("proposals", gm_traffic(gm_dir, now)), ("fixes", fix_traffic(gm_dir, now)),
+                       ("waiting", waiting(att))):
         edges += [{"from": a, "to": b, "kind": kind, "label": label, "count": n, "detail": detail}
                   for a, b, label, n, detail in rows]
-    touched = {e["from"] for e in edges} | {e["to"] for e in edges}
+    # Alone: talks to no one but its report to Fury - every agent reports.
+    talk = [e for e in edges if e["kind"] != "report"]
+    touched = {e["from"] for e in talk} | {e["to"] for e in talk}
     alone = [n["id"] for n in nodes if n["id"] not in touched]
     return {"asof_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "window_days": WINDOW_DAYS,
             "nodes": nodes, "edges": edges, "alone": alone,

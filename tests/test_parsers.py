@@ -14004,6 +14004,9 @@ class GMHarness:
             return (reply if isinstance(reply, str) else json.dumps(reply or {})), \
                 {"cost": 0.0123, "prompt_tokens": 900, "completion_tokens": 400}
         kw.setdefault("ideas", lambda: list(self.ideas))
+        kw.setdefault("health", lambda: {})
+        kw.setdefault("att", lambda: {})
+        kw.setdefault("runner", lambda cmd: (0, "", ""))
         code, doc = self.gm.run(now=kw.pop("now", self.now), days=self.days, con=self.con,
                                 read_budget=(budget if callable(budget) else (lambda: budget or self.OK_BUDGET)),
                                 call=call or fake, key="placeholder",
@@ -14099,24 +14102,18 @@ class TheGMProposesOnlyWhatTheFactsSupport(GMHarness, unittest.TestCase):
             _, doc, _ = self.run_gm({"summary": "s"}, briefing=None)
         self.assertFalse(any("Scout idea" in f for f in doc["facts"]), doc["facts"])
 
-    def test_it_stays_asleep_when_the_budget_says_so(self):
-        def boom(*a):
-            raise AssertionError("the model must not be called")
-        for b in ({"state": "over", "ai_left_today": 0.0},
-                  # budget.py's verdict is the word that counts, whatever
-                  # else the numbers seem to say.
-                  dict(self.OK_BUDGET, state="over"),
-                  {"state": "unknown", "ai_left_today": None},
-                  dict(self.OK_BUDGET, ai_left_today=0.05)):
-            code, doc, _ = self.run_gm(budget=b, call=boom, force=True)
-            self.assertEqual((code, doc["status"]), (0, "skipped"), b)
+    def test_the_debrief_is_written_whatever_openrouter_has_left(self):
+        # Fury thinks on the Claude plan (2026-10-30): a spent or unreadable
+        # OpenRouter day is a fact in his debrief, not a reason to sleep.
+        # Sending a job that spends it is still checked (send()).
+        for b in ({"state": "over", "ai_left_today": 0.0}, dict(self.OK_BUDGET, ai_left_today=0.05)):
+            code, doc, calls = self.run_gm({"summary": "s"}, budget=b, force=True)
+            self.assertEqual((code, doc["status"], len(calls)), (0, "ran", 1), b)
         def unreadable():
             raise OSError("offline")
-        code, doc, _ = self.run_gm(budget=unreadable, call=boom, force=True)
-        self.assertEqual(doc["status"], "skipped")
-        self.assertIn("unknown budget", doc["reason"])
-        self.assertEqual(self.gm.read_day(self.gm.day_path("2026-09-26", self.days))["status"],
-                         "skipped", "a skipped morning is written down, not silent")
+        code, doc, _ = self.run_gm({"summary": "s"}, budget=unreadable, force=True)
+        self.assertEqual(doc["status"], "ran")
+        self.assertIn("Budget: today's AI spend could not be read.", doc["facts"])
 
     def test_one_call_a_day_unless_forced(self):
         self.briefing()
@@ -14205,9 +14202,28 @@ class TheGMProposesOnlyWhatTheFactsSupport(GMHarness, unittest.TestCase):
         self.assertIn('declined "Clear the queue". Note: not while totes-only', user)
         self.assertIn('has not decided on "Other"', user)
 
-    def test_the_model_is_one_openrouter_really_lists(self):
-        listed = {m["id"] for m in json.loads((FIXTURES / "openrouter-models.json").read_text())["data"]}
-        self.assertIn(self.gm.DEFAULT_MODEL, listed)
+    def test_fury_thinks_on_the_claude_plan(self):
+        # Owner, 2026-10-30: "Sonnet on your Claude plan". The GM's brain was
+        # gpt-5-mini on OpenRouter; Fury's is one question on the plan.
+        e = json.loads((ROOT / "tasks" / "engines.json").read_text())["agents"]["fury"]
+        self.assertEqual((e["engine"], e["model"], e["fallback"]), ("claude", "sonnet", "none"))
+        asked = {}
+
+        class W:
+            @staticmethod
+            def ask(agent, question, timeout):
+                asked.update(agent=agent, question=question)
+                return True, '{"summary": "s"}'
+        with unittest.mock.patch.object(self.gm, "_wake", return_value=W):
+            text, usage = self.gm.call_model([{"content": "RULES"}, {"content": "MORNING"}])
+        self.assertEqual((asked["agent"], text, usage), ("fury", '{"summary": "s"}', {}))
+        self.assertTrue(asked["question"].startswith("RULES\n\nMORNING"))
+
+        class Busy:
+            ask = staticmethod(lambda *a: (False, "usage limit reached"))
+        with unittest.mock.patch.object(self.gm, "_wake", return_value=Busy):
+            with self.assertRaises(RuntimeError):
+                self.gm.call_model([{"content": "a"}, {"content": "b"}])
 
     def test_the_timer_is_not_mistaken_for_an_agent(self):
         # *-cycle.timer is how cost-estimate and health-check find agents.
@@ -14215,6 +14231,132 @@ class TheGMProposesOnlyWhatTheFactsSupport(GMHarness, unittest.TestCase):
         self.assertFalse(list((ROOT / "deploy").glob("gm-cycle.*")))
         svc = (ROOT / "deploy" / "gm-brief.service").read_text()
         self.assertIn("scripts/gm.py run", svc)
+
+
+class FuryIsTheManager(GMHarness, unittest.TestCase):
+    """Owner, 2026-10-30: "I want Fury to be a manager agent so every single
+    other agent give reports to him. I want daily debriefs from him on what
+    needs my attention, what i should be doing ... capable of assigning tasks
+    to other agents to fix things." The GM is retired into Fury (gm.py is his
+    brain); he makes safe fixes himself and asks for the rest."""
+
+    NOW_TS = datetime(2026, 9, 26, 13, 50, tzinfo=timezone.utc).timestamp()
+
+    def runs(self):
+        return {"belfort": {"state": "failed", "failed": ["belfort-fetch"], "last_run_utc": "2026-09-26T13:40:00Z"},
+                "coach": {"state": "fresh", "failed": [], "last_run_utc": "2026-09-26T04:20:00Z"},
+                "peter": {"state": "quiet", "failed": [], "last_run_utc": "2026-09-22T10:40:00Z"},
+                "clip": {"state": "unknown", "failed": [], "last_run_utc": None},
+                "you": {"state": "unknown", "failed": [], "last_run_utc": None}}
+
+    def test_every_agent_reports_its_runs(self):
+        facts = self.gm.health_facts(self.runs())
+        self.assertIn("Health: Belfort's belfort-fetch failed on its last run.", facts)
+        self.assertIn("Health: Coach ran recently - last run Sat Sep 26 12:20 AM ET.", facts)
+        self.assertIn("Health: Peter has been quiet - last run Tue Sep 22 6:40 AM ET.", facts)
+        self.assertFalse(any("Clip" in f or "You" in f for f in facts), "no timer read is no report")
+        w = self.gm.waiting_facts({"stan": {"n": 2, "why": ["2 problems to approve or reject"]}, "shop": {"n": 0}})
+        self.assertEqual(w, ["Waiting on the owner (stan): 2 problems to approve or reject."])
+
+    def test_what_needs_you_cites_its_facts(self):
+        facts = ["Health: Belfort's belfort-fetch failed on its last run.", "Waiting on the owner (stan): 2 problems."]
+        kept, dropped = self.gm.check_attention({"attention": [
+            {"text": "Stan has 2 problems waiting", "facts": ["F2"]},
+            {"text": "Stan has 3 problems waiting", "facts": ["F2"]},
+            {"text": "Belfort's data is broken", "facts": []},
+            {"text": "Something", "facts": ["F9"]}]}, facts)
+        self.assertEqual(kept, [{"text": "Stan has 2 problems waiting", "facts": ["F2"]}])
+        self.assertEqual(len(dropped), 3)
+        self.assertIn("uses 3", dropped[0]["reason"])
+        many = {"attention": [{"text": f"thing {i}", "facts": ["F1"]} for i in "abcdefg"]}
+        self.assertEqual(len(self.gm.check_attention(many, facts)[0]), self.gm.ATTENTION_MAX)
+
+    def test_a_fix_is_only_a_safe_rerun_of_what_a_fact_says_failed(self):
+        facts = ["Health: Belfort's belfort-fetch failed on its last run.",
+                 "Health: Ace's ace-cycle failed on its last run.", "The money: Belfort $10,000"]
+        kept, dropped = self.gm.check_fixes({"fixes": [
+            {"unit": "belfort-fetch.service", "why": "quotes are stale", "facts": ["F1"]},
+            {"unit": "ace-cycle", "why": "rerun Ace", "facts": ["F2"]},          # wakes a model and bets
+            {"unit": "ace-fetch", "why": "x", "facts": ["F3"]},                  # no fact says it failed
+            {"unit": "belfort-fetch", "why": "again", "facts": ["F1"]},          # once a day
+            {"unit": "stan-fetch", "why": "x", "facts": ["F9"]}]}, facts)
+        self.assertEqual([k["unit"] for k in kept], ["belfort-fetch"])
+        reasons = " | ".join(d["reason"] for d in dropped)
+        for want in ("ace-cycle is not a safe fix", "no fact it cites says ace-fetch failed",
+                     "belfort-fetch was already re-run today", "no fact it cites says stan-fetch failed"):
+            self.assertIn(want, reasons)
+        done = ["ace-fetch", "stan-fetch", "scout-niches"]
+        _, dropped = self.gm.check_fixes({"fixes": [{"unit": "belfort-fetch", "facts": ["F1"]}]}, facts, done)
+        self.assertIn(f"over the limit of {self.gm.FIXES_PER_DAY}", dropped[0]["reason"])
+
+    def test_safe_fixes_spend_nothing_and_decide_nothing(self):
+        # Guards: a wake, a trade, a paid picture or a credit-spending fetch
+        # slipping into the list Fury may run without asking.
+        never = {"belfort-cycle", "belfort-exits", "bolt-cycle", "ace-cycle", "ace-close", "ace-props",
+                 "ace-props-close", "scout-cycle", "stan-cycle", "paul-cycle", "tiktok-kit", "redraw-art",
+                 "clip-pickup", "gm-brief", "fury-cycle", "agentroom-runner", "belfort-review", "coach-weekly"}
+        self.assertEqual(set(self.gm.SAFE_FIXES) & never, set())
+        for u in self.gm.SAFE_FIXES:
+            svc = (ROOT / "deploy" / f"{u}.service").read_text()
+            self.assertNotIn("wake.py", svc, u)
+
+    def test_a_morning_with_a_fix_a_need_and_a_proposal(self):
+        self.briefing()
+        started, ran = [], []
+        reply = {"summary": "One fetch broke.",
+                 "attention": [{"text": "Belfort's quotes did not refresh", "facts": ["F_HEALTH"]}],
+                 "fixes": [{"unit": "belfort-fetch", "why": "its last run failed", "facts": ["F_HEALTH"]}],
+                 "proposals": [self.prop()]}
+
+        def call(msgs, key, slug):
+            text = msgs[1]["content"]
+            fid = next(l.split()[0] for l in text.splitlines() if "belfort-fetch failed" in l)
+            ran.append(msgs)
+            return json.dumps(reply).replace("F_HEALTH", fid), {}
+        code, doc, _ = self.run_gm(call=call, health=self.runs,
+                                   runner=lambda cmd: (started.append(cmd), (0, "", ""))[1])
+        self.assertEqual((code, doc["status"]), (0, "ran"))
+        self.assertIn("You are Fury, the manager", ran[0][0]["content"])
+        for u in self.gm.SAFE_FIXES:
+            self.assertIn(u, ran[0][0]["content"], "each safe fix is named in his rules")
+        self.assertEqual(started, [["systemctl", "start", "--no-block", "belfort-fetch.service"]])
+        self.assertEqual((doc["fixes"][0]["unit"], doc["fixes"][0]["status"]), ("belfort-fetch", "started"))
+        self.assertEqual(doc["attention"][0]["text"], "Belfort's quotes did not refresh")
+        self.assertEqual(len(doc["proposals"]), 1, "everything else still waits for the owner")
+        started.clear()
+        code, doc, _ = self.run_gm(call=call, health=self.runs, force=True,
+                                   runner=lambda cmd: (started.append(cmd), (0, "", ""))[1])
+        self.assertEqual(started, [], "a forced re-run of the debrief does not buy a second fix")
+        self.assertIn("already re-run today", " ".join(d["reason"] for d in doc["dropped"]))
+        text = "\n".join(self.gm.lines(doc))
+        self.assertIn("Fury's debrief, 2026-09-26", text)
+
+    def test_furys_collector_reads_every_agents_timers(self):
+        class B:
+            @staticmethod
+            def runs(now=None):
+                return {"coach": {"state": "failed", "failed": ["coach-daily"], "last_run_utc": None}}
+        with unittest.mock.patch.object(self.fury, "_brain", return_value=B), \
+             unittest.mock.patch.object(self.fury, "AGENTS", Path(self.tmp.name) / "none"), \
+             unittest.mock.patch.object(self.fury.urllib.request, "urlopen", side_effect=OSError("no deck")):
+            report = self.fury.collect(self.now)
+        self.assertEqual(report["failures"], [{"unit": "coach-daily.service", "agent": "coach"}],
+                         "the Coach has no agent folder and was never read before")
+        self.assertIn("`coach-daily.service` failed", self.fury.build_briefing(report, "2026-09-26"))
+
+    def test_his_page_and_where_it_opens(self):
+        api = ROOT / "mission-control-api"
+        page = (api / "public" / "fury.html").read_text()
+        for want in ("fetch('/api/townhall'", "/api/gm/${encodeURIComponent(G.day)}/${n}/${verdict}",
+                     "type: 'fury-close'", "<h2>Needs you</h2>", "<h2>Fury fixed himself</h2>",
+                     '<script src="/shared/busy.js"></script>'):
+            self.assertIn(want, page)
+        self.assertIn("app.get('/fury'", (api / "server.js").read_text())
+        village = (api / "public" / "village.html").read_text()
+        self.assertIn("fury: '/fury?embed=1'", village)
+        self.assertIn("['fury', '🧭', \"Fury's debrief\"]", village)
+        self.assertIn("'fury-close'", village)
+        self.assertIn('<a class="tabnav" href="/fury">Fury</a>', (api / "public" / "dashboard.html").read_text())
 
 
 class TheTownHallRecordsTheOwnersAnswer(TheTownHallRunsTheScriptsItShows):

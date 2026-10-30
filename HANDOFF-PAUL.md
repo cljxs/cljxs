@@ -58,7 +58,7 @@ Each agent wakes on a **systemd timer**, does its work by calling Python
 scripts, and **code judges the cycle by what is on disk**, never by what the
 agent says it did. Other agents share the server, the budget and the web app:
 Ace, Belfort, Bolt (paper trading), Peter (sports props), Scout and Emily
-(Etsy shop), Clip (video clips), Stan, the Agent Room, Fury and the GM.
+(Etsy shop), Clip (video clips), Stan, the Agent Room, and Fury, the manager (the GM was retired into him on 2026-10-30).
 ROUTING.md has a row for each.
 
 **Which engine wakes a model** is `tasks/engines.json`, read only by

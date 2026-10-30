@@ -39,8 +39,9 @@ it and import the first: `belfort-verify.py` imports `book_gap` from
 **A model asked to do arithmetic will eventually claim it did.** Anything a
 script can compute exactly belongs in a script, with the agent calling it.
 That is why indicators, briefings, Printify drafts, portfolio arithmetic,
-ledger rows and cycle-closing are all Python subcommands. Fury's whole cycle
-is now Python and wakes no model at all.
+ledger rows and cycle-closing are all Python subcommands. Fury's collector
+is Python; Fury the manager (`gm.py`) asks one question a day, and code
+checks every fact, number and fix in his answer.
 
 ## Verifying, before you say it works
 
