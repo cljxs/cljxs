@@ -189,7 +189,7 @@ def spawn_agent(agent, task_id):
         # instructions to read her payload, had no way to, and quit in 14
         # seconds having written nothing. The wake message now carries the
         # whole command.
-        "--message", task.wake_message(task_id, API_BASE),
+        "--message", task.wake_message(task_id, API_BASE, agent),
         "--session-id", session_id,
         "--timeout", str(TASK_TIMEOUT),
         "--json",

@@ -14359,6 +14359,85 @@ class FuryIsTheManager(GMHarness, unittest.TestCase):
         self.assertIn('<a class="tabnav" href="/fury">Fury</a>', (api / "public" / "dashboard.html").read_text())
 
 
+class EveryAgentHearsWhatWasLearned(unittest.TestCase):
+    """Owner, 2026-10-30: "Let's do all the agents that are applicable". Each
+    wake that thinks starts with its department's ACCEPTED entries from the
+    knowledge store (knowledge.py agent_brief) - only what the owner accepted,
+    empty when there is none. Ace is frozen until his read-out; Bolt is plain
+    code; Fury reads every department already."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db = Path(self.tmp.name) / "k.db"
+        env = unittest.mock.patch.dict(os.environ, {"KNOWLEDGE_DB": str(self.db), "ECOSYSTEM_ROOT": self.tmp.name})
+        env.start()
+        self.addCleanup(env.stop)
+        self.k = load(f"knowledge_lessons_{id(self)}", "knowledge.py")
+        self.con = self.k.connect(self.db)
+        self.addCleanup(self.con.close)
+
+    def add(self, dept, title, accept=True):
+        i = self.k.add(self.con, dept, "lesson", title, "body of " + title, "evidence", "observed", "owner")
+        if accept:
+            self.k.accept(self.con, i)
+        return i
+
+    def test_each_agent_gets_its_departments_accepted_entries(self):
+        self.add("etsy", "Pet names outsell breeds")
+        self.add("etsy", "Waiting on the owner", accept=False)
+        self.add("all", "Prices are the owner's")
+        scout = self.k.agent_brief(self.con, "scout")
+        self.assertTrue(scout.startswith(self.k.LESSONS_HEAD))
+        self.assertIn("Pet names outsell breeds", scout)
+        self.assertIn("Prices are the owner's", scout, "'all' reaches everyone")
+        self.assertNotIn("Waiting on the owner", scout, "only what the owner accepted")
+        self.assertEqual(self.k.agent_brief(self.con, "emily"), scout, "one department, one block")
+        belfort = self.k.agent_brief(self.con, "belfort")
+        self.assertIn("Prices are the owner's", belfort)
+        self.assertNotIn("Pet names", belfort)
+        self.assertEqual(self.k.agent_brief(self.con, "nobody"), "")
+
+    def test_not_briefed_and_why(self):
+        self.add("betting", "Favourites are overpriced")
+        self.add("trading", "Chasing loses")
+        for agent in ("ace", "bolt", "fury"):
+            self.assertEqual(self.k.agent_brief(self.con, agent), "", agent)
+            self.assertIn(agent, self.k.NOT_BRIEFED)
+        self.assertIn("2026-12-01", self.k.NOT_BRIEFED["ace"])
+
+    def test_nothing_accepted_is_nothing_in_the_wake(self):
+        self.add("etsy", "Still proposed", accept=False)
+        self.assertEqual(self.k.agent_brief(self.con, "scout"), "")
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knowledge.py"), "brief", "--agent", "scout"],
+                           capture_output=True, text=True, env=os.environ.copy())
+        self.assertEqual((r.returncode, r.stdout), (0, ""), r.stderr)
+        self.add("etsy", "Totes only")
+        r = subprocess.run([sys.executable, str(SCRIPTS / "knowledge.py"), "brief", "--agent", "scout"],
+                           capture_output=True, text=True, env=os.environ.copy())
+        self.assertIn("Totes only", r.stdout)
+
+    def test_a_task_wake_carries_its_agents_block(self):
+        self.add("etsy", "Pet names outsell breeds")
+        t = load(f"task_lessons_{id(self)}", "task.py")
+        self.assertIn("Pet names outsell breeds", t.wake_message(7, agent="emily"))
+        self.assertNotIn("WHAT WE HAVE LEARNED", t.wake_message(7), "no agent, no block")
+        self.assertIn("task.wake_message(task_id, API_BASE, agent)", (SCRIPTS / "task-dispatcher.py").read_text())
+
+    def test_where_it_is_wired_and_where_it_is_not(self):
+        for script, agent in (("scout-cycle.sh", "scout"), ("belfort-cycle.sh", "belfort"), ("paul-cycle.sh", "paul")):
+            sh = (SCRIPTS / script).read_text()
+            line = f'LESSONS="$(python3 "$ROOT/scripts/knowledge.py" brief --agent {agent} 2>/dev/null)" || LESSONS=""'
+            self.assertIn(line, sh, script)
+            self.assertLess(sh.index(line), sh.index("scripts/wake.py"), script)
+        bel = (SCRIPTS / "belfort-cycle.sh").read_text()
+        self.assertIn("\n$LESSONS\n", bel[bel.index("--message"):bel.index("--session-id")])
+        for script in ("ace-cycle.sh", "ace-judge.py"):
+            self.assertNotIn("knowledge.py", (SCRIPTS / script).read_text(), f"{script}: frozen until 2026-12-01")
+        coach = (SCRIPTS / "coach.py").read_text()
+        self.assertIn("lessons = coach_lessons(coach)", coach)
+
+
 class TheTownHallRecordsTheOwnersAnswer(TheTownHallRunsTheScriptsItShows):
     """townhall.js's GM route: validated, then handed to gm.py decide."""
 

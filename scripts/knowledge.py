@@ -308,6 +308,32 @@ def brief(con, dept, max_chars=BRIEF_MAX_CHARS, now=None):
     return "\n".join(out)
 
 
+# WHAT EACH AGENT IS HANDED (owner, 2026-10-30: "Let's do all the agents
+# that are applicable"). Each wake that thinks - Scout's run, Emily's task,
+# Belfort's wake, Paul's cycle, the Belfort and Bolt coaches' Sunday question -
+# starts with its department's accepted entries, under this heading. Empty
+# when nothing is accepted, so a wake carries nothing it does not need.
+# Not briefed, and why: the rest are plain code, or have their own lessons.
+NOT_BRIEFED = {
+    "ace": "his inputs are frozen until the 2026-12-01 read-out (agents/ace/PREREGISTRATION.md); "
+           "adding lessons would restart his experiment - the owner decides after it",
+    "bolt": "plain code - a lesson for Bolt is a code change, made in a session",
+    "fury": "reads every department already (EVERY), as the manager",
+}
+LESSONS_HEAD = ("WHAT WE HAVE LEARNED - entries the owner accepted for your department. "
+                "Your instructions come first; the owner's decisions are not yours to argue with.")
+
+
+def agent_brief(con, agent):
+    """The block an agent's wake starts with, or "" when there is nothing
+    accepted for its department (or it is not briefed - NOT_BRIEFED)."""
+    if agent in NOT_BRIEFED:
+        return ""
+    dept = next((d for d, members in DEPARTMENTS.items() if agent in members), None)
+    text = brief(con, dept) if dept else ""
+    return f"{LESSONS_HEAD}\n{text}" if text else ""
+
+
 # The starting entries: things this project has already paid to learn about
 # the Etsy side. They go in as `proposed` like anything else - the owner
 # accepts them in the Town Hall, so even the seed passes through the one gate.
@@ -429,7 +455,9 @@ def main(argv=None):
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("brief")
-    p.add_argument("--dept", required=True, choices=list(DEPARTMENTS))
+    who = p.add_mutually_exclusive_group(required=True)
+    who.add_argument("--dept", choices=list(DEPARTMENTS))
+    who.add_argument("--agent", help="the block that agent's wake is handed - empty when there is none")
 
     sub.add_parser("due")
     sub.add_parser("seed")
@@ -462,6 +490,10 @@ def main(argv=None):
                 print("no entries" + (f" ({a.status})" if a.status else ""))
             else:
                 print("\n\n".join(show(e) for e in rows))
+        elif a.cmd == "brief" and a.agent:
+            text = agent_brief(con, a.agent)
+            if text:
+                print(text)
         elif a.cmd == "brief":
             print(brief(con, a.dept) or f"(nothing accepted for {a.dept} yet)")
         elif a.cmd == "due":

@@ -696,12 +696,30 @@ def week_notes(coach, rows, end):
     return [judge], None
 
 
+def coach_lessons(coach):
+    """The accepted lessons for the coached agent's department, or ""."""
+    try:
+        k = _load("knowledge_coach", "knowledge.py")
+        con = k.connect()
+        try:
+            return k.agent_brief(con, coach)
+        finally:
+            con.close()
+    except Exception:
+        return ""
+
+
 def run_weekly(end_day, coach, ask=None, dry=False):
     start, end = week_of(end_day)
     rows, data = weekly_data(start, end, coach)
     rules = rules_for(coach)
     name = COACHES[coach]["name"]
     notes, too_few = week_notes(coach, rows, end)
+    # What the owner has accepted for this agent's department (knowledge.py),
+    # so a proposal does not argue with a decision already made (2026-10-30).
+    lessons = coach_lessons(coach)
+    if lessons:
+        notes = notes + [lessons]
     if too_few:
         review = f"_{too_few}. Observing only: no rule change is proposed on this little data._"
         asked = False

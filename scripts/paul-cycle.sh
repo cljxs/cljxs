@@ -39,6 +39,15 @@ MESSAGE="$MESSAGE
 
 $FACTS"
 
+# What the owner has accepted for this agent's department (knowledge.py) -
+# empty, and left out, when there is nothing accepted.
+LESSONS="$(python3 "$ROOT/scripts/knowledge.py" brief --agent paul 2>/dev/null)" || LESSONS=""
+if [ -n "$LESSONS" ]; then
+  MESSAGE="$MESSAGE
+
+$LESSONS"
+fi
+
 cd "$AGENT" || exit 1
 # 1800s: finding, checking and building one real site is the longest job any
 # agent here does. The unit's TimeoutStartSec leaves room for deploy and

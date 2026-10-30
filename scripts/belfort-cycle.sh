@@ -84,6 +84,9 @@ RECORD="$(python3 "$ROOT/scripts/belfort-learn.py" record 2>/dev/null)" || RECOR
 # rest reuse it. Background only: a buy still cites a news.json headline,
 # checked by code. Nothing found and the line is left out.
 REDDIT="$(python3 "$ROOT/scripts/reddit_search.py" belfort)" || REDDIT=""
+# What the owner has accepted for this agent's department (knowledge.py) -
+# empty, and left out, when there is nothing accepted.
+LESSONS="$(python3 "$ROOT/scripts/knowledge.py" brief --agent belfort 2>/dev/null)" || LESSONS=""
 # The wake message names every deliverable, the last one included. On
 # 2026-10-12 the close cycle wrote the report and the calls - the two things
 # this message named - and stopped: no memory line, no signoff, and the
@@ -98,6 +101,7 @@ Report these sales as they are; do not sell for those rules again. You judge onl
 Candidates owed a call this wake (one line each in state/calls.txt, then belfort-trade.py calls): $OWED
 $RECORD
 $REDDIT
+$LESSONS
 
 Before you stop: record one line with python3 ../../scripts/remember.py belfort \"<one short line>\" and finish by running python3 ../../scripts/signoff.py belfort - it lists anything MISSING, and the cycle is not done until it lists nothing." \
   --session-id "wake-belfort-$STARTED" \

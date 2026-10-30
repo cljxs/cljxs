@@ -79,6 +79,15 @@ if [ -n "$REDDIT" ]; then
 $REDDIT"
 fi
 
+# What the owner has accepted for this agent's department (knowledge.py) -
+# empty, and left out, when there is nothing accepted.
+LESSONS="$(python3 "$ROOT/scripts/knowledge.py" brief --agent scout 2>/dev/null)" || LESSONS=""
+if [ -n "$LESSONS" ]; then
+  MESSAGE="$MESSAGE
+
+$LESSONS"
+fi
+
 T=$(stat -c %Y "$LAST" 2>/dev/null || echo 0)
 
 cd "$AGENT" || exit 1

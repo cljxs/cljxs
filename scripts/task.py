@@ -33,6 +33,7 @@ broken commands in one session.
 Standard library only.
 """
 
+import importlib.util
 import json
 import os
 import sys
@@ -44,7 +45,26 @@ API_BASE = os.environ.get("MISSION_CONTROL_API", "http://127.0.0.1:3001")
 TASK_ENV = "ECOSYSTEM_TASK_ID"
 
 
-def wake_message(task_id, api_base=API_BASE):
+def lessons_for(agent):
+    """The accepted lessons for `agent`'s department (knowledge.py
+    agent_brief), or "" - a store that cannot be read costs the task
+    nothing."""
+    if not agent:
+        return ""
+    try:
+        spec = importlib.util.spec_from_file_location("knowledge_task", Path(__file__).resolve().parent / "knowledge.py")
+        k = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(k)
+        con = k.connect()
+        try:
+            return k.agent_brief(con, agent)
+        finally:
+            con.close()
+    except Exception:
+        return ""
+
+
+def wake_message(task_id, api_base=API_BASE, agent=None):
     """What the dispatcher tells an agent on waking it.
 
     Here rather than in the dispatcher so that the commands an agent is given
@@ -72,7 +92,8 @@ def wake_message(task_id, api_base=API_BASE):
             f"Nobody is watching this run. Never ask the user anything (no "
             f"ask_user): no one will answer, and the question just waits out "
             f"your time limit. Make the call yourself and say what you chose "
-            f"in your `done` line.")
+            f"in your `done` line."
+            + (f"\n\n{lessons}" if (lessons := lessons_for(agent)) else ""))
 
 
 # The dispatcher drops the task number here before waking an agent, and

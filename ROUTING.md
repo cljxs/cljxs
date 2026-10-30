@@ -46,6 +46,7 @@ generated - edit the header, then `scripts/deploy.sh <name>`).
 | Today's AI spend vs cap | `scripts/budget.py`; estimates `scripts/cost-estimate.py`; caps `tasks/limits.json` |
 | Could an agent run / did it run | `scripts/preflight.py` / `scripts/health-check.py`; last wake `scripts/last-run.py` |
 | Writing a memory line, the sign-off | `scripts/remember.py`, `scripts/signoff.py` |
+| What each agent is told the owner accepted (shared lessons) | `scripts/knowledge.py` (`agent_brief`, `NOT_BRIEFED`); read by scout/belfort/paul cycles, `task.py wake_message`, `coach.py coach_lessons` |
 | Task queue (create/complete) | `scripts/task.py`, `scripts/task-dispatcher.py`, `BACKBONE.md` |
 | Credentials | `scripts/set-credential.py`, `scripts/check-credentials.py` (never print one) |
 | What needs the owner on each Deck tab | `scripts/attention.py` -> `mission-control-api/attention.js` |
