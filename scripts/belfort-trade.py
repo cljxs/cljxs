@@ -229,8 +229,14 @@ def regime(doc=None, breadth=None):
     if len(closes) < 60 or qqq.get("price") is None:
         return "unknown", "no QQQ history yet - treated as mixed"
     sma_now, sma_then = sum(closes[-50:]) / 50, sum(closes[-60:-10]) / 50
-    above, rising = float(qqq["price"]) > sma_now, sma_now >= sma_then
-    why = f"QQQ {'above' if above else 'below'} its {'rising' if rising else 'falling'} 50-day average"
+    price = float(qqq["price"])
+    above, rising = price > sma_now, sma_now >= sma_then
+    # How far, in numbers (owner, 2026-10-30: "Can this show how much QQQ is
+    # below its 50 day average?") - and what it would take to cross back.
+    why = (f"QQQ {abs(price / sma_now - 1) * 100:.1f}% {'above' if above else 'below'} its "
+           f"{'rising' if rising else 'falling'} 50-day average (${price:,.2f} vs ${sma_now:,.2f}; the "
+           f"average {(sma_now / sma_then - 1) * 100:+.1f}% in 10 days"
+           + ("" if above else f"; it needs {(sma_now / price - 1) * 100:+.1f}% to get back above") + ")")
     breadth = None
     if mode == "sectors":
         funds = [q for sym, q in (doc.get("sectors") or {}).items()

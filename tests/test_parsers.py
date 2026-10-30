@@ -15969,9 +15969,9 @@ class BelfortGuardrailsFromTheReview(unittest.TestCase):
         rising = [400.0 + i for i in range(70)]
         weak = {"quotes": {s: {"price": 90.0, "sma50": 95.0} for s in "ABC"} | {"D": {"price": 100.0, "sma50": 95.0}},
                 "benchmarks": {"QQQ": self.qqq(rising, 500)}}
-        self.assertEqual(t.regime(weak, "names"), ("unfavorable", "QQQ above its rising 50-day average; "
+        self.assertEqual(t.regime(weak, "names"), ("unfavorable", "QQQ 12.5% above its rising 50-day average ($500.00 vs $444.50; the average +2.3% in 10 days); "
                                                                   "25% of the names above theirs"))
-        self.assertEqual(t.regime(weak, "none"), ("favorable", "QQQ above its rising 50-day average"))
+        self.assertEqual(t.regime(weak, "none"), ("favorable", "QQQ 12.5% above its rising 50-day average ($500.00 vs $444.50; the average +2.3% in 10 days)"))
         self.assertEqual(t.BREADTH, "none", "owner, 2026-10-28: QQQ alone - one edit moves it")
         flat = {"quotes": weak["quotes"], "benchmarks": weak["benchmarks"]}
         self.assertEqual(t.regime(flat)[0], "favorable", "his weak names no longer block a buy")
@@ -20480,8 +20480,11 @@ class TheMarketCheckMeasuredOnHisPasses(unittest.TestCase):
 
     def test_the_day_of_the_question(self):
         got = self.learn.check_on("2026-10-28", self.doc, self.sectors)
-        self.assertEqual(got["none"], ("unfavorable", "QQQ below its falling 50-day average"))
-        self.assertEqual(got["sectors"], ("unfavorable", "QQQ below its falling 50-day average; "
+        # Owner, 2026-10-30: "Can this show how much QQQ is below its 50 day
+        # average?" - on the real closes of the day he asked about, by how
+        # much, and what it would take to cross back.
+        self.assertEqual(got["none"], ("unfavorable", "QQQ 0.6% below its falling 50-day average ($721.25 vs $725.26; the average -0.2% in 10 days; it needs +0.6% to get back above)"))
+        self.assertEqual(got["sectors"], ("unfavorable", "QQQ 0.6% below its falling 50-day average ($721.25 vs $725.26; the average -0.2% in 10 days; it needs +0.6% to get back above); "
                                                          "6 of 11 market sectors above theirs"))
 
     def test_each_pass_is_measured_against_each_breadth(self):
