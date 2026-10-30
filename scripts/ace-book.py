@@ -233,10 +233,15 @@ def drift(path=None, bank=None):
                          f"${book['bankroll']:,.2f}")
     except (TypeError, ValueError):
         probs.append("bankroll is not a number")
-    if len(doc.get("open_bets") or []) != len(book["open"]):
-        probs.append(f"{len(doc.get('open_bets') or [])} open bets listed, the bets give {len(book['open'])}")
-    if len(doc.get("settled_bets") or []) != len(book["settled"]):
-        probs.append(f"{len(doc.get('settled_bets') or [])} settled listed, the bets give {len(book['settled'])}")
+    # Each list against its own bets: rebuild() files Ace Props' bets apart
+    # (props_open_bets, props_settled_bets). Counted together, the first
+    # props bet failed every one of his cycles - "4 open bets listed, the
+    # bets give 5" (2026-10-30).
+    for key, label, rows in (("open_bets", "open bets", book["open"]), ("settled_bets", "settled", book["settled"])):
+        for field, name, mine in ((key, label, [b for b in rows if not is_props(b)]),
+                                  (f"props_{key}", f"Ace Props {label}", [b for b in rows if is_props(b)])):
+            if len(doc.get(field) or []) != len(mine):
+                probs.append(f"{len(doc.get(field) or [])} {name} listed, the bets give {len(mine)}")
     return "; ".join(probs) or None
 
 

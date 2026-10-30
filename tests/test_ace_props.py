@@ -320,6 +320,19 @@ class AcesOwnBookIgnoresIt(PropsCase):
         with contextlib.redirect_stdout(io.StringIO()):
             verify.reconcile(json.loads((self.root / "agents/ace/state/bankroll.json").read_text()), problems)
         self.assertEqual(problems, [])
+        # 2026-10-30: drift() counted the props bets against his own lists, so
+        # the first props bet failed every cycle after it - "4 open bets
+        # listed, the bets give 5; 56 settled listed, the bets give 57".
+        self.bet(event_id="401909999", selection="Player Two 25+ pts", athlete_id="7")
+        self.b.rebuild()
+        self.assertIsNone(self.b.drift())
+        problems = []
+        verify.check_book(problems)
+        self.assertEqual(problems, [])
+        doc = json.loads((self.root / "agents/ace/state/bankroll.json").read_text())
+        doc["props_open_bets"] = []                                    # a hand edit is still seen
+        (self.root / "agents/ace/state/bankroll.json").write_text(json.dumps(doc))
+        self.assertIn("0 Ace Props open bets listed, the bets give 1", self.b.drift())
 
     def test_not_in_his_coach(self):
         e = self.bet()
