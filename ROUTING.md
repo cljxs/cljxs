@@ -30,6 +30,7 @@ the change that needs it.
 | Stan | software pains from Hacker News | `stan-fetch` 06:12 CT; `stan-cycle` 06:22 CT | `scripts/stan-fetch.py`, `scripts/stan.py` | `/stan` `mission-control-api/stan.js`, `mission-control-api/public/stan.html` | `tests/test_stan.py` |
 | Agent Room (Sylvester) | idea -> reviewed build plan | `agentroom-runner` | `scripts/agentroom.py`, `scripts/agentroom-guard.py`, `scripts/agentroom-builder-setup.sh`, `agentroom/roles.json` | `/agentroom` `mission-control-api/agentroom.js`, `mission-control-api/public/agentroom.html` | `tests/test_agentroom.py`, `tests/test_agentroom_build.py`, `tests/test_app_ai.py`, `tests/test_site.py` |
 | Fury | collects the whole ecosystem's state | `fury-cycle` 08:30 CT | `scripts/fury-collect.py` | Deck dashboard | test_parsers |
+| Brain map | every agent and what passes between them: standing wires (each a code line a test finds) and the week's traffic | on demand (the page) | `scripts/brain.py` (`NODES`, `WIRES`, `runs`, `task_traffic`) | `/brain` `mission-control-api/brain.js`, `mission-control-api/public/brain.html`; village NAV `brain` | `tests/test_brain.py` |
 | GM / Town Hall | morning facts -> proposals; knowledge | `gm-brief` 08:50 CT | `scripts/gm.py`, `scripts/knowledge.py` | `mission-control-api/townhall.js`; village `drawHall`, `drawGm`, `actOnProposal` | test_parsers `GMHarness`, `TheGM*`, `TheTownHall*` |
 
 Each agent's rules: `agents/<name>/_<name>-agents-header.md` (AGENTS.md is
@@ -124,6 +125,7 @@ in the background. `tests/test_clipper.py` alone is ~20 min; run a class
 | Scout scan | `tests/test_scout_scan.py` |
 | Stan | `tests/test_stan.py` |
 | Reddit through web search | `tests/test_reddit_search.py` |
+| Brain map | `tests/test_brain.py` |
 | Agent Room | `tests/test_agentroom.py`, `tests/test_agentroom_build.py`, `tests/test_app_ai.py`, `tests/test_site.py` |
 | Engines, wake | `tests/test_wake.py`, `tests/test_models.py`, `tests/test_new_claude_login.py` |
 | Deck restarts, attention, village frames | `tests/test_restarts.py`, `tests/test_attention.py`, `tests/test_village_frame.py` |
