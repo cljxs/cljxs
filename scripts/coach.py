@@ -186,10 +186,13 @@ def _after(now_price, exit_price):
         return None
 
 
-def bolt_rows(news=False):
-    """One of Bolt's books, as journal rows."""
+def bolt_rows(news=False, quick=False):
+    """One of Bolt's books, as journal rows: the plain one, the news one, or
+    Bolt Quick (its own stop, bolt.QUICK_RULES)."""
     b = _bolt()
-    path = b.NEWS_BOOK if news else b.BOOK
+    path = b.QUICK_BOOK if quick else b.NEWS_BOOK if news else b.BOOK
+    tag, agent = (("bolt-quick", "Bolt Quick") if quick else ("bolt-news", "Bolt + news") if news
+                  else ("bolt", "Bolt"))
     if not path.is_file():
         return []
     book = json.loads(path.read_text())
@@ -203,7 +206,7 @@ def bolt_rows(news=False):
         reason = buy.get("reason") or ""
         m = re.search(r"scored (\d+)/10", reason)
         rows.append({
-            "book": "bolt-news" if news else "bolt", "agent": "Bolt + news" if news else "Bolt",
+            "book": tag, "agent": agent,
             "asset": "crypto", "symbol": t["symbol"], "side": "long",
             "opened_utc": t.get("opened_utc"), "closed_utc": t.get("utc"),
             "entry_price": t.get("entry_price"), "exit_price": t.get("price"),
@@ -212,7 +215,7 @@ def bolt_rows(news=False):
             "setup": f"score {m.group(1)}/10" if m else "", "score": int(m.group(1)) if m else None,
             "entry_reason": reason, "exit_reason": t.get("reason") or "",
             "exit_rule": str(t.get("reason") or "").split(" (")[0],
-            "stop_pct": b.STOP_LOSS_PCT, "min_score": b.MIN_SCORE,
+            "stop_pct": b.QUICK_RULES["STOP_LOSS_PCT"] if quick else b.STOP_LOSS_PCT, "min_score": b.MIN_SCORE,
             "best_pct": t.get("best_pct"),
             "after_exit_pct": _after(marks.get(t["symbol"]), t.get("price")),
             "chased": _chased(b, t["symbol"], buy),
@@ -291,9 +294,11 @@ def ace_rows():
 COACHES = {
     "belfort": {"name": "Belfort", "what": "a paper stock trader", "books": ("belfort",),
                 "rows": lambda: belfort_rows()},
-    "bolt": {"name": "Bolt", "what": "a paper crypto trader with two books: plain rules, and the same rules "
-                                     "with a news check before each buy", "books": ("bolt", "bolt-news"),
-             "rows": lambda: bolt_rows() + bolt_rows(news=True)},
+    "bolt": {"name": "Bolt", "what": "a paper crypto trader with three books: plain rules, the same rules "
+                                     "with a news check before each buy, and Bolt Quick (small moves, a "
+                                     "tight stop, bigger buys for better scores)",
+             "books": ("bolt", "bolt-news", "bolt-quick"),
+             "rows": lambda: bolt_rows() + bolt_rows(news=True) + bolt_rows(quick=True)},
     "ace": {"name": "Ace", "what": "a paper sports bettor", "books": ("ace",), "rows": lambda: ace_rows()},
 }
 BOOK_COACH = {b: k for k, c in COACHES.items() for b in c["books"]}
@@ -615,7 +620,12 @@ def _rules(b, bt, ab, aj):
                      f"trailing {b.KEPT_TRAIL_PCT:g}% (and bought back up to size on a new {b.MIN_SCORE}+, "
                      f"at the average price), sold after {b.MAX_HOLD_DAYS:g} days, BTC dump switch at "
                      f"{b.BTC_DUMP_PCT:g}%",
-            "halt": f"no buys for {b.HALT_HOURS:g}h after a {b.MAX_DRAWDOWN_PCT:g}% drawdown"},
+            "halt": f"no buys for {b.HALT_HOURS:g}h after a {b.MAX_DRAWDOWN_PCT:g}% drawdown",
+            "quick book": (f"Bolt Quick, its own $10,000: stop -{b.QUICK_RULES['STOP_LOSS_PCT']:g}% (no trail), all "
+                           f"sold at +{b.QUICK_RULES['TAKE_PROFIT_PCT']:g}%, sold after "
+                           f"{b.QUICK_RULES['MAX_HOLD_DAYS']:g} days; buys "
+                           + ", ".join(f"{v:g}% at {k}/10" for k, v in b.QUICK_RULES["SIZE_BY_SCORE"].items())
+                           + " of the account")},
         "Belfort (stocks)": {
             "exits": f"stop {bt.STOP_LOSS:g}% (or {bt.ATR_MULT:g}x ATR, {bt.STOP_MIN_PCT:g}-{bt.STOP_MAX_PCT:g}%), "
                      f"half sold at +{bt.TAKE_PROFIT:g}%, the rest on a {bt.TRAIL:g}% trailing stop once "
@@ -779,7 +789,7 @@ def main(argv):
         x.add_argument("--coach", choices=list(COACHES), help="one coach; all three when left out")
     sub.add_parser("split", help="split the combined journal into the three coaches (done by itself too)")
     bf = sub.add_parser("backfill", help="one book's past days, every other book's rows kept as saved")
-    bf.add_argument("--book", required=True, choices=["ace", "belfort", "bolt", "bolt-news"])
+    bf.add_argument("--book", required=True, choices=["ace", "belfort", "bolt", "bolt-news", "bolt-quick"])
     bf.add_argument("--since", required=True, help="YYYY-MM-DD, Eastern")
     s = sub.add_parser("show")
     s.add_argument("--json", action="store_true")

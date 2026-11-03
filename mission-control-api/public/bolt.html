@@ -134,7 +134,7 @@
     <button class="btn" id="close" style="display:none">✕ Esc</button>
   </div>
   <div class="show">
-    <div class="showtop"><div class="k">The race — Bolt, Bolt + news, and BTC bought on his first day and held</div>
+    <div class="showtop"><div class="k">The race — Bolt, Bolt + news, Bolt Quick, and BTC bought on his first day and held</div>
       <div class="k" id="since"></div></div>
     <div id="race"><div class="empty">loading…</div></div>
     <div id="curve"></div>
@@ -150,6 +150,7 @@
         <button class="tab" data-t="history">History</button>
         <button class="tab" data-t="trades">Trades</button>
         <button class="tab" data-t="news">News book</button>
+        <button class="tab" data-t="quick">Quick book</button>
         <button class="tab" data-t="rules">Rules</button>
       </div>
       <div class="doc" id="side"></div>
@@ -217,7 +218,9 @@ function render() {
 
   const h = B.btc_hold || {};
   const N = B.news || {};
-  const rows = [{ name: 'Bolt', pct: B.pnl_pct }, { name: 'Bolt + news', pct: N.pnl_pct }, { name: 'BTC held', pct: h.pnl_pct }];
+  const Q = B.quick || {};
+  const rows = [{ name: 'Bolt', pct: B.pnl_pct }, { name: 'Bolt + news', pct: N.pnl_pct }, { name: 'Bolt Quick', pct: Q.pnl_pct },
+    { name: 'BTC held', pct: h.pnl_pct }];
   const scale = Math.max(1, ...rows.map(r => Math.abs(r.pct || 0)));
   $('race').innerHTML = rows.map(r => {
     const w = has(r.pct) ? Math.min(50, Math.abs(r.pct) / scale * 50) : 0;
@@ -409,6 +412,7 @@ async function side() {
     return;
   }
   if (tab === 'news') return newsTab(host);
+  if (tab === 'quick') return quickTab(host);
   const r = B.rules;
   host.innerHTML = `<div class="sect" style="margin-top:0">How Bolt trades</div>
     <div class="muted">All of it is code (scripts/bolt.py). No AI is woken, so nothing here costs anything and no number is made up.</div>
@@ -461,6 +465,32 @@ function newsTab(host) {
       N.trades.map(t => `<tr title="${esc(t.reason)}"><td>${when(t.utc)}</td><td class="${t.side === 'buy' ? 'up' : 'down'}">${t.side === 'buy' ? 'BUY' : 'SELL'}</td>
         <td>${esc(t.symbol)}</td><td class="num">${price(t.price)}</td><td class="num ${cls(t.pnl)}">${t.side === 'sell' ? pct(t.pnl_pct, 1) : ''}</td></tr>`).join('')}</table></div>`
       : '<div class="empty">No trades yet.</div>'}`;
+}
+
+// Bolt Quick (2026-11-03): small moves, a tight stop, bigger buys for
+// better scores - its own $10,000, every number from bolt.py board.
+function quickTab(host) {
+  const Q = B.quick || {}, s = Q.closed || {}, r = Q.rules || {}, sz = r.size_by_score || {};
+  host.innerHTML = `<div class="stats">
+      <div class="stat"><div class="l">Value</div><div class="v num">${money(Q.equity)}</div></div>
+      <div class="stat"><div class="l">Since start</div><div class="v num ${cls(Q.pnl_pct)}">${pct(Q.pnl_pct)}</div></div>
+      <div class="stat"><div class="l">Open</div><div class="v num">${(Q.positions || []).length}</div></div>
+      <div class="stat"><div class="l">Closed</div><div class="v num">${s.n || 0}${has(s.win_rate) ? ' · ' + Math.round(s.win_rate) + '% won' : ''}</div></div></div>
+    ${Q.balances === false ? '<div class="err">⚠ the quick book does not balance</div>' : ''}
+    ${Q.halted ? '<div class="err">Halted after a 15% drawdown - it resumes by itself after 24 hours</div>' : ''}
+    <div class="sect">Its rules</div><ul class="rules">
+      <li>The same coins, score and checks as Bolt; it buys the best <b>7/10</b> or more, one every ${B.rules.cycle_hours} hours.</li>
+      <li>Bigger buys for better scores: ${Object.entries(sz).map(([k, v]) => `<b>${k}/10 → ${v}%</b>`).join(' · ')} of the account.</li>
+      <li>Stop loss <b>-${r.stop_loss_pct}%</b> under the price paid - it does not trail. All of it sold at <b>+${r.take_profit_pct}%</b> (2:1).</li>
+      <li>Sold after <b>${r.max_hold_days} days</b> whatever it is doing. Bolt's BTC dump switch, 15% halt and 5% cash floor apply.</li></ul>
+    ${(Q.positions || []).length ? '<div class="sect">Holding</div>' + Q.positions.map(p =>
+      `<div class="muted">${esc(p.symbol)} · <span class="num ${cls(p.pnl_pct)}">${pct(p.pnl_pct, 1)}</span> · in at ${price(p.entry_price)} · stop ${price(p.stop_price)} · ${money(p.value)}</div>`).join('') : ''}
+    <div class="sect">Its trades</div>
+    ${(Q.trades || []).length ? `<div class="tw"><table class="tbl"><tr><th>When</th><th></th><th>Coin</th><th>Price</th><th>$</th><th>P&amp;L</th></tr>${
+      Q.trades.map(t => `<tr title="${esc(t.reason)}"><td>${when(t.utc)}</td><td class="${t.side === 'buy' ? 'up' : 'down'}">${t.side === 'buy' ? 'BUY' : 'SELL'}</td>
+        <td>${esc(t.symbol)}</td><td class="num">${price(t.price)}</td><td class="num">${money(t.notional)}</td><td class="num ${cls(t.pnl)}">${t.side === 'sell' ? pct(t.pnl_pct, 1) : ''}</td></tr>
+        <tr><td colspan="6" class="muted" style="font-size:11px;padding-top:0">${esc(t.reason)}</td></tr>`).join('')}</table></div>`
+      : '<div class="empty">No trades yet - it buys only what scores 7 or more.</div>'}`;
 }
 
 load();

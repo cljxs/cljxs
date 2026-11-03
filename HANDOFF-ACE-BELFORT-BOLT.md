@@ -283,6 +283,16 @@ Rules for the model: `agents/belfort/_belfort-agents-header.md`. Tests:
   bad news. At most **5 questions an Eastern day** (`NEWS_WAKES_PER_DAY`).
   Exits never wait for a model. The two books side by side say whether news
   helps crypto.
+- **Bolt Quick, a third $10,000 book (owner, 2026-11-03):** small moves, a
+  tight stop, bigger buys for better scores - `QUICK_RULES`: stop -2.5% under
+  the price paid (no trail), all sold at +5% (2:1), sold after 5 days, buys of
+  10/15/20/25% of the account at scores 7/8/9/10 (`SIZE_BY_SCORE`). Same coins,
+  score, ticks and breakers. run() trades it inside `rules(QUICK_RULES)`, the
+  same mechanism the replay uses; files `state/quick-portfolio.json`,
+  `quick-equity.jsonl`; a "Quick book" tab on Bolt's page; journaled by Bolt's
+  coach as `bolt-quick`. Replayed first over 90 days to 2026-10-30: -$168
+  (Bolt +$1,181); the owner chose to run it on paper anyway as the live test.
+  `bolt.py replay` shows it beside Bolt's rules.
 
 Commands: `python3 scripts/bolt.py show` (the book in words), `check` (does it
 balance?), `board` (the screen's JSON). Pause: `systemctl stop bolt-cycle.timer`.

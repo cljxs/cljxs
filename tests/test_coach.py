@@ -336,6 +336,25 @@ class AceHasACoach(CoachCase):
         self.assertIn("(w.data || {}).ace", page, "his Sunday card too")
 
 
+class BoltQuickIsInBoltsCoach(CoachCase):
+    """2026-11-03: Bolt Quick, a third Bolt book, is journaled by Bolt's coach
+    - its own name, its own 2.5% stop - and by nobody else's."""
+
+    def test_its_sales_are_bolts_coachs(self):
+        tr = [{"utc": "2026-11-03T10:00:00Z", "symbol": "SOL", "side": "buy", "qty": 25, "price": 100.0,
+               "notional": 2500, "fee": 2.5, "reason": "scored 10/10: uptrend"},
+              {"utc": "2026-11-03T15:00:00Z", "symbol": "SOL", "side": "sell", "qty": 25, "price": 105.0,
+               "notional": 2625, "fee": 2.6, "reason": "take profit (+5% target, +5.0%)", "entry_price": 100.0,
+               "opened_utc": "2026-11-03T10:00:00Z", "pnl": 120.0, "pnl_pct": 4.8, "best_pct": 5.0}]
+        (self.root / "agents/bolt/state/quick-portfolio.json").write_text(json.dumps(
+            {"starting_cash": 10000, "cash": 10000, "positions": [], "trades": tr, "marks": {}}))
+        rows = self.c.COACHES["bolt"]["rows"]()
+        self.assertEqual([(r["agent"], r["book"], r["stop_pct"], r["score"]) for r in rows],
+                         [("Bolt Quick", "bolt-quick", 2.5, 10)])
+        self.assertEqual(self.c.BOOK_COACH["bolt-quick"], "bolt")
+        self.assertEqual(self.c.COACHES["belfort"]["rows"](), [])
+
+
 class ThreeCoachesNeverMixed(CoachCase):
     """Owner, 2026-10-23: "make bolt, belfort and aces coach all separate from
     each other so me and the data [don't] get confused". Each coach keeps its

@@ -123,10 +123,10 @@ function draw() {
 
 function journal(all) {
   if (!all.length) return `<div class="muted">Nothing in ${esc(C().name || coach)}'s journal yet. It is written each night at 00:20 ET for the day before.</div>`;
-  // Only Bolt's coach has two books (Bolt and Bolt + news) to choose between.
+  // Only Bolt's coach has more than one book (Bolt, Bolt + news, Bolt Quick) to choose between.
   const agents = [...new Set(all.map(r => r.agent))];
   const shown = who === 'all' || !agents.includes(who) ? all : all.filter(r => r.agent === who);
-  return `${agents.length > 1 ? `<div class="filters">${['all', ...agents].map(a => `<button data-who="${esc(a)}" class="${who === a ? 'on' : ''}">${esc(a === 'all' ? 'Both books' : a)}</button>`).join('')}</div>` : ''}
+  return `${agents.length > 1 ? `<div class="filters">${['all', ...agents].map(a => `<button data-who="${esc(a)}" class="${who === a ? 'on' : ''}">${esc(a === 'all' ? 'Every book' : a)}</button>`).join('')}</div>` : ''}
   <div class="scroll"><table><tr><th>Closed</th><th>Agent</th><th>Asset</th><th>Side</th><th>Entry</th><th>Exit</th><th>Size</th><th>P&amp;L</th><th>Setup</th><th>Why bought</th><th>Why sold</th><th>Outcome</th></tr>
   ${shown.slice().reverse().map(r => `<tr><td>${esc(when(r.closed_utc))}</td><td>${esc(r.agent)}</td>
     <td><b>${esc(r.symbol)}</b> <span class="muted">${esc(r.asset)}</span></td><td>${esc(r.side)}</td>

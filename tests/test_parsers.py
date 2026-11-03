@@ -20777,6 +20777,7 @@ class BoltBase(unittest.TestCase):
         self.b.NEWS_CALLS, self.b.NEWS_USE = a / "state" / "news-calls.jsonl", a / "state" / "news-wakes.json"
         self.b.fetch_news = lambda get=None: []
         self.b.REPLAY_DIR = a / "data" / "replay"           # the replay's price cache too
+        self.b.QUICK_BOOK, self.b.QUICK_EQUITY = a / "state" / "quick-portfolio.json", a / "state" / "quick-equity.jsonl"
         self.rows = json.loads((FIXTURES / "coingecko-markets-bolt-10.json").read_text())
 
     def coin(self, price=100.0, ma20=98.0, ma50=95.0, ch1=0.5, ch24=5.0, ch7=3.0,
@@ -21154,6 +21155,83 @@ class BoltsExitsReplayOnHourlyPrices(BoltBase):
         again = []
         self.b.replay_charts(90, get=lambda url: again.append(url), sleep=lambda s: None)
         self.assertEqual(again, [], "kept for 12 hours")
+
+
+class BoltQuickIsAThirdBook(BoltBase):
+    """Owner, 2026-11-03: "a new trading book similar to bolt ... target
+    moves of 4-5% ... stop loss set at 2.5% below the purchase price ... its
+    own capital of $10,000 ... higher-scoring positions receive a larger
+    allocation". Answers: 10/15/20/25% for 7/8/9/10, all sold at +5%, 5 days.
+    run() trades it under QUICK_RULES (rules()), never a copy of the rules."""
+
+    TEN = dict(ma20=99.0, ma50=95.0, ch1=0.4, ch24=5.0, ch7=2.0)        # 10/10 with BTC up
+    SEVEN = dict(ma20=99.0, ma50=95.0, ch1=-0.1, ch24=5.0, ch7=2.0)     # 7/10 with BTC down
+
+    def quick(self, book, market, at):
+        with self.b.rules(self.b.QUICK_RULES):
+            return self.b.run(book, market, at)
+
+    def test_a_better_score_buys_more(self):
+        ten = self.b.seed(self.T0)
+        ev = self.quick(ten, self.market(btc=1.0, SOL=self.coin(price=100.0, **self.TEN)), self.T0)
+        self.assertIn("scored 10/10", ev["cycle"]["action"])
+        self.assertAlmostEqual(ten["trades"][0]["notional"], 2500.0, msg="10/10: 25% of $10,000")
+        seven = self.b.seed(self.T0)
+        ev = self.quick(seven, self.market(btc=-1.0, SOL=self.coin(price=100.0, **self.SEVEN)), self.T0)
+        self.assertIn("scored 7/10", ev["cycle"]["action"])
+        self.assertAlmostEqual(seven["trades"][0]["notional"], 1000.0, msg="7/10: 10%")
+        plain = self.b.seed(self.T0)
+        self.b.run(plain, self.market(btc=1.0, SOL=self.coin(price=100.0, **self.TEN)), self.T0)
+        self.assertAlmostEqual(plain["trades"][0]["notional"], 1500.0, msg="Bolt's own book: 15%, whatever the score")
+
+    def test_a_fixed_stop_at_minus_two_and_a_half_and_all_sold_at_plus_five(self):
+        book = self.b.seed(self.T0)
+        self.quick(book, self.market(btc=1.0, SOL=self.coin(price=100.0, **self.TEN)), self.T0)
+        tick = lambda m, price: self.quick(book, self.market(btc=1.0, SOL=price),
+                                           self.T0 + timedelta(minutes=m))
+        self.assertEqual(tick(10, 104.9)["exits"], [], "+4.9%: under the target")
+        self.assertEqual(tick(20, 98.0)["exits"], [], "-2%: the stop does not trail up behind +4.9%")
+        self.assertAlmostEqual(book["positions"][0]["stop_price"], 97.5)
+        ev = tick(30, 105.2)
+        self.assertIn("take profit", ev["exits"][0]["reason"])
+        self.assertNotIn("fraction", ev["exits"][0], "all of it")
+        self.assertEqual(book["positions"], [])
+        again = self.b.seed(self.T0)
+        self.quick(again, self.market(btc=1.0, SOL=self.coin(price=100.0, **self.TEN)), self.T0)
+        ev = self.quick(again, self.market(btc=1.0, SOL=97.4), self.T0 + timedelta(minutes=10))
+        self.assertIn("stop loss (-2.5%)", ev["exits"][0]["reason"])
+        self.assertEqual(self.b.problems(book), [])
+        self.assertEqual(self.b.problems(again), [])
+
+    def test_five_days_at_most(self):
+        book = self.b.seed(self.T0)
+        self.quick(book, self.market(btc=1.0, SOL=self.coin(price=100.0, **self.TEN)), self.T0)
+        self.assertEqual(self.quick(book, self.market(btc=1.0, SOL=101.0), self.T0 + timedelta(days=4))["exits"], [])
+        ev = self.quick(book, self.market(btc=1.0, SOL=101.0), self.T0 + timedelta(days=5, minutes=10))
+        self.assertIn("time limit (5 days", ev["exits"][0]["reason"])
+
+    def test_its_own_book_and_bolts_rules_are_back_after_its_turn(self):
+        market = self.market(btc=1.0, SOL=self.coin(price=100.0, **self.TEN))
+        line = self.b.tick_quick_book(market, self.T0)
+        self.assertIn("bolt quick: $", line)
+        q = json.loads(self.b.QUICK_BOOK.read_text())
+        self.assertEqual(q["starting_cash"], 10000.0)
+        self.assertAlmostEqual(q["trades"][0]["notional"], 2500.0)
+        self.assertFalse(self.b.BOOK.exists(), "Bolt's own book untouched")
+        self.assertEqual((self.b.STOP_LOSS_PCT, self.b.TRAIL_PCT, self.b.TAKE_PROFIT_PCT, self.b.MAX_HOLD_DAYS,
+                          self.b.SIZE_BY_SCORE), (8.0, 8.0, 10.0, 14.0, None), "Bolt's rules back after its turn")
+        board = self.b.quick_board(self.T0 + timedelta(minutes=10), {s: 100.0 for s in self.b.UNIVERSE})
+        self.assertEqual(board["positions"][0]["sell_by_utc"], self.b.iso(
+            self.b.parse_iso(q["positions"][0]["opened_utc"]) + timedelta(days=5)), "its 5 days, not Bolt's 14")
+        self.assertEqual(board["rules"]["size_by_score"], {"7": 10.0, "8": 15.0, "9": 20.0, "10": 25.0})
+        self.assertIn("Bolt Quick (its own book)", dict(self.b.REPLAY_PLANS))
+
+    def test_the_page_and_the_coach_know_it(self):
+        html = (ROOT / "mission-control-api" / "public" / "bolt.html").read_text()
+        self.assertIn('data-t="quick"', html)
+        self.assertIn("B.quick", html)
+        coach = (SCRIPTS / "coach.py").read_text()
+        self.assertIn("bolt_rows(quick=True)", coach)
 
 
 class BoltHaltsAndResumesOnHisOwn(BoltBase):

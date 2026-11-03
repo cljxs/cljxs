@@ -57,6 +57,18 @@ Exits never wait for a model. The plain book carries on exactly as before,
 so the two side by side say whether news helps crypto the way it helps
 Belfort.
 
+BOLT QUICK, A THIRD BOOK (owner, 2026-11-03: "another book next to bolt ...
+look for smaller moves like 4-5% while having a tight stop loss like 2.5%
+... 2/1 or better risk reward ... leverage more money into better
+positions"). $10,000 more, the same coins, score, ticks and breakers, its own
+exits and sizes (QUICK_RULES): the stop 2.5% under the price paid and no
+trailing stop, all of it sold at +5%, sold after 5 days whatever it is
+doing, and 10/15/20/25% of the account for a score of 7/8/9/10. run() itself
+trades it with those settings (rules()), as the replay does - no second copy
+of the rules. Replayed before it was built (90 days to 2026-10-30): it lost
+money (-$262 at 15% a buy); the owner chose to run it on paper anyway, as
+the live test.
+
 THE HALT RESUMES ITSELF (owner: "it's just paper trading"). Down 15% from
 where he last started counting, he opens nothing for 24 hours; then he starts
 again and counts from the equity he restarts at.
@@ -107,6 +119,7 @@ MIN_VOLUME_24H = 5e8
 STARTING_CASH = 10000.0
 FEE_PCT = 0.1                 # each way: a typical exchange's taker fee
 TARGET_PCT = 15.0             # of the account, per new position (owner, 2026-10-13: was 25)
+SIZE_BY_SCORE = None          # {score: % of the account} instead of TARGET_PCT - Bolt Quick's
 CASH_FLOOR_PCT = 5.0          # always kept in cash, after the fee (owner, 2026-10-13: was 25)
 MIN_TRADE = 100.0             # a position smaller than this is not worth the fees
 
@@ -149,6 +162,19 @@ STALE_MINUTES = 30            # the screen calls prices older than this stale
 # Bolt + news (see the docstring).
 NEWS_BOOK = AGENT / "state" / "news-portfolio.json"
 NEWS_EQUITY = AGENT / "state" / "news-equity.jsonl"
+
+# Bolt Quick (owner, 2026-11-03; see the docstring): the settings run() trades
+# its book with, everything else Bolt's own.
+QUICK_BOOK = AGENT / "state" / "quick-portfolio.json"
+QUICK_EQUITY = AGENT / "state" / "quick-equity.jsonl"
+QUICK_RULES = {
+    "STOP_LOSS_PCT": 2.5,     # "a tight stop loss like 2.5% under whatever we bought at"
+    "TRAIL_PCT": None,        # no trailing stop: the stop stays where it was set
+    "TAKE_PROFIT_PCT": 5.0,   # "smaller moves like 4-5%" - all sold at +5%, 2:1 on the stop
+    "TAKE_FRACTION": 1.0,
+    "MAX_HOLD_DAYS": 5.0,
+    "SIZE_BY_SCORE": {7: 10.0, 8: 15.0, 9: 20.0, 10: 25.0},   # "if it scores a 10/10 that's better than 7/10"
+}
 NEWS_CALLS = AGENT / "state" / "news-calls.jsonl"
 NEWS_USE = AGENT / "state" / "news-wakes.json"
 NEWS_WAKES_PER_DAY = 5        # owner, 2026-10-16: "put the cap at 5"
@@ -400,8 +426,9 @@ def stop_for(pos):
     best price since, whichever is higher - so it only ever rises. Once
     profit is taken, the quarter kept trails KEPT_TRAIL_PCT under its best."""
     best = pos["entry_price"] * (1 + (pos.get("high_water_pct") or 0.0) / 100.0)
+    floor = pos["entry_price"] * (1 - STOP_LOSS_PCT / 100.0)
     trail = KEPT_TRAIL_PCT if pos.get("took_profit") else TRAIL_PCT
-    return max(pos["entry_price"] * (1 - STOP_LOSS_PCT / 100.0), best * (1 - trail / 100.0))
+    return floor if trail is None else max(floor, best * (1 - trail / 100.0))
 
 
 def trailing(pos):
@@ -474,11 +501,13 @@ def rolling(xs, n):
     return out
 
 
-def size_for(book, eq):
-    """What a new position may cost: 15% of the account, never taking
-    cash under the floor once the fee is paid."""
+def size_for(book, eq, score=None):
+    """What a new position may cost: 15% of the account (or SIZE_BY_SCORE's
+    share for this score), never taking cash under the floor once the fee
+    is paid."""
+    share = (SIZE_BY_SCORE or {}).get(score, TARGET_PCT) if SIZE_BY_SCORE else TARGET_PCT
     room = (book["cash"] - eq * CASH_FLOOR_PCT / 100.0) / (1 + FEE_PCT / 100.0)
-    return max(0.0, min(eq * TARGET_PCT / 100.0, room))
+    return max(0.0, min(eq * share / 100.0, room))
 
 
 def update_halt(book, eq, now):
@@ -552,7 +581,7 @@ def run(book, market, now, gate=None):
                   else f"no entry: nothing eligible scored {MIN_SCORE}+")
     else:
         pick = best[0]
-        notional = size_for(book, eq)
+        notional = size_for(book, eq, pick["score"])
         mine = next((p for p in book["positions"] if p["symbol"] == pick["symbol"]), None)
         if mine:                                  # bought back: up to the size of a new one
             notional = min(notional, eq * TARGET_PCT / 100.0 - mine["qty"] * marks[pick["symbol"]])
@@ -910,6 +939,7 @@ def cmd_tick(now=None, fetch=fetch_raw):
         remember.remember(AGENT, memory_line(book, ev), now=et_time.to_eastern(now))
 
     news_line = tick_news_book(market, now)
+    quick_line = tick_quick_book(market, now)
 
     eq = equity(book)
     print(f"bolt: {money(eq)} ({signed(pct(eq, book['starting_cash']))}%), cash {money(book['cash'])}, "
@@ -917,8 +947,51 @@ def cmd_tick(now=None, fetch=fetch_raw):
           + "".join(f"\n  {exit_line(t)}" for t in ev["exits"])
           + (f"\n  {ev['halt']}" if ev["halt"] else "")
           + (f"\n  cycle: {ev['cycle']['action']}" if ev["cycle"] else "")
-          + (f"\n  {news_line}" if news_line else ""))
+          + (f"\n  {news_line}" if news_line else "")
+          + (f"\n  {quick_line}" if quick_line else ""))
     return 0
+
+
+class rules:
+    """`with rules(QUICK_RULES):` - run() and everything it calls trade by
+    these module settings until the block ends, then Bolt's are back. One
+    set of rules, read through one set of names: the quick book and the
+    replay both use it."""
+
+    def __init__(self, overrides):
+        self.overrides = dict(overrides or {})
+
+    def __enter__(self):
+        self.saved = {k: globals()[k] for k in self.overrides}
+        globals().update(self.overrides)
+        return self
+
+    def __exit__(self, *exc):
+        globals().update(self.saved)
+        return False
+
+
+def tick_quick_book(market, now):
+    """Bolt Quick's turn on the same prices, by QUICK_RULES. Its own file
+    and balance check; a failure is said and never stops the other books."""
+    try:
+        qbook = load_book(now, QUICK_BOOK)
+        with rules(QUICK_RULES):
+            qev = run(qbook, market, now)
+        bad = problems(qbook)
+        if bad:
+            return "bolt quick: THE BOOK DOES NOT BALANCE - nothing saved: " + "; ".join(bad)
+        write_json(QUICK_BOOK, qbook)
+        save_equity(qbook, now, QUICK_EQUITY)
+        for t in qev["exits"]:
+            append_report(now, f"## {et_clock(now)} - Bolt Quick: {exit_line(t)}")
+        if qev["cycle"]:
+            append_report(now, f"**Bolt Quick:** {qev['cycle']['action']}")
+        eq = equity(qbook)
+        return (f"bolt quick: {money(eq)} ({signed(pct(eq, qbook['starting_cash']))}%)"
+                + (f" - {qev['cycle']['action']}" if qev["cycle"] else ""))
+    except Exception as exc:
+        return f"bolt quick: failed this tick - {type(exc).__name__}: {str(exc)[:200]}"
 
 
 def tick_news_book(market, now, gate=None):
@@ -1040,6 +1113,24 @@ def news_board(now, marks):
             "feeds": [n for n, _u in FEEDS], "balances": not problems(nb)}
 
 
+def quick_board(now, marks):
+    """Bolt Quick, for the screen: its account, holdings, trades and rules -
+    the positions worked out under its own rules (its stop, its 5 days)."""
+    qb = load_book(now, QUICK_BOOK)
+    eq = equity(qb, marks)
+    with rules(QUICK_RULES):
+        positions = position_rows(qb, marks, now)
+    return {"started_utc": qb.get("started_utc"), "equity": eq, "cash": qb["cash"],
+            "pnl": eq - qb["starting_cash"], "pnl_pct": pct(eq, qb["starting_cash"]),
+            "positions": positions, "closed": closed_stats(qb),
+            "trades": list(reversed(qb["trades"][-30:])), "curve": series(read_curve(QUICK_EQUITY)),
+            "halted": bool(qb["halt"].get("active")),
+            "rules": {"stop_loss_pct": QUICK_RULES["STOP_LOSS_PCT"], "take_profit_pct": QUICK_RULES["TAKE_PROFIT_PCT"],
+                      "max_hold_days": QUICK_RULES["MAX_HOLD_DAYS"],
+                      "size_by_score": {str(k): v for k, v in QUICK_RULES["SIZE_BY_SCORE"].items()}},
+            "balances": not problems(qb)}
+
+
 def board(now=None):
     """Everything the screen shows. The page draws this and works nothing out."""
     now = now or utcnow()
@@ -1085,6 +1176,7 @@ def board(now=None):
                      "halted_since": h.get("since_utc"), "resumed_utc": h.get("resumed_utc")},
         "closed": closed_stats(book),
         "news": news_board(now, marks),
+        "quick": quick_board(now, marks),
         "trades": list(reversed(book["trades"][-40:])),
         "curve": series(curve),
         "market": {"fetched_utc": (market or {}).get("fetched_utc"), "age_min": age,
@@ -1117,6 +1209,7 @@ REPLAY_PLANS = (
     ("Rules now", {}),
     ("Trail only (before 2026-10-30)", {"TAKE_PROFIT_PCT": None}),
     ("Sell all at the target", {"TAKE_FRACTION": 1.0}),
+    ("Bolt Quick (its own book)", QUICK_RULES),
 )
 WEEK_HOURS = 168
 
@@ -1187,10 +1280,7 @@ def replay_markets(charts):
 def replay(markets, overrides=None):
     """One plan over the markets: run() on a fresh $10,000 book with these
     module settings for the length of the replay, then put back."""
-    overrides = overrides or {}
-    saved = {k: globals()[k] for k in overrides}
-    globals().update(overrides)
-    try:
+    with rules(overrides):
         book = seed(markets[0][0])
         mid = None
         for n, (now, market) in enumerate(markets):
@@ -1198,8 +1288,6 @@ def replay(markets, overrides=None):
             if n == len(markets) // 2:
                 mid = equity(book, book["marks"])
         end = equity(book, book["marks"])
-    finally:
-        globals().update(saved)
     sells = [t for t in book["trades"] if t["side"] == "sell"]
     start = book["starting_cash"]
     return {"profit": round(end - start, 2), "first_half": round(mid - start, 2),
