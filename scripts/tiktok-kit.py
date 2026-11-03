@@ -392,11 +392,55 @@ def audio_for(thing, ai=False):
 
 # ------------------------------------------------------------------ who goes next
 
+# WHO HAS HAD A KIT, KEPT (owner, 2026-11-03: "So im getting kit's that we've
+# already made. Can we make sure there are no more duplicates made with the
+# same product."). Who had been featured was read off the kit folders, and
+# only KEEP_KITS of those are kept: two weeks on, a listing's kit was pruned,
+# it looked never featured, and it went to the front again - with 35 live
+# listings, repeats began while 21 had never had one. Every kit made is
+# recorded here as well, and pruning never touches it; deleting a kit
+# takes its line out, so that listing's turn comes round again on purpose.
+def _featured_path():
+    return KITS / "featured.json"
+
+
+def featured_log():
+    """{kit id: {"listing_id", "day"}} for every kit ever made and not deleted."""
+    try:
+        d = json.loads(_featured_path().read_text())
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_featured(log_):
+    path = _featured_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(log_, indent=1, sort_keys=True) + "\n")
+    tmp.replace(path)
+
+
+def remember(kid, listing_id, day):
+    log_ = featured_log()
+    log_[kid] = {"listing_id": int(listing_id), "day": day}
+    _save_featured(log_)
+
+
+def forget(kid):
+    log_ = featured_log()
+    if log_.pop(kid, None) is not None:
+        _save_featured(log_)
+
+
 def featured(kits):
-    """{listing_id: the latest day it had a kit}."""
+    """{listing_id: the latest day it had a kit} - the kits on disk and the
+    record of every kit made, so a pruned kit is not forgotten."""
     out = {}
-    for k in kits:
-        lid, day = str(k.get("listing_id")), str(k.get("day") or "")
+    rows = [(k.get("listing_id"), k.get("day")) for k in kits]
+    rows += [(e.get("listing_id"), e.get("day")) for e in featured_log().values() if isinstance(e, dict)]
+    for lid, day in rows:
+        lid, day = str(lid), str(day or "")
         if day > out.get(lid, ""):
             out[lid] = day
     return out
@@ -825,6 +869,7 @@ def build_kit(row, photos, day, shop_line, turn, scenes=SCENES_PER_KIT, maker=No
                "made_utc": _now(), "posted_utc": None}
         (part / "kit.json").write_text(json.dumps(kit, indent=1) + "\n")
         part.rename(KITS / kid)
+        remember(kid, row["listing_id"], day)
     except BaseException:
         shutil.rmtree(part, ignore_errors=True)
         raise
@@ -837,6 +882,10 @@ def prune(keep=KEEP_KITS):
     Returns the ids removed."""
     gone = []
     for k in read_kits()[keep:]:
+        # Recorded before it goes: a kit made before featured.json existed
+        # would otherwise be forgotten here, and its listing come round again.
+        if k.get("listing_id") and k.get("day"):
+            remember(k["id"], k["listing_id"], k["day"])
         shutil.rmtree(KITS / k["id"], ignore_errors=True)
         gone.append(k["id"])
     for pattern in (".part-*", ".gone-*"):
@@ -954,6 +1003,7 @@ def delete_kit(kid):
         trash = KITS / f".gone-{kid}-{os.getpid()}"
         folder.rename(trash)
     shutil.rmtree(trash, ignore_errors=True)
+    forget(kid)            # deleted on purpose: its listing's turn comes round again
     return kit
 
 

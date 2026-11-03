@@ -292,8 +292,10 @@ class KitOnDisk(unittest.TestCase):
         (self.kits / ".part-2026-10-09-1").mkdir()
         gone = self.tk.prune(keep=3)
         self.assertEqual(sorted(gone), ["2026-10-01-1", "2026-10-02-1"])
-        self.assertEqual(sorted(p.name for p in self.kits.iterdir()),
+        self.assertEqual(sorted(p.name for p in self.kits.iterdir() if p.is_dir()),
                          ["2026-10-03-1", "2026-10-04-1", "2026-10-05-1"])
+        # ...and what they featured is still known (2026-11-03: repeats).
+        self.assertEqual(sorted(self.tk.featured_log()), ["2026-10-01-1", "2026-10-02-1"])
 
     def test_a_kit_can_be_deleted_and_its_listing_gets_its_turn_back(self):
         # Owner, 2026-10-15: "a delete option for the previous kits that I
@@ -913,6 +915,62 @@ class APaidScene(SceneBase):
         with unittest.mock.patch.object(ea, "post", post):
             ea.generate(self.d / "out2.png", "draw it", "k", model="m", product="tote")
         self.assertIsInstance(sent[1]["messages"][0]["content"], str)
+
+
+class NoProductGetsASecondKitTooSoon(unittest.TestCase):
+    """2026-11-03, the owner: "So im getting kit's that we've already made.
+    Can we make sure there are no more duplicates made with the same
+    product." Who had been featured was read off the kit folders, and only
+    KEEP_KITS are kept: once a listing's kit was pruned it looked never
+    featured and went first again, while 21 of 35 listings had never had one."""
+
+    def setUp(self):
+        self.tk = load("tiktok_kit_featured", "tiktok-kit.py")
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d, True)
+        p = unittest.mock.patch.object(self.tk, "KITS", self.d)
+        p.start()
+        self.addCleanup(p.stop)
+        self.listings = [{"listing_id": i, "url": f"u{i}", "favs": 0, "views": 0} for i in range(1, 6)]
+
+    def kit(self, lid, day):
+        kid = f"{day}-{lid}"
+        (self.d / kid).mkdir()
+        (self.d / kid / "kit.json").write_text(json.dumps({"listing_id": lid, "day": day,
+                                                           "made_utc": day + " 14:00:00"}))
+        return kid
+
+    def test_a_pruned_kit_is_not_forgotten(self):
+        for n, lid in enumerate((1, 2, 3)):
+            self.kit(lid, f"2026-10-0{n + 1}")
+        self.tk.prune(keep=1)                              # 1 and 2 are cleared away
+        kits = self.tk.read_kits()
+        self.assertEqual([k["listing_id"] for k in kits], [3])
+        self.assertIn(self.tk.next_listing(self.listings, kits)["listing_id"], (4, 5),
+                      "a listing that never had a kit goes first, not one whose kit was pruned")
+
+    def test_every_listing_has_one_before_any_has_two(self):
+        kits = []
+        for day in range(1, 6):
+            row = self.tk.next_listing(self.listings, kits)
+            kid = self.kit(row["listing_id"], f"2026-10-{day:02d}")
+            self.tk.remember(kid, row["listing_id"], f"2026-10-{day:02d}")
+            self.tk.prune(keep=2)
+            kits = self.tk.read_kits()
+        self.assertEqual(sorted(e["listing_id"] for e in self.tk.featured_log().values()), [1, 2, 3, 4, 5])
+        self.assertEqual(self.tk.next_listing(self.listings, kits)["listing_id"], 1,
+                         "round two starts with the one featured longest ago")
+
+    def test_deleting_a_kit_gives_its_listing_the_turn_back(self):
+        kid = self.kit(4, "2026-10-01")
+        self.tk.remember(kid, 4, "2026-10-01")
+        self.tk.delete_kit(kid)
+        self.assertNotIn(kid, self.tk.featured_log())
+
+    def test_the_kit_builder_records_what_it_made(self):
+        src = (SCRIPTS / "tiktok-kit.py").read_text()
+        body = src.split("def build_kit(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("remember(kid, row[\"listing_id\"], day)", body)
 
 
 class EveryCoverLooksDifferent(unittest.TestCase):
