@@ -226,11 +226,23 @@ class TheBookItKeeps(PropsCase):
         self.assertEqual(self.p.pick(soon, [], [], "2026-10-26", self.NOW)[0], [])
 
     def test_the_props_stop(self):
-        settled = [{"profit": -100.0}] * 10
+        settled = [{"profit": -100.0, "utc": "2026-11-04 17:00:00"}] * 10
         bets, why = self.p.pick(self.boards(1), [], settled, "2026-10-26", self.NOW)
         self.assertEqual(bets, [])
         self.assertIn("props stop", why)
         self.assertIn("Ace's own betting is not affected", why)
+
+    def test_the_stop_counts_from_the_rule_change(self):
+        # Owner, 2026-11-03 ("A"): the old rule lost its $1,000 - 0 for 10 -
+        # and the new one (this season's games only) starts its own count.
+        old = [{"profit": -100.0, "utc": f"2026-10-{20 + i} 17:00:00"} for i in range(10)]
+        self.assertIsNone(self.p.stop_reason(old), "the old rule's losses do not pause the new one")
+        late_night = [{"profit": -100.0, "utc": "2026-11-03 03:30:00"}]          # 23:30 ET on Nov 2
+        self.assertEqual(self.p.counted(late_night), [], "placed on Nov 2 Eastern")
+        new = [{"profit": -100.0, "utc": "2026-11-03 16:00:00"}] * 9
+        self.assertIsNone(self.p.stop_reason(old + new), "$900 since")
+        self.assertIn("lost $1,000.00 settled since 2026-11-03",
+                      self.p.stop_reason(old + new + [{"profit": -100.0, "utc": "2026-11-05 16:00:00"}]))
 
     def test_graded_by_his_points_and_voided_if_he_sat(self):
         bet = self.bet()

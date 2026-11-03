@@ -159,7 +159,9 @@ toward the price, any number of games, -400 to +400, +2 pts. (Until
 the owner made it this season only, no minimum or maximum - `season_start`.) At most 2 a day, $100, page `/ace-props` (a
 button on Ace's page, and in the village menu). Its bets go into Ace's
 `bets.jsonl` as `book: "props"`: his bankroll, none of his measures (cap, fault
-stop, CLV, baselines, coach) - `ace-book.py is_props`. Own stop at -$1,000.
+stop, CLV, baselines, coach) - `ace-book.py is_props`. Own stop at -$1,000,
+counted on bets placed since the 2026-11-03 rule change (`STOP_FROM`; the old
+rule had lost its $1,000, 0-10, and the owner chose a fresh count).
 Logged in the preregistration as not a rule change. `ace-props.py show`.
 
 Scripts: `ace-judge.py` (blind/list/bet/pass/rest/verdict/mark - Ace's only

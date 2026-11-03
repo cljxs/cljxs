@@ -42,7 +42,8 @@ with book "props", so his bankroll is theirs too. ace-book.py keeps them out
 of everything his preregistration measures: his MAX_OPEN_BETS, his fault
 stop, his closing-line value, his no-AI comparison. They have their own cap,
 DAILY_CAP a day by when they were placed, and their own stop at STOP_USD of
-settled losses. Graded on the close, too: the last DraftKings price seen for
+settled losses on bets placed since STOP_FROM (the 2026-11-03 rule change
+started the count again). Graded on the close, too: the last DraftKings price seen for
 the same player and line before the tip (with the book's margin in it, so
 the closing-line value is if anything understated).
 
@@ -75,6 +76,8 @@ LADDER = "Points Milestones"   # DraftKings' 15+ / 20+ / 25+ ladder, as ESPN nam
 
 DAILY_CAP = 2                  # bets a day (Eastern, by when placed) - the owner's number
 STOP_USD = 1000.0              # settled props losses that pause props; Ace's own betting is untouched
+STOP_FROM = "2026-11-03"       # ...counted from bets placed this Eastern day on: the rule changed
+                               # then, and the old rule's $1,000 is not the new one's (owner: "A")
 SHRINK = 0.6                   # the same 60% as Ace's, its own number: one never moves the other
 GAP_MIN_PTS = 2.0
 MAX_FAVOURITE = -400           # an 80% price: past it one loss costs four wins
@@ -434,10 +437,16 @@ def props_bets(b=None):
     return ([x for x in f["open"] if b.is_props(x)], [x for x in f["settled"] if b.is_props(x)], f)
 
 
+def counted(settled):
+    """The settled bets the stop counts: those placed on or after STOP_FROM."""
+    return [x for x in settled if et_time.day(et_time.to_eastern(x.get("utc"))) >= STOP_FROM]
+
+
 def stop_reason(settled):
-    lost = -sum(float(x.get("profit") or 0) for x in settled)
+    lost = -sum(float(x.get("profit") or 0) for x in counted(settled))
     if lost >= STOP_USD:
-        return f"props have lost ${lost:,.2f} settled - the ${STOP_USD:,.0f} props stop. Ace's own betting is not affected"
+        return (f"props have lost ${lost:,.2f} settled since {STOP_FROM} - the ${STOP_USD:,.0f} props stop. "
+                f"Ace's own betting is not affected")
     return None
 
 
@@ -671,7 +680,9 @@ def board_json(now=None):
                     "avg_clv_pct": round(sum(x["clv_pct"] for x in with_close) / len(with_close), 2)
                     if with_close else None,
                     "with_close": len(with_close), "beat_close": sum(1 for x in with_close if x["clv_pct"] > 0),
-                    "stopped": stop_reason(settled), "bankroll": f["bankroll"]},
+                    "stopped": stop_reason(settled), "bankroll": f["bankroll"],
+                    "stop_from": STOP_FROM,
+                    "since_profit": round(sum(float(x.get("profit") or 0) for x in counted(settled)), 2)},
         "rules": {"cap": DAILY_CAP, "stake": b.flat_stake(), "stop_usd": STOP_USD, "shrink": SHRINK,
                   "gap_min_pts": GAP_MIN_PTS, "max_favourite": MAX_FAVOURITE,
                   "max_longshot": MAX_LONGSHOT, "bottom": BOTTOM, "season_from": season_start(day)},

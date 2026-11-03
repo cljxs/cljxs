@@ -114,6 +114,7 @@ function draw() {
   $('acct').innerHTML = [
     ['Bankroll (shared)', `<span class="v num">${money(s.bankroll)}</span>`],
     ['Props P/L', `<span class="v num ${cls(s.profit)}">${signed(s.profit)}</span>`],
+    ...(s.stop_from ? [[`Since ${esc(s.stop_from)}`, `<span class="v num ${cls(s.since_profit)}">${signed(s.since_profit)}</span>`]] : []),
     ['W-L', `<span class="v num">${s.won || 0}-${s.lost || 0}${s.void ? ` · ${s.void} void` : ''}</span>`],
     ['Today', `<span class="v num">${s.today || 0}/${s.cap || 2}</span>`],
     ['Beat the close', `<span class="v num">${has(s.avg_clv_pct) ? `${pp(s.avg_clv_pct)}%` : '—'}</span>`],
@@ -122,7 +123,7 @@ function draw() {
     season's games). His hit rate against those defences this season - however many games that is - is pulled
     ${Math.round((r.shrink || 0) * 100)}% toward the price and must beat it by ${r.gap_min_pts} pts; prices ${r.max_favourite} to
     +${r.max_longshot} only. At most ${r.cap} bets a day, ${money(r.stake)} each, from Ace's bankroll - kept out of his
-    own record, his 4-bet cap and his stops. Props pause after ${money(-r.stop_usd)}.`;
+    own record, his 4-bet cap and his stops. Props pause after ${money(-r.stop_usd)} settled on bets placed since ${esc(s.stop_from || '')}.`;
   $('stop').innerHTML = s.stopped ? `<div class="stop">PAUSED: ${esc(s.stopped)}</div>` : '';
   const games = ((D.board || {}).games || []);
   $('tabs').innerHTML = [['board', "Today's board", games.length], ['open', 'Open bets', (D.open || []).length],
