@@ -216,6 +216,14 @@ class WhoIsFeaturedNext(unittest.TestCase):
         self.assertIsNone(self.tk.next_listing([], []))
 
 
+# The slideshow at a twentieth of the pixels, for tests about which slides a
+# kit holds rather than the video itself: the full 1080x1920 render was 9-11 s
+# each time and most of this file's 4.7 minutes (2026-11-03). The kit's own
+# check (video_problems) still reads every small video back and holds it to
+# this size and its length. KitOnDisk.test_a_whole_kit keeps the real size.
+SMALL_VIDEO = (270, 480)
+
+
 class KitOnDisk(unittest.TestCase):
     """A real kit: slides, video, words and zip, made whole or not at all."""
 
@@ -267,7 +275,8 @@ class KitOnDisk(unittest.TestCase):
     def test_a_kit_that_goes_wrong_leaves_nothing(self):
         self.ff()
         photos = [still(self.d, "a.png")]
-        with unittest.mock.patch.object(self.tk, "video_problems", return_value=["900x900, not 1080x1920"]):
+        with unittest.mock.patch.object(self.tk, "VIDEO", SMALL_VIDEO), \
+                unittest.mock.patch.object(self.tk, "video_problems", return_value=["900x900, not 1080x1920"]):
             with self.assertRaises(RuntimeError):
                 self.tk.build_kit(ROW, photos, "2026-10-13", "Shop on Etsy", 0)
         self.assertEqual(list(self.kits.iterdir()), [], "no kit and no .part folder")
@@ -1073,6 +1082,9 @@ class KitsWithScenes(unittest.TestCase):
         p = unittest.mock.patch.object(self.tk, "KITS", self.d / "tiktok")
         p.start()
         self.addCleanup(p.stop)
+        small = unittest.mock.patch.object(self.tk, "VIDEO", SMALL_VIDEO)
+        small.start()
+        self.addCleanup(small.stop)
         # Two studio mockups: the product on one flat colour.
         self.photos = [mockup(self.d, "a.png"), mockup(self.d, "b.png", bag="0x7a4a2a")]
         # A photo with a background of its own.

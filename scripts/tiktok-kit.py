@@ -78,6 +78,7 @@ ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", SCRIPTS.parent))
 KITS = ROOT / "agents" / "emily" / "shop" / "tiktok"
 
 W, H = 1080, 1920           # TikTok's full-screen 9:16
+VIDEO = (W, H)              # the slideshow's frame; tests that only count slides make theirs small
 MAX_PHOTOS = 5              # listing photos in the carousel, after the hook
 SECONDS_PER_SLIDE = 2.5
 VIDEO_MIN, VIDEO_MAX = 8, 20
@@ -594,8 +595,8 @@ def video_problems(path, seconds):
         size = Path(path).stat().st_size if Path(path).exists() else 0
         return [f"the video file could not be read ({size:,} bytes)"]
     out = []
-    if (w, h) != (W, H):
-        out.append(f"{w}x{h}, not {W}x{H}")
+    if (w, h) != VIDEO:
+        out.append(f"{w}x{h}, not {VIDEO[0]}x{VIDEO[1]}")
     if abs(secs - seconds) > 0.25:
         out.append(f"{secs:.1f}s long, meant to be {seconds}s")
     if audio:
@@ -769,7 +770,7 @@ def package(folder, kid, style=None):
     slides = sorted(p for p in (folder / "slides").iterdir() if SLIDE_RE.match(p.name))
     seconds = video_seconds(len(slides))
     tmp = folder / "video.part.mp4"
-    cmd = _lv().command(slides, tmp, seconds, size=(W, H), background="black", crf=23, style=style)
+    cmd = _lv().command(slides, tmp, seconds, size=VIDEO, background="black", crf=23, style=style)
     cmd[0] = shutil.which("ffmpeg") or "ffmpeg"
     run(cmd, timeout=600)
     bad = video_problems(tmp, seconds)

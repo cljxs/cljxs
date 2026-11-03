@@ -346,10 +346,9 @@ Sunday propose STOP / START / CONTINUE / updated rules.
 6. **Tests use real captured data** (`tests/fixtures/`: ESPN payloads,
    `_meta.json`, CoinGecko replies). Every test names the bug it guards and was
    checked by putting the bug back. Run before a push:
-   `python3 -B -m unittest tests.test_parsers -b` (fast) and
-   `python3 scripts/check-secrets.py`; for money-touching changes, the full
-   `python3 -B -m unittest discover -s tests -b` too (about 40 minutes - run it
-   in the background).
+   `python3 scripts/run-tests.py --changed` and `python3 scripts/check-secrets.py`;
+   for money-touching changes, the full `python3 scripts/run-tests.py` too
+   (CLAUDE.md, "Running the tests", says which and why).
 7. **Changing an agent's instructions:** edit `agents/<name>/_<name>-agents-header.md`
    (AGENTS.md is generated), then on the server `scripts/deploy.sh <name>`.
 8. **Credentials never leave the server.** `agents/<name>/state/credentials.env`,

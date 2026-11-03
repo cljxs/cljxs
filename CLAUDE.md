@@ -121,19 +121,27 @@ parser bug here was a format assumption, not a logic error.
 
 ## Running the tests
 
-    python3 -m unittest discover -s tests -v      # no dependencies, runs anywhere
-    python3 -m unittest discover -s tests -b 2>&1 | tail -3    # just the verdict
+    python3 scripts/run-tests.py --changed     # what this change touches - the usual check
+    python3 scripts/run-tests.py               # everything, four classes at a time
+    python3 scripts/run-tests.py 2>&1 | tail -3    # just the verdict
 
-Which to run before a push (owner's choice, 2026-10-03 - the full suite
-takes 8-10 minutes and was most of every reply's wait):
+No dependencies; it runs in a frozen copy of the tree, so editing while it
+runs cannot fail it. It prints its own time and keeps each class's in
+tests/.timings.json - the one place for how long the suite takes (the
+numbers once written here and in ROUTING.md disagreed by 30 minutes).
+`python3 -m unittest discover -s tests` still works and is the same suite,
+one test at a time.
 
-* **Small change** - a schedule, wording, a setting, one function: the fast
-  suite (`python3 -B -m unittest tests.test_parsers -b`, about a minute), the
-  new test, and `scripts/check-secrets.py`.
+Which to run before a push (owner's choice, 2026-10-03, when the full suite
+was most of every reply's wait; the commands changed 2026-11-03):
+
+* **Small change** - a schedule, wording, a setting, one function:
+  `--changed`, the new test, and `scripts/check-secrets.py`.
 * **Bigger code change** - several files, new behaviour, anything touching
-  money or Printify: the full `discover` run as well.
+  money or Printify: the full run as well. CI runs the full suite on every
+  push either way.
 
-Use `-b` for the short form. Tests print to stdout and unittest reports to
+With plain unittest, use `-b` for the short form. Tests print to stdout and unittest reports to
 stderr; through a pipe those two are buffered differently, so `| tail -3`
 without it can hand you three lines of a catalogue listing and no verdict at
 all. That happened on the droplet and read as a hung test run.

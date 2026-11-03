@@ -2081,6 +2081,26 @@ settled(step);
 })();""".replace("(function(){", "(function(){" + STYLED_JS + DESC_JS + FIT_JS, 1)
 
 
+def browser_dom(run, browser, url, marker, flags):
+    """The page as headless Chrome left it, after a script of ours wrote its
+    answer into <pre id=marker>. Asked a second time when the first run gave
+    no answer: once in ~70 tries, with other work running, Chrome printed
+    nothing and a whole page went unchecked (seen in a parallel test run,
+    2026-11-03). '' when neither run answered."""
+    out = ""
+    for _ in range(2):
+        try:
+            r = run([browser, "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run",
+                     "--disable-dev-shm-usage", *flags, "--dump-dom", url],
+                    capture_output=True, text=True, timeout=90)
+            out = r.stdout or ""
+        except Exception:
+            out = ""
+        if f'<pre id="{marker}">' in out:
+            break
+    return out
+
+
 def phone_problems(site, browser, run=subprocess.run):
     """{'wraps': [(text, lines)], 'wide': bool} for the first page at phone
     width, or None when the browser gave no answer."""
@@ -2105,14 +2125,9 @@ def phone_problems(site, browser, run=subprocess.run):
             "});</script>")
     frame.write_text(phone_frame(probe.name, PHONE_W, PHONE_H, lift))
     try:
-        r = run([browser, "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
-                 "--no-first-run", "--disable-dev-shm-usage", "--allow-file-access-from-files",
-                 f"--window-size={CHROME_MIN_W},{PHONE_H}",
-                 "--virtual-time-budget=10000", "--dump-dom", frame.as_uri()],
-                capture_output=True, text=True, timeout=90)
-        out = r.stdout or ""
-    except Exception:
-        out = ""
+        out = browser_dom(run, browser, frame.as_uri(), "paul-phone",
+                          ["--hide-scrollbars", "--allow-file-access-from-files",
+                           f"--window-size={CHROME_MIN_W},{PHONE_H}", "--virtual-time-budget=10000"])
     finally:
         probe.unlink(missing_ok=True)
         frame.unlink(missing_ok=True)
@@ -2193,13 +2208,8 @@ def contrast_problems(site, browser, run=subprocess.run, width=1280, height=900)
         probe.write_text(re.sub(r"(?i)</body>", lambda _m: tag + "</body>", markup, count=1)
                          if re.search(r"(?i)</body>", markup) else markup + tag)
         try:
-            r = run([browser, "--headless=new", "--no-sandbox", "--disable-gpu",
-                     "--no-first-run", "--disable-dev-shm-usage",
-                     f"--window-size={width},{height}", "--virtual-time-budget=4000",
-                     "--dump-dom", probe.as_uri()], capture_output=True, text=True, timeout=90)
-            out = r.stdout or ""
-        except Exception:
-            out = ""
+            out = browser_dom(run, browser, probe.as_uri(), CONTRAST_ID,
+                              [f"--window-size={width},{height}", "--virtual-time-budget=4000"])
         finally:
             probe.unlink(missing_ok=True)
         m = re.search(rf'<pre id="{CONTRAST_ID}">(.*?)</pre>', out, re.S)
@@ -2309,13 +2319,9 @@ def image_problems(site, browser, run=subprocess.run, width=1280, height=900, sa
         probe.write_text(re.sub(r"(?i)</body>", lambda _m: tag + "</body>", markup, count=1)
                          if re.search(r"(?i)</body>", markup) else markup + tag)
         try:
-            r = run([browser, "--headless=new", "--no-sandbox", "--disable-gpu",
-                     "--no-first-run", "--disable-dev-shm-usage", "--allow-file-access-from-files",
-                     f"--window-size={width},{height}", "--virtual-time-budget=5000",
-                     "--dump-dom", probe.as_uri()], capture_output=True, text=True, timeout=90)
-            out = r.stdout or ""
-        except Exception:
-            out = ""
+            out = browser_dom(run, browser, probe.as_uri(), "paul-images",
+                              ["--allow-file-access-from-files", f"--window-size={width},{height}",
+                               "--virtual-time-budget=5000"])
         finally:
             probe.unlink(missing_ok=True)
         m = re.search(r'<pre id="paul-images">(.*?)</pre>', out, re.S)

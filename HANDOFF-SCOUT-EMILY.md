@@ -198,10 +198,10 @@ the shop instead.
 Tests: `tests/test_shop.py` (shop, kits, scenes, board), `tests/test_scout_scan.py`,
 and `tests/test_parsers.py` classes for Scout, Emily, Printify, stickers, mugs
 and listings (grep `class Scout`, `class Emily`, `Printify`). Run before a push:
-the fast suite `python3 -B -m unittest tests.test_parsers -b`, the area's own
-file, and `python3 scripts/check-secrets.py`; anything touching money or
-Printify gets the full `python3 -B -m unittest discover -s tests -b` too
-(about 40 minutes - run it in the background).
+`python3 scripts/run-tests.py --changed` (the area's own files and the fast
+suite) and `python3 scripts/check-secrets.py`; anything touching money or
+Printify gets the full `python3 scripts/run-tests.py` too (CLAUDE.md, "Running
+the tests").
 
 ---
 

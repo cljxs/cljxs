@@ -53,6 +53,7 @@ generated - edit the header, then `scripts/deploy.sh <name>`).
 | Model slugs, model comparison | `scripts/set-agent-model.sh`, `scripts/model-trial.py` |
 | A Claude plan login | `scripts/new-claude-login.py` |
 | Provider error or agent error | `scripts/check-provider-error.py` |
+| Which tests to run, how long they take | `scripts/run-tests.py` (`--changed`, `--list`); CI runs it too; `tests/test_run_tests.py` |
 | Reddit, read through web search (Scout, Stan, Belfort; not Ace until 2026-12-01) | `scripts/reddit_search.py` (`find`, `read_items`, `once_a_day`); engine `reddit` in `tasks/engines.json` |
 
 ## The Command Deck (Express, port 3001)
@@ -107,10 +108,17 @@ generated - edit the header, then `scripts/deploy.sh <name>`).
 
 ## Tests - which file
 
-Run: fast `python3 -B -m unittest tests.test_parsers -b` (~1.5 min); one area
-`python3 -B -m unittest tests.test_<area> -b`; full `discover` ~40 min - run it
-in the background. `tests/test_clipper.py` alone is ~20 min; run a class
-(`tests.test_clipper.Posting`) when only that changed.
+Run them with `scripts/run-tests.py` - four classes at a time, in a frozen copy
+of the tree so an edit mid-run cannot fail it:
+
+* `python3 scripts/run-tests.py --changed` - before a push: the test files tied
+  to what changed (a backticked path in the same row of a table here, or a test
+  that names the file), plus test_parsers and test_routing. `--list` says why
+  each was picked. A changed file nothing ties to runs everything.
+* `python3 scripts/run-tests.py` - everything; `... test_clipper.Posting` - one class.
+
+It prints its own time. Each class's last time is kept in tests/.timings.json
+(untracked) - that, not a number in this file, is how long the suite takes.
 
 | Area | File |
 |---|---|
@@ -129,8 +137,9 @@ in the background. `tests/test_clipper.py` alone is ~20 min; run a class
 | Brain map | `tests/test_brain.py` |
 | Agent Room | `tests/test_agentroom.py`, `tests/test_agentroom_build.py`, `tests/test_app_ai.py`, `tests/test_site.py` |
 | Engines, wake | `tests/test_wake.py`, `tests/test_models.py`, `tests/test_new_claude_login.py` |
-| Deck restarts, attention, village frames | `tests/test_restarts.py`, `tests/test_attention.py`, `tests/test_village_frame.py` |
-| This table | `tests/test_routing.py` |
+| Deck restarts (`scripts/restart-deck.py`), attention (`scripts/attention.py`), village frames (`mission-control-api/public/village.html`) | `tests/test_restarts.py`, `tests/test_attention.py`, `tests/test_village_frame.py` |
+| This table (`ROUTING.md`) | `tests/test_routing.py` |
+| The test runner | `tests/test_run_tests.py` |
 
 Real captured inputs live in `tests/fixtures/`; refresh with
 `scripts/capture-fixtures.py`. Before any push: `scripts/check-secrets.py`.

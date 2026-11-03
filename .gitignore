@@ -186,3 +186,6 @@ agents/stan/MEMORY.md
 # The trading coach's journal and reviews (scripts/coach.py) - runtime, like the books.
 # One folder per coach since 2026-10-23 (coach/belfort, coach/bolt, coach/ace).
 coach/
+
+# How long each test class last took (scripts/run-tests.py) - this machine's, not history
+tests/.timings.json

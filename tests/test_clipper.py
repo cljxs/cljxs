@@ -589,14 +589,65 @@ class FramingFallsBackToTheCentre(unittest.TestCase):
         self.assertIn("crop=606:1080:657:0", vf)
 
 
+_RUN_DIR = tempfile.TemporaryDirectory(prefix="clipper-e2e-")   # gone when the run ends
+
+
+def _test_video(dest, hz=220):
+    """The 60 s test pattern the end-to-end tests ingest, made once per run
+    and copied: it is the same file every time, and making it was 2.5 s of
+    every one of ~110 tests (2026-11-03)."""
+    made = Path(_RUN_DIR.name) / f"talk-{hz}.mp4"
+    if not made.is_file():
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error",
+                        "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30",
+                        "-f", "lavfi", "-i", f"sine=frequency={hz}:sample_rate=16000",
+                        "-t", "60", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
+                        str(made) + ".part.mp4"], check=True)
+        os.replace(str(made) + ".part.mp4", made)
+    shutil.copyfile(made, dest)
+    return Path(dest)
+
+
+class _ClassDir:
+    """In place of TemporaryDirectory: the same path for every test of one
+    class, emptied before each. The Clip database keeps absolute paths, so a
+    snapshot (EndToEnd.once) only comes back true at the path it was made at."""
+
+    def __init__(self, path):
+        self.name = str(path)
+        shutil.rmtree(self.name, ignore_errors=True)
+        os.makedirs(self.name)
+
+    def cleanup(self):
+        shutil.rmtree(self.name, ignore_errors=True)
+
+
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "needs ffmpeg")
 class EndToEnd(unittest.TestCase):
     """The whole Phase 1 path through the real CLI: rights gate, ingest,
     duplicate refusal, transcribe (from the real fixture), find, render, and
     a failure that is retried rather than lost."""
 
+    def once(self, build):
+        """Run build() - the same setup steps that open many tests of a class -
+        for real the first time, and give every later test a fresh copy of what
+        it left. The render in it is ~11 s and was redone by 29 Posting tests
+        alone (2026-11-03). Each test still starts from its own copy, so what
+        one test changes never reaches the next. Only for steps that come
+        first in a test, before anything is patched or changed."""
+        snap = Path(_RUN_DIR.name) / "snaps" / f"{type(self).__module__}.{type(self).__qualname__}.{build.__name__}"
+        root = Path(self.tmp.name)
+        if snap.is_dir():
+            shutil.rmtree(root)
+            shutil.copytree(snap, root, symlinks=True)
+            return False
+        build()
+        shutil.copytree(root, str(snap) + ".part", symlinks=True)
+        os.replace(str(snap) + ".part", snap)
+        return True
+
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = _ClassDir(Path(_RUN_DIR.name) / "classes" / f"{type(self).__module__}.{type(self).__qualname__}")
         self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name) / "home"
         self.old = os.environ.get("CLIPPER_HOME")
@@ -613,12 +664,7 @@ class EndToEnd(unittest.TestCase):
             # On the droplet the OpenRouter key is real: a test must never
             # spend it. Drafting by model is tested with a stand-in call.
             "copy_model": None}))
-        self.video = Path(self.tmp.name) / "talk.mp4"
-        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error",
-                        "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30",
-                        "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=16000",
-                        "-t", "60", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
-                        str(self.video)], check=True)
+        self.video = _test_video(Path(self.tmp.name) / "talk.mp4")
         self.words = [x for x in WORDS if x["end"] <= 59.0]
 
     def restore(self):
@@ -813,14 +859,17 @@ class SpotterRun(EndToEnd):
     test_a_failing_stage_is_retried_then_parked_then_retryable = None
 
     def ready(self):
+        self.once(self.one_clip)
+        self.conn = db.connect(self.home / "clipper.db")
+        self.cfg = config.load()
+        self.paths = config.paths()
+
+    def one_clip(self):
         self.cli("source", "add", "tao", "--rights", "permission", "--evidence", "campaign page",
                  "--channel", TAO)
         self.cli("ingest", "tao", str(self.video))
         self.give_words(1)
         self.assertEqual(self.cli("run")[0], 0)
-        self.conn = db.connect(self.home / "clipper.db")
-        self.cfg = config.load()
-        self.paths = config.paths()
 
     def spot(self, **kw):
         fetch, calls = fake_youtube(**kw)
@@ -993,15 +1042,18 @@ class Posting(EndToEnd):
     test_a_failing_stage_is_retried_then_parked_then_retryable = None
 
     def ready(self):
+        self.once(self.one_clip)
+        self.conn = db.connect(self.home / "clipper.db")
+        self.cfg = config.load()
+        self.clip = self.conn.execute("SELECT * FROM clips").fetchone()
+        self.sent = []
+
+    def one_clip(self):
         self.cli("source", "add", "tao", "--rights", "permission", "--evidence", "campaign page")
         self.cli("source", "rules", "tao", "--tags", "#clipping #TaoReads", "--credit", "Clip from @taoreads")
         self.cli("ingest", "tao", str(self.video))
         self.give_words(1)
         self.assertEqual(self.cli("run")[0], 0)
-        self.conn = db.connect(self.home / "clipper.db")
-        self.cfg = config.load()
-        self.clip = self.conn.execute("SELECT * FROM clips").fetchone()
-        self.sent = []
 
     def upload(self, path, meta, privacy, category):
         self.sent.append((path, meta, privacy, category))
@@ -2380,24 +2432,25 @@ class ForgetATestVideo(EndToEnd):
     test_a_failing_stage_is_retried_then_parked_then_retryable = None
 
     def two_videos(self):
+        self.real = Path(self.tmp.name) / "episode.mp4"
+        self.once(self.both_clipped)
+        self.conn = db.connect(self.home / "clipper.db")
+
+    def both_clipped(self):
         self.cli("source", "add", "setup-test", "--rights", "public-domain", "--evidence", "LibriVox")
         self.cli("source", "add", "mike", "--rights", "permission", "--evidence", "campaign page")
-        self.real = Path(self.tmp.name) / "episode.mp4"
-        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error",
-                        "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30",
-                        "-f", "lavfi", "-i", "sine=frequency=330:sample_rate=16000",
-                        "-t", "60", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
-                        str(self.real)], check=True)
+        _test_video(self.real, hz=330)
         self.cli("ingest", "setup-test", str(self.video), "--title", "story")   # video 1, the test
         self.cli("ingest", "mike", str(self.real), "--title", "Trae Young")  # video 2, the real one
         self.give_words(1); self.give_words(2)
         code, said = self.cli("run")
         self.assertEqual(code, 0, said)
-        self.conn = db.connect(self.home / "clipper.db")
-        with self.conn:
-            self.conn.execute("INSERT INTO trending_clips (yt_id, creator_id, title, seen_at, match_video_id, "
-                              "match_start, match_end) VALUES ('t1', 'UC', 'x', ?, 1, 1.0, 20.0)", (db.now(),))
-            db.record_cost(self.conn, "openrouter", "copy", 0.002, video_id=1)
+        conn = db.connect(self.home / "clipper.db")
+        with conn:
+            conn.execute("INSERT INTO trending_clips (yt_id, creator_id, title, seen_at, match_video_id, "
+                         "match_start, match_end) VALUES ('t1', 'UC', 'x', ?, 1, 1.0, 20.0)", (db.now(),))
+            db.record_cost(conn, "openrouter", "copy", 0.002, video_id=1)
+        conn.close()
 
     def count(self, sql, *a):
         return self.conn.execute(sql, a).fetchone()[0]

@@ -1126,7 +1126,20 @@ class CheckDoesNotRemeasureAnUnchangedSite(unittest.TestCase):
                                     or types.SimpleNamespace(stdout=""))
         self.assertIsNone(paul.measured_contrast(self.site, "chrome", self.memo, run=silent))
         self.assertIsNone(paul.measured_contrast(self.site, "chrome", self.memo, run=silent))
+        self.assertEqual(self.launches, 4, "each check asks twice (browser_dom), and no answer is not remembered")
+
+    def test_a_silent_browser_is_asked_once_more(self):
+        # Guards: a page left unchecked because Chrome printed nothing once
+        # (a parallel test run, 2026-11-03) - and a second launch on every
+        # page when the first one answered.
+        said = ["", '<pre id="paul-contrast">{"checked":1,"fails":[]}</pre>']
+        late = lambda cmd, **kw: (setattr(self, "launches", self.launches + 1)
+                                  or types.SimpleNamespace(stdout=said[min(self.launches, 2) - 1]))
+        self.assertEqual(paul.contrast_problems(self.site, "chrome", run=late), [])
         self.assertEqual(self.launches, 2)
+        self.launches = 0
+        self.assertEqual(paul.contrast_problems(self.site, "chrome", run=self.fake_chrome), [])
+        self.assertEqual(self.launches, 1, "an answer the first time is not asked for again")
 
     def test_screenshots_are_not_retaken(self):
         calls = []
