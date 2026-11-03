@@ -37,10 +37,10 @@ app and a review, and a post you have not looked at is not one you want with
 the shop's name on it. The Deck's Shop page shows today's kit, plays it, and
 has the download and a Posted button.
 
-WHO IS FEATURED. A listing that has never had a kit goes first, most-saved
-first; after that, whichever was featured longest ago. So every live listing
-gets a turn before any gets a second one, and the order is a sort, not a
-judgement.
+WHO IS FEATURED. A listing that has never had a kit, most-saved first. Once
+every live listing has had one, no kit is made until a new listing goes live
+(owner, 2026-11-03) - deleting a kit gives its listing the turn back, and
+make --listing makes one for any listing on purpose.
 
 THE WORDS ARE CODE'S, not a model's: the hook from a fixed set, the caption
 from the listing's own description and tags. Free, never a claim the listing
@@ -447,17 +447,27 @@ def featured(kits):
 
 
 def next_listing(listings, kits):
-    """The listing whose turn it is: never featured first (most saved, then
-    most viewed), then the one featured longest ago. None if there are none."""
+    """The listing whose turn it is: one never featured, most saved then most
+    viewed first. None once every live listing has had a kit - owner,
+    2026-11-03: "Once all the listings are covered only build new ones don't
+    rebuild any old ones." A new listing going live is the next kit; deleting
+    a kit gives its listing the turn back; make --listing is always the
+    owner's choice."""
     seen = featured(kits)
-    rows = [r for r in listings or [] if r.get("listing_id") and r.get("url")]
+    rows = [r for r in listings or [] if r.get("listing_id") and r.get("url")
+            and str(r["listing_id"]) not in seen]
     if not rows:
         return None
     num = lambda v: v if isinstance(v, int) else -1
-    # A listing never featured has no day, and "" sorts before every date.
-    rows.sort(key=lambda r: (seen.get(str(r["listing_id"]), ""),
-                             -num(r.get("favs")), -num(r.get("views")), str(r["listing_id"])))
+    rows.sort(key=lambda r: (-num(r.get("favs")), -num(r.get("views")), str(r["listing_id"])))
     return rows[0]
+
+
+def waiting_listings(listings, kits):
+    """How many live listings have never had a kit."""
+    seen = featured(kits)
+    return sum(1 for r in listings or [] if r.get("listing_id") and r.get("url")
+               and str(r["listing_id"]) not in seen)
 
 
 # ------------------------------------------------------------------ the pictures
@@ -1072,6 +1082,12 @@ def _make(a):
             return 2
     else:
         row = next_listing(listings, kits)
+        if not row and any(r.get("url") for r in listings):
+            # Not a failure: the timer's run ends here quietly every day
+            # until a new listing goes live.
+            print("Every live listing has had a kit - no old one is made again. The next kit "
+                  "is made when a new listing goes live on Etsy.")
+            return 0
         if not row:
             print("No live listings in the store snapshot yet: store-report.py fetch",
                   file=sys.stderr)
@@ -1144,8 +1160,15 @@ def cmd_list(a):
                     k[key] = (KITS / k["id"] / f"{name}.txt").read_text()
                 except OSError:
                     k[key] = None
+        try:
+            snaps = _store().snapshots()
+            listings = (snaps[-1].get("listings") if snaps else None) or []
+        except Exception:
+            listings = []
         print(json.dumps({"kits": kits, "today": et_time.day(),
-                          "to_post": sum(1 for k in kits if k.get("status") != "posted")}))
+                          "to_post": sum(1 for k in kits if k.get("status") != "posted"),
+                          # None when the shop has not been read yet
+                          "waiting": waiting_listings(listings, kits) if listings else None}))
         return 0
     if not kits:
         print("no kits yet:  tiktok-kit.py make")

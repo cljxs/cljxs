@@ -199,11 +199,16 @@ class WhoIsFeaturedNext(unittest.TestCase):
     def test_never_featured_first_most_saved_first(self):
         self.assertEqual(self.tk.next_listing(self.rows(), [])["listing_id"], 3)
 
-    def test_then_the_one_featured_longest_ago(self):
-        kits = [{"listing_id": 3, "day": "2026-10-10"}, {"listing_id": 2, "day": "2026-10-11"},
-                {"listing_id": 1, "day": "2026-10-12"}, {"listing_id": 3, "day": "2026-10-13"}]
-        self.assertEqual(self.tk.next_listing(self.rows(), kits)["listing_id"], 2,
-                         "3's latest kit is the 13th, not the 10th")
+    def test_once_every_listing_has_had_a_kit_none_is_made_again(self):
+        # Owner, 2026-11-03: "Once all the listings are covered only build new
+        # ones don't rebuild any old ones." (It used to start round two.)
+        kits = [{"listing_id": 3, "day": "2026-10-10"}, {"listing_id": 2, "day": "2026-10-11"}]
+        self.assertEqual(self.tk.next_listing(self.rows(), kits)["listing_id"], 1, "the one left")
+        kits.append({"listing_id": 1, "day": "2026-10-12"})
+        self.assertIsNone(self.tk.next_listing(self.rows(), kits))
+        self.assertEqual(self.tk.waiting_listings(self.rows(), kits), 0)
+        new = self.rows() + [{"listing_id": 5, "url": "u5", "favs": 0, "views": 0}]
+        self.assertEqual(self.tk.next_listing(new, kits)["listing_id"], 5, "a new listing is next")
 
     def test_a_listing_without_a_link_is_never_chosen(self):
         self.assertNotEqual(self.tk.next_listing(self.rows(), [])["listing_id"], 4)
@@ -305,7 +310,7 @@ class KitOnDisk(unittest.TestCase):
         two = self.kits / "2026-10-14-2" / "kit.json"
         two.write_text(json.dumps(dict(json.loads(two.read_text()), listing_id=2)))
         rows = [{"listing_id": 1, "url": "u1", "favs": 1}, {"listing_id": 2, "url": "u2", "favs": 9}]
-        self.assertEqual(self.tk.next_listing(rows, self.tk.read_kits())["listing_id"], 1, "featured longest ago")
+        self.assertIsNone(self.tk.next_listing(rows, self.tk.read_kits()), "both have had a kit")
         self.assertEqual(self.tk.delete_kit("2026-10-14-2")["listing_id"], 2)
         self.assertEqual([k["id"] for k in self.tk.read_kits()], ["2026-10-13-1"])
         self.assertEqual([p.name for p in self.kits.iterdir() if p.name != ".lock"], ["2026-10-13-1"],
@@ -958,14 +963,23 @@ class NoProductGetsASecondKitTooSoon(unittest.TestCase):
             self.tk.prune(keep=2)
             kits = self.tk.read_kits()
         self.assertEqual(sorted(e["listing_id"] for e in self.tk.featured_log().values()), [1, 2, 3, 4, 5])
-        self.assertEqual(self.tk.next_listing(self.listings, kits)["listing_id"], 1,
-                         "round two starts with the one featured longest ago")
+        self.assertIsNone(self.tk.next_listing(self.listings, kits),
+                          "and no second round (owner, 2026-11-03: only new ones)")
 
     def test_deleting_a_kit_gives_its_listing_the_turn_back(self):
         kid = self.kit(4, "2026-10-01")
         self.tk.remember(kid, 4, "2026-10-01")
         self.tk.delete_kit(kid)
         self.assertNotIn(kid, self.tk.featured_log())
+
+    def test_the_daily_run_says_so_and_does_not_fail(self):
+        src = (SCRIPTS / "tiktok-kit.py").read_text()
+        body = src.split("def _make(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("Every live listing has had a kit - no old one is made again.", body)
+        part = body.split("Every live listing has had a kit", 1)[1][:400]
+        self.assertIn("return 0", part, "not a failed timer every morning")
+        page = (API / "public" / "shop.html").read_text()
+        self.assertIn("T.waiting === 0 ?", page, "the Shop page says why there is no kit")
 
     def test_the_kit_builder_records_what_it_made(self):
         src = (SCRIPTS / "tiktok-kit.py").read_text()

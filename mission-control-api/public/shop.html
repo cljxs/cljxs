@@ -248,7 +248,9 @@ function draw() {
   ].join('');
   $('status').innerHTML = `<div class="k">Status</div>
     <div class="line">${today ? `Today's kit: ${esc(today.title).slice(0, 80)}${today.status === 'posted' ? ' · posted ✓' : today.status === 'needs_review' ? ' · AI scenes to check' : ' · ready to post'}`
-      : T && T.available ? 'No kit yet today - one is made at 9:48 Eastern, or press Make one now' : 'Kits could not be read'}</div>
+      : T && T.available ? (T.waiting === 0 ? 'Every live listing has had a kit - the next is made when a new listing goes live on Etsy'
+        : `No kit yet today - one is made at 9:48 Eastern, or press Make one now${T.waiting ? ` · ${T.waiting} listing${T.waiting === 1 ? '' : 's'} still to feature` : ''}`)
+      : 'Kits could not be read'}</div>
     <div class="muted">${toPost} kit${toPost === 1 ? '' : 's'} to post · ${review} listing${review === 1 ? '' : 's'} to review</div>
     ${jobLine()}`;
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.t === tab));
