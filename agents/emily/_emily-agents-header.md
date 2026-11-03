@@ -197,6 +197,11 @@ suggest or mention a price, and do not run `market-price`, `costs` or
    them in yourself; where you have not, the command puts them in and prints
    `fixed`. Use all 13 tags, mostly phrases of two or three words a shopper
    would type.
+
+   If the phrase or the idea's name carries someone else's name - a platform
+   like TikTok, a brand - leave it out of your copy and run the command
+   anyway: it drops that word from the phrase itself ("cat meme sticker
+   tiktok" becomes "cat meme sticker"). Do not stop the build over it.
 4. **Do NOT touch Printify.** The draft is created for you, by plain code,
    after you finish — `emily-finish.py` reads the listing and the artwork you
    left on disk and creates the product UNPUBLISHED. You do not need a
