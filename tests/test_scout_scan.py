@@ -309,37 +309,61 @@ class YourShopShapesTheIdeas(unittest.TestCase):
 
 class EmilyTitlesTheSearch(unittest.TestCase):
     """Owner, 2026-10-28: traffic. Scout's idea names the phrase shoppers type;
-    a listing that never says it cannot be found for it. Emily's title must
-    start with it and it must be a tag - checked by emily-listing.py."""
+    a listing that never says it cannot be found for it. Emily's title starts
+    with it and it is a tag. It was a refusal at first, and on 2026-11-03 "cat
+    meme sticker tiktok dramatic pause cat" failed again and again - no
+    listing.json, Emily reporting success. So emily-listing.py puts the
+    phrase in, as disclosures.py does with the disclosure lines."""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        self.d = self.tmp / "reel-dad"
+        self.d = self.tmp / "cat-meme-sticker-tiktok-dramatic-pause-cat"
         self.d.mkdir()
         self.m = load("emily_listing_search", "emily-listing.py")
 
-    def problems(self, title, tags, phrase="judging frog sticker"):
+    def fixed(self, title, tags, phrase="cat meme sticker"):
         (self.d / "evidence.json").write_text(json.dumps({"phrase": phrase}))
-        return self.m.search_problems(self.d, {"title": title, "tags": tags})
+        return self.m.with_search(self.d, {"title": title, "tags": tags, "description": "x"})
 
-    def test_the_title_starts_with_the_phrase_and_it_is_a_tag(self):
-        self.assertEqual(self.problems("Judging Frog Stickers | Unimpressed Frog", ["judging frog sticker"]), [],
-                         "a plural is the same search")
-        said = self.problems("Unimpressed Frog | Sarcastic Sticker for Laptops", ["funny frog"])
-        self.assertEqual(len(said), 2)
-        self.assertIn("must start with 'judging frog sticker'", said[0])
+    def test_a_title_and_tags_without_the_phrase_get_it(self):
+        out, changed = self.fixed("Loading Drama Dramatic Pause Cat Sticker", ["funny cat", "drama cat"])
+        self.assertTrue(out["title"].startswith("Cat Meme Sticker | Loading Drama"), out["title"])
+        self.assertEqual(out["tags"][0], "cat meme sticker")
+        self.assertEqual(len(changed), 2)
 
-    def test_a_phrase_too_long_for_a_tag_is_only_asked_of_the_title(self):
-        self.assertEqual(self.problems("Dad Joke Fishing Shirt | Reel Dad", ["fishing dad"],
-                                       phrase="dad joke fishing shirt"), [])
+    def test_what_emily_already_did_is_left_alone(self):
+        out, changed = self.fixed("Cat Meme Stickers | Loading Drama", ["cat meme stickers", "funny cat"])
+        self.assertEqual(changed, [], "a plural is the same search")
+        self.assertEqual(out["title"], "Cat Meme Stickers | Loading Drama")
 
-    def test_a_build_with_no_evidence_is_not_checked(self):
-        self.assertEqual(self.m.search_problems(self.d, {"title": "Anything", "tags": []}), [])
+    def test_etsys_limits_still_hold_after_the_fix(self):
+        out, _ = self.fixed("Loading Drama " + "word " * 40, [f"tag {i}" for i in range(13)])
+        self.assertLessEqual(len(out["title"]), 140)
+        self.assertEqual(len(out["tags"]), 13)
+        self.assertEqual(out["tags"][0], "cat meme sticker")
 
-    def test_the_command_refuses_before_writing(self):
-        src = (SCRIPTS / "emily-listing.py").read_text()
-        self.assertIn("stitch_problems(listing) + search_problems(d, listing)", src)
+    def test_a_phrase_too_long_for_a_tag_only_leads_the_title(self):
+        out, changed = self.fixed("Reel Dad Jokes", ["fishing dad"], phrase="dad joke fishing shirt")
+        self.assertTrue(out["title"].startswith("Dad Joke Fishing Shirt | "))
+        self.assertEqual(out["tags"], ["fishing dad"])
+
+    def test_a_build_with_no_evidence_is_not_touched(self):
+        self.assertEqual(self.m.with_search(self.d, {"title": "Anything", "tags": []}),
+                         ({"title": "Anything", "tags": []}, []))
+
+    def test_the_command_writes_the_fixed_listing(self):
+        (self.d / "evidence.json").write_text(json.dumps({"phrase": "cat meme sticker"}))
+        (self.d / "order.json").write_text(json.dumps({"product": "sticker"}))
+        r = subprocess.run(["python3", str(SCRIPTS / "emily-listing.py"), "listing", str(self.d),
+                            "--title", "Loading Drama Cat", "--description", "A dramatic cat sticker for meme lovers.",
+                            "--tag", "funny cat", "--product", "sticker"],
+                           capture_output=True, text=True, env=dict(os.environ, ECOSYSTEM_ROOT=str(self.tmp)))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("fixed       title now starts with", r.stdout)
+        written = json.loads((self.d / "listing.json").read_text())
+        self.assertEqual(written["title"], "Cat Meme Sticker | Loading Drama Cat")
+        self.assertIn("cat meme sticker", written["tags"])
 
 
 class ScoutThinksOnSonnet(unittest.TestCase):

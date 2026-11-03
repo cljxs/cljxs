@@ -193,9 +193,10 @@ suggest or mention a price, and do not run `market-price`, `costs` or
    **The search this design is for.** When Scout's idea came with a measured
    phrase (the task's evidence, saved as `evidence.json` in the build), the
    title must start with that phrase - within its first 40 characters, which
-   is what Etsy search shows - and the phrase must be one of the tags. The
-   command checks both and says exactly what to change. Use all 13 tags,
-   mostly phrases of two or three words a shopper would type.
+   is what Etsy search shows - and the phrase must be one of the tags. Write
+   them in yourself; where you have not, the command puts them in and prints
+   `fixed`. Use all 13 tags, mostly phrases of two or three words a shopper
+   would type.
 4. **Do NOT touch Printify.** The draft is created for you, by plain code,
    after you finish — `emily-finish.py` reads the listing and the artwork you
    left on disk and creates the product UNPUBLISHED. You do not need a

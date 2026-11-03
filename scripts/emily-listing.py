@@ -128,6 +128,13 @@ def stitch_problems(listing):
 # shop's first 35 listings averaged two views each. So the title starts with
 # it and it is a tag. What "starts" and "a tag" mean is store-report.py's
 # audit - where search shows a title, plurals as one search - imported.
+#
+# PUT THERE, NOT REFUSED (2026-11-03). It refused at first, and the "cat
+# meme sticker tiktok dramatic pause cat" build failed again and again: the
+# listing was never written, and Emily reported success. The disclosure lines
+# went the same way once (disclosures.py: refusing stalled two hoodies over a
+# rule a script can simply apply). The phrase is fixed text, so code puts it
+# in and says so; Emily's own words follow it.
 def _audit():
     spec = importlib.util.spec_from_file_location("store_report_listing", SCRIPTS / "store-report.py")
     mod = importlib.util.module_from_spec(spec)
@@ -144,21 +151,30 @@ def target_of(d):
     return " ".join(str(phrase or "").lower().split()) or None
 
 
-def search_problems(d, listing):
+def with_search(d, listing):
+    """(listing, [what was changed]) - the title led by the build's measured
+    phrase and the phrase among the tags, wherever Emily did not put them."""
     phrase = target_of(d)
     if not phrase:
-        return []
+        return listing, []
     sr = _audit()
     norm = lambda text: " ".join(sr._stem(w) for w in sr._words(text))
-    out = []
-    lead = str(listing.get("title") or "")[:max(sr.TITLE_SEEN, len(phrase) + 10)]
-    if norm(phrase) not in norm(lead):
-        out.append(f"the title must start with {phrase!r} - the search this design is for, within "
-                   f"the first {sr.TITLE_SEEN} characters, which is what Etsy search shows. "
-                   f"For example: \"{sr._cap(phrase)} | ...\"")
-    if len(phrase) <= sr.TAG_MAX and not any(norm(t) == norm(phrase) for t in listing.get("tags") or []):
-        out.append(f"{phrase!r} must be one of the tags - it is the search this design is for")
-    return out
+    out = dict(listing)
+    changed = []
+    title = " ".join(str(out.get("title") or "").split())
+    if norm(phrase) not in norm(title[:max(sr.TITLE_SEEN, len(phrase) + 10)]):
+        head = sr._cap(phrase)
+        rest = title
+        while rest and len(head) + 3 + len(rest) > sr.TITLE_MAX:
+            rest = rest.rsplit(" ", 1)[0] if " " in rest else ""
+        out["title"] = f"{head} | {rest}" if rest else head
+        changed.append(f"title now starts with {phrase!r}, the search this design is for")
+    tags = list(out.get("tags") or [])
+    if len(phrase) <= sr.TAG_MAX and not any(norm(t) == norm(phrase) for t in tags):
+        dropped = tags[sr.TAG_SLOTS - 1:] if len(tags) >= sr.TAG_SLOTS else []
+        out["tags"] = [phrase] + tags[:sr.TAG_SLOTS - 1]
+        changed.append(f"{phrase!r} added as the first tag" + (f" (in place of {dropped[0]!r})" if dropped else ""))
+    return out, changed
 
 
 def cmd_listing(a):
@@ -184,7 +200,8 @@ def cmd_listing(a):
 
     # Checked with the verifier's own function, before anything is written. A
     # file that exists and fails is worse than no file: it looks like work.
-    problems = ev.listing_problems(listing) + stitch_problems(listing) + search_problems(d, listing)
+    listing, fixed = with_search(d, listing)
+    problems = ev.listing_problems(listing) + stitch_problems(listing)
     if problems:
         print("not written - this listing would fail the build:", file=sys.stderr)
         for p in problems:
@@ -196,7 +213,9 @@ def cmd_listing(a):
     print(f"wrote {path}")
     print(f"  title       {listing['title']}")
     print(f"  product     {listing['product_type']}")
-    print(f"  tags        {len(a.tag)}: {', '.join(a.tag)}")
+    print(f"  tags        {len(listing['tags'])}: {', '.join(listing['tags'])}")
+    for f in fixed:
+        print(f"  fixed       {f}")
     # The shop's listing audit, as advice: the same words the owner's Fix
     # listings tab would show for this listing once it is live.
     try:
