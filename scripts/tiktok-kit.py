@@ -126,6 +126,40 @@ PLAIN_SIDE = 96
 LOCK_WAIT = 1500            # seconds; a kit with paid scenes takes a few minutes
 SCENE_SPACING = 25          # seconds between FREE requests; closer, they are refused
 
+# THE COVER (owner, 2026-11-03, with a screenshot of the profile: "Can we make
+# sure we are using different thumbnails and different fonts so every post
+# doesn't look the same"). Every cover was white DejaVu Bold with a black
+# outline at the very top of a person holding the product. Now each kit takes
+# the next LOOK - a font and a way of setting it - and the next COVER kind,
+# so consecutive posts differ in both. The fonts are in the repo
+# (assets/fonts, SIL Open Font License / Apache 2.0, licences beside them),
+# so the droplet needs nothing installed; DejaVu is the fallback.
+FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
+# size is the hook's font size, line how many characters a line holds - each
+# font is a different width, measured on the longest hooks (2026-11-03).
+LOOKS = [
+    {"name": "bold outline", "font": "Anton-Regular.ttf", "size": 120, "line": 16, "color": "white",
+     "border": 7},
+    {"name": "white card", "font": "ArchivoBlack-Regular.ttf", "size": 92, "line": 15, "color": "#1b1b1b",
+     "box": "white@0.93"},
+    {"name": "comic yellow", "font": "Bangers-Regular.ttf", "size": 126, "line": 16, "color": "#FFD84D",
+     "border": 7},
+    {"name": "marker", "font": "PermanentMarker-Regular.ttf", "size": 100, "line": 16, "color": "white",
+     "border": 5},
+    {"name": "tall caps on red", "font": "BebasNeue-Regular.ttf", "size": 136, "line": 18, "color": "white",
+     "box": "#D9485F@0.90"},
+    {"name": "script", "font": "Pacifico-Regular.ttf", "size": 104, "line": 16, "color": "white", "border": 5},
+]
+# TikTok's profile grid shows the middle of a cover, cut to 3:4 - about 240
+# pixels off the top and bottom of 1920. The words sat at y=220, and the
+# grid cut their first line off every post ("POV: you found a" showed as
+# half a line). They start below the cut now.
+GRID_TOP = 340
+# What the cover is a picture of, in turn: an AI scene (a flat lay when
+# there is one, so the words are not over a face - 2026-10-16), or the
+# listing's own photo of the product, large, below the words.
+COVERS = ("scene", "product")
+
 FONTS = ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
          "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
          "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
@@ -388,24 +422,64 @@ def font():
     return next((f for f in FONTS if Path(f).is_file()), None)
 
 
-def _text_filters(lines, fontfile, folder, top, size, tag):
+def look_for(turn):
+    """This kit's cover look: the next in LOOKS, so no two posts in a row match."""
+    return LOOKS[turn % len(LOOKS)]
+
+
+def look_font(look, fallback):
+    """The look's font file, or the system bold when it is not there."""
+    f = FONT_DIR / look["font"] if look else None
+    return str(f) if f and f.is_file() else fallback
+
+
+def cover_for(turn, have):
+    """This kit's cover kind - the next in COVERS that the kit has a picture for."""
+    for k in range(len(COVERS)):
+        kind = COVERS[(turn + k) % len(COVERS)]
+        if kind in have:
+            return kind
+    return "product"
+
+
+def next_turn(kits):
+    """How many kits came before - counted, not measured from the folder: the
+    folder keeps only KEEP_KITS, so its length stopped growing at 14 and
+    every rotation keyed on it (hook, video style, cover) would have frozen."""
+    turns = [k.get("turn") for k in kits if isinstance(k.get("turn"), int)]
+    return max(turns) + 1 if turns else len(kits)
+
+
+def _text_filters(lines, fontfile, folder, top, size, tag, look=None):
     """One drawtext per line, each centred. The words go through a file
-    (textfile=) so an apostrophe or a colon in a hook is never ffmpeg syntax."""
+    (textfile=) so an apostrophe or a colon in a hook is never ffmpeg syntax.
+    look sets the colour, the outline or a box behind each line."""
+    look = look or {"color": "white", "border": 6}
     out, step = [], int(size * 1.22)
+    if look.get("box"):
+        paint = f":fontcolor={look['color']}:box=1:boxcolor={look['box']}:boxborderw={int(size * 0.22)}"
+        step = int(size * 1.5)
+    else:
+        paint = f":fontcolor={look['color']}:borderw={look.get('border', 6)}:bordercolor=black@0.85"
     for n, line in enumerate(lines):
         f = Path(folder) / f"{tag}-{n}.txt"
         f.write_text(line)
         out.append(f"drawtext=fontfile={fontfile}:textfile={f}:expansion=none:fontsize={size}"
-                   f":fontcolor=white:borderw=6:bordercolor=black@0.85"
-                   f":x=(w-text_w)/2:y={top + n * step}")
+                   f"{paint}:x=(w-text_w)/2:y={top + n * step}")
     return out
 
 
-def slide_command(photo, out, kind, lines=(), fontfile=None, scratch=None):
+def text_height(lines, look):
+    size = (look or {}).get("size", 96)
+    return len(lines) * int(size * (1.5 if (look or {}).get("box") else 1.22))
+
+
+def slide_command(photo, out, kind, lines=(), fontfile=None, scratch=None, look=None):
     """One slide as an ffmpeg argument list. Every slide is the photo over a
     blurred, darkened copy of itself, so a square mockup fills a tall screen
     without white bars. kind: 'hook' (photo lower, words on top), 'photo',
-    or 'end' (words only, over the blur)."""
+    or 'end' (words only, over the blur). look: the kit's cover look."""
+    size = (look or {}).get("size", 96)
     if kind in ("scene", "hook_scene"):
         # A scene is already the full frame; it is shown as it is, a little
         # darker under the hook's words.
@@ -413,13 +487,18 @@ def slide_command(photo, out, kind, lines=(), fontfile=None, scratch=None):
         chain = [f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
                  f"eq=brightness={dim}[c]"]
         last = "[c]"
-        text = (_text_filters(lines, fontfile, scratch, 220, 96, Path(out).stem) if lines else [])
+        text = (_text_filters(lines, fontfile, scratch, GRID_TOP, size, Path(out).stem, look)
+                if lines else [])
         chain.append(f"{last}{','.join(text + ['format=yuvj420p'])}[out]")
         return ["ffmpeg", "-y", "-loglevel", "error", "-i", str(photo),
                 "-filter_complex", ";".join(chain), "-map", "[out]",
                 "-frames:v", "1", "-q:v", "3", str(out)]
     dim = {"hook": -0.28, "photo": -0.10, "end": -0.32}[kind]
     fg_w, fg_h = {"hook": (960, 960), "photo": (1040, 1600), "end": (0, 0)}[kind]
+    if kind == "hook":
+        # The product below the words, never under them, and inside the grid.
+        below = GRID_TOP + text_height(lines, look) + 60
+        fg_w = fg_h = max(480, min(960, H - 240 - below))
     chain = [f"[0:v]split=2[a][b]",
              f"[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
              f"gblur=sigma=38,eq=brightness={dim}[bg]"]
@@ -427,15 +506,16 @@ def slide_command(photo, out, kind, lines=(), fontfile=None, scratch=None):
         chain.append("[b]nullsink")
         last = "[bg]"
     else:
-        y = "(H-h)/2" if kind == "photo" else f"{H}-h-260"
+        y = "(H-h)/2" if kind == "photo" else f"{H}-h-240"
         chain.append(f"[b]scale={fg_w}:{fg_h}:force_original_aspect_ratio=decrease[fg]")
         chain.append(f"[bg][fg]overlay=(W-w)/2:{y}[c]")
         last = "[c]"
     text = []
     if lines:
-        size = 96 if kind == "hook" else 84
-        top = 220 if kind == "hook" else int(H / 2 - len(lines) * size * 0.61)
-        text = _text_filters(lines, fontfile, scratch, top, size, Path(out).stem)
+        size = size if kind == "hook" else int(size * 0.88)
+        sized = dict(look or {}, size=size)
+        top = GRID_TOP if kind == "hook" else int(H / 2 - text_height(lines, sized) / 2)
+        text = _text_filters(lines, fontfile, scratch, top, size, Path(out).stem, look)
     chain.append(f"{last}{','.join(text + ['format=yuvj420p'])}[out]")
     return ["ffmpeg", "-y", "-loglevel", "error", "-i", str(photo),
             "-filter_complex", ";".join(chain), "-map", "[out]",
@@ -677,7 +757,8 @@ def build_kit(row, photos, day, shop_line, turn, scenes=SCENES_PER_KIT, maker=No
     the kit dict. Raises on anything that would leave a kit half-made, and
     leaves nothing behind when it does. A scene that fails is not a failed
     kit: it is left out and the reason kept."""
-    fontfile = font()
+    look = look_for(turn)
+    fontfile = look_font(look, font())
     if not fontfile:
         raise RuntimeError("no bold font found. On the droplet:  apt install -y fonts-dejavu-core")
     photos = [Path(p) for p in photos][:MAX_PHOTOS]
@@ -685,7 +766,7 @@ def build_kit(row, photos, day, shop_line, turn, scenes=SCENES_PER_KIT, maker=No
         raise RuntimeError("the listing has no photos to make slides from")
     thing = thing_of(row.get("title"))
     hook = hook_for(row, turn)
-    hook_lines = wrap(hook)
+    hook_lines = wrap(hook, look.get("line", HOOK_LINE))
     name = re.sub(r"\s+on Etsy$", "", shop_line).strip()
     end_lines = ["Shop it on Etsy"] + (wrap(name, 18, 2) if name else []) + ["Link in bio"]
 
@@ -704,16 +785,24 @@ def build_kit(row, photos, day, shop_line, turn, scenes=SCENES_PER_KIT, maker=No
             used, shown, left_out = choose(made, photos)
             if not used and not shown:
                 shown = photos[:1]
-            # The first scene carries the hook and is not shown again.
-            plan = ([("hook_scene", used[0][0], hook_lines, used[0][1])] if used
-                    else [("hook", shown[0], hook_lines, None)])
-            plan += [("scene", path, (), rep) for path, rep in used[1:]]
-            plan += [("photo", p, (), None) for p in (shown[1:] if not used else shown)]
+            # The cover, in turn: a scene (choose() put a flat lay first) or
+            # the product's own photo. A scene that is the cover carries the
+            # hook and is not shown again; the product photo cover leaves
+            # every scene to follow it.
+            cover = cover_for(turn, {"product"} | ({"scene"} if used else set()))
+            if cover == "scene":
+                plan = [("hook_scene", used[0][0], hook_lines, used[0][1])]
+                plan += [("scene", path, (), rep) for path, rep in used[1:]]
+                plan += [("photo", p, (), None) for p in shown]
+            else:
+                plan = [("hook", photos[0], hook_lines, None)]
+                plan += [("scene", path, (), rep) for path, rep in used]
+                plan += [("photo", p, (), None) for p in shown if p != photos[0]]
             plan += [("end", (used[-1][0] if used else shown[-1]), end_lines, None)]
             ai_slides, scene_rows = [], []
             for n, (kind, photo, lines, rep) in enumerate(plan, start=1):
                 out = part / "slides" / f"{n:02d}.jpg"
-                run(slide_command(photo, out, kind, lines, fontfile, scratch))
+                run(slide_command(photo, out, kind, lines, fontfile, scratch, look))
                 if kind in ("scene", "hook_scene"):
                     ai_slides.append(out.name)
                     scene_rows.append({"slide": out.name, "prompt": rep.get("prompt"),
@@ -725,6 +814,7 @@ def build_kit(row, photos, day, shop_line, turn, scenes=SCENES_PER_KIT, maker=No
         style = style_for(turn)
         slides, seconds = package(part, kid, style)
         kit = {"day": day, "listing_id": int(row["listing_id"]), "video_style": style,
+               "turn": turn, "cover": cover, "cover_look": look["name"],
                "title": row.get("title") or "", "url": row.get("url"),
                "hook": hook, "thing": thing, "slides": len(slides),
                "slide_names": [p.name for p in slides], "left_out": left_out,
@@ -945,7 +1035,7 @@ def _make(a):
         try:
             photos = lv.download(lv.listing_photos(row["listing_id"], key, ep), d, MAX_PHOTOS)
             how = _scene().mode()
-            kit = build_kit(row, photos, day, store.SHOP_LINE, len(kits),
+            kit = build_kit(row, photos, day, store.SHOP_LINE, next_turn(kits),
                             scenes=0 if a.no_scenes or how == "off" else SCENES_PER_KIT,
                             spent=spent_today(kits, day), how=how,
                             recent=recent_places(kits, thing_of(row.get("title"))))

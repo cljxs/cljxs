@@ -915,6 +915,69 @@ class APaidScene(SceneBase):
         self.assertIsInstance(sent[1]["messages"][0]["content"], str)
 
 
+class EveryCoverLooksDifferent(unittest.TestCase):
+    """2026-11-03, the owner, with a screenshot of the profile: "Can we make
+    sure we are using different thumbnails and different fonts so every post
+    doesn't look the same." Every cover was white DejaVu Bold with a black
+    outline at the top of an AI scene - and the grid cut its first line off.
+    Each kit now takes the next look (a font and a way of setting it) and
+    the next kind of cover, and the words sit inside what the grid shows."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tk = load("tiktok_kit_covers", "tiktok-kit.py")
+
+    def test_the_fonts_are_in_the_repo_with_their_licences(self):
+        fonts = ROOT / "assets" / "fonts"
+        for look in self.tk.LOOKS:
+            self.assertTrue((fonts / look["font"]).is_file(), look["font"])
+        self.assertEqual(len({l["font"] for l in self.tk.LOOKS}), len(self.tk.LOOKS), "a font each")
+        self.assertGreaterEqual(len(list(fonts.glob("OFL-*.txt"))), 5)
+        self.assertTrue(list(fonts.glob("LICENSE-*Apache*")))
+
+    def test_consecutive_kits_never_share_a_look_or_a_cover(self):
+        for turn in range(30):
+            self.assertNotEqual(self.tk.look_for(turn)["name"], self.tk.look_for(turn + 1)["name"])
+            have = {"scene", "product"}
+            self.assertNotEqual(self.tk.cover_for(turn, have), self.tk.cover_for(turn + 1, have))
+        self.assertEqual(self.tk.cover_for(0, {"product"}), "product", "no scene, the product's photo")
+
+    def test_the_rotation_keeps_going_past_the_fourteen_kits_kept(self):
+        # The turn was the number of kit folders, which stops at KEEP_KITS:
+        # every rotation keyed on it - hook, video style, cover - would freeze.
+        kits = [{"id": str(i), "turn": 30 + i} for i in range(self.tk.KEEP_KITS)]
+        self.assertEqual(self.tk.next_turn(kits), 30 + self.tk.KEEP_KITS)
+        self.assertEqual(self.tk.next_turn([{"id": "a"}, {"id": "b"}]), 2, "old kits without a turn")
+        src = (SCRIPTS / "tiktok-kit.py").read_text()
+        self.assertIn("build_kit(row, photos, day, store.SHOP_LINE, next_turn(kits),", src)
+
+    def test_the_words_sit_below_the_grids_cut(self):
+        # The profile grid shows the middle 3:4 of a 9:16 cover: ~240 px off the top.
+        self.assertGreaterEqual(self.tk.GRID_TOP, 300)
+        cmd = self.tk.slide_command("p.jpg", "o.jpg", "hook_scene", ["POV"], "f.ttf",
+                                    tempfile.mkdtemp(), self.tk.LOOKS[1])
+        graph = cmd[cmd.index("-filter_complex") + 1]
+        self.assertIn(f"y={self.tk.GRID_TOP}", graph)
+        self.assertIn("box=1:boxcolor=white@0.93", graph, "the look's own way of setting it")
+        self.assertIn("ArchivoBlack", self.tk.look_font(self.tk.LOOKS[1], "fallback.ttf"))
+
+    def test_every_hook_fits_the_width_in_every_look(self):
+        try:
+            from PIL import ImageFont
+        except ImportError:
+            self.skipTest("Pillow is not installed here")
+        things = ["tote bag", "sweatshirt", "t-shirt", "sticker", "tumbler", "blanket", "hoodie"]
+        for look in self.tk.LOOKS:
+            f = ImageFont.truetype(str(self.tk.FONT_DIR / look["font"]), look["size"])
+            pad = look["size"] * 0.44 if look.get("box") else 2 * look.get("border", 6)
+            for hook in self.tk.HOOKS:
+                for thing in things:
+                    lines = self.tk.wrap(hook.format(thing=thing, who="dog lover"), look["line"])
+                    self.assertLessEqual(len(lines), self.tk.HOOK_LINES)
+                    for line in lines:
+                        self.assertLess(f.getlength(line) + pad, 1000, f"{look['name']}: {line!r}")
+
+
 class KitsWithScenes(unittest.TestCase):
     """The kit holds AI scenes for the owner's eye before it can be posted.
 
@@ -1021,6 +1084,14 @@ class KitsWithScenes(unittest.TestCase):
         kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 0, maker=make,
                                 wait=lambda s: None, scenes=3, how="paid")
         self.assertEqual(kit["ai_slides"], ["01.jpg"], "three identical scenes are one")
+
+    def test_every_other_cover_is_the_products_own_photo(self):
+        make, _ = self.maker()
+        kit = self.tk.build_kit(ROW, self.photos, "2026-10-13", "Shop on Etsy", 1, maker=make,
+                                wait=lambda s: None, scenes=2, how="paid")
+        self.assertEqual((kit["cover"], kit["turn"]), ("product", 1))
+        self.assertEqual(kit["ai_slides"], ["02.jpg", "03.jpg"], "both scenes follow the product's photo")
+        self.assertEqual(kit["cover_look"], self.tk.look_for(1)["name"])
 
     def test_the_hook_goes_on_a_flat_lay_not_over_a_face(self):
         # 2026-10-16: scenes now show whole people, and the hook's words cover
