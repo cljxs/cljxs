@@ -118,9 +118,9 @@ function draw() {
     ['Today', `<span class="v num">${s.today || 0}/${s.cap || 2}</span>`],
     ['Beat the close', `<span class="v num">${has(s.avg_clv_pct) ? `${pp(s.avg_clv_pct)}%` : '—'}</span>`],
   ].map(([l, v]) => `<div><div class="l">${l}</div>${v}</div>`).join('');
-  $('rule').innerHTML = `The opponent must be bottom ${r.bottom} at defending the player's position (G, F or C, its last
-    ${r.defense_games} games). His hit rate against those defences is pulled ${Math.round((r.shrink || 0) * 100)}% toward the
-    price, needs ${r.min_games}+ games, and must beat the price by ${r.gap_min_pts} pts; prices ${r.max_favourite} to
+  $('rule').innerHTML = `The opponent must be bottom ${r.bottom} at defending the player's position (G, F or C, this
+    season's games). His hit rate against those defences this season - however many games that is - is pulled
+    ${Math.round((r.shrink || 0) * 100)}% toward the price and must beat it by ${r.gap_min_pts} pts; prices ${r.max_favourite} to
     +${r.max_longshot} only. At most ${r.cap} bets a day, ${money(r.stake)} each, from Ace's bankroll - kept out of his
     own record, his 4-bet cap and his stops. Props pause after ${money(-r.stop_usd)}.`;
   $('stop').innerHTML = s.stopped ? `<div class="stop">PAUSED: ${esc(s.stopped)}</div>` : '';
@@ -179,7 +179,7 @@ function results() {
 function defences() {
   const d = (D.board || {}).defense || {};
   const names = { G: 'Guards', F: 'Forwards', C: 'Centres' };
-  return `<div class="muted" style="margin-bottom:10px">The ${(D.rules || {}).bottom} teams that allow the most points a game to each position, over their last ${(D.rules || {}).defense_games} games.</div>
+  return `<div class="muted" style="margin-bottom:10px">The ${(D.rules || {}).bottom} teams that allow the most points a game to each position, over every game they have played this season (since ${esc((D.rules || {}).season_from)}).</div>
     <div class="defs">${Object.entries(d).map(([pos, x]) => `<div class="card"><h3>${names[pos] || pos}</h3><ul>${(x.bottom || []).map((t, i) =>
       `<li>${i + 1}. ${esc(t)} <span class="muted">${x.allowed[t]} a game</span></li>`).join('')}</ul></div>`).join('')
       || '<div class="muted">No box scores yet.</div>'}</div>`;

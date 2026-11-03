@@ -22,7 +22,10 @@ twenty games is a small sample, and the best-looking edge of hundreds each
 day is mostly the luckiest one):
   * the hit rate is pulled SHRINK of the way back to the market's chance,
     as Ace's own estimates are;
-  * MIN_GAMES games against those defences, or no bet;
+  * this season's games only, as many or as few as there are (owner,
+    2026-11-03, after 0-10: "games from this season only no minimum or max
+    amount of games needed for a bet" - last season's games were most of
+    every hit rate, and a player's role changes between seasons);
   * no price shorter than MAX_FAVOURITE or longer than MAX_LONGSHOT;
   * the shrunk chance must clear the price's own by GAP_MIN_PTS.
 
@@ -31,8 +34,8 @@ prices (sports.core.api.espn.com propBets - for the NBA they carry prices),
 and every box score, which gives both halves of the rule at once: points
 allowed to guards, forwards and centres (ESPN labels positions G, F and C
 only, not the five the video names), and every player's points against
-every opponent. A team's defence is its last DEFENSE_GAMES games, across
-seasons, so it means something in the first weeks of one.
+every opponent. A team's defence is every game it has played this season
+(season_start); it was its last 40 games across seasons until 2026-11-03.
 
 SEPARATE FROM ACE, ON HIS MONEY. The bets go into Ace's own state/bets.jsonl
 with book "props", so his bankroll is theirs too. ace-book.py keeps them out
@@ -74,11 +77,10 @@ DAILY_CAP = 2                  # bets a day (Eastern, by when placed) - the owne
 STOP_USD = 1000.0              # settled props losses that pause props; Ace's own betting is untouched
 SHRINK = 0.6                   # the same 60% as Ace's, its own number: one never moves the other
 GAP_MIN_PTS = 2.0
-MIN_GAMES = 10
 MAX_FAVOURITE = -400           # an 80% price: past it one loss costs four wins
 MAX_LONGSHOT = 400             # a 20% price
 BOTTOM = 10                    # "bottom 10 in the league at defending that position"
-DEFENSE_GAMES = 40             # a team's defence is its last 40 games, across seasons
+SEASON_FROM_MONTH = 8          # a season runs August to July: the NBA's is October to June
 POSITIONS = ("G", "F", "C")
 SEASON_TYPES = (2, 3)          # regular season and playoffs; never preseason
 FIRST_SEASON_DAY = "2025-10-21"   # last season's first day: the store starts there
@@ -315,13 +317,22 @@ def update_store(since=None, until=None, get=None, store=None, sleep=time.sleep)
 
 # ------------------------------------------------------------------ the rule
 
+def season_start(day):
+    """The first day of the NBA season `day` (YYYY-MM-DD) falls in."""
+    y, m = int(day[:4]), int(day[5:7])
+    return f"{y if m >= SEASON_FROM_MONTH else y - 1}-{SEASON_FROM_MONTH:02d}-01"
+
+
 def defense(store, before=None):
     """{position: {"allowed": {team: points a game}, "rank": {team: 1 = most allowed},
-    "bottom": [the BOTTOM teams that allow the most]}} over each team's last
-    DEFENSE_GAMES games before `before` (an ISO date)."""
+    "bottom": [the BOTTOM teams that allow the most]}} over every game each
+    team has played this season - the season of `before` (an ISO date; by
+    default the newest stored game's) - and before it."""
+    games = sorted(store.get("games", {}).values(), key=lambda g: g["date"])
+    since = season_start(before or (games[-1]["date"] if games else "2000-01-01"))
     per = {}
-    for g in sorted(store.get("games", {}).values(), key=lambda g: g["date"]):
-        if before and g["date"] >= before:
+    for g in games:
+        if (before and g["date"] >= before) or g["date"] < since:
             continue
         allowed = {}
         for team, opp, _aid, _name, pos, minutes, pts in g["rows"]:
@@ -331,8 +342,7 @@ def defense(store, before=None):
             per.setdefault(team, []).append(by)
     out = {}
     for pos in POSITIONS:
-        avg = {t: round(sum(g[pos] for g in games[-DEFENSE_GAMES:]) / len(games[-DEFENSE_GAMES:]), 1)
-               for t, games in per.items() if games}
+        avg = {t: round(sum(g[pos] for g in games) / len(games), 1) for t, games in per.items() if games}
         order = sorted(avg, key=lambda t: (-avg[t], t))
         out[pos] = {"allowed": avg, "rank": {t: i + 1 for i, t in enumerate(order)}, "bottom": order[:BOTTOM]}
     return out
@@ -361,8 +371,8 @@ def judge(rung_line, price, games, against):
            "p_used": None, "edge_pts": None, "clears": False, "why": ""}
     if q is None:
         out["why"] = "no price"
-    elif n < MIN_GAMES:
-        out["why"] = f"{n} game(s) against these defences - {MIN_GAMES} needed"
+    elif n == 0:
+        out["why"] = "no game against these defences this season"
     else:
         p_used = round(q + (1 - SHRINK) * (hit - q), 1)
         out.update(p_used=p_used, edge_pts=round(p_used - q, 1))
@@ -379,8 +389,9 @@ def judge(rung_line, price, games, against):
     return out
 
 
-def game_board(event, ladder, store_players, dfn):
-    """Every player on a game's ladder, judged."""
+def game_board(event, ladder, store_players, dfn, since=None):
+    """Every player on a game's ladder, judged on his games since `since`
+    (this season's first day; every stored game when None)."""
     comp = event["competitions"][0]
     teams = {t["homeAway"]: t["team"]["abbreviation"] for t in comp["competitors"]}
     rows = []
@@ -404,7 +415,8 @@ def game_board(event, ladder, store_players, dfn):
         if opp not in (d.get("bottom") or []):
             row["why"] = f"{opp} is not bottom {BOTTOM} against {pos}s (rank {row['opp_rank']} of {len(d.get('rank') or {})})"
         else:
-            row["rungs"] = [judge(line, price, p["games"], set(d["bottom"])) for line, price in rungs]
+            mine = [g for g in p["games"] if not since or g[0] >= since]
+            row["rungs"] = [judge(line, price, mine, set(d["bottom"])) for line, price in rungs]
             ok = [r for r in row["rungs"] if r["clears"]]
             row["best"] = max(ok, key=lambda r: r["edge_pts"]) if ok else None
             row["why"] = row["best"]["why"] if row["best"] else "no rung clears the bar"
@@ -567,7 +579,7 @@ def scan(part=None, get=None, store=None, now=None):
         if part and not in_part(e.get("date"), part):
             continue
         ladder, note = fetch_ladder(e["id"], get)
-        g = game_board(e, ladder, who, dfn)
+        g = game_board(e, ladder, who, dfn, since=season_start(day))
         g["note"] = note
         boards.append(g)
         time.sleep(GAP)
@@ -661,8 +673,8 @@ def board_json(now=None):
                     "with_close": len(with_close), "beat_close": sum(1 for x in with_close if x["clv_pct"] > 0),
                     "stopped": stop_reason(settled), "bankroll": f["bankroll"]},
         "rules": {"cap": DAILY_CAP, "stake": b.flat_stake(), "stop_usd": STOP_USD, "shrink": SHRINK,
-                  "gap_min_pts": GAP_MIN_PTS, "min_games": MIN_GAMES, "max_favourite": MAX_FAVOURITE,
-                  "max_longshot": MAX_LONGSHOT, "bottom": BOTTOM, "defense_games": DEFENSE_GAMES},
+                  "gap_min_pts": GAP_MIN_PTS, "max_favourite": MAX_FAVOURITE,
+                  "max_longshot": MAX_LONGSHOT, "bottom": BOTTOM, "season_from": season_start(day)},
     }
 
 

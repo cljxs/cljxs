@@ -72,13 +72,14 @@ class PropsCase(unittest.TestCase):
         allows the most points to forwards."""
         pts = pts or [25] * n
         games = []
+        # This season's (2026-11-03: last season's games no longer count).
         for i in range(n):
-            day = (datetime(2026, 1, 1) + timedelta(days=i)).strftime("%Y-%m-%d")
+            day = (datetime(2026, 8, 2) + timedelta(days=i)).strftime("%Y-%m-%d")
             games.append((day, [[team, vs[i % len(vs)], aid, name, pos, 34, pts[i]]]))
         # the rest of the league: BAD gives up the most to forwards, his own
         # games included
         for i, t in enumerate(["BAD", "T02", "T03", "T04", "T05", "T06", "T07", "T08", "T09", "T10", "T11", "T12"]):
-            games.append(("2026-02-01", [["OPP", t, f"x{i}", "Someone", "F", 30, 40 if t == "BAD" else 15 - i]]))
+            games.append(("2026-09-01", [["OPP", t, f"x{i}", "Someone", "F", 30, 40 if t == "BAD" else 15 - i]]))
         return self.store(games)
 
     def bet(self, **kw):
@@ -133,12 +134,33 @@ class TheRuleAndItsGuards(PropsCase):
         self.assertEqual(len(d["F"]["bottom"]), 10)
         self.assertEqual(d["F"]["rank"]["BAD"], 1)
 
-    def test_a_teams_defence_is_its_last_forty_games(self):
-        old = [("2025-11-01", [["X", "GOOD", "a", "A", "G", 30, 60]])] * 1
-        recent = [((datetime(2026, 1, 1) + timedelta(days=i)).strftime("%Y-%m-%d"), [["X", "GOOD", "a", "A", "G", 30, 10]])
-                  for i in range(40)]
-        d = self.p.defense(self.store(old + recent))
-        self.assertEqual(d["G"]["allowed"]["GOOD"], 10.0, "the 60-point night is 41 games back")
+    def test_a_teams_defence_is_this_seasons_games_all_of_them(self):
+        # Owner, 2026-11-03, after 0-10: "games from this season only no
+        # minimum or max amount of games". It was the last 40, across seasons.
+        last_season = [("2026-04-10", [["X", "GOOD", "a", "A", "G", 30, 60]])]
+        this_season = [((datetime(2026, 10, 21) + timedelta(days=i)).strftime("%Y-%m-%d"),
+                        [["X", "GOOD", "a", "A", "G", 30, 10 if i else 40]]) for i in range(50)]
+        d = self.p.defense(self.store(last_season + this_season), before="2026-12-15")
+        self.assertEqual(d["G"]["allowed"]["GOOD"], 10.6, "all 50 of this season's games (530/50), not last season's 60")
+        self.assertEqual((self.p.season_start("2026-11-03"), self.p.season_start("2027-03-01"),
+                          self.p.season_start("2026-06-10")), ("2026-08-01", "2026-08-01", "2025-08-01"))
+
+    def test_his_hit_rate_counts_this_season_only(self):
+        # Last season's games were most of every hit rate - a player whose role
+        # shrank still showed his old numbers.
+        last = [(f"2026-01-{1 + i:02d}", [["AAA", "BAD", "6583", "Player One", "F", 34, 25]]) for i in range(20)]
+        now = [(f"2026-10-2{3 + i}", [["AAA", "BAD", "6583", "Player One", "F", 30, 12]]) for i in range(3)]
+        store = self.store(last + now)                              # twenty 25s last season, three 12s now
+        event = {"id": "1", "shortName": "AAA @ BAD", "date": "2026-11-03T23:00Z", "competitions": [
+            {"competitors": [{"homeAway": "away", "team": {"abbreviation": "AAA"}},
+                             {"homeAway": "home", "team": {"abbreviation": "BAD"}}],
+             "status": {"type": {"name": "STATUS_SCHEDULED"}}}]}
+        dfn = self.p.defense(store, before="2026-11-03")
+        dfn["F"]["bottom"] = ["BAD"]
+        row = self.p.game_board(event, {"6583": [(20.0, 150)]}, self.p.players(store), dfn,
+                                since=self.p.season_start("2026-11-03"))["players"][0]
+        self.assertEqual((row["rungs"][0]["games"], row["rungs"][0]["hit_pct"]), (3, 0.0),
+                         "this season's three games, not last season's twenty 25-point nights")
 
     def test_the_hit_rate_is_shrunk_toward_the_price(self):
         games = [("2026-01-01", "BAD", 34, 25)] * 18 + [("2026-01-02", "BAD", 34, 10)] * 2     # 90% of 20
@@ -152,9 +174,10 @@ class TheRuleAndItsGuards(PropsCase):
         self.assertFalse(r["clears"])
         self.assertIn("shorter than -400", r["why"])
 
-    def test_too_few_games_and_too_small_an_edge(self):
-        few = [("2026-01-01", "BAD", 34, 30)] * 9
-        self.assertIn("10 needed", self.p.judge(20.0, -150, few, {"BAD"})["why"])
+    def test_any_number_of_games_and_too_small_an_edge(self):
+        one = [("2026-10-25", "BAD", 34, 30)]
+        self.assertTrue(self.p.judge(20.0, 150, one, {"BAD"})["clears"], "one game is enough (2026-11-03)")
+        self.assertIn("no game against these defences", self.p.judge(20.0, 150, [], {"BAD"})["why"])
         even = [("2026-01-01", "BAD", 34, 30)] * 12 + [("2026-01-02", "BAD", 34, 5)] * 8     # 60% vs 60%
         self.assertIn("the bar is +2", self.p.judge(20.0, -150, even, {"BAD"})["why"])
 
