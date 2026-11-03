@@ -9337,10 +9337,11 @@ class AnIdeaWithNoMeasurementIsAnOpinion(unittest.TestCase):
         self.assertEqual(self.filed(), [])
 
     def test_a_loosely_matched_phrase_is_refused_with_the_reason(self):
-        self.write_scan(excluded=[{"phrase": "water bottle sticker etsy",
+        # Not "... etsy" since 2026-11-03: a platform's name is refused first.
+        self.write_scan(excluded=[{"phrase": "water bottle sticker bulk",
                                    "match": 0.08, "supply": 284,
                                    "why": "loose"}])
-        code, said = self.propose("--phrase", "water bottle sticker etsy",
+        code, said = self.propose("--phrase", "water bottle sticker bulk",
                                   "--title", "X", "--product", "sticker")
         self.assertEqual(code, 2)
         self.assertIn("8%", said)

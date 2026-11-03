@@ -72,6 +72,14 @@ BLOCKED = [
                       r"\bhermes\b|herm[eè]s birkin"),
     ("pro sports", r"\bnfl\b|\bnba\b|\bmlb\b|\bnhl\b|super bowl|"
                    r"march madness|world series"),
+    # Platforms and apps (2026-11-03). Their names turn up in real searches
+    # ("cat meme sticker tiktok" was measured and became an idea) and are a
+    # trademark in a title. Emily refused to write it three times, rightly,
+    # while this list passed it. Etsy's own name is the platform the listing
+    # is already on - in a title it is only someone else's mark.
+    ("platforms & apps", r"\btik ?tok\b|\binstagram\b|\byoutube\b|\bsnapchat\b|"
+                         r"\bfacebook\b|\bpinterest\b|\bspotify\b|\bnetflix\b|"
+                         r"\bchat ?gpt\b|\bdiscord\b|\btwitch\b|\bwordle\b|\betsy\b"),
 ]
 
 # Ordinary words that are also properties. Flagged, never refused - refusing

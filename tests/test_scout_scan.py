@@ -348,6 +348,24 @@ class EmilyTitlesTheSearch(unittest.TestCase):
         self.assertTrue(out["title"].startswith("Dad Joke Fishing Shirt | "))
         self.assertEqual(out["tags"], ["fishing dad"])
 
+    def test_a_trademark_in_the_phrase_never_reaches_the_listing(self):
+        # The real one, 2026-11-03: Emily refused three times to title a
+        # listing "cat meme sticker tiktok", rightly, and ip-check passed it.
+        out, changed = self.fixed("Loading Drama Cat", ["funny cat"], phrase="cat meme sticker tiktok")
+        self.assertNotIn("tiktok", (out["title"] + " ".join(out["tags"])).lower())
+        self.assertTrue(out["title"].startswith("Cat Meme Sticker | "))
+        self.assertIn("cat meme sticker", out["tags"])
+        self.assertIn("someone else's property", changed[0])
+        ip = load("ip_check_platforms", "ip-check.py")
+        for p in ("cat meme sticker tiktok", "sticker bundle etsy", "instagram story sticker"):
+            self.assertEqual(ip.risky(p)[0], "blocked", p)
+        self.assertIsNone(ip.risky("funny dad shirt")[0])
+
+    def test_a_phrase_that_is_all_somebody_elses_is_left_out(self):
+        out, changed = self.fixed("Loading Drama Cat", ["funny cat"], phrase="tiktok sticker")
+        self.assertEqual((out["title"], out["tags"]), ("Loading Drama Cat", ["funny cat"]))
+        self.assertIn("left out", changed[0])
+
     def test_a_build_with_no_evidence_is_not_touched(self):
         self.assertEqual(self.m.with_search(self.d, {"title": "Anything", "tags": []}),
                          ({"title": "Anything", "tags": []}, []))

@@ -151,16 +151,41 @@ def target_of(d):
     return " ".join(str(phrase or "").lower().split()) or None
 
 
+def ours(phrase):
+    """The phrase without words that are somebody else's mark, or None.
+
+    The measured phrase was "cat meme sticker tiktok" (2026-11-03): Emily
+    would not write TikTok into an Etsy title, rightly, three runs running.
+    A word ip-check.py refuses on its own is dropped ("cat meme sticker");
+    if what is left is still refused, or is under two words, there is no
+    phrase to put in. A CHECK-tier word ("frozen") is an ordinary word too,
+    so it stays - the owner saw that flag when approving the idea."""
+    spec = importlib.util.spec_from_file_location("ip_check_listing", SCRIPTS / "ip-check.py")
+    ipc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ipc)
+    if ipc.risky(phrase)[0] != "blocked":
+        return phrase
+    kept = " ".join(w for w in phrase.split() if ipc.risky(w)[0] != "blocked")
+    if len(kept.split()) < 2 or ipc.risky(kept)[0] == "blocked":
+        return None
+    return kept
+
+
 def with_search(d, listing):
     """(listing, [what was changed]) - the title led by the build's measured
     phrase and the phrase among the tags, wherever Emily did not put them."""
-    phrase = target_of(d)
-    if not phrase:
+    measured = target_of(d)
+    if not measured:
         return listing, []
+    phrase = ours(measured)
+    if not phrase:
+        return listing, [f"the measured phrase {measured!r} names someone else's property - "
+                         f"left out of the title and tags"]
     sr = _audit()
     norm = lambda text: " ".join(sr._stem(w) for w in sr._words(text))
     out = dict(listing)
-    changed = []
+    changed = [] if phrase == measured else [
+        f"the measured phrase {measured!r} names someone else's property - used {phrase!r}"]
     title = " ".join(str(out.get("title") or "").split())
     if norm(phrase) not in norm(title[:max(sr.TITLE_SEEN, len(phrase) + 10)]):
         head = sr._cap(phrase)
