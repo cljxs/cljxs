@@ -221,6 +221,11 @@ class TheFrozenCopy(ATree):
             self.assertFalse((copy / "secret.env").exists(), "an ignored file is not copied")
             self.assertFalse((copy / "ROUTING.md").exists())
             self.assertTrue((copy / "api" / "node_modules").is_symlink())
+            # Guards: the credential tests ask git, and a plain folder answered nothing.
+            tracked = subprocess.run(["git", "ls-files"], cwd=copy, capture_output=True, text=True).stdout.split()
+            self.assertEqual(sorted(tracked), [".gitignore", "scripts/a.py", "scripts/b.py"])
+            ignored = subprocess.run(["git", "check-ignore", "-q", "secret.env"], cwd=copy)
+            self.assertEqual(ignored.returncode, 0, "the copy keeps the tree's ignore rules")
             self.file("scripts/a.py", "LATER = 3\n")
             self.assertEqual((copy / "scripts" / "a.py").read_text(), "NEW = 2\n", "frozen")
 

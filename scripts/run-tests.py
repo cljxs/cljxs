@@ -155,6 +155,11 @@ def frozen_copy(root, dest):
             continue                      # deleted in the tree, not yet in git
         out.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, out, follow_symlinks=False)
+    # A repository of its own, with the copied files added: some tests ask git
+    # what is tracked or ignored (the credential guards), and a plain folder
+    # failed 7 of them (2026-11-03).
+    for cmd in (["git", "init", "-q"], ["git", "add", "-A"]):
+        subprocess.run(cmd, cwd=dest, check=True, capture_output=True)
     for nm in Path(root).glob("*/node_modules"):
         link = Path(dest) / nm.relative_to(root)
         link.parent.mkdir(parents=True, exist_ok=True)
