@@ -288,6 +288,10 @@ function board() {
       // its result is shown beside his, never inside his record.
       props_profit: ((bank && bank.props_settled_bets) || []).reduce((t, s) => t + (num(s.profit) || 0), 0),
       props_count: ((bank && bank.props_settled_bets) || []).length + ((bank && bank.props_open_bets) || []).length,
+      // Its open stakes are out of the shared cash too: without them "In
+      // play" left the bankroll short of start + P/L by exactly their sum
+      // (2026-11-04: $9,216.69 and $0.00 in play, with $200 on two props).
+      props_at_risk: ((bank && bank.props_open_bets) || []).reduce((t, b) => t + (num(b.stake) || 0), 0),
     },
     counts: { games: out.length, bets: out.filter(g => g.verdict === 'bet').length,
               passes: out.filter(g => g.verdict === 'pass').length,

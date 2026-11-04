@@ -17258,6 +17258,24 @@ class TheNoAIBettorsAndTheBlindScore(unittest.TestCase):
         self.assertEqual(b["strategies"]["favourite"]["settled"][0]["profit"], -100.0)
         self.assertTrue(all(b["strategies"][s]["describe"] for s in b["order"]))
 
+    def test_aces_row_is_his_own_books(self):
+        # 2026-11-04: the tab said Ace +$236.69 while his settled P/L read
+        # +$416.69 - his bets were re-graded from results.json and one of his
+        # wins came out a loss. His book is the record that moved his money.
+        book = load("ace_book_row", "ace-book.py")
+        e = book.place({"sport": "nfl", "event_id": "401", "match": "PIT @ CLE", "selection": "CLE ML",
+                        "side": "home", "starts_utc": self.start, "price": -125})
+        book.append({"kind": "settle", "id": e["id"], "utc": "2026-10-02 05:00:00", "result": "won",
+                     "profit": 80.0, "detail": "x"})
+        (self.root / "agents/ace/state/results.json").write_text(json.dumps(
+            {"nfl|401": {"winner": "away", "status": "STATUS_FINAL"}}))
+        out = self.root / "agents/ace/state/baselines.jsonl"
+        ace = self.bl.board_json(path=out)["strategies"]["ace"]["record"]
+        self.assertEqual((ace["settled"], ace["won"], ace["profit"]), (1, 1, 80.0))
+        self.assertEqual(ace["regraded_differ"], ["CLE ML (PIT @ CLE): his book won, the results file lost"])
+        self.assertEqual(self.bl.report(path=out)["ace"]["profit"], 80.0)
+        self.assertIn("1 bet(s) differ", "\n".join(self.bl.report_lines(self.bl.report(path=out))))
+
     def test_blind_estimates_are_scored_against_the_market(self):
         st = self.root / "agents/ace/state"
         rows = [("1", 70, "home", 60.0), ("2", 40, "away", 45.0), ("3", 55, "home", 50.0)]

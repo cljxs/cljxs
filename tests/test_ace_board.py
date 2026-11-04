@@ -108,6 +108,25 @@ class TheBoardPairsEachCallWithItsGame(unittest.TestCase):
         self.assertAlmostEqual(self.b["bankroll"]["at_risk"], sum(b["stake"] for b in self.bank["open_bets"]))
         self.assertAlmostEqual(self.b["bankroll"]["settled_profit"], sum(s["profit"] for s in settled))
 
+    def test_props_stakes_are_in_play_too(self):
+        # 2026-11-04: bankroll $9,216.69, $0.00 in play, settled +$416.69 and
+        # props -$1,000 - $200 short of start + P/L: two open props bets share
+        # the cash and were nowhere on the header.
+        with tempfile.TemporaryDirectory() as d:
+            ace = Path(d) / "agents" / "ace"
+            (ace / "data").mkdir(parents=True)
+            (ace / "state").mkdir()
+            shutil.copy(FIX / "candidates.json", ace / "data" / "candidates.json")
+            shutil.copy(FIX / "ledger.json", ace / "state" / "ledger.json")
+            bank = dict(self.bank, props_open_bets=[{"stake": 100.0, "book": "props"}, {"stake": 100.0, "book": "props"}],
+                        props_settled_bets=[{"profit": -100.0, "result": "lost"}])
+            (ace / "state" / "bankroll.json").write_text(json.dumps(bank))
+            b = board(d)["bankroll"]
+        self.assertAlmostEqual(b["props_at_risk"], 200.0)
+        self.assertAlmostEqual(b["at_risk"], sum(x["stake"] for x in self.bank["open_bets"]), msg="his own, apart")
+        html = (API / "public" / "ace.html").read_text()
+        self.assertIn("(b.at_risk || 0) + (b.props_at_risk || 0)", html, "the header's In play adds them")
+
     def test_a_context_path_cannot_leave_the_context_folder(self):
         # event_id and sport come from files an agent writes and become part
         # of a path. "nba-/../../x.json" would resolve to data/x.json; only

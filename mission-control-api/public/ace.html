@@ -255,7 +255,8 @@ function drawAcct() {
   const rec = `${r.won || 0}-${r.lost || 0}${r.push ? '-' + r.push : ''}`;
   $('acct').innerHTML = [
     ['Bankroll', `<span class="v big num">${money(b.cash)}</span>`],
-    ['In play', `<span class="v num">${money(b.at_risk)}</span>`],
+    ['In play', `<span class="v num">${money((b.at_risk || 0) + (b.props_at_risk || 0))}</span>${b.props_at_risk
+      ? `<div class="l">${money(b.props_at_risk)} of it props</div>` : ''}`],
     ['Settled P/L', `<span class="v num ${cls(b.settled_profit)}">${signed(b.settled_profit)}</span>`],
     ['Record W-L', `<span class="v num">${rec}</span>`],
     // Ace Props shares the bankroll (2026-10-26); its bets are not in his record.

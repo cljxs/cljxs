@@ -258,6 +258,29 @@ def _ace_picks(clv, book):
             if b.get("kind") == "bet" and b.get("side") in ("home", "away") and not book.is_props(b)]
 
 
+def _ace_record(clv, book, lines, results):
+    """Ace's row: his closes graded like everyone's, but his bets, wins and
+    profit from his own book (ace-book.py fold) - the record that moved his
+    money. Re-grading them from results.json read one of his wins as a loss
+    and showed +$236.69 beside a settled P/L of +$416.69 (2026-11-04).
+    `regraded_differ` names any bet the two disagree on."""
+    picks = _ace_picks(clv, book)
+    rec = score(picks, lines, results, clv, book)
+    mine = [x for x in book.fold(book.events(AGENT / "state" / "bets.jsonl"))["settled"] if not book.is_props(x)]
+    real = [x for x in mine if x.get("result") in ("won", "lost", "push")]
+    rec.update(settled=len(real), won=sum(1 for x in real if x["result"] == "won"),
+               profit=round(sum(float(x.get("profit") or 0) for x in mine), 2))
+    by_id = {x.get("id"): x for x in mine}
+    rec["regraded_differ"] = []
+    for p in picks:
+        b = by_id.get(p.get("id"))
+        g = graded(p, lines, results, clv, book)
+        if b and g["result"] and b.get("result") in ("won", "lost") and g["result"] != b["result"]:
+            rec["regraded_differ"].append(f"{p.get('selection')} ({p.get('match')}): his book {b['result']}, "
+                                          f"the results file {g['result']}")
+    return rec
+
+
 def _sources():
     clv = _load("ace_clv_r", "ace-clv.py")
     book = _load("ace_book_r", "ace-book.py")
@@ -271,7 +294,7 @@ def report(path=None):
     for p in picks(path):
         by.setdefault(p.get("strategy"), []).append(p)
     out = {s: score(rows, lines, results, clv, book) for s, rows in by.items()}
-    out["ace"] = score(_ace_picks(clv, book), lines, results, clv, book)
+    out["ace"] = _ace_record(clv, book, lines, results)
     return out
 
 
@@ -299,7 +322,7 @@ def board_json(path=None):
             "settled": sorted([x for x in shown if x["result"] is not None],
                               key=lambda x: str(x["starts_utc"]), reverse=True)[:SHOW_SETTLED]}
     out["strategies"]["ace"] = {"describe": "Ace himself: his blind estimate against the market, by his preregistered rule.",
-                                "record": score(_ace_picks(clv, book), lines, results, clv, book)}
+                                "record": _ace_record(clv, book, lines, results)}
     return out
 
 
@@ -315,6 +338,10 @@ def report_lines(r):
                    f"{s.get('profit', 0):>+9.2f} {f(s.get('avg_clv_pct'), '%'):>9} "
                    f"{f(s.get('avg_sharp_clv_pct'), '%'):>10} "
                    f"{('-' if s.get('beat_close_pct') is None else str(s['beat_close_pct']) + '%'):>11}")
+    differ = (r.get("ace") or {}).get("regraded_differ") or []
+    if differ:
+        out.append(f"  Ace's row is his own book. Graded from the results file instead, {len(differ)} bet(s) differ:")
+        out += [f"    {d}" for d in differ]
     return out
 
 
