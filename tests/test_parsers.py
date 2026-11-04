@@ -5846,7 +5846,8 @@ class ClipHasAStudio(unittest.TestCase):
 
     def test_the_api_runs_clipper_without_a_shell_and_holds_no_rules(self):
         js = (ROOT / "mission-control-api" / "clip.js").read_text()
-        self.assertIn("execFile(python(), ['-m', 'clipper', ...args]", js)
+        self.assertIn("return runGroup(python(), ['-m', 'clipper', ...args], timeout);", js)
+        self.assertIn("child = spawn(cmd, argv, {", js, "an argument list, no shell")
         self.assertNotIn(".exec(", js)
         self.assertNotIn("better-sqlite3", js, "state comes from `clipper deck`, not a second reader")
         server = (ROOT / "mission-control-api" / "server.js").read_text()

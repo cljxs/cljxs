@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import warnings
 import unittest
@@ -565,6 +566,49 @@ class ClipsHouseLoadsStillsNotVideos(unittest.TestCase):
             self.assertEqual(out["b"], out["a"])
             self.assertEqual(out["none"][0], 404)
             self.assertEqual(out["bad"][0], 400)
+
+
+@unittest.skipUnless(shutil.which("node"), "needs node")
+class AJobThatRunsOutOfTimeIsStoppedWhole(unittest.TestCase):
+    """2026-11-04, the owner: "I keep trying to update this video and it keeps
+    failing" - a minute-and-a-half clip, 92 captions. The Deck gave clipper 5
+    minutes and then stopped python only; its ffmpeg ran on, so each retry
+    shared one CPU with the last and was stopped again, and the reply was
+    empty: the page could only say "The video was not updated"."""
+
+    API = Path(__file__).resolve().parent.parent / "mission-control-api"
+
+    def run_js(self, body):
+        js = f"const clip=require({json.dumps(str(self.API / 'clip.js'))});(async()=>{{{body}}})();"
+        r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def test_the_whole_job_is_stopped_and_says_so(self):
+        with tempfile.TemporaryDirectory() as d:
+            pidfile = Path(d) / "grandchild.pid"
+            out = self.run_js(
+                "const r=await clip._runGroup('sh',['-c','sleep 60 & echo $! > " + str(pidfile) + "; wait'],1500);"
+                "await new Promise(ok=>setTimeout(ok,500));"
+                "process.stdout.write(JSON.stringify(r));")
+            self.assertTrue(out["killed"])
+            self.assertIn("stopped after", out["stderr"])
+            pid = int(pidfile.read_text())
+            time.sleep(0.5)
+            alive = Path(f"/proc/{pid}").exists() and "Z" not in Path(f"/proc/{pid}/stat").read_text().split()[2]
+            self.assertFalse(alive, "what the job started (ffmpeg, on the droplet) is stopped too")
+
+    def test_a_failure_with_no_words_still_says_something(self):
+        out = self.run_js(
+            "let sent;const res={status(){return this;},json(j){sent=j;}};"
+            "clip._reply(res,{code:1,stdout:'',stderr:''});"
+            "process.stdout.write(JSON.stringify(sent));")
+        self.assertFalse(out["ok"])
+        self.assertIn("without saying why", out["message"])
+
+    def test_long_jobs_get_long_enough(self):
+        js = (self.API / "clip.js").read_text()
+        self.assertIn("const REMAKE_TIMEOUT_MS = 25 * 60 * 1000;", js)
 
 
 class FramingFallsBackToTheCentre(unittest.TestCase):

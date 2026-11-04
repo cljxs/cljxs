@@ -28,30 +28,62 @@ let posterQueue = Promise.resolve();
 // before it reaches a process.
 const SOURCE_RE = /^[A-Za-z0-9][A-Za-z0-9 _.@-]{0,59}$/;
 // A remake renders a clip: about a minute of CPU per 30 s on the droplet.
-const REMAKE_TIMEOUT_MS = 300000;
+// Cutting or re-subtitling a clip. It was 5 minutes, and a minute-and-a-half
+// clip with 92 captions took longer on the droplet's one CPU (owner,
+// 2026-11-04: "I keep trying to update this video and it keeps failing").
+const REMAKE_TIMEOUT_MS = 25 * 60 * 1000;
 const SPOT_TIMEOUT_MS = 180000;
 const APPROVE_TIMEOUT_MS = 600000;
 const TEXT_MAX = 2200;                  // TikTok's caption limit; nothing a person types is longer
 const PLATFORMS = ['youtube', 'tiktok'];
 
 function reply(res, r) {
+  // A failure always says something: a stop with no words came back as an
+  // empty message, and the page could only say it had not worked.
+  const said = (r.code === 0 ? r.stdout : r.stderr || r.stdout).trim();
   res.status(r.code === 0 ? 200 : 400)
-    .json({ ok: r.code === 0, message: (r.code === 0 ? r.stdout : r.stderr || r.stdout).trim().slice(-800) });
+    .json({ ok: r.code === 0, message: (said || (r.code === 0 ? 'done' : `clipper stopped (exit ${r.code}) without saying why`)).slice(-800) });
 }
 
 function python() {
   return fs.existsSync(VENV_PY) ? VENV_PY : 'python3';
 }
 
+// clipper in its own process group, so running out of time stops the whole
+// job. Stopping python alone (execFile's timeout did) left its ffmpeg running:
+// each Update video pressed again then ran beside the last one on one CPU,
+// slower each time, and was stopped again - with nothing said, so the page
+// could only show "The video was not updated" (2026-11-04).
+const OUTPUT_MAX = 8 * 1024 * 1024;
 function clipper(args, timeout = 30000) {
+  return runGroup(python(), ['-m', 'clipper', ...args], timeout);
+}
+
+function runGroup(cmd, argv, timeout) {
   return new Promise(resolve => {
-    execFile(python(), ['-m', 'clipper', ...args], {
-      cwd: ROOT, timeout, maxBuffer: 8 * 1024 * 1024,
-      env: Object.assign({}, process.env, { CLIPPER_HOME: HOME }),
-    }, (err, stdout, stderr) => resolve({
-      code: err ? (typeof err.code === 'number' ? err.code : 1) : 0,
-      stdout: String(stdout || ''), stderr: String(stderr || ''),
-    }));
+    let child;
+    try {
+      child = spawn(cmd, argv, {
+        cwd: ROOT, detached: true, env: Object.assign({}, process.env, { CLIPPER_HOME: HOME }),
+      });
+    } catch (e) { return resolve({ code: 1, stdout: '', stderr: String(e.message || e), killed: false }); }
+    let stdout = '', stderr = '', killed = false;
+    const keep = (buf, d) => (buf + d).slice(-OUTPUT_MAX);
+    child.stdout.on('data', d => { stdout = keep(stdout, d); });
+    child.stderr.on('data', d => { stderr = keep(stderr, d); });
+    const stop = sig => { try { process.kill(-child.pid, sig); } catch { /* already gone */ } };
+    const timer = setTimeout(() => {
+      killed = true;
+      stop('SIGTERM');
+      setTimeout(() => stop('SIGKILL'), 5000).unref();
+    }, timeout);
+    let done = false;
+    const finish = r => { if (!done) { done = true; clearTimeout(timer); resolve(r); } };
+    child.on('error', e => finish({ code: 1, stdout, stderr: stderr || String(e.message || e), killed }));
+    child.on('close', code => finish(killed
+      ? { code: 1, stdout, killed, stderr: `stopped after ${Math.round(timeout / 60000)} minutes - it was still `
+          + `working. The server may be busy; try again in a little while.` + (stderr ? `\n${stderr}` : '') }
+      : { code: code === null ? 1 : code, stdout, stderr, killed }));
   });
 }
 
@@ -278,4 +310,4 @@ function register(app) {
   });
 }
 
-module.exports = { register, HOME, CLIPS };
+module.exports = { register, HOME, CLIPS, _runGroup: runGroup, _reply: reply };
