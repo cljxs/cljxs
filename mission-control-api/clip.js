@@ -213,6 +213,18 @@ function register(app) {
   // Fix subtitles (owner, 2026-10-12): the clip's captions, one per line,
   // for the editor - and the corrected lines back, saved and the clip cut
   // again. The lines go to clipper as one JSON argument, never a shell string.
+  // Change length (owner, 2026-11-04: clips ending a couple of seconds too
+  // early or too late): move the start and the end, and cut it again. What a
+  // clip may be is clipper's to refuse (pipeline.retime); this checks shape.
+  app.post('/api/clip/length/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    const b = req.body || {};
+    const by = v => (typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= 120 ? v : null);
+    const start = by(b.start_by ?? 0), end = by(b.end_by ?? 0);
+    if (start === null || end === null) return res.status(400).json({ ok: false, error: 'start_by and end_by are seconds' });
+    reply(res, await clipper(['length', req.params.id, `--start-by=${start}`, `--end-by=${end}`], REMAKE_TIMEOUT_MS));
+  });
+
   app.get('/api/clip/subtitles/:id', async (req, res) => {
     if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ error: 'bad id' });
     const r = await clipper(['subtitles', req.params.id]);

@@ -5864,6 +5864,11 @@ class ClipHasAStudio(unittest.TestCase):
         for route in ("approve", "reject", "edit", "redraft", "posted", "recut"):
             self.assertIn(f"app.post('/api/clip/{route}/", js)
         self.assertIn('data-clip="recut"', self.html, "Fix subtitles is on the card")
+        # Owner, 2026-11-04: clips ending a couple of seconds early or late.
+        self.assertIn('data-clip="length"', self.html, "Change length is on the card")
+        self.assertIn("if (kind === 'length') return changeLength(k);", self.html)
+        self.assertIn("app.post('/api/clip/length/", js)
+        self.assertIn("['length', req.params.id, `--start-by=${start}`, `--end-by=${end}`]", js)
 
     def test_fix_subtitles_opens_the_text_box(self):
         # Owner, 2026-10-12: "a text box of all the subtitles... fix them

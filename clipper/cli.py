@@ -560,6 +560,17 @@ def cmd_recut(a):
     return 0
 
 
+def cmd_length(a):
+    """Start or end a clip earlier or later, and cut it again (the village's
+    Change length box). Owner, 2026-11-04: clips ending a couple of seconds
+    too early or too late."""
+    cfg, paths, conn = open_all()
+    start, end = pipeline.retime(conn, paths, cfg, a.clip, a.start_by, a.end_by)
+    print(f"clip {a.clip} now runs {pipeline.clock(start)}-{pipeline.clock(end)} of the video "
+          f"({end - start:.1f}s) - reload Clip's studio to see it.")
+    return 0
+
+
 def cmd_subtitles(a):
     """A clip's captions, one per line - or the owner's corrected ones saved
     and the clip cut again with them (the village's Fix subtitles box)."""
@@ -824,6 +835,12 @@ def main(argv=None):
     x = sub.add_parser("recut", help="cut a clip again with the source's spellings as they are now")
     x.add_argument("clip", type=int)
     x.set_defaults(fn=cmd_recut)
+    x = sub.add_parser("length", help="start or end a clip earlier or later and cut it again "
+                                      "(seconds; negative is earlier): --start-by -1.5 --end-by 2")
+    x.add_argument("clip", type=int)
+    x.add_argument("--start-by", dest="start_by", type=float, default=0.0)
+    x.add_argument("--end-by", dest="end_by", type=float, default=0.0)
+    x.set_defaults(fn=cmd_length)
     x = sub.add_parser("subtitles", help="a clip's captions as JSON; --set-json saves your fixed "
                                          "lines and puts them in the video (--save-only: not yet); "
                                          "--reset goes back to the transcript")

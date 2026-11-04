@@ -394,6 +394,72 @@ def recut(conn, paths, cfg, clip_id):
     return meta
 
 
+# CHANGING A CLIP'S LENGTH (owner, 2026-11-04: "some of these clips end a
+# couple seconds too early or too late sometimes. Is there anyway i can change
+# the length of the video inside the village?"). The moment's start and end
+# move by what the owner asks, within the source video, and the clip is cut
+# again whole from the source - the copy kept without subtitles has the old
+# length, so it cannot be reused. The owner's corrected subtitles are kept for
+# the part they cover; the transcript captions what is added. Refused once
+# posted anywhere, like every change to a clip.
+LENGTH_MIN_SECONDS = 5.0
+LENGTH_MAX_SECONDS = 180.0
+
+
+def retime(conn, paths, cfg, clip_id, start_by=0.0, end_by=0.0):
+    """Move a clip's start and end by start_by / end_by seconds (negative is
+    earlier) and cut it again. Returns (start, end) on the source's clock."""
+    clip, video, c = _clip_parts(conn, clip_id)
+    _postable(conn, clip)
+    start, end = round(c["start"] + float(start_by), 2), round(c["end"] + float(end_by), 2)
+    if start < 0:
+        raise ValueError(f"the clip cannot start before the video does - it starts "
+                         f"{clock(c['start'])} in, so at most {c['start']:.1f}s earlier")
+    if video["duration"] and end > video["duration"]:
+        raise ValueError(f"the clip cannot end after the video does - "
+                         f"at most {video['duration'] - c['end']:.1f}s later")
+    if not LENGTH_MIN_SECONDS <= end - start <= LENGTH_MAX_SECONDS:
+        raise ValueError(f"a clip is {LENGTH_MIN_SECONDS:g} seconds to {LENGTH_MAX_SECONDS / 60:g} minutes "
+                         f"long - that would make it {end - start:.1f}s")
+    if (start, end) == (c["start"], c["end"]):
+        return start, end
+    if not media.is_url(video["media_path"]) and not Path(video["media_path"]).is_file():
+        raise ValueError(f"video {video['id']}'s source was deleted to save space (clipper cleanup "
+                         f"--sources) - add the video again to change this clip's length")
+    own = json.loads(clip["subtitles"]) if clip["subtitles"] else None
+    if own:
+        # The owner's words for the stretch they fixed, the transcript's for
+        # anything now added either side of it.
+        added = [w for w in words_of(conn, paths, video)
+                 if w["start"] < c["start"] or w["start"] >= c["end"]]
+        own = sorted(added + own, key=lambda w: w["start"])
+    out = Path(clip["path"])
+    clean = render.clean_path(out)
+    kept = clean.with_name(clean.stem + ".old.mp4")
+    if clean.is_file():
+        clean.replace(kept)                 # recut() then cuts whole, and keeps a new one
+    before = (c["start"], c["end"], clip["subtitles"])
+    with conn:
+        conn.execute("UPDATE candidates SET start = ?, end = ? WHERE id = ?", (start, end, c["id"]))
+        conn.execute("UPDATE clips SET start = ?, end = ?, subtitles = ? WHERE id = ?",
+                     (start, end, json.dumps(own) if own else clip["subtitles"], clip_id))
+    try:
+        recut(conn, paths, cfg, clip_id)
+    except Exception:
+        # Nothing half-changed: the old times, words and copy go back.
+        with conn:
+            conn.execute("UPDATE candidates SET start = ?, end = ? WHERE id = ?", (before[0], before[1], c["id"]))
+            conn.execute("UPDATE clips SET start = ?, end = ?, subtitles = ? WHERE id = ?",
+                         (before[0], before[1], before[2], clip_id))
+        if kept.is_file() and not clean.is_file():
+            kept.replace(clean)
+        raise
+    kept.unlink(missing_ok=True)
+    db.event(conn, "render", f"clip {clip['rank']} re-timed: {clock(start)}-{clock(end)} "
+             f"({end - start:.1f}s, was {c['end'] - c['start']:.1f}s)", video_id=video["id"], clip_id=clip_id)
+    return start, end
+
+
 def stage_render(conn, paths, cfg, video):
     words = words_of(conn, paths, video)
     src = conn.execute("SELECT * FROM sources WHERE id = ?", (video["source_id"],)).fetchone()

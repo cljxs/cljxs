@@ -3223,7 +3223,8 @@ function drawPost(k){
         <button data-clip="edit" data-id="${k.id}">Edit text</button>
         <button data-clip="redraft" data-id="${k.id}">New draft</button>
         <button class="no" data-clip="reject" data-id="${k.id}">Reject</button>
-        <button data-clip="recut" data-id="${k.id}">Fix subtitles</button></div>
+        <button data-clip="recut" data-id="${k.id}">Fix subtitles</button>
+        <button data-clip="length" data-id="${k.id}">Change length</button></div>
       ${k.subtitles_pending ? '<div class="muted" style="color:var(--warn,#fbbf24)">Subtitle fixes saved, not in the video yet - Fix subtitles → Update video before approving.</div>' : ''}
       <div class="muted">${dl}</div>`;
   }
@@ -3457,11 +3458,99 @@ async function fixSubtitles(id){
   finally { clipBusy = false; loadClip(); }
 }
 
+// Change length (owner, 2026-11-04: "some of these clips end a couple seconds
+// too early or too late ... change the length of the video inside the
+// village"). Start and end each move earlier or later; Update video cuts the
+// clip again from the source with the new times (clipper length). The video
+// shown plays the clip as it is now, to find where it should start and end.
+function changeLength(k){
+  if (!k) return;
+  const was = { start: Number(k.start), end: Number(k.end) };
+  let startBy = 0, endBy = 0;
+  const box = document.createElement('div');
+  box.id = 'clen';
+  box.style.cssText = 'position:fixed;inset:0;z-index:30;display:flex;align-items:flex-start;justify-content:center;'
+    + 'background:rgba(5,8,14,.72);padding:4vh 14px;overflow-y:auto';
+  const sec = t => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`;
+  const steps = which => [-2, -0.5, 0.5, 2].map(d =>
+    `<button data-len="${which}" data-by="${d}" style="flex:1;padding:12px 0;font-size:16px">${d < 0 ? '−' : '+'}${Math.abs(d)}s</button>`).join('');
+  box.innerHTML = `<div style="width:min(620px,100%);background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px">
+      <h2 style="margin:0 0 6px;font-size:20px">Change length · clip #${esc(k.rank)}</h2>
+      <div class="muted" style="margin-bottom:10px">Play it to find where it should start and end. − is earlier, + is later.</div>
+      <video src="/api/clip/file/${encodeURIComponent(k.video_id)}/${encodeURIComponent(k.rank)}?v=${Date.now()}"
+        controls playsinline preload="metadata" style="width:100%;max-height:44vh;border-radius:10px;background:#000"></video>
+      <div style="margin-top:12px"><b>Start</b> <span class="muted" id="clenS"></span></div>
+      <div style="display:flex;gap:8px;margin-top:6px">${steps('start')}</div>
+      <div style="margin-top:12px"><b>End</b> <span class="muted" id="clenE"></span></div>
+      <div style="display:flex;gap:8px;margin-top:6px">${steps('end')}</div>
+      <div style="margin-top:12px;font-size:15px" id="clenL"></div>
+      <div class="muted" id="clenSay" style="margin-top:8px;min-height:1.2em"></div>
+      <div class="acts" style="margin-top:12px">
+        <button id="clenCancel">Cancel</button>
+        <button id="clenGo" class="yes">Update video</button></div>
+    </div>`;
+  document.body.appendChild(box);
+  const q = id => box.querySelector('#' + id);
+  const draw = () => {
+    const s = was.start + startBy, e = was.end + endBy;
+    q('clenS').textContent = `${sec(s)} of the video` + (startBy ? ` (${startBy < 0 ? '' : '+'}${startBy}s)` : '');
+    q('clenE').textContent = `${sec(e)} of the video` + (endBy ? ` (${endBy < 0 ? '' : '+'}${endBy}s)` : '');
+    q('clenL').innerHTML = `Length: <b>${(e - s).toFixed(1)}s</b>` + (startBy || endBy ? ` <span class="muted">(was ${(was.end - was.start).toFixed(1)}s)</span>` : '');
+  };
+  const close = () => { box.remove(); clipBusy = false; loadClip(); };
+  box.addEventListener('click', e => {
+    const b = e.target.closest('[data-len]');
+    if (!b) return;
+    const by = Number(b.dataset.by);
+    if (b.dataset.len === 'start') startBy = Math.round((startBy + by) * 10) / 10;
+    else endBy = Math.round((endBy + by) * 10) / 10;
+    draw();
+  });
+  q('clenCancel').onclick = close;
+  q('clenGo').onclick = async () => {
+    if (!startBy && !endBy) { q('clenSay').textContent = 'Nothing changed yet.'; return; }
+    box.querySelectorAll('button').forEach(b => { b.disabled = true; });
+    q('clenSay').textContent = 'Cutting it again from the video - a minute or two…';
+    let waiting = true;
+    (async () => {
+      while (waiting) {
+        await new Promise(r => setTimeout(r, 2000));
+        if (!waiting) break;
+        try {
+          const p = await (await fetch(`/api/clip/progress/${encodeURIComponent(k.id)}`, { cache: 'no-store' })).json();
+          if (waiting && p.running) q('clenSay').textContent = `${String(p.step || 'working')}`
+            + (p.percent === null || p.percent === undefined ? '…' : ` - ${p.percent}%`);
+        } catch (e) { /* the next ask will tell */ }
+      }
+    })();
+    try {
+      const r = await fetch(`/api/clip/length/${encodeURIComponent(k.id)}`, { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ start_by: startBy, end_by: endBy }) });
+      const j = await r.json();
+      waiting = false;
+      if (!r.ok || j.ok === false) {
+        q('clenSay').textContent = String(j.message || j.error || 'Not changed.').replace(/^clipper: /, '').slice(0, 400);
+        box.querySelectorAll('button').forEach(b => { b.disabled = false; });
+        return;
+      }
+      q('clenSay').textContent = 'Done - the clip has its new length.';
+      setTimeout(close, 900);
+    } catch (e) {
+      waiting = false;
+      q('clenSay').textContent = 'Could not reach the API: ' + e.message;
+      box.querySelectorAll('button').forEach(b => { b.disabled = false; });
+    }
+  };
+  clipBusy = true;
+  draw();
+}
+
 async function clipCard(kind, id, platform){
   if (clipBusy) return;
   const k = ((CLIP && CLIP.clips) || []).find(c => String(c.id) === String(id));
   if (kind === 'copytiktok') { if (k && k.post) copyText(k.post.tiktok); return; }
   if (kind === 'recut') return fixSubtitles(id);
+  if (kind === 'length') return changeLength(k);
   let body = null;
   if (kind === 'approve') {
     const where = ((CLIP && CLIP.platforms) || []).join(' and ');

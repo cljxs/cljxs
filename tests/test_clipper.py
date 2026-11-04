@@ -1198,6 +1198,39 @@ class Posting(EndToEnd):
         self.assertFalse(self.listing()["edited"])
         self.assertNotIn("ZEBRA", " ".join(self.dialogue()))
 
+    # Change length (owner, 2026-11-04: "some of these clips end a couple
+    # seconds too early or too late ... change the length of the video inside
+    # the village").
+    def test_change_length_cuts_the_clip_again_with_the_new_times(self):
+        self.ready()
+        was = (self.clip["start"], self.clip["end"])
+        code, said = self.cli("length", str(self.clip["id"]), "--start-by=1", "--end-by=-1.5")
+        self.assertEqual(code, 0, said)
+        row = self.conn.execute("SELECT * FROM clips WHERE id = ?", (self.clip["id"],)).fetchone()
+        cand = self.conn.execute("SELECT * FROM candidates WHERE id = ?", (row["candidate_id"],)).fetchone()
+        self.assertEqual((row["start"], row["end"]), (round(was[0] + 1, 2), round(was[1] - 1.5, 2)))
+        self.assertEqual((cand["start"], cand["end"]), (row["start"], row["end"]), "one moment, one pair of times")
+        meta = json.loads(row["meta"])
+        self.assertAlmostEqual(meta["duration"], row["end"] - row["start"], delta=0.6, msg="the video itself is shorter")
+        path = Path(row["path"])
+        self.assertTrue(render.clean_path(path).is_file(), "a copy without subtitles, at the new length")
+        self.assertFalse(list(path.parent.glob("*.old.*")) + list(path.parent.glob("*.recut.*")),
+                         "nothing half-made left behind")
+
+    def test_a_length_the_video_cannot_give_changes_nothing(self):
+        self.ready()
+        path = Path(self.clip["path"])
+        mtime = path.stat().st_mtime_ns
+        for args, said_in in ((["--start-by=-99999"], "before the video does"),
+                              (["--end-by=99999"], "after the video does"),
+                              (["--start-by=0", f"--end-by={-(self.clip['end'] - self.clip['start'] - 1)}"], "seconds to")):
+            code, said = self.cli("length", str(self.clip["id"]), *args)
+            self.assertNotEqual(code, 0)
+            self.assertIn(said_in, said)
+        row = self.conn.execute("SELECT * FROM clips WHERE id = ?", (self.clip["id"],)).fetchone()
+        self.assertEqual((row["start"], row["end"]), (self.clip["start"], self.clip["end"]))
+        self.assertEqual(path.stat().st_mtime_ns, mtime, "the video was not touched")
+
     def test_a_posted_clip_is_never_recut(self):
         self.ready()
         publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
@@ -1207,6 +1240,9 @@ class Posting(EndToEnd):
         code, said = self.cli("subtitles", str(self.clip["id"]), "--set-json", "[]")
         self.assertNotEqual(code, 0)
         self.assertIn("already posted", said, "nor its subtitles changed")
+        code, said = self.cli("length", str(self.clip["id"]), "--end-by=1")
+        self.assertNotEqual(code, 0)
+        self.assertIn("already posted", said, "nor its length")
 
     # Owner, 2026-10-20: "make the changes be save able without having to
     # remake the entire video". Save keeps the lines and leaves the video;

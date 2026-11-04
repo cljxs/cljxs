@@ -69,7 +69,7 @@ generated - edit the header, then `scripts/deploy.sh <name>`).
 * Village anchors in `mission-control-api/public/village.html`: `const NAV`, `const FRAMES`, `openFrame`,
   `renderFrame`, `avatarSrc` (character pictures), feed `last_run_utc`,
   `openPanel`, Scout `drawIdeas`, Clip
-  `openClipPanel`/`drawClip`/`drawPost`/`clipCard`/`editSubtitles`/`fixSubtitles`,
+  `openClipPanel`/`drawClip`/`drawPost`/`clipCard`/`editSubtitles`/`fixSubtitles`/`changeLength`,
   Town Hall `drawHall`. Shared front-end helpers: `mission-control-api/public/shared/` -
   `mission-control-api/public/shared/busy.js` is the loading sign every page loads (a
   button's `data-busy` names a slow job).
@@ -86,7 +86,7 @@ generated - edit the header, then `scripts/deploy.sh <name>`).
 | Transcribe, spellings; sentences Whisper dropped (`holes`, `relisten`, `fill`) | `clipper/transcribe.py` |
 | Moments, scoring, campaign lists | `clipper/moments.py`, `clipper/score.py`, `clipper/campaign.py` |
 | Complete thoughts: where each story/argument starts and ends (Sonnet on the plan) | `clipper/stories.py` (`read`, `apply`, `cuts_into`) |
-| Stages, recut, subtitles (`set_subtitles`, `recut`, `clip_ass`) | `clipper/pipeline.py` |
+| Stages, recut, subtitles (`set_subtitles`, `recut`, `clip_ass`), change length (`retime`) | `clipper/pipeline.py` |
 | Framing on faces (`shot_layout`, `crowd`) | `clipper/framing.py` |
 | ffmpeg render, clean copy, `burn`, watermark | `clipper/render.py`, `clipper/media.py`, `clipper/cutout.py` |
 | Captions (ASS) | `clipper/captions.py` |
