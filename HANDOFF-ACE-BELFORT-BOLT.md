@@ -126,6 +126,12 @@ If the owner asks for a rule change, tell them this first and let them choose.
   38-48%, game day from 10:00 ET), is the strategy run beside him to compare
   on profit. Each has a tab on Ace's page (`/api/ace/no-ai` <- `ace-baselines.py
   board`): records side by side, and every open and settled pick.
+- **Grading (bug fixed 2026-11-04):** a bet is graded by its own game id
+  only, never before its start (`ace-book.py find_result`, `outcome`). A
+  wrong settle is corrected, never erased: `ace-book.py regrade` lists any
+  settled bet its own game now grades differently, `--apply` writes a
+  `correct` event beside the old settle (`fold` uses the latest). First use:
+  MIL @ TB's second game, booked won from the first night's score.
 - **What his record says** (`scripts/ace-study.py`, read-only, owner
   2026-10-29: find a second strategy to run beside him; better = more
   profit): profit split into closing-price worth + luck, his blind forecasts

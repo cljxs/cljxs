@@ -145,3 +145,16 @@ fresh-news bettor matches Ace, the model adds nothing.
   in that game is now refused and nothing is recorded. Gate 1 keeps every
   estimate already made; `scripts/ace-study.py` names the far-apart games.
   Every number in the table above is unchanged.
+* 2026-11-04 — a bug fix, not a rule change: a bet is graded by its own game
+  only. MIL @ TB was played on back-to-back nights (ESPN 401908044 and
+  401908045) and Ace bet both. The second bet was settled at 16:01 UTC on
+  2026-10-27, eight hours before its game began, as a win ("MIL 10 @ TB 1"):
+  its own game had no result yet, and the fixture-name fallback - meant only
+  for hand-written bets with no game id - found the first game. TB won the
+  second 4-3. `ace-book.py find_result` no longer falls back for a bet with
+  an id, and nothing is graded before its start. The wrong settle is kept in
+  state/bets.jsonl with a `correct` event beside it (`ace-book.py regrade
+  --apply`): won +$80.00 becomes lost -$100.00. Closing-line value, Gate 1
+  and Gate 2 are untouched (they never read results); settled profit and the
+  fault stop now read the corrected figure. Every number in the table above
+  is unchanged.

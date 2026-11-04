@@ -16797,6 +16797,69 @@ class AceMoneyIsKeptByCode(unittest.TestCase):
     def settled(self):
         return {s["selection"]: (s["result"], s["profit"]) for s in json.loads(self.b.BANK.read_text())["settled_bets"]}
 
+    # 2026-11-04, from the owner's book: MIL @ TB on back-to-back nights.
+    G1 = {"sport": "mlb", "event_id": "401908044", "match": "MIL @ TB", "start_utc": "2026-10-27T00:00Z",
+          "status": "STATUS_FINAL", "home": "TB", "away": "MIL", "home_score": 1, "away_score": 10, "winner": "away"}
+    G2 = {"sport": "mlb", "event_id": "401908045", "match": "MIL @ TB", "start_utc": "2026-10-28T00:00Z",
+          "status": "STATUS_FINAL", "home": "TB", "away": "MIL", "home_score": 4, "away_score": 3, "winner": "home"}
+
+    def mil(self, eid, price, start):
+        return self.b.place({"sport": "mlb", "event_id": eid, "selection": "MIL ML", "side": "away",
+                             "match": "MIL @ TB", "price": price, "starts_utc": start})
+
+    def test_a_bet_is_graded_by_its_own_game_never_last_nights(self):
+        # The second game's bet was settled at 16:01 UTC on 10-27 - eight hours
+        # before it began - as a win, "MIL 10 @ TB 1": its own game had no
+        # result yet, and the fixture name found the night before's.
+        self.mil("401908045", -125, "2026-10-28T00:00Z")
+        self.b.RESULTS.write_text(json.dumps({"mlb|401908044": self.G1}))
+        self.assertEqual(self.b.settle(now=datetime(2026, 10, 27, 16, 1, tzinfo=timezone.utc)), [])
+        self.assertEqual(self.b.settle(now=datetime(2026, 10, 28, 4, tzinfo=timezone.utc)), [],
+                         "after its start, still not by another game's score")
+        self.b.RESULTS.write_text(json.dumps({"mlb|401908044": self.G1, "mlb|401908045": self.G2}))
+        self.b.settle(now=datetime(2026, 10, 28, 4, tzinfo=timezone.utc))
+        self.assertEqual(self.settled(), {"MIL ML": ("lost", -100.0)})
+
+    def test_nothing_is_graded_before_its_game_begins(self):
+        self.mil("401908045", -125, "2026-10-28T00:00Z")
+        self.b.RESULTS.write_text(json.dumps({"mlb|401908045": self.G2}))
+        self.assertEqual(self.b.settle(now=datetime(2026, 10, 27, 23, 59, tzinfo=timezone.utc)), [])
+
+    def test_a_wrong_settle_is_corrected_and_kept(self):
+        # The owner's book as it stood: both MIL bets settled won.
+        e1 = self.mil("401908044", -102, "2026-10-27T00:00Z")
+        e2 = self.mil("401908045", -125, "2026-10-28T00:00Z")
+        for e, profit in ((e1, 98.04), (e2, 80.0)):
+            self.b.append({"kind": "settle", "id": e["id"], "utc": "2026-10-27 16:01:32", "result": "won",
+                           "profit": profit, "detail": "MIL 10 @ TB 1"})
+        self.b.rebuild()
+        before = json.loads(self.b.BANK.read_text())["bankroll"]
+        self.b.RESULTS.write_text(json.dumps({"mlb|401908044": self.G1, "mlb|401908045": self.G2}))
+        now = datetime(2026, 11, 4, 23, tzinfo=timezone.utc)
+        wrong = self.b.regrade(now=now)
+        self.assertEqual([(b["id"], got[:2]) for b, got in wrong], [(e2["id"], ("lost", -100.0))],
+                         "only the second; the first really was won")
+        self.assertEqual(json.loads(self.b.BANK.read_text())["bankroll"], before, "listing changes nothing")
+        self.b.regrade(now=now, apply=True)
+        bank = json.loads(self.b.BANK.read_text())
+        self.assertAlmostEqual(bank["bankroll"], before - 180.0)
+        fixed = next(s for s in bank["settled_bets"] if s["id"] == e2["id"])
+        self.assertEqual((fixed["result"], fixed["profit"], fixed["detail"]), ("lost", -100.0, "MIL 3 @ TB 4"))
+        evs = [json.loads(l) for l in self.b.BETS.read_text().splitlines()]
+        self.assertEqual([x["kind"] for x in evs if x.get("id") == e2["id"]], ["bet", "settle", "correct"],
+                         "the wrong settle stays on file, the correction beside it")
+        self.assertIn("was won +80.00 (MIL 10 @ TB 1)", self.b.fold(self.b.events())["settled"][1]["corrected"])
+        self.assertEqual(self.b.regrade(now=now), [], "once corrected, nothing left")
+        self.assertIsNone(self.b.drift())
+
+    def test_a_hand_written_bet_without_an_id_is_still_found_by_name(self):
+        self.b.BETS.write_text(json.dumps({"kind": "bet", "id": "old1", "sport": "mlb", "selection": "MIL ML",
+                                           "side": "away", "match": "MIL @ TB", "price": -125, "stake": 100.0,
+                                           "starts_utc": "2026-10-28T00:00Z", "utc": "2026-10-27 15:00:00"}) + "\n")
+        self.b.RESULTS.write_text(json.dumps({"mlb|401908045": self.G2}))
+        self.b.settle(now=datetime(2026, 10, 28, 4, tzinfo=timezone.utc))
+        self.assertEqual(self.settled(), {"MIL ML": ("lost", -100.0)})
+
     def test_real_finals_settle_won_and_lost(self):
         self.bet("nfl", "401872948", "ATL ML", "away", 150, "2026-09-25T00:15Z")    # ATL 35 @ GB 14
         self.bet("nfl", "401872953", "LAC ML", "away", -110, "2026-09-27T17:00Z")   # LAC 16 @ BUF 24

@@ -165,25 +165,30 @@ def fold(evs, start=None):
     cash not tied up in an open bet. The identity ace-verify.py checks:
     start - every stake + every return."""
     start = STARTING_BANKROLL if start is None else float(start)
-    bets, settles = {}, {}
+    bets, settles, corrections = {}, {}, {}
     for e in evs:
         if e.get("kind") == "bet" and e.get("id") not in bets:
             bets[e["id"]] = e
         elif e.get("kind") == "settle" and e.get("id") in bets and e["id"] not in settles:
             settles[e["id"]] = e
+        elif e.get("kind") == "correct" and e.get("id") in bets:
+            # A settle proved wrong (regrade): the latest correction stands,
+            # and the wrong settle stays in the file beside it.
+            corrections[e["id"]] = e
     open_bets, settled = [], []
     cash = start
     for i, b in bets.items():
         stake = float(b.get("stake") or 0)
         cash -= stake
-        s = settles.get(i)
+        s = corrections.get(i) or settles.get(i)
         if s is None:
             open_bets.append(b)
             continue
         profit = float(s.get("profit") or 0)
         cash += stake + profit
         settled.append(dict(b, result=s.get("result"), profit=round(profit, 2),
-                            settled_utc=s.get("utc"), detail=s.get("detail")))
+                            settled_utc=s.get("utc"), detail=s.get("detail"),
+                            **({"corrected": s.get("why")} if i in corrections else {})))
     return {"open": open_bets, "settled": settled, "bankroll": round(cash, 2),
             "profit": round(sum(s["profit"] for s in settled), 2)}
 
@@ -334,11 +339,17 @@ def record_results(sport, board_events, path=None, now=None):
 
 
 def find_result(results, bet):
-    """The result for a bet: by sport and ESPN event id, or - for a bet Ace
-    wrote by hand before this file existed - by the fixture name."""
+    """The result for a bet: by sport and ESPN event id, or - only for a bet
+    Ace wrote by hand before this file existed, which has no id - by the
+    fixture name. A bet with an id is graded by that game or not at all: on
+    2026-10-27 MIL @ TB's second game had no result yet, the name found the
+    first, sixteen hours earlier, and a loss was booked as a win before the
+    game began."""
     r = results.get(f"{bet.get('sport')}|{bet.get('event_id')}")
     if r:
         return r
+    if bet.get("event_id"):
+        return None
     match = str(bet.get("match") or "").upper()
     hits = [v for v in results.values() if str(v.get("match") or "").upper() == match and match]
     start = parse_utc(bet.get("starts_utc"))
@@ -363,6 +374,8 @@ def outcome(bet, result, now=None):
     wait."""
     stake = float(bet.get("stake") or 0)
     start = parse_utc(bet.get("starts_utc"))
+    if start and (now or utc_now()) < start:
+        return None                                  # nothing is graded before its game begins
     if result is None:
         if start and (now or utc_now()) - start > timedelta(hours=VOID_AFTER_HOURS):
             return "void", 0.0, f"no final score {VOID_AFTER_HOURS}h after the start"
@@ -403,6 +416,31 @@ def settle(path=None, results_path=None, bank=None, now=None):
     if done:
         rebuild(path, bank)
     return done
+
+
+def regrade(path=None, results_path=None, bank=None, now=None, apply=False):
+    """Every settled game bet (never Ace Props) whose own game's result now
+    grades it differently from its settle: [(bet, (result, profit, detail))].
+    With apply, each gets a "correct" event - the old settle is kept - and
+    bankroll.json is rebuilt."""
+    now = now or utc_now()
+    results = _read(results_path or RESULTS, {})
+    wrong = []
+    for b in fold(events(path))["settled"]:
+        if is_props(b) or not b.get("event_id") or b.get("result") not in ("won", "lost", "push"):
+            continue
+        r = results.get(f"{b.get('sport')}|{b.get('event_id')}")
+        got = outcome(b, r, now) if r else None
+        if got and (got[0] != b["result"] or abs(got[1] - float(b.get("profit") or 0)) > 0.005):
+            wrong.append((b, got))
+    if apply and wrong:
+        for b, (word, profit, detail) in wrong:
+            append({"kind": "correct", "id": b["id"], "utc": now.strftime(STAMP), "result": word,
+                    "profit": profit, "detail": detail,
+                    "why": f"regraded from its own game ({b.get('sport')} {b.get('event_id')}): "
+                           f"was {b['result']} {float(b.get('profit') or 0):+.2f} ({b.get('detail')})"}, path)
+        rebuild(path, bank)
+    return wrong
 
 
 # ------------------------------------------------------------------ the rules
@@ -478,8 +516,10 @@ def lines(path=None):
 def main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(description="Ace's money, kept by code")
-    ap.add_argument("cmd", nargs="?", default="show", choices=["show", "settle", "rebuild"])
-    cmd = ap.parse_args(argv).cmd
+    ap.add_argument("cmd", nargs="?", default="show", choices=["show", "settle", "rebuild", "regrade"])
+    ap.add_argument("--apply", action="store_true", help="regrade: write the corrections (default: list them)")
+    a = ap.parse_args(argv)
+    cmd = a.cmd
     # After parsing: --help must never touch the book.
     n = migrate()
     if n:
@@ -490,6 +530,14 @@ def main(argv=None):
         for d in done:
             print(f"settled {d['selection']} ({d['match']}): {d['result']} {d['profit']:+,.2f} - {d['detail']}")
         print(f"{len(done)} settled")
+    elif cmd == "regrade":
+        wrong = regrade(apply=a.apply)
+        for b, (word, profit, detail) in wrong:
+            print(f"{b['selection']} ({b['match']}, {b.get('starts_utc')}): settled {b['result']} "
+                  f"{float(b.get('profit') or 0):+,.2f} ({b.get('detail')}), its own game says {word} "
+                  f"{profit:+,.2f} ({detail})")
+        print(f"{len(wrong)} bet(s) graded differently by their own game"
+              + (" - corrected" if a.apply and wrong else " - add --apply to correct them" if wrong else ""))
     elif cmd == "rebuild":
         doc = rebuild()
         print(f"bankroll.json rebuilt: ${doc['bankroll']:,.2f}, {len(doc['open_bets'])} open")
