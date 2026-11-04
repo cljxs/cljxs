@@ -150,10 +150,14 @@ you never sell to dodge one or hold past one.
   who reports soon; `data/earnings.json` has the dates)
 - **At most 40%** in one cluster of names that move together - chips,
   software, space, quantum and so on; `show` prints the groups and yours
-- **Market regime** (QQQ against its 50-day average and that average's
-  direction - nothing else since 2026-10-28): favourable = QQQ above a rising
-  average, normal sizing; mixed = one of the two, at most 10% in a new buy;
-  unfavourable = QQQ below a falling average, no buys
+- **Market regime**, judged per name since 2026-11-04 (`show` prints both):
+  tech and growth clusters (chips, software, mega-cap, crypto and high-beta,
+  consumer internet, AI infrastructure, space, quantum) by **QQQ**; healthcare,
+  financials, industrials and energy, consumer and retail, fintech, drones and
+  defense by **SPY**. Against that index's 50-day average and its direction:
+  favourable = above a rising average, normal sizing; mixed = one of the two,
+  at most 10% in a new buy; unfavourable = below a falling average, no buys of
+  that name. `buy` and `size` apply it - you do not choose the index
 - **Keep at least 5% cash**
 - **Day 1** (`cycle_count` 0): open **3 to 5** starters, roughly equal weight
 

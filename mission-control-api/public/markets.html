@@ -226,8 +226,15 @@ function render() {
   }).join('') || '<div class="empty">No books yet.</div>';
 
   const asof = B.asof_utc ? new Date(B.asof_utc.replace(' ', 'T') + 'Z') : null;
-  $('status').innerHTML = `<span><span class="dot" style="background:${B.regime === 'unfavorable' ? 'var(--down)' : B.regime === 'favorable' ? 'var(--up)' : 'var(--warn)'}"></span>Market ${esc(B.regime)}</span>
-    <span>${esc(B.regime_why || '')}</span>
+  // Two market checks since 2026-11-04: tech and growth names by QQQ, the
+  // rest by SPY (belfort-trade.py regimes / index_for).
+  const dotOf = st => st === 'unfavorable' ? 'var(--down)' : st === 'favorable' ? 'var(--up)' : 'var(--warn)';
+  const regs = Object.values(B.regimes || {});
+  $('status').innerHTML = (regs.length ? regs.map(r =>
+      `<span><span class="dot" style="background:${dotOf(r.state)}"></span>${esc(r.judges)}: ${esc(r.state)}</span>
+       <span>${esc(r.why)}</span>`).join('')
+    : `<span><span class="dot" style="background:${dotOf(B.regime)}"></span>Market ${esc(B.regime)}</span>
+    <span>${esc(B.regime_why || '')}</span>`) + `
     <span>${B.watch.length} watched</span>
     <span>Data ${asof ? asof.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : '—'} · every 10 min, market hours</span>`
     + (B.data_warning ? `<span class="err">⚠ ${esc(B.data_warning)}</span>`
@@ -458,7 +465,9 @@ async function loadBooks() {
   if (j.error) { $('side').innerHTML = `<div class="err">Could not read the books: ${esc(j.error)}</div>`; return; }
   const books = j.books || [];
   const mine = books.find(b => b.book === 'belfort'), shadow = books.find(b => b.book === 'shadow');
-  const regime = `<div class="muted" style="margin:4px 0 10px">Market regime: <b>${esc(j.regime)}</b> - ${esc(j.regime_why)}</div>`;
+  const regime = Object.values(j.regimes || {}).length
+    ? Object.values(j.regimes).map(r => `<div class="muted" style="margin:4px 0 6px">Market check, ${esc(r.judges)}: <b>${esc(r.state)}</b> - ${esc(r.why)}</div>`).join('')
+    : `<div class="muted" style="margin:4px 0 10px">Market regime: <b>${esc(j.regime)}</b> - ${esc(j.regime_why)}</div>`;
   const d = j.same_days;
   let html = `<div class="bk"><div class="sect">Belfort (AI)</div>${regime}${mine ? bookStats(mine) + bookPositions(mine) + bookTrades(mine) : ''}
     <div class="sect">No-AI book</div>`;

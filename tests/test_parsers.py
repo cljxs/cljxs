@@ -16145,10 +16145,12 @@ class BelfortGuardrailsFromTheReview(unittest.TestCase):
     def book(self, p, name="portfolio.json"):
         (self.state / name).write_text(json.dumps(p))
 
-    def prices(self, px, qqq=None, extra=None):
+    def prices(self, px, qqq=None, extra=None, spy=None):
         quotes = {k: dict({"price": v, "sma50": v * 0.95}, **(extra or {}).get(k, {})) for k, v in px.items()}
-        (self.data / "quotes.json").write_text(json.dumps(
-            {"quotes": quotes, "benchmarks": {"QQQ": qqq if qqq is not None else rising_qqq()}}))
+        bench = {"QQQ": qqq if qqq is not None else rising_qqq()}
+        if spy is not None:
+            bench["SPY"] = spy
+        (self.data / "quotes.json").write_text(json.dumps({"quotes": quotes, "benchmarks": bench}))
 
     def run_trade(self, *args):
         return subprocess.run([sys.executable, str(SCRIPTS / "belfort-trade.py"), *args],
@@ -16327,11 +16329,44 @@ class BelfortGuardrailsFromTheReview(unittest.TestCase):
 
     def test_the_shadow_book_starts_itself_and_obeys_the_regime(self):
         self.candidates("PANW")
-        self.prices({"PANW": 100.0}, qqq=self.qqq([470.0 - i for i in range(70)], 380))
+        falling = self.qqq([470.0 - i for i in range(70)], 380)
+        self.prices({"PANW": 100.0}, qqq=falling, spy=falling)
         r = self.run_trade("shadow")
         self.assertIn("no buy: regime unfavourable", r.stdout)
         shadow = json.loads((self.state / "shadow.json").read_text())
         self.assertEqual((shadow["starting_cash"], shadow["cash"], shadow["cycle_count"]), (10000.0, 10000.0, 1))
+
+    def test_each_name_is_judged_by_its_own_index(self):
+        # Owner, 2026-11-04 (option B): QQQ below a falling average blocked
+        # OSCR (health care) and ABNB (travel) for tech's weakness while SPY
+        # rose. Tech and growth keep QQQ; the rest are judged by SPY.
+        falling, rising = self.qqq([470.0 - i for i in range(70)], 380), self.qqq([400.0 + i for i in range(70)], 500)
+        self.prices({"PANW": 100.0, "OSCR": 30.0}, qqq=falling, spy=rising)
+        t = self.mod()
+        self.assertEqual([t.index_for(s) for s in ("NVDA", "PANW", "TSLA", "ABNB", "OSCR", "JPM", "XOM", "KO",
+                                                   "SOFI", "KTOS", "NOTHELD")],
+                         ["QQQ", "QQQ", "QQQ", "QQQ", "SPY", "SPY", "SPY", "SPY", "SPY", "SPY", "QQQ"])
+        st, why = t.regime_for("PANW")
+        self.assertEqual(st, "unfavorable")
+        self.assertTrue(why.startswith("QQQ "), why)
+        st, why = t.regime_for("OSCR")
+        self.assertEqual(st, "favorable")
+        self.assertTrue(why.startswith("SPY 12.5% above its rising 50-day average"), why)
+        self.assertIn("the regime is unfavourable (QQQ", t.size(t.load(), "PANW")[1])
+        room, why = t.size(t.load(), "OSCR")
+        self.assertGreater(room, 0, f"SPY rising lets OSCR through: {why}")
+        regs = t.regimes()
+        self.assertEqual((regs["QQQ"]["state"], regs["SPY"]["state"]), ("unfavorable", "favorable"))
+        self.assertIn("healthcare", regs["SPY"]["clusters"])
+        self.assertIn("semiconductors", regs["QQQ"]["clusters"])
+
+    def test_the_shadow_book_buys_what_its_own_index_allows(self):
+        self.candidates("PANW", "OSCR")
+        falling, rising = self.qqq([470.0 - i for i in range(70)], 380), self.qqq([400.0 + i for i in range(70)], 500)
+        self.prices({"PANW": 100.0, "OSCR": 30.0}, qqq=falling, spy=rising)
+        r = self.run_trade("shadow")
+        self.assertIn("OSCR (favorable)", r.stdout, r.stdout + r.stderr)
+        self.assertNotIn("PANW", r.stdout)
 
     def test_the_shadow_book_sells_by_the_same_exit_rules(self):
         self.candidates()
@@ -16848,8 +16883,10 @@ class AceMoneyIsKeptByCode(unittest.TestCase):
         book = f.ace_book()
         book.place({"sport": "nfl", "event_id": "401872948", "selection": "ATL ML", "side": "away",
                     "match": "ATL @ GB", "price": 150, "starts_utc": "2026-09-25T00:15Z"})
+        # The morning after the game: results are kept 40 days, so a run on
+        # the real clock graded it void from 2026-11-04 on.
         with contextlib.redirect_stdout(io.StringIO()):
-            f.settle_bets([("nfl", self.NFL)])
+            f.settle_bets([("nfl", self.NFL)], now=datetime(2026, 9, 25, 12, tzinfo=timezone.utc))
         bank = json.loads((root / "agents/ace/state/bankroll.json").read_text())
         self.assertEqual((bank["bankroll"], bank["settled_bets"][0]["result"]), (10150.0, "won"))
         self.assertIn("boards.append((sport, graded))", (SCRIPTS / "ace-fetch.py").read_text(),

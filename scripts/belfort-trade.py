@@ -24,8 +24,9 @@ Every trade is validated against the rules before it is applied:
   * at least 5% of the portfolio must stay in cash after a buy
   * no more than 40% in one cluster of related names (CLUSTERS)
   * no more than 8 names at once
-  * the market regime (regime()): no buys when it is unfavourable, half-size
-    ones when it is mixed
+  * the market regime (regime(), each name by its own index - index_for:
+    QQQ for tech and growth, SPY for SPY_CLUSTERS): no buys when it is
+    unfavourable, half-size ones when it is mixed
   * Belfort's buys cite a headline from news.json by its id (--headline)
 
 A refused trade changes nothing and says why.
@@ -180,6 +181,15 @@ SECTORS_NEEDED = 6          # fewer sectors with a price than this: breadth is n
 # still needs its own stock above its 20- and 50-day averages.
 BREADTH = "none"
 BREADTHS = ("names", "sectors", "none")
+# Which index each name is judged by (owner, 2026-11-04, option B). QQQ alone
+# blocked every buy while tech fell and the rest of the market rose - since
+# his start QQQ -1.6%, SPY +1.8%; over the 45 trading days to 2026-10-28 QQQ
+# blocked 10 days, SPY 1 - so OSCR (health care) and ABNB (travel) were
+# refused for tech's weakness. Tech and growth clusters keep QQQ; these are
+# judged by SPY. A cluster moves between the two with one edit here.
+SPY_CLUSTERS = ("healthcare", "financials", "industrials and energy", "consumer and retail", "fintech",
+                "drones and defense")
+INDEXES = ("QQQ", "SPY")
 
 HEADLINE_MAX_AGE_DAYS = 7
 SHADOW_POSITION_PCT = 20.0
@@ -215,25 +225,35 @@ def quotes_doc():
         return {}
 
 
-def regime(doc=None, breadth=None):
+def index_for(symbol):
+    """"QQQ" or "SPY" - the index a name's buy is judged by (SPY_CLUSTERS)."""
+    return "SPY" if cluster_of(symbol) in SPY_CLUSTERS else "QQQ"
+
+
+def regime_for(symbol, doc=None):
+    """regime() for this name: its own index's (index_for)."""
+    return regime(doc, index=index_for(symbol))
+
+
+def regime(doc=None, breadth=None, index="QQQ"):
     """(state, why) - "favorable", "neutral", "unfavorable", or "unknown"
-    (no QQQ data yet: treated as neutral). From QQQ against its own 50-day
-    average and that average's direction over 10 days, and breadth (BREADTH,
-    or `breadth`): the share of his names, or of the market's sector funds
-    (SECTOR_FUNDS, quotes.json "sectors"), above their own 50-day average -
-    or none."""
+    (no history yet: treated as neutral). From `index` (QQQ, or SPY for the
+    names index_for gives it) against its own 50-day average and that
+    average's direction over 10 days, and breadth (BREADTH, or `breadth`):
+    the share of his names, or of the market's sector funds (SECTOR_FUNDS,
+    quotes.json "sectors"), above their own 50-day average - or none."""
     mode = breadth or BREADTH
     doc = doc if doc is not None else quotes_doc()
-    qqq = (doc.get("benchmarks") or {}).get("QQQ") or {}
+    qqq = (doc.get("benchmarks") or {}).get(index) or {}
     closes = [float(c) for _, c in qqq.get("history") or []]
     if len(closes) < 60 or qqq.get("price") is None:
-        return "unknown", "no QQQ history yet - treated as mixed"
+        return "unknown", f"no {index} history yet - treated as mixed"
     sma_now, sma_then = sum(closes[-50:]) / 50, sum(closes[-60:-10]) / 50
     price = float(qqq["price"])
     above, rising = price > sma_now, sma_now >= sma_then
     # How far, in numbers (owner, 2026-10-30: "Can this show how much QQQ is
     # below its 50 day average?") - and what it would take to cross back.
-    why = (f"QQQ {abs(price / sma_now - 1) * 100:.1f}% {'above' if above else 'below'} its "
+    why = (f"{index} {abs(price / sma_now - 1) * 100:.1f}% {'above' if above else 'below'} its "
            f"{'rising' if rising else 'falling'} 50-day average (${price:,.2f} vs ${sma_now:,.2f}; the "
            f"average {(sma_now / sma_then - 1) * 100:+.1f}% in 10 days"
            + ("" if above else f"; it needs {(sma_now / price - 1) * 100:+.1f}% to get back above") + ")")
@@ -254,6 +274,18 @@ def regime(doc=None, breadth=None):
     if not above or not rising:
         return "neutral", why
     return "favorable", why
+
+
+def regimes(doc=None):
+    """{index: {"state", "why", "judges", "clusters"}} - the market check as
+    each index gives it, and which of his clusters each one judges."""
+    out = {}
+    for i in INDEXES:
+        st, why = regime(doc, index=i)
+        groups = [c for c in CLUSTERS if index_for((CLUSTERS[c] or [c])[0]) == i]
+        out[i] = {"state": st, "why": why, "clusters": groups,
+                  "judges": ("tech and growth" if i == "QQQ" else "everything else") + f" ({i})"}
+    return out
 
 
 def universe():
@@ -475,7 +507,7 @@ def size(p, symbol, state=None):
     if not q or not q.get("price"):
         return 0, f"no price for {sym}"
     px = float(q["price"])
-    state, why = state or regime()
+    state, why = state or regime_for(sym)
     if state == "unfavorable":
         return 0, f"the regime is unfavourable ({why})"
     soon = earnings_soon(sym)
@@ -611,9 +643,10 @@ def buy(p, symbol, shares, price=None, reason="", score=0, cited=None, state=Non
     if shares <= 0:
         print("shares must be positive.", file=sys.stderr)
         return 1
-    state, why = state or regime()
+    state, why = state or regime_for(sym)
     if state == "unfavorable":
-        print(f"REFUSED: the market regime is unfavourable ({why}) - no new buys.", file=sys.stderr)
+        print(f"REFUSED: the market regime is unfavourable ({why}) - no new buys of {sym} "
+              f"({cluster_of(sym)}, judged by {index_for(sym)}).", file=sys.stderr)
         return 1
     soon = earnings_soon(sym)
     if soon:
@@ -763,19 +796,22 @@ def shadow_turn(p):
     candidate (candidates.json is ranked by MACD histogram over price) it does not hold
     that every rule allows, sized like Belfort's. Returns what it did."""
     did = apply_exits(p)
-    state, why = regime()
-    if state == "unfavorable":
-        return did + [f"no buy: regime unfavourable ({why})"]
+    regs = {i: regime(index=i) for i in INDEXES}
+    if all(st == "unfavorable" for st, _ in regs.values()):
+        return did + ["no buy: regime unfavourable (" + "; ".join(w for _, w in regs.values()) + ")"]
     try:
         ranked = json.loads(CANDIDATES.read_text())["candidates"]
     except Exception:
         ranked = []
     mv = market_value(p)
-    pct = SHADOW_POSITION_PCT if state == "favorable" else NEUTRAL_POSITION_PCT
     for c in ranked:
         sym, px = c["symbol"], float(c["price"])
         if position(p, sym) or px <= 0:
             continue
+        state, why = regs[index_for(sym)]
+        if state == "unfavorable":
+            continue
+        pct = SHADOW_POSITION_PCT if state == "favorable" else NEUTRAL_POSITION_PCT
         # Belfort's usual ~20%, or less: whatever size() allows
         shares = min(int(mv * pct / 100 // px), size(p, sym, (state, why))[0])
         if shares > 0 and buy(p, sym, shares, None, "SHADOW: top candidate by MACD histogram over price",
@@ -982,14 +1018,15 @@ def cmd_stats(a):
     if SHADOW.exists():
         books.append(book_stats(load(SHADOW), "shadow"))
     state, why = regime()
+    regs = regimes()
     if a.json:
         for b in books:
             b.update(book_view(load(SHADOW) if b["book"] == "shadow" else load()))
-        print(json.dumps({"regime": state, "regime_why": why, "books": books,
+        print(json.dumps({"regime": state, "regime_why": why, "regimes": regs, "books": books,
                           "same_days": same_days(books)}, indent=1))
         return 0
     fmt = lambda v, suffix="%": "-" if v is None else f"{v:+.2f}{suffix}" if suffix == "%" else f"{v}{suffix}"
-    print(f"regime: {state} - {why}\n")
+    print("".join(f"regime ({r['judges']}): {r['state']} - {r['why']}\n" for r in regs.values()))
     for b in books:
         name = "BELFORT (AI)" if b["book"] == "belfort" else "SHADOW (no AI)"
         print(f"{name}  since {b['since']}\n"
@@ -1036,6 +1073,7 @@ def board():
         books.append(book_stats(load(SHADOW), "shadow", doc))
     same = same_days(books)
     state, why = regime(doc)
+    regs = regimes(doc)
     qqq = (doc.get("benchmarks") or {}).get("QQQ")
 
     held = {pos["symbol"].upper(): entry_of(p, pos) for pos in p["positions"]
@@ -1073,7 +1111,8 @@ def board():
                    "catalyst": (pos.get("catalyst") or {}).get("title") if isinstance(pos.get("catalyst"), dict) else None}
         else:
             verdict = "WATCH"
-            room, blocked = size(p, sym, (state, why))
+            r = regs[index_for(sym)]
+            room, blocked = size(p, sym, (r["state"], r["why"]))
             fresh = [n for n in news if str(n.get("symbol", "")).upper() == sym
                      and (headline_age(n) or 10 ** 9) <= HEADLINE_MAX_AGE_DAYS * 86400]
             if not room:
@@ -1129,7 +1168,7 @@ def board():
     vals = [v for _, v in race if v is not None]
     reports = sorted(REPORTS.glob("*.md"), key=report_order, reverse=True) if REPORTS.is_dir() else []
     return {
-        "asof_utc": doc.get("asof_utc"), "regime": state, "regime_why": why,
+        "asof_utc": doc.get("asof_utc"), "regime": state, "regime_why": why, "regimes": regs,
         # The last data run's own verdict (belfort-fetch.py health), and the
         # names on old prices - said on the page, not only in a log.
         "data_warning": _doc(FETCH_META).get("health"),
@@ -1524,9 +1563,10 @@ def summary(p):
                                      if soon else f"none within {EARNINGS_BLACKOUT_DAYS} trading days"))
     except Exception:
         lines.append("earnings  no calendar yet (data/earnings.json) - the blackout is not being checked")
-    state, why = regime()
-    lines.append(f"regime    {state} - {why}"
-                 + {"favorable": "", "unfavorable": ": no new buys"}.get(state, f": new buys up to {NEUTRAL_POSITION_PCT:.0f}%"))
+    for r in regimes().values():
+        lines.append(f"regime    {r['judges']}: {r['state']} - {r['why']}"
+                     + {"favorable": "", "unfavorable": ": no new buys"}.get(
+                         r["state"], f": new buys up to {NEUTRAL_POSITION_PCT:.0f}%"))
     lines.append(f"\ntrades    {len(p['trades'])}")
     for t in p["trades"][-8:]:
         lines.append(f"  cycle {t.get('cycle', '?')}  {t.get('side', '?'):<4} "
