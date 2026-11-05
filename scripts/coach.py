@@ -621,7 +621,9 @@ def _rules(b, bt, ab, aj):
                      f"at the average price), sold after {b.MAX_HOLD_DAYS:g} days, BTC dump switch at "
                      f"{b.BTC_DUMP_PCT:g}%",
             "halt": f"no buys for {b.HALT_HOURS:g}h after a {b.MAX_DRAWDOWN_PCT:g}% drawdown",
-            "quick book": (f"Bolt Quick, its own $10,000: stop -{b.QUICK_RULES['STOP_LOSS_PCT']:g}% (no trail), all "
+            "quick book": (f"Bolt Quick, its own $10,000: stop -{b.QUICK_RULES['STOP_LOSS_PCT']:g}%"
+                           + (f", trailing {b.QUICK_RULES['TRAIL_PCT']:g}% under its best"
+                              if b.QUICK_RULES.get("TRAIL_PCT") else " (no trail)") + ", all "
                            f"sold at +{b.QUICK_RULES['TAKE_PROFIT_PCT']:g}%, sold after "
                            f"{b.QUICK_RULES['MAX_HOLD_DAYS']:g} days; buys "
                            + ", ".join(f"{v:g}% at {k}/10" for k, v in b.QUICK_RULES["SIZE_BY_SCORE"].items())

@@ -295,7 +295,8 @@ Rules for the model: `agents/belfort/_belfort-agents-header.md`. Tests:
   helps crypto.
 - **Bolt Quick, a third $10,000 book (owner, 2026-11-03):** small moves, a
   tight stop, bigger buys for better scores - `QUICK_RULES`: stop -2.5% under
-  the price paid (no trail), all sold at +5% (2:1), sold after 5 days, buys of
+  the price paid, trailing 2.5% under its best since 2026-11-05 (up 2.5% = at
+  breakeven; replay -$136 against -$168 without), all sold at +5% (2:1), sold after 5 days, buys of
   10/15/20/25% of the account at scores 7/8/9/10 (`SIZE_BY_SCORE`). Same coins,
   score, ticks and breakers. run() trades it inside `rules(QUICK_RULES)`, the
   same mechanism the replay uses; files `state/quick-portfolio.json`,

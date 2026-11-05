@@ -21308,14 +21308,13 @@ class BoltQuickIsAThirdBook(BoltBase):
         self.b.run(plain, self.market(btc=1.0, SOL=self.coin(price=100.0, **self.TEN)), self.T0)
         self.assertAlmostEqual(plain["trades"][0]["notional"], 1500.0, msg="Bolt's own book: 15%, whatever the score")
 
-    def test_a_fixed_stop_at_minus_two_and_a_half_and_all_sold_at_plus_five(self):
+    def test_a_stop_at_minus_two_and_a_half_and_all_sold_at_plus_five(self):
         book = self.b.seed(self.T0)
         self.quick(book, self.market(btc=1.0, SOL=self.coin(price=100.0, **self.TEN)), self.T0)
         tick = lambda m, price: self.quick(book, self.market(btc=1.0, SOL=price),
                                            self.T0 + timedelta(minutes=m))
-        self.assertEqual(tick(10, 104.9)["exits"], [], "+4.9%: under the target")
-        self.assertEqual(tick(20, 98.0)["exits"], [], "-2%: the stop does not trail up behind +4.9%")
-        self.assertAlmostEqual(book["positions"][0]["stop_price"], 97.5)
+        self.assertEqual(tick(10, 102.0)["exits"], [], "+2%")
+        self.assertAlmostEqual(book["positions"][0]["stop_price"], 99.45, msg="already rising: 2.5% under 102")
         ev = tick(30, 105.2)
         self.assertIn("take profit", ev["exits"][0]["reason"])
         self.assertNotIn("fraction", ev["exits"][0], "all of it")
@@ -21326,6 +21325,22 @@ class BoltQuickIsAThirdBook(BoltBase):
         self.assertIn("stop loss (-2.5%)", ev["exits"][0]["reason"])
         self.assertEqual(self.b.problems(book), [])
         self.assertEqual(self.b.problems(again), [])
+
+    def test_up_two_and_a_half_the_stop_is_at_breakeven(self):
+        # Owner, 2026-11-05: "a trailing stop loss of 2.5 percent. So if it goes
+        # up 2.5 percent the new stop loss would be breakeven".
+        book = self.b.seed(self.T0)
+        self.quick(book, self.market(btc=1.0, SOL=self.coin(price=100.0, **self.TEN)), self.T0)
+        tick = lambda m, price: self.quick(book, self.market(btc=1.0, SOL=price),
+                                           self.T0 + timedelta(minutes=m))
+        self.assertEqual(tick(10, 102.5)["exits"], [])
+        self.assertAlmostEqual(book["positions"][0]["stop_price"], 99.9375, msg="2.5% under 102.5: breakeven")
+        self.assertEqual(tick(20, 104.0)["exits"], [])
+        self.assertAlmostEqual(book["positions"][0]["stop_price"], 101.4, msg="it follows the best up")
+        self.assertEqual(tick(30, 102.0)["exits"], [], "a dip does not lower it")
+        ev = tick(40, 101.3)
+        self.assertIn("trailing stop (2.5% off its best, +4.0%)", ev["exits"][0]["reason"])
+        self.assertEqual(self.b.TRAIL_PCT, 8.0, "Bolt's own trail is back after the quick book's turn")
 
     def test_five_days_at_most(self):
         book = self.b.seed(self.T0)

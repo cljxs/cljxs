@@ -481,7 +481,7 @@ function quickTab(host) {
     <div class="sect">Its rules</div><ul class="rules">
       <li>The same coins, score and checks as Bolt; it buys the best <b>7/10</b> or more, one every ${B.rules.cycle_hours} hours.</li>
       <li>Bigger buys for better scores: ${Object.entries(sz).map(([k, v]) => `<b>${k}/10 → ${v}%</b>`).join(' · ')} of the account.</li>
-      <li>Stop loss <b>-${r.stop_loss_pct}%</b> under the price paid - it does not trail. All of it sold at <b>+${r.take_profit_pct}%</b> (2:1).</li>
+      <li>Stop loss <b>-${r.stop_loss_pct}%</b> under the price paid${has(r.trail_pct) ? `, trailing <b>${r.trail_pct}%</b> under its best price - up ${r.trail_pct}%, the stop is at breakeven` : ' - it does not trail'}. All of it sold at <b>+${r.take_profit_pct}%</b> (2:1).</li>
       <li>Sold after <b>${r.max_hold_days} days</b> whatever it is doing. Bolt's BTC dump switch, 15% halt and 5% cash floor apply.</li></ul>
     ${(Q.positions || []).length ? '<div class="sect">Holding</div>' + Q.positions.map(p =>
       `<div class="muted">${esc(p.symbol)} · <span class="num ${cls(p.pnl_pct)}">${pct(p.pnl_pct, 1)}</span> · in at ${price(p.entry_price)} · stop ${price(p.stop_price)} · ${money(p.value)}</div>`).join('') : ''}

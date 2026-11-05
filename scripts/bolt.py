@@ -61,8 +61,8 @@ BOLT QUICK, A THIRD BOOK (owner, 2026-11-03: "another book next to bolt ...
 look for smaller moves like 4-5% while having a tight stop loss like 2.5%
 ... 2/1 or better risk reward ... leverage more money into better
 positions"). $10,000 more, the same coins, score, ticks and breakers, its own
-exits and sizes (QUICK_RULES): the stop 2.5% under the price paid and no
-trailing stop, all of it sold at +5%, sold after 5 days whatever it is
+exits and sizes (QUICK_RULES): the stop 2.5% under the price paid, trailing
+2.5% under its best (2026-11-05: up 2.5% it is at breakeven), all of it sold at +5%, sold after 5 days whatever it is
 doing, and 10/15/20/25% of the account for a score of 7/8/9/10. run() itself
 trades it with those settings (rules()), as the replay does - no second copy
 of the rules. Replayed before it was built (90 days to 2026-10-30): it lost
@@ -169,7 +169,8 @@ QUICK_BOOK = AGENT / "state" / "quick-portfolio.json"
 QUICK_EQUITY = AGENT / "state" / "quick-equity.jsonl"
 QUICK_RULES = {
     "STOP_LOSS_PCT": 2.5,     # "a tight stop loss like 2.5% under whatever we bought at"
-    "TRAIL_PCT": None,        # no trailing stop: the stop stays where it was set
+    "TRAIL_PCT": 2.5,         # owner, 2026-11-05: always 2.5% under its best - it rises from the
+                              # first gain, and up 2.5% it is at breakeven (2.5% under 102.5 is 99.94)
     "TAKE_PROFIT_PCT": 5.0,   # "smaller moves like 4-5%" - all sold at +5%, 2:1 on the stop
     "TAKE_FRACTION": 1.0,
     "MAX_HOLD_DAYS": 5.0,
@@ -1125,7 +1126,8 @@ def quick_board(now, marks):
             "positions": positions, "closed": closed_stats(qb),
             "trades": list(reversed(qb["trades"][-30:])), "curve": series(read_curve(QUICK_EQUITY)),
             "halted": bool(qb["halt"].get("active")),
-            "rules": {"stop_loss_pct": QUICK_RULES["STOP_LOSS_PCT"], "take_profit_pct": QUICK_RULES["TAKE_PROFIT_PCT"],
+            "rules": {"stop_loss_pct": QUICK_RULES["STOP_LOSS_PCT"], "trail_pct": QUICK_RULES["TRAIL_PCT"],
+                      "take_profit_pct": QUICK_RULES["TAKE_PROFIT_PCT"],
                       "max_hold_days": QUICK_RULES["MAX_HOLD_DAYS"],
                       "size_by_score": {str(k): v for k, v in QUICK_RULES["SIZE_BY_SCORE"].items()}},
             "balances": not problems(qb)}
