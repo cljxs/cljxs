@@ -478,6 +478,11 @@ STAKE_CAP_PCT = 3.0
 # value at or below zero means no edge has shown up - betting stops and the
 # owner decides. (The fault stop, a 30% loss, is ace-book.py's.)
 EVIDENCE_MIN_BETS = 60
+# Counted from this day (UTC, by when the bet was judged). The first 60 bets
+# stopped him at -5.30% on 2026-11-06; the owner decided ("keep the
+# estimates but don't stop the betting") and betting resumed with a fresh
+# count - the stop is still there for the next 60.
+EVIDENCE_FROM = "2026-11-06"
 # The numbers above are preregistered (agents/ace/PREREGISTRATION.md): none
 # changes before this day except a logged bug fix, or the clock restarts.
 # coach.py reads it, so its Sunday review proposes nothing for Ace until then.
@@ -551,10 +556,11 @@ def evidence_stop():
                           journal_path=AGENT / "state" / "judgements.jsonl")
     except Exception:
         return None
-    clvs = [_clv().headline_clv(g)[0] for g in r.get("graded", []) if g.get("status") == "bet"]
+    clvs = [_clv().headline_clv(g)[0] for g in r.get("graded", []) if g.get("status") == "bet"
+            and str(g.get("judged_utc") or EVIDENCE_FROM)[:10] >= EVIDENCE_FROM]
     clvs = [c for c in clvs if c is not None]
     if len(clvs) >= EVIDENCE_MIN_BETS and sum(clvs) / len(clvs) <= 0:
-        return (f"after {len(clvs)} bets the average closing-line value is "
+        return (f"after {len(clvs)} bets since {EVIDENCE_FROM} the average closing-line value is "
                 f"{sum(clvs) / len(clvs):+.2f}% - no edge has shown up, so betting has "
                 f"stopped and the owner decides")
     return None

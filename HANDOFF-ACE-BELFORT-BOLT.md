@@ -126,6 +126,16 @@ If the owner asks for a rule change, tell them this first and let them choose.
   38-48%, game day from 10:00 ET), is the strategy run beside him to compare
   on profit. Each has a tab on Ace's page (`/api/ace/no-ai` <- `ace-baselines.py
   board`): records side by side, and every open and settled pick.
+- **Evidence stop reached, betting restarted (2026-11-06):** 60 bets at -5.30%
+  closing-line value stopped him; the owner kept the blind estimates and
+  restarted betting ("keep the estimates but don't stop the betting"). The
+  stop counts again from that day (`ace-judge.py EVIDENCE_FROM`).
+- **Looking for an edge** (`scripts/ace-edge.py`, read-only, owner 2026-11-06):
+  every bettor side by side; every bet they made pooled; and both sides of
+  every game 6 hours out - grouped by sport, favourite or underdog, home or
+  away, time before, the move in the 2 hours before, Pinnacle against
+  DraftKings. An idea needs 30+ bets, a positive closing-line value and money
+  in both halves.
 - **Grading (bug fixed 2026-11-04):** a bet is graded by its own game id
   only, never before its start (`ace-book.py find_result`, `outcome`). A
   wrong settle is corrected, never erased: `ace-book.py regrade` lists any

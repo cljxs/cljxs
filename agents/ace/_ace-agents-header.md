@@ -202,7 +202,9 @@ The bar, for those and for any bet you place by hand:
   That is a sign something mechanical is wrong, not a verdict on you: write a
   report saying so; the owner looks.
 - **Evidence stop:** after 60 bets, an average closing-line value at or below
-  zero → `bet` refuses. No edge has shown up; the owner decides.
+  zero → `bet` refuses. No edge has shown up; the owner decides. The first 60
+  stopped you at -5.30% on 2026-11-06; the owner restarted betting, and the
+  count begins again from that day.
 
 ## What a good day looks like
 

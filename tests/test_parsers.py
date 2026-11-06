@@ -15761,18 +15761,27 @@ class AceBankrollHoldsDataNotRules(unittest.TestCase):
         self.assertIn("30% fault stop", b.refusal("nfl", "999", "X ML"))
 
     def test_the_evidence_stop(self):
-        graded = lambda clv, sharp=None: {"graded": [{"status": "bet", "clv_pct": clv, "sharp_clv_pct": sharp}] * 60}
+        graded = lambda clv, sharp=None, day="2026-11-07 15:00:00": {"graded": [
+            {"status": "bet", "clv_pct": clv, "sharp_clv_pct": sharp, "judged_utc": day}] * 60}
         # headline_clv is ace-clv.py's own: Pinnacle's close where there is one.
         hl = load("ace_clv_headline", "ace-clv.py").headline_clv
         fake = lambda doc: (lambda: types.SimpleNamespace(report=lambda **k: doc, headline_clv=hl))
         self.m._clv = fake(graded(-0.1))
-        self.assertIn("after 60 bets the average closing-line value is -0.10%", self.m.evidence_stop())
+        self.assertIn("after 60 bets since 2026-11-06 the average closing-line value is -0.10%",
+                      self.m.evidence_stop())
         self.m._clv = fake(graded(0.4))
         self.assertIsNone(self.m.evidence_stop())
         self.m._clv = fake(graded(0.4, sharp=-0.3))
         self.assertIn("is -0.30%", self.m.evidence_stop(), "Pinnacle's close is the headline")
         self.m._clv = fake({"graded": graded(-5)["graded"][:59]})
         self.assertIsNone(self.m.evidence_stop(), "59 bets is too few to judge")
+        # Owner, 2026-11-06: "keep the estimates but don't stop the betting" -
+        # the first 60 (-5.30%) no longer count; the next 60 are judged afresh.
+        self.m._clv = fake(graded(-5.3, day="2026-11-05 15:00:00"))
+        self.assertIsNone(self.m.evidence_stop(), "bets before the restart do not count")
+        self.m._clv = fake({"graded": graded(-5.3, day="2026-11-05 15:00:00")["graded"]
+                            + graded(-1.0)["graded"][:59]})
+        self.assertIsNone(self.m.evidence_stop(), "59 since the restart")
 
     def test_mark_strips_the_retired_keys_and_keeps_the_rest(self):
         self.bank.write_text(json.dumps({"bankroll": 9800.0, "starting_bankroll": 10000.0,

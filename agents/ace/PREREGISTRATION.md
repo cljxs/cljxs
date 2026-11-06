@@ -158,3 +158,10 @@ fresh-news bettor matches Ace, the model adds nothing.
   and Gate 2 are untouched (they never read results); settled profit and the
   fault stop now read the corrected figure. Every number in the table above
   is unchanged.
+* 2026-11-06 — the evidence stop was reached, and the owner decided, as the
+  stop provides: 60 bets with an average closing-line value of -5.30%. The
+  owner kept the blind estimates and restarted betting ("keep the estimates
+  but don't stop the betting"). The stop is kept, counted again from this day
+  (`ace-judge.py EVIDENCE_FROM`): 60 more bets at or below zero stop him
+  again. Gate 2's verdict on the first 60 stands - no edge shown. Every
+  number in the table above is unchanged.

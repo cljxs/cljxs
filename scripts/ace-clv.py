@@ -295,6 +295,7 @@ def grade(judgement, entry, now=None):
     then_pct = judgement.get("novig_pct")
     out = {"match": judgement.get("match"), "selection": judgement.get("selection"),
            "status": judgement.get("status"), "start_utc": entry.get("start_utc"),
+           "judged_utc": judgement.get("judged_utc"),
            "price": judgement.get("price"), "then_pct": then_pct,
            "close_price": last.get(f"moneyline_{side}"), "close_pct": close_pct,
            "my_pct": judgement.get("my_pct"),
