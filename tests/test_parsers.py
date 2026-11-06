@@ -16740,7 +16740,9 @@ class BelfortStopsSizesAndEarnings(unittest.TestCase):
         self.assertEqual(cal, ["Mon..Fri 09:45/10 America/New_York",
                                "Mon..Fri 10..15:05/10 America/New_York"])
         runs = [l.split("=", 1)[1] for l in service.splitlines() if l.startswith("ExecStart=")]
-        self.assertEqual([r.split("belfort-trade.py ")[1] for r in runs], ["exits --apply", "shadow --exits-only"])
+        self.assertEqual([r.split("/scripts/")[1] for r in runs],
+                         ["belfort-trade.py exits --apply", "belfort-trade.py shadow --exits-only",
+                          "belfort-quick.py tick"], "Belfort Quick's tick last (2026-11-06)")
         self.assertNotIn("openclaw", service, "code only: no model is woken")
         # deploy.sh installs and starts every deploy/belfort-*.timer
         self.assertIn('"$ROOT"/deploy/"$AGENT"-*.timer', (SCRIPTS / "deploy.sh").read_text())

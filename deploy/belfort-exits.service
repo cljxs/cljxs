@@ -1,5 +1,5 @@
 [Unit]
-Description=Belfort's 10-minute check: the sell rules on both books, no AI, no buys
+Description=Belfort's 10-minute check: the sell rules on his books, and Belfort Quick's tick - no AI
 Documentation=https://github.com/cljxs/cljxs
 After=network-online.target
 
@@ -14,6 +14,8 @@ Environment=HOME=/root
 WorkingDirectory=/root/ecosystem
 ExecStart=/usr/bin/python3 /root/ecosystem/scripts/belfort-trade.py exits --apply
 ExecStart=/usr/bin/python3 /root/ecosystem/scripts/belfort-trade.py shadow --exits-only
+# Belfort Quick (2026-11-06): its exits every tick, its one buy at the 15:30 check.
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/belfort-quick.py tick
 TimeoutStartSec=120
 StandardOutput=journal
 StandardError=journal

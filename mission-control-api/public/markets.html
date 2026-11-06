@@ -160,6 +160,7 @@
         <button class="tab on" data-t="report">Latest report</button>
         <button class="tab" data-t="history">History</button>
         <button class="tab" data-t="books">Books</button>
+        <button class="tab" data-t="quick">Quick</button>
         <button class="tab" data-t="record">Record<span class="newdot" id="recdot" hidden></span></button>
       </div>
       <div class="doc" id="side"></div>
@@ -398,6 +399,9 @@ async function side() {
   } else if (tab === 'record') {
     $('side').innerHTML = '<div class="empty">working out his record…</div>';
     loadRecord();
+  } else if (tab === 'quick') {
+    $('side').innerHTML = '<div class="empty">loading Belfort Quick…</div>';
+    loadQuick();
   } else {
     $('side').innerHTML = '<div class="empty">loading the books…</div>';
     loadBooks();
@@ -499,6 +503,33 @@ function bookPositions(b) {
       <td class="num">${money(p.entry)}</td><td class="num">${money(p.last)}</td>
       <td class="num ${cls(p.pnl_pct)}">${pct(p.pnl_pct)}</td>
       <td class="num">${money(p.stop)}</td></tr>`).join('')}</tbody></table>`;
+}
+
+/* ---------------- Belfort Quick (2026-11-06) ----------------
+ * Short swings on his stocks by plain code, its own $10,000. Every number
+ * from belfort-quick.py board; this only lays it out. */
+async function loadQuick() {
+  let Q;
+  try { const r = await fetch('/api/belfort/quick', { cache: 'no-store' }); Q = await r.json(); if (!r.ok) throw new Error(Q.error || r.status); }
+  catch (e) { if (tab === 'quick') $('side').innerHTML = `<div class="err">Could not read Belfort Quick: ${esc(e.message)}</div>`; return; }
+  if (tab !== 'quick') return;
+  const r = Q.rules || {}, c = Q.closed || {}, sz = r.size_by_score || {};
+  $('side').innerHTML = `<div class="sect">Belfort Quick · paper $10,000 · no AI</div>
+    <div class="muted" style="margin:4px 0 8px">${money(Q.equity)} · <span class="${cls(Q.pnl_pct)}">${pct(Q.pnl_pct)}</span> since ${esc((Q.started_utc || '').slice(0, 10))}
+      · ${c.n || 0} closed, ${c.won || 0} won${Q.balances === false ? ' · <span class="err">the book does not balance</span>' : ''}${Q.halted ? ' · <span class="err">halted for the day</span>' : ''}</div>
+    ${(Q.positions || []).length ? Q.positions.map(p => `<div class="muted" style="padding:4px 0;border-bottom:1px solid var(--line)"><b>${esc(p.symbol)}</b> ${p.shares} at ${money(p.entry_price)}
+      · now <span class="${cls(p.pnl_pct)}">${pct(p.pnl_pct)}</span> · stop ${money(p.stop)} · target ${money(p.target)}</div>`).join('')
+      : '<div class="empty">Holding nothing.</div>'}
+    <div class="sect">Its rules</div><ul style="margin:4px 0 8px;padding-left:18px">
+      <li>Buys once a day at <b>${esc((r.buy_checks || []).join(', '))} ET</b>: the best score of <b>${r.min_score}/10</b> or more - an uptrend, a pullback near the 20-day, turning up today, volume, RSI 40-65, beating SPY.</li>
+      <li>${Object.entries(sz).map(([k, v]) => `<b>${k}/10 → ${v}%</b>`).join(' · ')} of the account; at most ${r.max_positions} stocks, ${r.per_cluster} from one group.</li>
+      <li>Stop <b>-${r.stop_pct}%</b>, trailing ${r.trail_pct}% under its best; all sold at <b>+${r.target_pct}%</b>; sold after ${r.max_hold_days} trading days or the day before earnings.</li>
+      <li>Never: earnings within 5 trading days, up ${r.chase_pct}%+ today, a stock moving under ${(r.atr_range || [])[0]}% or over ${(r.atr_range || [])[1]}% a day, or on a day SPY is down ${Math.abs(r.spy_brake_pct)}%+.</li></ul>
+    <div class="sect">Its trades</div>
+    ${(Q.trades || []).length ? Q.trades.map(t => `<div style="padding:5px 0;border-bottom:1px solid var(--line)">
+        <b class="${t.side === 'buy' ? 'up' : 'down'}">${t.side === 'buy' ? 'BUY' : 'SELL'}</b> ${t.shares} ${esc(t.symbol)} at ${money(t.price)} · ${esc(t.day || '')}
+        ${t.side === 'sell' ? ` · <span class="${cls(t.pnl)}">${pct(t.pnl_pct)}</span>` : ''}<div class="muted" style="font-size:12px">${esc(t.reason)}</div></div>`).join('')
+      : '<div class="empty">No trades yet - it buys at 3:30pm ET on a day something scores 7 or more.</div>'}`;
 }
 
 function bookStats(b) {

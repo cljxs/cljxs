@@ -13,6 +13,7 @@ const { ROOT } = require('./db');
 
 const TRADE = path.join(ROOT, 'scripts', 'belfort-trade.py');
 const LEARN = path.join(ROOT, 'scripts', 'belfort-learn.py');
+const QUICK = path.join(ROOT, 'scripts', 'belfort-quick.py');
 
 function register(app) {
   // Everything the Markets page draws, from `belfort-trade.py board` - the
@@ -33,6 +34,17 @@ function register(app) {
         if (err) return res.status(500).json({ error: String(stderr || err.message).trim().slice(0, 400) });
         try { res.set('Cache-Control', 'no-cache'); res.json(JSON.parse(stdout)); }
         catch { res.status(500).json({ error: 'belfort-learn.py record printed something that is not JSON' }); }
+      });
+  });
+
+  // Belfort Quick (2026-11-06): short swings on his stocks, plain code, its
+  // own $10,000 - every number from `belfort-quick.py board`.
+  app.get('/api/belfort/quick', (req, res) => {
+    execFile('python3', [QUICK, 'board'], { cwd: ROOT, timeout: 30000, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) return res.status(500).json({ error: String(stderr || err.message).trim().slice(0, 400) });
+        try { res.set('Cache-Control', 'no-cache'); res.json(JSON.parse(stdout)); }
+        catch { res.status(500).json({ error: 'belfort-quick.py board printed something that is not JSON' }); }
       });
   });
 

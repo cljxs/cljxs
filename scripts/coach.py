@@ -160,6 +160,32 @@ def belfort_rows():
     return rows
 
 
+def belfort_quick_rows():
+    """Belfort Quick's closed trades (2026-11-06), as journal rows."""
+    q = _load("belfort_quick_coach", "belfort-quick.py")
+    if not q.BOOK.is_file():
+        return []
+    book = json.loads(q.BOOK.read_text())
+    buys = {(t["symbol"], t["utc"]): t for t in book.get("trades", []) if t.get("side") == "buy"}
+    rows = []
+    for t in book.get("trades", []):
+        if t.get("side") != "sell":
+            continue
+        b = buys.get((t["symbol"], t.get("opened_utc"))) or {}
+        rows.append({
+            "book": "belfort-quick", "agent": "Belfort Quick", "asset": "stock", "symbol": t["symbol"], "side": "long",
+            "opened_utc": t.get("opened_utc"), "closed_utc": t.get("utc"),
+            "entry_price": t.get("entry_price"), "exit_price": t.get("price"),
+            "size_usd": round(float(b.get("notional") or 0), 2), "pnl_usd": round(float(t.get("pnl") or 0), 2),
+            "pnl_pct": round(float(t.get("pnl_pct") or 0), 2),
+            "setup": f"score {b['score']}" if b.get("score") else "", "score": b.get("score"),
+            "entry_reason": b.get("reason") or "", "exit_reason": t.get("reason") or "",
+            "exit_rule": str(t.get("reason") or "").split(" (")[0], "stop_pct": q.STOP_PCT, "min_score": q.MIN_SCORE,
+            "best_pct": t.get("best_pct"), "after_exit_pct": None,
+        })
+    return rows
+
+
 def _close_after_sale(bt, doc, c):
     """The close of the day he sold, once that bar is final - so a day's
     "early exit" reads the same whenever its journal is written. It read the
@@ -292,8 +318,9 @@ def ace_rows():
 
 
 COACHES = {
-    "belfort": {"name": "Belfort", "what": "a paper stock trader", "books": ("belfort",),
-                "rows": lambda: belfort_rows()},
+    "belfort": {"name": "Belfort", "what": "a paper stock trader, and Belfort Quick - short swings on his stocks "
+                                           "by plain code, its own $10,000", "books": ("belfort", "belfort-quick"),
+                "rows": lambda: belfort_rows() + belfort_quick_rows()},
     "bolt": {"name": "Bolt", "what": "a paper crypto trader with three books: plain rules, the same rules "
                                      "with a news check before each buy, and Bolt Quick (small moves, a "
                                      "tight stop, bigger buys for better scores)",
@@ -609,6 +636,16 @@ def rules_for(coach):
     return {key: _rules(b, bt, ab, aj)[key]}
 
 
+def _quick_rules():
+    q = _load("belfort_quick_rules", "belfort-quick.py")
+    return (f"Belfort Quick, its own $10,000, plain code: one buy a day at the 15:30 check, the best score "
+            f"{q.MIN_SCORE}+/10 (uptrend, pullback to the 20-day, up today, volume, RSI, beating SPY); "
+            + ", ".join(f"{v:g}% at {k}/10" for k, v in q.SIZE_BY_SCORE.items())
+            + f"; stop -{q.STOP_PCT:g}% trailing {q.TRAIL_PCT:g}%, all sold at +{q.TARGET_PCT:g}%, "
+            f"{q.MAX_HOLD_DAYS} trading days at most; no buys near earnings or with SPY down "
+            f"{abs(q.SPY_BRAKE_PCT):g}%+ on the day")
+
+
 def _rules(b, bt, ab, aj):
     return {
         "Bolt (crypto, both books)": {
@@ -633,7 +670,8 @@ def _rules(b, bt, ab, aj):
                      f"half sold at +{bt.TAKE_PROFIT:g}%, the rest on a {bt.TRAIL:g}% trailing stop once "
                      f"+{bt.PROTECT_AT:g}%, dead money after {bt.DEAD_DAYS} days within {bt.DEAD_BAND:g}% and behind QQQ",
             "size": f"risk {bt.RISK_PER_TRADE_PCT:g}% of the portfolio a trade, at most {bt.MAX_POSITION_PCT:g}% "
-                    f"in one name, {bt.MIN_CASH_PCT:g}% cash"},
+                    f"in one name, {bt.MIN_CASH_PCT:g}% cash",
+            "quick book": _quick_rules()},
         "Ace (sports bets)": {
             "bet": f"his blind estimate pulled {aj.SHRINK:.0%} of the way to the market (Pinnacle, else "
                    f"DraftKings) must clear it by {aj.GAP_MIN_PTS:g} pts or {aj.GAP_MIN_REL:g}% of it, with "
@@ -791,7 +829,7 @@ def main(argv):
         x.add_argument("--coach", choices=list(COACHES), help="one coach; all three when left out")
     sub.add_parser("split", help="split the combined journal into the three coaches (done by itself too)")
     bf = sub.add_parser("backfill", help="one book's past days, every other book's rows kept as saved")
-    bf.add_argument("--book", required=True, choices=["ace", "belfort", "bolt", "bolt-news", "bolt-quick"])
+    bf.add_argument("--book", required=True, choices=["ace", "belfort", "belfort-quick", "bolt", "bolt-news", "bolt-quick"])
     bf.add_argument("--since", required=True, help="YYYY-MM-DD, Eastern")
     s = sub.add_parser("show")
     s.add_argument("--json", action="store_true")

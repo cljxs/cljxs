@@ -263,6 +263,24 @@ Rules for the model: `agents/belfort/_belfort-agents-header.md`. Tests:
 
 ---
 
+### Belfort Quick - short swings on his stocks, plain code (2026-11-06)
+
+`scripts/belfort-quick.py`, its own $10,000 in `state/quick-portfolio.json`,
+run by `belfort-exits` every 10 minutes (`tick`). Owner's brief: like Bolt
+Quick - a 5% target, Bolt Quick's stop - with its own entry and exit rules
+instead of Belfort's market check. Chosen: his 79 stocks; up to 10 trading
+days; 15/20/25/30% of the account at a score of 7/8/9/10, at most 4 held and
+2 from one cluster; no new buys on a day SPY is down 1.5%+. The score buys a
+pullback in an uptrend on the day it turns up (`score`); never near earnings
+(Belfort's `earnings_soon`), up 7%+ on the day, or a stock moving under 1.5%
+or over 6% a day (`refusal`). Exits: stop -2.5% trailing 2.5% (breakeven at
++2.5%), all sold at +5%, 10 trading days, out the day before earnings.
+One buy a day, at the 15:30 ET check: `belfort-quick.py replay` over two
+years of Yahoo daily prices (2025-02 to 2026-11, a day touching both stop
+and target counted a loss) made +24.1% against SPY's +22.5%, worst fall
+7.6%; three checks a day made +18.8% with a 20% fall, and the owner chose
+one. Quick tab on the Markets page; Belfort's coach journals it.
+
 ## 5. Bolt - paper crypto, plain code (two books)
 
 **No model trades Bolt** (`agents/bolt/NO_MODEL`): every rule is a formula in
