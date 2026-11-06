@@ -1,0 +1,313 @@
+'use strict';
+
+// Clip's studio: the clips Clip has cut, and what Spotter, its research
+// assistant, found trending.
+//
+// No rules here. Everything comes from `python3 -m clipper deck`, the same
+// code the command line uses, so the page and the terminal cannot disagree
+// about whether a creator is permitted or a moment is in your footage. The
+// two buttons run the clipper commands with an argument array, never a shell
+// string, behind the same trust boundary as every write route here.
+
+const { execFile, spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const { ROOT } = require('./db');
+
+const HOME = process.env.CLIPPER_HOME
+  ? path.resolve(process.env.CLIPPER_HOME)
+  : path.join(ROOT, 'clipper', 'var');
+const CLIPS = path.join(HOME, 'clips');
+// The venv's python if it exists (it has faster-whisper), else the system
+// one - `deck`, `spot` and `remake` need nothing beyond the standard library.
+const VENV_PY = path.join(ROOT, 'clipper', '.venv', 'bin', 'python');
+const ID_RE = /^\d{1,9}$/;
+const POSTER_WIDTH = 360;         // px: a grid tile, not the clip
+let posterQueue = Promise.resolve();
+// A source name as `clipper source add` takes it; anything else is refused
+// before it reaches a process.
+const SOURCE_RE = /^[A-Za-z0-9][A-Za-z0-9 _.@-]{0,59}$/;
+// A remake renders a clip: about a minute of CPU per 30 s on the droplet.
+// Cutting or re-subtitling a clip. It was 5 minutes, and a minute-and-a-half
+// clip with 92 captions took longer on the droplet's one CPU (owner,
+// 2026-11-04: "I keep trying to update this video and it keeps failing").
+const REMAKE_TIMEOUT_MS = 25 * 60 * 1000;
+const SPOT_TIMEOUT_MS = 180000;
+const APPROVE_TIMEOUT_MS = 600000;
+const TEXT_MAX = 2200;                  // TikTok's caption limit; nothing a person types is longer
+const PLATFORMS = ['youtube', 'tiktok'];
+
+function reply(res, r) {
+  // A failure always says something: a stop with no words came back as an
+  // empty message, and the page could only say it had not worked.
+  const said = (r.code === 0 ? r.stdout : r.stderr || r.stdout).trim();
+  res.status(r.code === 0 ? 200 : 400)
+    .json({ ok: r.code === 0, message: (said || (r.code === 0 ? 'done' : `clipper stopped (exit ${r.code}) without saying why`)).slice(-800) });
+}
+
+function python() {
+  return fs.existsSync(VENV_PY) ? VENV_PY : 'python3';
+}
+
+// clipper in its own process group, so running out of time stops the whole
+// job. Stopping python alone (execFile's timeout did) left its ffmpeg running:
+// each Update video pressed again then ran beside the last one on one CPU,
+// slower each time, and was stopped again - with nothing said, so the page
+// could only show "The video was not updated" (2026-11-04).
+const OUTPUT_MAX = 8 * 1024 * 1024;
+function clipper(args, timeout = 30000) {
+  return runGroup(python(), ['-m', 'clipper', ...args], timeout);
+}
+
+function runGroup(cmd, argv, timeout) {
+  return new Promise(resolve => {
+    let child;
+    try {
+      child = spawn(cmd, argv, {
+        cwd: ROOT, detached: true, env: Object.assign({}, process.env, { CLIPPER_HOME: HOME }),
+      });
+    } catch (e) { return resolve({ code: 1, stdout: '', stderr: String(e.message || e), killed: false }); }
+    let stdout = '', stderr = '', killed = false;
+    const keep = (buf, d) => (buf + d).slice(-OUTPUT_MAX);
+    child.stdout.on('data', d => { stdout = keep(stdout, d); });
+    child.stderr.on('data', d => { stderr = keep(stderr, d); });
+    const stop = sig => { try { process.kill(-child.pid, sig); } catch { /* already gone */ } };
+    const timer = setTimeout(() => {
+      killed = true;
+      stop('SIGTERM');
+      setTimeout(() => stop('SIGKILL'), 5000).unref();
+    }, timeout);
+    let done = false;
+    const finish = r => { if (!done) { done = true; clearTimeout(timer); resolve(r); } };
+    child.on('error', e => finish({ code: 1, stdout, stderr: stderr || String(e.message || e), killed }));
+    child.on('close', code => finish(killed
+      ? { code: 1, stdout, killed, stderr: `stopped after ${Math.round(timeout / 60000)} minutes - it was still `
+          + `working. The server may be busy; try again in a little while.` + (stderr ? `\n${stderr}` : '') }
+      : { code: code === null ? 1 : code, stdout, stderr, killed }));
+  });
+}
+
+function register(app) {
+  app.get('/api/clip', async (req, res) => {
+    const r = await clipper(['deck']);
+    if (r.code !== 0) {
+      return res.json({ installed: false, error: (r.stderr || r.stdout).trim().slice(-400) });
+    }
+    try { res.json(Object.assign({ installed: true }, JSON.parse(r.stdout))); }
+    catch (e) { res.json({ installed: false, error: 'clipper deck printed something that is not JSON' }); }
+  });
+
+  // A still of one clip, for the grid. The studio drew every clip as a
+  // <video> (24 of them) and Safari fetched part of each before showing any,
+  // so Clip's house barely loaded on the iPad (owner, 2026-10-15). Now the
+  // grid is these small JPEGs and a video loads only when tapped. Made once
+  // by ffmpeg beside the clip, again when the clip is newer (a recut), and
+  // one at a time: 24 ffmpegs at once on one CPU would be the same stall.
+  app.get('/api/clip/poster/:video/:rank', (req, res) => {
+    const { video, rank } = req.params;
+    if (!ID_RE.test(video) || !ID_RE.test(rank)) return res.status(400).json({ error: 'bad id' });
+    const name = String(rank).padStart(2, '0');
+    const mp4 = path.join(CLIPS, video, `${name}.mp4`);
+    const jpg = path.join(CLIPS, video, `${name}.poster.jpg`);
+    let st;
+    try { st = fs.statSync(mp4); } catch { return res.status(404).json({ error: 'no such clip' }); }
+    const send = () => res.sendFile(jpg, { headers: { 'Cache-Control': 'no-cache' } }, err => {
+      if (err && !res.headersSent) res.status(500).json({ error: 'no poster' });
+    });
+    let fresh = false;
+    try { fresh = fs.statSync(jpg).mtimeMs >= st.mtimeMs; } catch { /* not made yet */ }
+    if (fresh) return send();
+    posterQueue = posterQueue.then(() => new Promise(done => {
+      execFile('ffmpeg', ['-nostdin', '-v', 'error', '-y', '-ss', '1', '-i', mp4, '-frames:v', '1',
+                          '-vf', `scale=${POSTER_WIDTH}:-2`, '-q:v', '5', jpg],
+               { timeout: 30000 }, () => done());
+    }));
+    posterQueue.then(send);
+  });
+
+  // One finished clip. sendFile answers range requests, which Safari needs
+  // before it will play a video at all (learned on Emily's listing videos).
+  app.get('/api/clip/file/:video/:rank', (req, res) => {
+    const { video, rank } = req.params;
+    if (!ID_RE.test(video) || !ID_RE.test(rank)) return res.status(400).json({ error: 'bad id' });
+    const full = path.join(CLIPS, video, `${String(rank).padStart(2, '0')}.mp4`);
+    let st;
+    try { st = fs.statSync(full); } catch { return res.status(404).json({ error: 'no such clip' }); }
+    if (!st.isFile()) return res.status(404).json({ error: 'not found' });
+    if (req.query.dl === '1') return res.download(full, `clip-${video}-${rank}.mp4`);
+    res.sendFile(full, { headers: { 'Cache-Control': 'no-cache' } });
+  });
+
+  // Spotter's research, now. Costs YouTube quota units, not money.
+  // A video link for the next pickup (inbox.py): checked and saved now,
+  // downloaded and clipped by the 15-minute pickup timer - never while the
+  // page waits. The source and every word travel as separate arguments.
+  app.post('/api/clip/queue', async (req, res) => {
+    const b = req.body || {};
+    const source = String(b.source || '');
+    const url = String(b.url || '').trim();
+    const title = String(b.title || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    const hunt = String(b.hunt || '').replace(/\s+/g, ' ').trim().slice(0, 1000);
+    if (!SOURCE_RE.test(source)) return res.status(400).json({ ok: false, error: 'pick a source' });
+    if (!/^https:\/\/\S{8,1500}$/.test(url)) return res.status(400).json({ ok: false, error: 'paste an https:// link' });
+    const args = ['queue', source, url];
+    if (title) args.push('--title', title);
+    if (hunt) args.push('--hunt', hunt);
+    const youtube = String(b.youtube || '').trim().slice(0, 300);
+    if (/^https:\/\/(www\.|m\.)?(youtube\.com|youtu\.be)\//.test(youtube)) args.push('--youtube', youtube);
+    reply(res, await clipper(args));
+  });
+
+  // Hooks written from the title: one cheap model call, checked by code
+  // (inbox.hooks). The text comes back for the owner to edit before queueing.
+  app.post('/api/clip/hooks', async (req, res) => {
+    const b = req.body || {};
+    const title = String(b.title || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    const source = String(b.source || '');
+    if (!title) return res.status(400).json({ ok: false, error: 'paste the title first' });
+    const args = ['hooks', title];
+    if (SOURCE_RE.test(source)) args.push('--source', source);
+    // The video's YouTube page, for its comments - read through the API by
+    // inbox.py, which checks it is a YouTube link. Nothing is downloaded.
+    const youtube = String(b.youtube || '').trim().slice(0, 300);
+    if (/^https:\/\/(www\.|m\.)?(youtube\.com|youtu\.be)\//.test(youtube)) args.push('--youtube', youtube);
+    // Up to 150 s on the Claude plan with a web search, then the cheap
+    // model's 60 s if the plan cannot answer (inbox.HOOKS_TIMEOUT).
+    reply(res, await clipper(args, 240000));
+  });
+
+  app.post('/api/clip/inbox/:id/retry', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    reply(res, await clipper(['inbox', '--retry', req.params.id]));
+  });
+
+  app.post('/api/clip/spot', async (req, res) => {
+    const r = await clipper(['spot'], SPOT_TIMEOUT_MS);
+    res.status(r.code === 0 ? 200 : 500)
+      .json({ ok: r.code === 0, message: (r.code === 0 ? r.stdout : r.stderr || r.stdout).trim().slice(-600) });
+  });
+
+  // Approving records the verdict and answers; the upload runs on in the
+  // background. It used to wait for the upload, and on 2026-10-07 Safari
+  // gave up first ("Could not reach the API: Load failed") and the approval
+  // was never recorded. publish takes a lock, so two quick approvals cannot
+  // upload the same clip twice.
+  app.post('/api/clip/approve/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    const note = String((req.body && req.body.note) || '').slice(0, TEXT_MAX);
+    const r = await clipper(['approve', req.params.id, '--later', ...(note ? ['--note', note] : [])],
+      APPROVE_TIMEOUT_MS);
+    if (r.code === 0) {
+      spawn(python(), ['-m', 'clipper', 'publish'], {
+        cwd: ROOT, detached: true, stdio: 'ignore',
+        env: Object.assign({}, process.env, { CLIPPER_HOME: HOME }),
+      }).unref();
+    }
+    reply(res, r);
+  });
+
+  app.post('/api/clip/reject/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    const why = String((req.body && req.body.why) || '').trim().slice(0, TEXT_MAX);
+    if (!why) return res.status(400).json({ ok: false, error: 'say why - it is what Clip learns from' });
+    reply(res, await clipper(['reject', req.params.id, '--why', why]));
+  });
+
+  // Delete (owner, 2026-10-20): the clip's video goes and it leaves the studio.
+  app.post('/api/clip/delete/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    reply(res, await clipper(['delete', req.params.id]));
+  });
+
+  // The owner's own words for a post. Only fields sent are changed.
+  app.post('/api/clip/edit/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    const b = req.body || {};
+    const args = ['edit', req.params.id];
+    for (const k of ['title', 'caption', 'tags']) {
+      if (typeof b[k] === 'string') args.push('--' + k, b[k].slice(0, TEXT_MAX));
+    }
+    reply(res, await clipper(args));
+  });
+
+  app.post('/api/clip/redraft/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    reply(res, await clipper(['copy', req.params.id, '--redo'], 90000));
+  });
+
+  // The same moment cut again, with the subtitles respelled - after a name
+  // was fixed in the source's spellings (owner, 2026-10-09: "Amber Woolf").
+  app.post('/api/clip/recut/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    reply(res, await clipper(['recut', req.params.id], REMAKE_TIMEOUT_MS));
+  });
+
+  // Fix subtitles (owner, 2026-10-12): the clip's captions, one per line,
+  // for the editor - and the corrected lines back, saved and the clip cut
+  // again. The lines go to clipper as one JSON argument, never a shell string.
+  // Change length (owner, 2026-11-04: clips ending a couple of seconds too
+  // early or too late): move the start and the end, and cut it again. What a
+  // clip may be is clipper's to refuse (pipeline.retime); this checks shape.
+  app.post('/api/clip/length/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    const b = req.body || {};
+    const by = v => (typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= 120 ? v : null);
+    const start = by(b.start_by ?? 0), end = by(b.end_by ?? 0);
+    if (start === null || end === null) return res.status(400).json({ ok: false, error: 'start_by and end_by are seconds' });
+    reply(res, await clipper(['length', req.params.id, `--start-by=${start}`, `--end-by=${end}`], REMAKE_TIMEOUT_MS));
+  });
+
+  app.get('/api/clip/subtitles/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ error: 'bad id' });
+    const r = await clipper(['subtitles', req.params.id]);
+    if (r.code !== 0) return res.status(400).json({ error: (r.stderr || r.stdout).trim().slice(-400) });
+    try { res.json(JSON.parse(r.stdout)); }
+    catch { res.status(500).json({ error: 'clipper printed something that is not JSON' }); }
+  });
+
+  // How far Update video has got (clipper progress - progress.py works it
+  // out; this only passes it on), asked every couple of seconds while it runs.
+  app.get('/api/clip/progress/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ error: 'bad id' });
+    const r = await clipper(['progress', req.params.id], 15000);
+    try { res.json(JSON.parse(r.stdout)); }
+    catch { res.json({ running: false }); }
+  });
+
+  app.post('/api/clip/subtitles/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    const b = req.body || {};
+    if (b.reset === true) return reply(res, await clipper(['subtitles', req.params.id, '--reset'], REMAKE_TIMEOUT_MS));
+    const lines = b.lines;
+    // The shape only: how many lines and how long is clipper's to refuse
+    // (pipeline.set_subtitles), so the two cannot disagree.
+    if (!Array.isArray(lines) || lines.some(l => typeof l !== 'string')) {
+      return res.status(400).json({ ok: false, error: 'lines must be a list of caption lines' });
+    }
+    // Save keeps the lines and leaves the video; Update video burns them in.
+    if (b.save_only === true) {
+      return reply(res, await clipper(['subtitles', req.params.id, '--set-json', JSON.stringify(lines), '--save-only']));
+    }
+    reply(res, await clipper(['subtitles', req.params.id, '--set-json', JSON.stringify(lines)],
+                             REMAKE_TIMEOUT_MS));
+  });
+
+  app.post('/api/clip/posted/:id/:platform', async (req, res) => {
+    const { id, platform } = req.params;
+    if (!ID_RE.test(id || '') || !PLATFORMS.includes(platform)) {
+      return res.status(400).json({ ok: false, error: 'bad id or platform' });
+    }
+    reply(res, await clipper(['posted', id, platform]));
+  });
+
+  // Clip's own cut of a trending moment, from permitted footage. clipper
+  // refuses anything not matched in a permitted source.
+  app.post('/api/clip/remake/:id', async (req, res) => {
+    if (!ID_RE.test(req.params.id || '')) return res.status(400).json({ ok: false, error: 'bad id' });
+    const r = await clipper(['remake', req.params.id], REMAKE_TIMEOUT_MS);
+    res.status(r.code === 0 ? 200 : 400)
+      .json({ ok: r.code === 0, message: (r.code === 0 ? r.stdout : r.stderr || r.stdout).trim().slice(-600) });
+  });
+}
+
+module.exports = { register, HOME, CLIPS, _runGroup: runGroup, _reply: reply };

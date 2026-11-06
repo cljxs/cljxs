@@ -1,0 +1,12 @@
+[Unit]
+Description=Belfort market data fetcher (no AI, costs nothing)
+Documentation=https://github.com/cljxs/cljxs
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+WorkingDirectory=/root/ecosystem
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/belfort-fetch.py
+StandardOutput=journal
+StandardError=journal

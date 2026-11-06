@@ -1,0 +1,196 @@
+{
+ "_source": "https://www.etsy.com/openapi/generated/oas/3.0.0.json, fetched 2026-10-02 - getReviewsByListing and the schemas it returns, as published",
+ "operation": {
+  "operationId": "getReviewsByListing",
+  "security": null,
+  "parameters": [
+   {
+    "name": "listing_id",
+    "in": "path",
+    "description": "The numeric ID for the [listing](/documentation/reference#tag/ShopListing) associated to this transaction.",
+    "required": true,
+    "schema": {
+     "type": "integer",
+     "description": "The numeric ID for the [listing](/documentation/reference#tag/ShopListing) associated to this transaction.",
+     "format": "int64",
+     "minimum": 1
+    }
+   },
+   {
+    "name": "limit",
+    "in": "query",
+    "description": "The maximum number of results to return.",
+    "required": false,
+    "schema": {
+     "type": "integer",
+     "description": "The maximum number of results to return.",
+     "format": "int64",
+     "minimum": 1,
+     "maximum": 100,
+     "default": 25
+    }
+   },
+   {
+    "name": "offset",
+    "in": "query",
+    "description": "The number of records to skip before selecting the first result.",
+    "required": false,
+    "schema": {
+     "type": "integer",
+     "description": "The number of records to skip before selecting the first result.",
+     "format": "int64",
+     "minimum": 0,
+     "default": 0
+    }
+   },
+   {
+    "name": "min_created",
+    "in": "query",
+    "description": "The earliest unix timestamp for when a record was created.",
+    "required": false,
+    "schema": {
+     "type": "integer",
+     "description": "The earliest unix timestamp for when a record was created.",
+     "format": "int64",
+     "nullable": true,
+     "minimum": 946684800
+    }
+   },
+   {
+    "name": "max_created",
+    "in": "query",
+    "description": "The latest unix timestamp for when a record was created.",
+    "required": false,
+    "schema": {
+     "type": "integer",
+     "description": "The latest unix timestamp for when a record was created.",
+     "format": "int64",
+     "nullable": true,
+     "minimum": 946684800
+    }
+   }
+  ]
+ },
+ "ListingReviews": {
+  "type": "object",
+  "x-resource-id": "ListingReviews",
+  "description": "A set of listing review records left by Users.",
+  "properties": {
+   "count": {
+    "type": "integer",
+    "description": "The number of TransactionReview resources found.",
+    "format": "int64",
+    "minimum": 0
+   },
+   "results": {
+    "type": "array",
+    "description": "The TransactionReview resources found.",
+    "items": {
+     "description": "The TransactionReview resources found.",
+     "oneOf": [
+      {
+       "$ref": "#/components/schemas/ListingReview"
+      }
+     ]
+    }
+   }
+  }
+ },
+ "ListingReview": {
+  "type": "object",
+  "x-resource-id": "ListingReview",
+  "description": "A listing review record left by a User.",
+  "properties": {
+   "shop_id": {
+    "type": "integer",
+    "description": "The shop's numeric ID.",
+    "format": "int64",
+    "minimum": 1
+   },
+   "listing_id": {
+    "type": "integer",
+    "description": "The ID of the ShopListing that the TransactionReview belongs to.",
+    "format": "int64",
+    "minimum": 1
+   },
+   "rating": {
+    "type": "integer",
+    "description": "Rating value on scale from 1 to 5",
+    "format": "int64",
+    "minimum": 1,
+    "maximum": 5
+   },
+   "review": {
+    "type": "string",
+    "description": "A message left by the author, explaining the feedback, if provided.",
+    "nullable": true
+   },
+   "language": {
+    "type": "string",
+    "description": "The language of the TransactionReview"
+   },
+   "image_url_fullxfull": {
+    "type": "string",
+    "description": "The url to a photo provided with the feedback, dimensions fullxfull. Note: This field may be absent, depending on the buyer's privacy settings.",
+    "nullable": true
+   },
+   "create_timestamp": {
+    "type": "integer",
+    "description": "The date and time the TransactionReview was created in epoch seconds.",
+    "format": "int64",
+    "minimum": 946684800
+   },
+   "created_timestamp": {
+    "type": "integer",
+    "description": "The date and time the TransactionReview was created in epoch seconds.",
+    "format": "int64",
+    "minimum": 946684800
+   },
+   "update_timestamp": {
+    "type": "integer",
+    "description": "The date and time the TransactionReview was updated in epoch seconds.",
+    "format": "int64",
+    "minimum": 946684800
+   },
+   "updated_timestamp": {
+    "type": "integer",
+    "description": "The date and time the TransactionReview was updated in epoch seconds.",
+    "format": "int64",
+    "minimum": 946684800
+   }
+  }
+ },
+ "ShopListing_fields": {
+  "listing_id": {
+   "type": "integer",
+   "description": "The numeric ID for the [listing](/documentation/reference#tag/ShopListing) associated to this transaction.",
+   "format": "int64",
+   "minimum": 1
+  },
+  "shop_id": {
+   "type": "integer",
+   "description": "The unique positive non-zero numeric ID for an Etsy Shop.",
+   "format": "int64",
+   "minimum": 1
+  },
+  "num_favorers": {
+   "type": "integer",
+   "description": "The number of users who marked this Listing a favorite.",
+   "format": "int64",
+   "minimum": 0
+  },
+  "tags": {
+   "type": "array",
+   "description": "A comma-separated list of tag strings for the listing. When creating or updating a listing, valid tag strings contain only letters, numbers, whitespace characters, -, ', \u2122, \u00a9, and \u00ae. (regex: /[^\\p{L}\\p{Nd}\\p{Zs}\\-'\u2122\u00a9\u00ae]/u) Default value is null.",
+   "items": {
+    "type": "string"
+   }
+  }
+ },
+ "global_security": [
+  {
+   "api_key": []
+  }
+ ],
+ "findAllListingsActive_security": null
+}

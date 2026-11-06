@@ -1,0 +1,22 @@
+[Unit]
+Description=Fury's morning debrief: every agent's report in, needs-you, safe fixes and proposals out (one question on the Claude plan)
+Documentation=https://github.com/cljxs/cljxs
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WorkingDirectory=/root/ecosystem
+# Fury, the manager (the GM retired into him, 2026-10-30). gm.py writes
+# tasks/gm/<date>.json: what needs the owner, his proposals, and the safe
+# fixes he made himself - re-runs of plain-code fetches in SAFE_FIXES, only
+# for a unit a fact says failed, at most three a day. Everything else waits
+# for the owner. He thinks on the Claude plan, so OpenRouter's budget is a
+# fact in the debrief, not a reason to sleep. A failed question or an
+# unreadable reply exits 1, so it shows as failed in systemctl and in the
+# next morning's health facts rather than as a quiet morning.
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/gm.py run
+TimeoutStartSec=420
+StandardOutput=journal
+StandardError=journal

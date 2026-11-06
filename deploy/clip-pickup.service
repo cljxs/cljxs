@@ -1,0 +1,17 @@
+[Unit]
+Description=Clip's Dropbox pickup: ingest new videos from the sources' shared folders, then render them
+Documentation=https://github.com/cljxs/cljxs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+WorkingDirectory=/root/ecosystem
+ExecStart=/root/ecosystem/clipper/.venv/bin/python -m clipper pickup --run
+# A 60-second clip renders in a minute or two; this is room for a long
+# video that happens to be waiting in the same run.
+TimeoutStartSec=3h
+StandardOutput=journal
+StandardError=journal

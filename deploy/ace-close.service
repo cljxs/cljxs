@@ -1,0 +1,17 @@
+[Unit]
+Description=Ace's closing line: re-price games starting within 2 hours (no AI, costs nothing)
+Documentation=https://github.com/cljxs/cljxs
+
+[Service]
+# Added 2026-10-01. The close was the last half-hourly price, up to 30
+# minutes before the start - the half hour when lineups and inactives move
+# a line. This re-prices only the games starting within two hours, every 5
+# minutes, so the close Ace and the no-AI bettors are graded on is real.
+Type=oneshot
+User=root
+Environment=HOME=/root
+WorkingDirectory=/root/ecosystem
+ExecStart=/usr/bin/flock /run/ace-fetch.lock /usr/bin/python3 /root/ecosystem/scripts/ace-fetch.py --close
+TimeoutStartSec=240
+StandardOutput=journal
+StandardError=journal

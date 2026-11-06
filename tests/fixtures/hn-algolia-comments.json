@@ -1,0 +1,207 @@
+{
+ "exhaustive": {
+  "nbHits": true,
+  "typo": true
+ },
+ "exhaustiveNbHits": true,
+ "exhaustiveTypo": true,
+ "hits": [
+  {
+   "_highlightResult": {
+    "author": {
+     "matchLevel": "none",
+     "matchedWords": [],
+     "value": "tuzemec"
+    },
+    "comment_text": {
+     "fullyHighlighted": false,
+     "matchLevel": "full",
+     "matchedWords": [
+      "i",
+      "would",
+      "pay",
+      "for"
+     ],
+     "value": "<em>I would pay for</em> this in a VST form"
+    },
+    "story_title": {
+     "matchLevel": "none",
+     "matchedWords": [],
+     "value": "Show HN: Guitoro, a virtual guitar you strum with your keyboard"
+    },
+    "story_url": {
+     "matchLevel": "none",
+     "matchedWords": [],
+     "value": "https://guitoro.com/"
+    }
+   },
+   "_tags": [
+    "comment",
+    "author_tuzemec",
+    "story_50077020"
+   ],
+   "author": "tuzemec",
+   "comment_text": "I would pay for this in a VST form",
+   "created_at": "2026-10-14T11:16:35Z",
+   "created_at_i": 1791976595,
+   "objectID": "50085840",
+   "parent_id": 50077020,
+   "story_id": 50077020,
+   "story_title": "Show HN: Guitoro, a virtual guitar you strum with your keyboard",
+   "story_url": "https://guitoro.com/",
+   "updated_at": "2026-10-14T11:21:58Z"
+  },
+  {
+   "_highlightResult": {
+    "author": {
+     "matchLevel": "none",
+     "matchedWords": [],
+     "value": "herpdyderp"
+    },
+    "comment_text": {
+     "fullyHighlighted": false,
+     "matchLevel": "full",
+     "matchedWords": [
+      "i",
+      "would",
+      "pay",
+      "for"
+     ],
+     "value": "I want this so badly. If Anthropic released this I would start using it on day one. If they launched a GitHub competitor built around it <em>I would pay for</em> it on day one."
+    },
+    "story_title": {
+     "matchLevel": "none",
+     "matchedWords": [],
+     "value": "Redesigning source control at Anthropic"
+    },
+    "story_url": {
+     "matchLevel": "none",
+     "matchedWords": [],
+     "value": "https://www.anthropic.com/engineering/redesigning-source-control"
+    }
+   },
+   "_tags": [
+    "comment",
+    "author_herpdyderp",
+    "story_50073633"
+   ],
+   "author": "herpdyderp",
+   "children": [
+    50077622
+   ],
+   "comment_text": "I want this so badly. If Anthropic released this I would start using it on day one. If they launched a GitHub competitor built around it I would pay for it on day one.",
+   "created_at": "2026-10-13T19:14:08Z",
+   "created_at_i": 1791918848,
+   "objectID": "50077048",
+   "parent_id": 50073633,
+   "story_id": 50073633,
+   "story_title": "Redesigning source control at Anthropic",
+   "story_url": "https://www.anthropic.com/engineering/redesigning-source-control",
+   "updated_at": "2026-10-14T01:18:11Z"
+  },
+  {
+   "_highlightResult": {
+    "author": {
+     "matchLevel": "none",
+     "matchedWords": [],
+     "value": "cobbzilla"
+    },
+    "comment_text": {
+     "fullyHighlighted": false,
+     "matchLevel": "full",
+     "matchedWords": [
+      "i",
+      "would",
+      "pay",
+      "for"
+     ],
+     "value": "it was nice while it lasted. I guess my next step is a jev+cron to sort good from bad. Browser automation here we come. Someone want to write a Firefox extension that runs in your open browser tab? <em>I would pay for</em> this."
+    },
+    "story_title": {
+     "matchLevel": "none",
+     "matchedWords": [],
+     "value": "The Deeply Impersonal Personalized Recruiter Mail"
+    }
+   },
+   "_tags": [
+    "comment",
+    "author_cobbzilla",
+    "story_50008685"
+   ],
+   "author": "cobbzilla",
+   "children": [
+    50033141
+   ],
+   "comment_text": "it was nice while it lasted. I guess my next step is a jev+cron to sort good from bad. Browser automation here we come. Someone want to write a Firefox extension that runs in your open browser tab? I would pay for this.",
+   "created_at": "2026-10-09T15:44:37Z",
+   "created_at_i": 1791560677,
+   "objectID": "50022196",
+   "parent_id": 50020837,
+   "story_id": 50008685,
+   "story_title": "The Deeply Impersonal Personalized Recruiter Mail",
+   "updated_at": "2026-10-10T14:05:45Z"
+  },
+  {
+   "_highlightResult": {
+    "author": {
+     "matchLevel": "none",
+     "matchedWords": [],
+     "value": "Danox"
+    },
+    "comment_text": {
+     "fullyHighlighted": false,
+     "matchLevel": "full",
+     "matchedWords": [
+      "i",
+      "would",
+      "pay",
+      "for"
+     ],
+     "value": "It looks forced. It doesn\u2019t look bad, but it\u2019s not something <em>I would pay for</em>, nor would I give it access to my computer?<p>I also believe that a small talented group of developers just out of college can do just as good a job. That is why there is no moat around AI, it still comes down to original thinking and talent."
+    },
+    "story_title": {
+     "matchLevel": "none",
+     "matchedWords": [],
+     "value": "GPT\u20116 and Intelligent UI for everyone"
+    },
+    "story_url": {
+     "matchLevel": "none",
+     "matchedWords": [],
+     "value": "https://openai.com/index/gpt-6-for-everyone/"
+    }
+   },
+   "_tags": [
+    "comment",
+    "author_Danox",
+    "story_49996425"
+   ],
+   "author": "Danox",
+   "comment_text": "It looks forced. It doesn\u2019t look bad, but it\u2019s not something I would pay for, nor would I give it access to my computer?<p>I also believe that a small talented group of developers just out of college can do just as good a job. That is why there is no moat around AI, it still comes down to original thinking and talent.",
+   "created_at": "2026-10-07T22:31:44Z",
+   "created_at_i": 1791412304,
+   "objectID": "49999662",
+   "parent_id": 49996425,
+   "story_id": 49996425,
+   "story_title": "GPT\u20116 and Intelligent UI for everyone",
+   "story_url": "https://openai.com/index/gpt-6-for-everyone/",
+   "updated_at": "2026-10-08T05:09:38Z"
+  }
+ ],
+ "hitsPerPage": 20,
+ "nbHits": 6,
+ "nbPages": 1,
+ "page": 0,
+ "params": "query=%22I+would+pay+for%22&tags=%28story%2Ccomment%29&numericFilters=created_at_i%3E1790793971&hitsPerPage=20&advancedSyntax=true&analyticsTags=backend",
+ "processingTimeMS": 1,
+ "processingTimingsMS": {
+  "_request": {
+   "roundTrip": 14
+  },
+  "fetch": {
+   "total": 1
+  },
+  "total": 1
+ },
+ "query": "\"I would pay for\"",
+ "serverTimeMS": 2
+}

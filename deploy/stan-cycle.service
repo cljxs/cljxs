@@ -1,0 +1,22 @@
+[Unit]
+Description=Stan's daily cycle - the new posts judged, problems surfaced for approval (one cheap AI call)
+Documentation=https://github.com/cljxs/cljxs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=ECOSYSTEM_ROOT=/root/ecosystem
+WorkingDirectory=/root/ecosystem
+# One OpenRouter call on the shared key, refused before it is made if its
+# worst case would pass stan_daily_ai or leave less than
+# stan_leave_for_others of the shared day (tasks/limits.json). Quotes are
+# checked, scores counted and duplicates dropped by code. Exits 1 when the
+# run stopped on a problem - the report and state/last-cycle.json say which.
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/stan.py cycle
+TimeoutStartSec=900
+StandardOutput=journal
+StandardError=journal

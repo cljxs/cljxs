@@ -1,0 +1,14 @@
+[Unit]
+Description=Fetch Stan's Hacker News posts once a day, before his cycle
+
+[Timer]
+# Ten minutes before stan-cycle.timer. Hacker News says about five matching
+# things a day (measured 2026-10-14), so once a day misses nothing: each
+# fetch reads back to the last good one, and a day further for posts the
+# search indexed late.
+OnCalendar=*-*-* 06:12 America/Chicago
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

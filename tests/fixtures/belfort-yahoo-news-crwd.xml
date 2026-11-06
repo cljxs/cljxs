@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<rss version="2.0">
+    <channel>
+        <copyright>Copyright (c) 2026 Yahoo Inc. All rights reserved.</copyright>
+        <description>Latest Financial News for CRWD</description>
+        <image>
+            <height>45</height>
+            <link>http://finance.yahoo.com/q/h?s=CRWD</link>
+            <title>Yahoo! Finance: CRWD News</title>
+            <url>https://s.yimg.com/rz/stage/p/yahoo_finance_en-US_h_p_finance_2.png</url>
+            <width>144</width>
+        </image>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-1</guid>
+            <link>https://example.invalid/article-2</link>
+            <pubDate>Thu, 01 Oct 2026 03:26:17 +0000</pubDate>
+            <title>headline 1</title>
+        </item>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-3</guid>
+            <link>https://example.invalid/article-4</link>
+            <pubDate>Wed, 30 Sep 2026 21:14:47 +0000</pubDate>
+            <title>headline 2</title>
+        </item>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-5</guid>
+            <link>https://example.invalid/article-6</link>
+            <pubDate>Wed, 30 Sep 2026 15:41:53 +0000</pubDate>
+            <title>headline 3</title>
+        </item>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-7</guid>
+            <link>https://example.invalid/article-8</link>
+            <pubDate>Wed, 30 Sep 2026 15:40:50 +0000</pubDate>
+            <title>headline 4</title>
+        </item>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-9</guid>
+            <link>https://example.invalid/article-10</link>
+            <pubDate>Wed, 30 Sep 2026 13:15:24 +0000</pubDate>
+            <title>headline 5</title>
+        </item>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-11</guid>
+            <link>https://example.invalid/article-12</link>
+            <pubDate>Wed, 30 Sep 2026 11:13:45 +0000</pubDate>
+            <title>headline 6</title>
+        </item>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-13</guid>
+            <link>https://example.invalid/article-14</link>
+            <pubDate>Wed, 30 Sep 2026 02:57:09 +0000</pubDate>
+            <title>headline 7</title>
+        </item>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-15</guid>
+            <link>https://example.invalid/article-16</link>
+            <pubDate>Thu, 01 Oct 2026 11:39:00 +0000</pubDate>
+            <title>headline 8</title>
+        </item>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-17</guid>
+            <link>https://example.invalid/article-18</link>
+            <pubDate>Wed, 30 Sep 2026 16:48:00 +0000</pubDate>
+            <title>headline 9</title>
+        </item>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-19</guid>
+            <link>https://example.invalid/article-20</link>
+            <pubDate>Wed, 30 Sep 2026 15:27:01 +0000</pubDate>
+            <title>headline 10</title>
+        </item>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-21</guid>
+            <link>https://example.invalid/article-22</link>
+            <pubDate>Wed, 30 Sep 2026 13:53:28 +0000</pubDate>
+            <title>headline 11</title>
+        </item>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-23</guid>
+            <link>https://example.invalid/article-24</link>
+            <pubDate>Wed, 30 Sep 2026 13:00:00 +0000</pubDate>
+            <title>headline 12</title>
+        </item>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-25</guid>
+            <link>https://example.invalid/article-26</link>
+            <pubDate>Wed, 30 Sep 2026 12:57:00 +0000</pubDate>
+            <title>headline 13</title>
+        </item>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-27</guid>
+            <link>https://example.invalid/article-28</link>
+            <pubDate>Wed, 30 Sep 2026 12:45:15 +0000</pubDate>
+            <title>headline 14</title>
+        </item>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-29</guid>
+            <link>https://example.invalid/article-30</link>
+            <pubDate>Wed, 30 Sep 2026 12:45:13 +0000</pubDate>
+            <title>headline 15</title>
+        </item>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-31</guid>
+            <link>https://example.invalid/article-32</link>
+            <pubDate>Thu, 01 Oct 2026 11:30:36 +0000</pubDate>
+            <title>headline 16</title>
+        </item>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-33</guid>
+            <link>https://example.invalid/article-34</link>
+            <pubDate>Wed, 30 Sep 2026 23:14:30 +0000</pubDate>
+            <title>headline 17</title>
+        </item>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-35</guid>
+            <link>https://example.invalid/article-36</link>
+            <pubDate>Wed, 30 Sep 2026 12:29:19 +0000</pubDate>
+            <title>headline 18</title>
+        </item>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-37</guid>
+            <link>https://example.invalid/article-38</link>
+            <pubDate>Wed, 30 Sep 2026 11:15:11 +0000</pubDate>
+            <title>headline 19</title>
+        </item>
+        <item>
+            <description></description>
+            <guid isPermaLink="false">https://example.invalid/article-39</guid>
+            <link>https://example.invalid/article-40</link>
+            <pubDate>Wed, 30 Sep 2026 00:21:07 +0000</pubDate>
+            <title>headline 20</title>
+        </item>
+        <language>en-US</language>
+        <lastBuildDate>Thu, 01 Oct 2026 15:05:08 +0000</lastBuildDate>
+        <link>https://example.invalid/article-41</link>
+        <title>headline 21</title>
+    </channel>
+</rss>

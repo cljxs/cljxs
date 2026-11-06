@@ -1,0 +1,25 @@
+[Unit]
+Description=Mission Control API (agent task queue + dashboard)
+Documentation=https://github.com/cljxs/cljxs
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+# HOME must be set so anything shelling out finds ~/.openclaw/openclaw.json
+Environment=HOME=/root
+Environment=NODE_ENV=production
+Environment=PORT=3001
+WorkingDirectory=/root/ecosystem/mission-control-api
+# HOST is chosen at start: this machine's Tailscale address if Tailscale is up,
+# loopback otherwise. Never 0.0.0.0 - the API has unauthenticated write
+# endpoints that queue paid agent work.
+ExecStart=/root/ecosystem/scripts/mission-control-start.sh
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

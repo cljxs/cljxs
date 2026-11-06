@@ -1,0 +1,189 @@
+{
+ "_captured": "ESPN site.web.api.espn.com NBA scoreboard, trimmed to the fields ace-fetch reads; no date, fetched 2026-10-21 09:41 ET - still Tuesday's board",
+ "day": {
+  "date": "2026-10-20"
+ },
+ "season": {
+  "type": 2,
+  "year": 2027
+ },
+ "events": [
+  {
+   "id": "401909088",
+   "date": "2026-10-20T19:00Z",
+   "name": "Boston Celtics at Detroit Pistons",
+   "shortName": "BOS @ DET",
+   "competitions": [
+    {
+     "id": "401909088",
+     "date": "2026-10-20T19:00Z",
+     "status": {
+      "type": {
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "detail": "Final"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "score": "121",
+       "winner": true,
+       "team": {
+        "id": "8",
+        "abbreviation": "DET",
+        "displayName": "Detroit Pistons"
+       },
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Game",
+         "type": "total",
+         "summary": "1-0"
+        }
+       ]
+      },
+      {
+       "homeAway": "away",
+       "score": "113",
+       "winner": false,
+       "team": {
+        "id": "2",
+        "abbreviation": "BOS",
+        "displayName": "Boston Celtics"
+       },
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Game",
+         "type": "total",
+         "summary": "0-1"
+        }
+       ]
+      }
+     ],
+     "odds": []
+    }
+   ]
+  },
+  {
+   "id": "401909089",
+   "date": "2026-10-20T23:00Z",
+   "name": "Philadelphia 76ers at New York Knicks",
+   "shortName": "PHI @ NY",
+   "competitions": [
+    {
+     "id": "401909089",
+     "date": "2026-10-20T23:00Z",
+     "status": {
+      "type": {
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "detail": "Final"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "score": "100",
+       "winner": false,
+       "team": {
+        "id": "18",
+        "abbreviation": "NY",
+        "displayName": "New York Knicks"
+       },
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Game",
+         "type": "total",
+         "summary": "0-1"
+        }
+       ]
+      },
+      {
+       "homeAway": "away",
+       "score": "106",
+       "winner": true,
+       "team": {
+        "id": "20",
+        "abbreviation": "PHI",
+        "displayName": "Philadelphia 76ers"
+       },
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Game",
+         "type": "total",
+         "summary": "1-0"
+        }
+       ]
+      }
+     ],
+     "odds": []
+    }
+   ]
+  },
+  {
+   "id": "401909090",
+   "date": "2026-10-21T01:50Z",
+   "name": "Oklahoma City Thunder at San Antonio Spurs",
+   "shortName": "OKC @ SA",
+   "competitions": [
+    {
+     "id": "401909090",
+     "date": "2026-10-21T01:50Z",
+     "status": {
+      "type": {
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "detail": "Final"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "score": "104",
+       "winner": false,
+       "team": {
+        "id": "24",
+        "abbreviation": "SA",
+        "displayName": "San Antonio Spurs"
+       },
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Game",
+         "type": "total",
+         "summary": "0-1"
+        }
+       ]
+      },
+      {
+       "homeAway": "away",
+       "score": "116",
+       "winner": true,
+       "team": {
+        "id": "25",
+        "abbreviation": "OKC",
+        "displayName": "Oklahoma City Thunder"
+       },
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Game",
+         "type": "total",
+         "summary": "1-0"
+        }
+       ]
+      }
+     ],
+     "odds": []
+    }
+   ]
+  }
+ ]
+}

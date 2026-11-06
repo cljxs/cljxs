@@ -1,0 +1,778 @@
+{
+ "data": [
+  {
+   "id": "deepseek/deepseek-v4-pro",
+   "canonical_slug": "deepseek/deepseek-v4-pro-20260423",
+   "hugging_face_id": "deepseek-ai/DeepSeek-V4-Pro",
+   "name": "DeepSeek: DeepSeek V4 Pro 0423",
+   "created": 1777000679,
+   "description": "DeepSeek V4 Pro is a large-scale Mixture-of-Experts model from DeepSeek with 1.6T total parameters and 49B activated parameters, supporting a 1M-token context window. It is designed for advanced reasoning, coding,...",
+   "context_length": 1048576,
+   "architecture": {
+    "modality": "text->text",
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "DeepSeek",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0.000000436044",
+    "completion": "0.000000872088",
+    "input_cache_read": "0.000000036337"
+   },
+   "top_provider": {
+    "context_length": 1024000,
+    "max_completion_tokens": 384000,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logit_bias",
+    "logprobs",
+    "max_completion_tokens",
+    "max_tokens",
+    "min_p",
+    "presence_penalty",
+    "reasoning",
+    "reasoning_effort",
+    "repetition_penalty",
+    "response_format",
+    "seed",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_logprobs",
+    "top_p"
+   ],
+   "default_parameters": {
+    "temperature": 1,
+    "top_p": 1
+   },
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/deepseek/deepseek-v4-pro-20260423/endpoints"
+   },
+   "benchmarks": {
+    "design_arena": [
+     {
+      "arena": "agents",
+      "category": "fullstack",
+      "elo": 948,
+      "win_rate": 22.1,
+      "rank": 43
+     },
+     {
+      "arena": "agents",
+      "category": "godotgamedev",
+      "elo": 1059,
+      "win_rate": 34,
+      "rank": 32
+     },
+     {
+      "arena": "agents",
+      "category": "webapps",
+      "elo": 1000,
+      "win_rate": 26.4,
+      "rank": 42
+     },
+     {
+      "arena": "models",
+      "category": "3d",
+      "elo": 1252,
+      "win_rate": 56.8,
+      "rank": 31
+     },
+     {
+      "arena": "models",
+      "category": "asciiart",
+      "elo": 1151,
+      "win_rate": 46.4,
+      "rank": 43
+     },
+     {
+      "arena": "models",
+      "category": "codecategories",
+      "elo": 1242,
+      "win_rate": 51.9,
+      "rank": 44
+     },
+     {
+      "arena": "models",
+      "category": "dataviz",
+      "elo": 1204,
+      "win_rate": 48.7,
+      "rank": 55
+     },
+     {
+      "arena": "models",
+      "category": "gamedev",
+      "elo": 1232,
+      "win_rate": 52.3,
+      "rank": 41
+     },
+     {
+      "arena": "models",
+      "category": "svg",
+      "elo": 1139,
+      "win_rate": 45.4,
+      "rank": 49
+     },
+     {
+      "arena": "models",
+      "category": "uicomponent",
+      "elo": 1223,
+      "win_rate": 50.6,
+      "rank": 49
+     },
+     {
+      "arena": "models",
+      "category": "website",
+      "elo": 1236,
+      "win_rate": 50.5,
+      "rank": 49
+     }
+    ],
+    "artificial_analysis": {
+     "intelligence_index": 30.4,
+     "coding_index": 59.4,
+     "agentic_index": 26.3
+    }
+   },
+   "reasoning": {
+    "mandatory": false,
+    "supported_efforts": [
+     "xhigh",
+     "high"
+    ],
+    "default_effort": "high"
+   }
+  },
+  {
+   "id": "deepseek/deepseek-v4-flash",
+   "canonical_slug": "deepseek/deepseek-v4-flash-20260423",
+   "hugging_face_id": "deepseek-ai/DeepSeek-V4-Flash",
+   "name": "DeepSeek: DeepSeek V4 Flash 0423",
+   "created": 1777000666,
+   "description": "DeepSeek V4 Flash is an efficiency-optimized Mixture-of-Experts model from DeepSeek with 284B total parameters and 13B activated parameters, supporting a 1M-token context window. It is designed for fast inference and...",
+   "context_length": 1048576,
+   "architecture": {
+    "modality": "text->text",
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "DeepSeek",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0.000000091",
+    "completion": "0.000000182",
+    "input_cache_read": "0.0000000182"
+   },
+   "top_provider": {
+    "context_length": 1048575,
+    "max_completion_tokens": 943717,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logit_bias",
+    "logprobs",
+    "max_completion_tokens",
+    "max_tokens",
+    "min_p",
+    "presence_penalty",
+    "reasoning",
+    "reasoning_effort",
+    "repetition_penalty",
+    "response_format",
+    "seed",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_a",
+    "top_k",
+    "top_logprobs",
+    "top_p"
+   ],
+   "default_parameters": {},
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/deepseek/deepseek-v4-flash-20260423/endpoints"
+   },
+   "benchmarks": {
+    "design_arena": [
+     {
+      "arena": "models",
+      "category": "3d",
+      "elo": 1187,
+      "win_rate": 49.3,
+      "rank": 54
+     },
+     {
+      "arena": "models",
+      "category": "asciiart",
+      "elo": 1113,
+      "win_rate": 42.8,
+      "rank": 57
+     },
+     {
+      "arena": "models",
+      "category": "codecategories",
+      "elo": 1207,
+      "win_rate": 48.9,
+      "rank": 56
+     },
+     {
+      "arena": "models",
+      "category": "dataviz",
+      "elo": 1129,
+      "win_rate": 40.7,
+      "rank": 88
+     },
+     {
+      "arena": "models",
+      "category": "gamedev",
+      "elo": 1200,
+      "win_rate": 50.2,
+      "rank": 53
+     },
+     {
+      "arena": "models",
+      "category": "svg",
+      "elo": 1155,
+      "win_rate": 48.4,
+      "rank": 41
+     },
+     {
+      "arena": "models",
+      "category": "uicomponent",
+      "elo": 1166,
+      "win_rate": 44.7,
+      "rank": 70
+     },
+     {
+      "arena": "models",
+      "category": "website",
+      "elo": 1209,
+      "win_rate": 49.1,
+      "rank": 57
+     }
+    ],
+    "artificial_analysis": {
+     "intelligence_index": 24.4,
+     "coding_index": 52,
+     "agentic_index": 26.3
+    }
+   },
+   "reasoning": {
+    "mandatory": false,
+    "supported_efforts": [
+     "xhigh",
+     "high"
+    ],
+    "default_effort": "high"
+   }
+  },
+  {
+   "id": "moonshotai/kimi-k2.6",
+   "canonical_slug": "moonshotai/kimi-k2.6-20260420",
+   "hugging_face_id": "moonshotai/Kimi-K2.6",
+   "name": "MoonshotAI: Kimi K2.6",
+   "created": 1776699402,
+   "description": "Kimi K2.6 is Moonshot AI's next-generation multimodal model, designed for long-horizon coding, coding-driven UI/UX generation, and multi-agent orchestration. It handles complex end-to-end coding tasks across Python, Rust, and Go, and...",
+   "context_length": 262144,
+   "architecture": {
+    "modality": "text+image->text",
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0.00000065",
+    "completion": "0.00000341",
+    "input_cache_read": "0.00000015"
+   },
+   "top_provider": {
+    "context_length": 262144,
+    "max_completion_tokens": 235929,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logit_bias",
+    "logprobs",
+    "max_tokens",
+    "min_p",
+    "parallel_tool_calls",
+    "presence_penalty",
+    "reasoning",
+    "repetition_penalty",
+    "response_format",
+    "seed",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_logprobs",
+    "top_p"
+   ],
+   "default_parameters": {
+    "temperature": null,
+    "top_p": null,
+    "top_k": null,
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "repetition_penalty": null
+   },
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/moonshotai/kimi-k2.6-20260420/endpoints"
+   },
+   "benchmarks": {
+    "design_arena": [
+     {
+      "arena": "agents",
+      "category": "agenticgamedev",
+      "elo": 1141,
+      "win_rate": 47.5,
+      "rank": 20
+     },
+     {
+      "arena": "agents",
+      "category": "agentichtmlslides",
+      "elo": 1248,
+      "win_rate": 59,
+      "rank": 2
+     },
+     {
+      "arena": "agents",
+      "category": "agenticslides",
+      "elo": 1187,
+      "win_rate": 45.8,
+      "rank": 4
+     },
+     {
+      "arena": "agents",
+      "category": "agenticslides(html)",
+      "elo": 1252,
+      "win_rate": 59.2,
+      "rank": 2
+     },
+     {
+      "arena": "agents",
+      "category": "agenticslides(python-pptx)",
+      "elo": 1186,
+      "win_rate": 45.5,
+      "rank": 4
+     },
+     {
+      "arena": "agents",
+      "category": "androidnative",
+      "elo": 1174,
+      "win_rate": 49.1,
+      "rank": 21
+     },
+     {
+      "arena": "agents",
+      "category": "fullstack",
+      "elo": 1155,
+      "win_rate": 49.4,
+      "rank": 25
+     },
+     {
+      "arena": "agents",
+      "category": "godotgamedev",
+      "elo": 1120,
+      "win_rate": 46.8,
+      "rank": 28
+     },
+     {
+      "arena": "agents",
+      "category": "htmlslides",
+      "elo": 1184,
+      "win_rate": 52.3,
+      "rank": 10
+     },
+     {
+      "arena": "agents",
+      "category": "mobileapps",
+      "elo": 1153,
+      "win_rate": 47.6,
+      "rank": 26
+     },
+     {
+      "arena": "agents",
+      "category": "pptxslides",
+      "elo": 1181,
+      "win_rate": 44.3,
+      "rank": 4
+     },
+     {
+      "arena": "agents",
+      "category": "python-pptxslides",
+      "elo": 1180,
+      "win_rate": 42.1,
+      "rank": 18
+     },
+     {
+      "arena": "agents",
+      "category": "webapps",
+      "elo": 1268,
+      "win_rate": 59.3,
+      "rank": 6
+     },
+     {
+      "arena": "models",
+      "category": "3d",
+      "elo": 1266,
+      "win_rate": 57.6,
+      "rank": 25
+     },
+     {
+      "arena": "models",
+      "category": "asciiart",
+      "elo": 1167,
+      "win_rate": 47.5,
+      "rank": 34
+     },
+     {
+      "arena": "models",
+      "category": "codecategories",
+      "elo": 1273,
+      "win_rate": 54.8,
+      "rank": 28
+     },
+     {
+      "arena": "models",
+      "category": "dataviz",
+      "elo": 1251,
+      "win_rate": 52,
+      "rank": 33
+     },
+     {
+      "arena": "models",
+      "category": "gamedev",
+      "elo": 1254,
+      "win_rate": 54.9,
+      "rank": 35
+     },
+     {
+      "arena": "models",
+      "category": "svg",
+      "elo": 1181,
+      "win_rate": 51.2,
+      "rank": 32
+     },
+     {
+      "arena": "models",
+      "category": "uicomponent",
+      "elo": 1268,
+      "win_rate": 55.6,
+      "rank": 32
+     },
+     {
+      "arena": "models",
+      "category": "website",
+      "elo": 1271,
+      "win_rate": 54.2,
+      "rank": 28
+     }
+    ],
+    "artificial_analysis": {
+     "intelligence_index": 27,
+     "coding_index": 61.8,
+     "agentic_index": 20.5
+    }
+   },
+   "reasoning": {
+    "mandatory": false,
+    "default_enabled": true
+   }
+  },
+  {
+   "id": "openai/gpt-5.4-mini",
+   "canonical_slug": "openai/gpt-5.4-mini-20260317",
+   "hugging_face_id": "",
+   "name": "OpenAI: GPT-5.4 Mini",
+   "created": 1773748178,
+   "description": "GPT-5.4 mini brings the core capabilities of GPT-5.4 to a faster, more efficient model optimized for high-throughput workloads. It supports text and image inputs with strong performance across reasoning, coding,...",
+   "context_length": 400000,
+   "architecture": {
+    "modality": "text+image+file->text",
+    "input_modalities": [
+     "file",
+     "image",
+     "text"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "GPT",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0.00000075",
+    "completion": "0.0000045",
+    "web_search": "0.01",
+    "input_cache_read": "0.000000075"
+   },
+   "top_provider": {
+    "context_length": 400000,
+    "max_completion_tokens": 128000,
+    "is_moderated": true
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "include_reasoning",
+    "max_completion_tokens",
+    "max_tokens",
+    "reasoning",
+    "reasoning_effort",
+    "response_format",
+    "seed",
+    "structured_outputs",
+    "tool_choice",
+    "tools",
+    "verbosity"
+   ],
+   "default_parameters": {
+    "temperature": null,
+    "top_p": null,
+    "top_k": null,
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "repetition_penalty": null
+   },
+   "supported_voices": null,
+   "knowledge_cutoff": "2025-08-31",
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/openai/gpt-5.4-mini-20260317/endpoints"
+   },
+   "benchmarks": {
+    "design_arena": [],
+    "artificial_analysis": {
+     "intelligence_index": 24.1,
+     "coding_index": 56.1,
+     "agentic_index": 17.9
+    }
+   },
+   "reasoning": {
+    "mandatory": false,
+    "default_enabled": false,
+    "supported_efforts": [
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   }
+  },
+  {
+   "id": "openai/gpt-5.3-codex",
+   "canonical_slug": "openai/gpt-5.3-codex-20260224",
+   "hugging_face_id": "",
+   "name": "OpenAI: GPT-5.3-Codex",
+   "created": 1771959164,
+   "description": "GPT-5.3-Codex is OpenAI\u2019s most advanced agentic coding model, combining the frontier software engineering performance of GPT-5.2-Codex with the broader reasoning and professional knowledge capabilities of GPT-5.2. It achieves state-of-the-art results...",
+   "context_length": 400000,
+   "architecture": {
+    "modality": "text+image+file->text",
+    "input_modalities": [
+     "text",
+     "image",
+     "file"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "GPT",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0.00000175",
+    "completion": "0.000014",
+    "web_search": "0.01",
+    "input_cache_read": "0.000000175"
+   },
+   "top_provider": {
+    "context_length": 400000,
+    "max_completion_tokens": 128000,
+    "is_moderated": true
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "include_reasoning",
+    "max_completion_tokens",
+    "max_tokens",
+    "reasoning",
+    "reasoning_effort",
+    "response_format",
+    "seed",
+    "structured_outputs",
+    "tool_choice",
+    "tools",
+    "verbosity"
+   ],
+   "default_parameters": {
+    "temperature": null,
+    "top_p": null,
+    "top_k": null,
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "repetition_penalty": null
+   },
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/openai/gpt-5.3-codex-20260224/endpoints"
+   },
+   "benchmarks": {
+    "design_arena": [
+     {
+      "arena": "agents",
+      "category": "androidnative",
+      "elo": 1084,
+      "win_rate": 35.2,
+      "rank": 30
+     },
+     {
+      "arena": "agents",
+      "category": "fullstack",
+      "elo": 983,
+      "win_rate": 36.5,
+      "rank": 42
+     },
+     {
+      "arena": "agents",
+      "category": "godotgamedev",
+      "elo": 1124,
+      "win_rate": 45.1,
+      "rank": 27
+     },
+     {
+      "arena": "agents",
+      "category": "mobileapps",
+      "elo": 1051,
+      "win_rate": 41.4,
+      "rank": 44
+     },
+     {
+      "arena": "agents",
+      "category": "webapps",
+      "elo": 1026,
+      "win_rate": 36.9,
+      "rank": 40
+     },
+     {
+      "arena": "models",
+      "category": "3d",
+      "elo": 1006,
+      "win_rate": 35.3,
+      "rank": 108
+     },
+     {
+      "arena": "models",
+      "category": "asciiart",
+      "elo": 1154,
+      "win_rate": 51.2,
+      "rank": 41
+     },
+     {
+      "arena": "models",
+      "category": "codecategories",
+      "elo": 1146,
+      "win_rate": 47.2,
+      "rank": 85
+     },
+     {
+      "arena": "models",
+      "category": "dataviz",
+      "elo": 1165,
+      "win_rate": 50.6,
+      "rank": 72
+     },
+     {
+      "arena": "models",
+      "category": "gamedev",
+      "elo": 1164,
+      "win_rate": 51.3,
+      "rank": 68
+     },
+     {
+      "arena": "models",
+      "category": "svg",
+      "elo": 1129,
+      "win_rate": 54,
+      "rank": 54
+     },
+     {
+      "arena": "models",
+      "category": "uicomponent",
+      "elo": 1139,
+      "win_rate": 47.3,
+      "rank": 80
+     },
+     {
+      "arena": "models",
+      "category": "website",
+      "elo": 1164,
+      "win_rate": 48.6,
+      "rank": 81
+     }
+    ],
+    "artificial_analysis": {
+     "intelligence_index": 32.5,
+     "coding_index": null,
+     "agentic_index": null
+    }
+   },
+   "reasoning": {
+    "mandatory": false,
+    "supported_efforts": [
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   }
+  }
+ ]
+}

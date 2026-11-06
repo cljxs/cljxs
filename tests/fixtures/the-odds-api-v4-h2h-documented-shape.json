@@ -1,0 +1,84 @@
+[
+ {
+  "id": "bda33adca828c09dc3cac3a856aef176",
+  "sport_key": "americanfootball_nfl",
+  "sport_title": "NFL",
+  "commence_time": "2026-10-02T00:15:00Z",
+  "home_team": "Cleveland Browns",
+  "away_team": "Pittsburgh Steelers",
+  "bookmakers": [
+   {
+    "key": "pinnacle",
+    "title": "Pinnacle",
+    "last_update": "2026-10-01T17:20:11Z",
+    "markets": [
+     {
+      "key": "h2h",
+      "last_update": "2026-10-01T17:20:11Z",
+      "outcomes": [
+       {
+        "name": "Cleveland Browns",
+        "price": 2.31
+       },
+       {
+        "name": "Pittsburgh Steelers",
+        "price": 1.67
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "draftkings",
+    "title": "DraftKings",
+    "last_update": "2026-10-01T17:19:40Z",
+    "markets": [
+     {
+      "key": "h2h",
+      "last_update": "2026-10-01T17:19:40Z",
+      "outcomes": [
+       {
+        "name": "Cleveland Browns",
+        "price": 2.24
+       },
+       {
+        "name": "Pittsburgh Steelers",
+        "price": 1.68
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "0b7c1c7e5f0f4a2b9c1e6d2a3f4b5c6d",
+  "sport_key": "americanfootball_ncaaf",
+  "sport_title": "NCAAF",
+  "commence_time": "2026-10-03T23:30:00Z",
+  "home_team": "San Jos\u00e9 State Spartans",
+  "away_team": "Miami (OH) RedHawks",
+  "bookmakers": [
+   {
+    "key": "pinnacle",
+    "title": "Pinnacle",
+    "last_update": "2026-10-01T17:20:11Z",
+    "markets": [
+     {
+      "key": "h2h",
+      "outcomes": [
+       {
+        "name": "San Jos\u00e9 State Spartans",
+        "price": 1.5
+       },
+       {
+        "name": "Miami (OH) RedHawks",
+        "price": 2.7
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ }
+]

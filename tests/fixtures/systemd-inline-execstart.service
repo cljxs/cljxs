@@ -1,0 +1,14 @@
+[Unit]
+Description=An agent cycle written inline (the shape the retired stock-report agent's unit had)
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/ecosystem/agents/example
+ExecStart=/bin/bash -lc 'M=/root/ecosystem/agents/example/MEMORY.md; \
+B=$(stat -c %%s "$M" 2>/dev/null || echo 0); S=$(date +%%s); \
+/usr/bin/openclaw agent --agent example --message "scheduled cycle" --session-id "wake-example-$(date +%%s)" --timeout 900 --json; \
+/usr/bin/python3 /root/ecosystem/scripts/example-verify.py "$B" "$S"'
+TimeoutStartSec=1200
+StandardOutput=journal
+StandardError=journal
