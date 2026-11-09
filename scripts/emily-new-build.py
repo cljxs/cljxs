@@ -138,6 +138,10 @@ def generate_artwork(slug, idea, brief, product, evidence=None):
         # used to keep only "(placeholder)": on 2026-10-04 the redraw reported
         # two failures and not one word of the reason.
         msg += f" - the image call failed: {why_failed(res.stderr)}"
+    elif '"free_backup"' in res.stdout:
+        # Real art, drawn by the free backup artist while the paid one was
+        # out. Said, so the owner knows which builds to look at twice.
+        msg += " - drawn by the free backup artist (the paid one was out)"
     return True, msg
 
 

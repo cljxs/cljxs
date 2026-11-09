@@ -21735,3 +21735,155 @@ class BoltIsPlainCode(BoltBase):
         unit = (ROOT / "deploy" / "bolt-cycle.service").read_text()
         self.assertIn("scripts/bolt.py tick", unit)
         self.assertIn("OnCalendar=*:0/10", (ROOT / "deploy" / "bolt-cycle.timer").read_text())
+
+
+class EmilyHasAFreeBackupArtist(unittest.TestCase):
+    """Owner, 2026-11-09: when the day's drawing money was spent every build
+    became a placeholder ring and waited for the 8pm reset. The free backup
+    (FLUX.1 schnell on Cloudflare's free allowance) draws instead - only when
+    the paid drawing fails, through the same checks."""
+
+    def setUp(self):
+        import tempfile
+        self.ea = load("emily_assets_free", "emily-assets.py")
+        self.d = Path(tempfile.mkdtemp())
+        self.out = self.d / "design.png"
+        self.ko = load("knockout_free", "knockout.py")
+
+    def jpeg(self):
+        """A real JPEG, as FLUX answers - made by ffmpeg, not imagined."""
+        p = self.d / "art.jpg"
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+                        "color=c=white:s=256x256,drawbox=x=64:y=64:w=128:h=128:color=red:t=fill",
+                        "-frames:v", "1", str(p)], check=True)
+        return p.read_bytes()
+
+    def reply(self, image=None, status=200, errors=()):
+        import urllib.error
+        import base64
+        body = json.dumps({"result": {"image": base64.b64encode(image).decode()} if image else None,
+                           "success": image is not None, "errors": list(errors),
+                           "messages": []}).encode()
+
+        def opener(req, timeout=None):
+            self.sent = req
+            if status != 200:
+                raise urllib.error.HTTPError(req.full_url, status, "refused", {}, io.BytesIO(body))
+            return _Body(body)
+        return opener
+
+    def run_main(self, argv, opener, paid_error="HTTP 402: key limit reached"):
+        def paid(*a, **k):
+            raise RuntimeError(paid_error)
+
+        def proof(*a, **k):
+            raise RuntimeError("HTTP 402: key limit reached")
+        out, err = io.StringIO(), io.StringIO()
+        env = {"OPENROUTER_API_KEY": "or-test", "CLOUDFLARE_ACCOUNT_ID": "0" * 32,
+               "CLOUDFLARE_API_TOKEN": "cf-test-token"}
+        with unittest.mock.patch.dict(os.environ, env), \
+                unittest.mock.patch.object(self.ea, "generate", paid), \
+                unittest.mock.patch.object(self.ea, "proof", proof), \
+                unittest.mock.patch.object(self.ea.urllib.request, "urlopen", opener), \
+                unittest.mock.patch.object(sys, "argv", ["emily-assets.py", "--prompt", "a cozy cat",
+                                                "--out", str(self.out)] + argv), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = self.ea.main()
+        return code, out.getvalue(), err.getvalue()
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg turns FLUX's JPEG into a PNG")
+    def test_the_money_is_out_and_the_free_artist_draws_real_art(self):
+        # Reintroduced bug: main() without the backup goes straight to
+        # placeholder() - this test then finds the placeholder mark.
+        code, out, err = self.run_main([], self.reply(self.jpeg()))
+        self.assertEqual(code, 0)
+        said = json.loads(out.strip().splitlines()[-1])
+        self.assertEqual(said["mode"], "generated")
+        self.assertEqual(said["model"], self.ea.CF_NAME)
+        self.assertEqual(said["cost_usd"], 0.0)
+        self.assertIn("key limit", said["free_backup"])
+        self.assertIn("not proofread", said["proof"])
+        self.assertFalse(self.ea.is_placeholder(self.out))
+        w, h, px = self.ko.decode(self.out)     # a PNG every later check can read
+        self.assertEqual((w, h), (256, 256))
+        self.assertFalse((self.d / "design.free.jpg").exists(), "the JPEG is cleaned up")
+        self.assertIn("/ai/run/@cf/black-forest-labs/flux-1-schnell", self.sent.full_url)
+        self.assertEqual(self.sent.get_header("Authorization"), "Bearer cf-test-token")
+
+    def test_out_of_free_drawings_too_is_a_placeholder_with_both_reasons(self):
+        code, out, err = self.run_main([], self.reply(status=429, errors=[
+            {"code": 4006, "message": "you have used up your daily free allocation"}]))
+        self.assertEqual(json.loads(out.strip().splitlines()[-1])["mode"], "placeholder")
+        self.assertTrue(self.ea.is_placeholder(self.out))
+        why = load("emily_new_build_free", "emily-new-build.py").why_failed(err)
+        self.assertIn("key limit", why)
+        self.assertIn("daily free allocation", why)
+
+    def test_a_named_model_is_never_answered_by_another(self):
+        code, out, err = self.run_main(["--model", "google/gemini-2.5-flash-image"],
+                                       self.reply(b"\x89PNG\r\n\x1a\n never sent"))
+        self.assertEqual(json.loads(out.strip().splitlines()[-1])["mode"], "placeholder")
+        self.assertFalse(hasattr(self, "sent"), "Cloudflare was asked anyway")
+
+    def test_a_slow_paid_failure_leaves_the_free_artist_no_redraws(self):
+        # emily-new-build kills the art step at 180s and a killed step leaves
+        # no art. Reintroduced bug: drawn() restarting the clock, so the free
+        # artist redrew three times after the paid one had used 150s.
+        clock, calls = [0.0], []
+
+        def slow_paid(*a, **k):
+            clock[0] = 150.0
+            raise RuntimeError("timed out")
+
+        def free(path, prompt, keys, product=""):
+            calls.append(prompt)
+            self.ko.encode(path, 8, 8, bytearray(8 * 8 * 3))
+            return 100
+        out = io.StringIO()
+        env = {"OPENROUTER_API_KEY": "or-test", "CLOUDFLARE_ACCOUNT_ID": "0" * 32,
+               "CLOUDFLARE_API_TOKEN": "cf-test-token"}
+        with unittest.mock.patch.dict(os.environ, env), \
+                unittest.mock.patch.object(self.ea, "generate", slow_paid), \
+                unittest.mock.patch.object(self.ea, "cf_generate", free), \
+                unittest.mock.patch.object(self.ea, "pale_problem", lambda *a: "too pale"), \
+                unittest.mock.patch.object(self.ea.time, "monotonic", lambda: clock[0]), \
+                unittest.mock.patch.object(sys, "argv", ["emily-assets.py", "--prompt", "a cat",
+                                                         "--out", str(self.out)]), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.ea.main()
+        self.assertEqual(len(calls), 1)
+        self.assertIn("out of time", json.loads(out.getvalue().strip().splitlines()[-1])["proof"])
+
+    def test_its_refusal_is_read_from_the_real_reply(self):
+        # Captured 2026-11-09 from api.cloudflare.com with a made-up token.
+        real = {"result": None, "success": False,
+                "errors": [{"code": 10000, "message": "Authentication error"}], "messages": []}
+        self.assertEqual(self.ea.cf_reason(real), "10000: Authentication error")
+        with self.assertRaises(RuntimeError) as e:
+            self.ea.cf_generate(self.out, "x", ("a" * 32, "t"),
+                                opener=self.reply(status=401, errors=real["errors"]))
+        self.assertIn("Authentication error", str(e.exception))
+
+    def test_the_prompt_fits_and_keeps_the_direction_and_the_correction(self):
+        # Cloudflare refuses a prompt over 2048 characters; Emily's run to 2,000
+        # before the ink colours. Reintroduced bug: sending directed() whole.
+        long = "market note " * 400
+        fixed = self.ea.cf_prompt(long + self.ea.CORRECTION + " the words were misspelled.")
+        self.assertLessEqual(len(fixed), self.ea.CF_PROMPT_MAX)
+        self.assertIn(self.ea.PRINT_DIRECTION, fixed)
+        self.assertIn("The last attempt was wrong: the words were misspelled.", fixed)
+        short = self.ea.cf_prompt("a cozy cat")
+        self.assertEqual(short, self.ea.directed("a cozy cat"))
+
+    def test_the_account_id_is_not_taken_for_the_token(self):
+        sc = load("set_credential_cf", "set-credential.py")
+        self.assertEqual(sc.problems("CLOUDFLARE_ACCOUNT_ID", "0123456789abcdef0123456789abcdef"), [])
+        self.assertTrue(sc.problems("CLOUDFLARE_ACCOUNT_ID", "Ab3_longer-token-looking-value-1234567890"))
+
+
+class _Body(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False

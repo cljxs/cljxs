@@ -29,6 +29,8 @@ MATTERS = {
     "OPENROUTER_API_KEY": "without it Emily writes a geometric placeholder, not art - the build passes and is not sellable",
     "PRINTIFY_API_TOKEN": "without it Emily builds locally but cannot create the product",
     "PRINTIFY_SHOP_ID": "needed to create the product; run emily-printify.py check to get it",
+    "CLOUDFLARE_ACCOUNT_ID": "with CLOUDFLARE_API_TOKEN, Emily's free backup artist when the paid drawing money is out",
+    "CLOUDFLARE_API_TOKEN": "with CLOUDFLARE_ACCOUNT_ID, Emily's free backup artist when the paid drawing money is out",
 }
 
 

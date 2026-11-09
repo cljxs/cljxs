@@ -6,7 +6,11 @@ Two modes, chosen automatically:
 
   * OPENROUTER_API_KEY set -> generates real art through the same OpenRouter
     key the rest of the ecosystem already uses. No new provider, no new account.
-  * no key -> writes a deterministic geometric placeholder at the right
+  * the paid drawing fails (the day's money spent, most often) and Emily's
+    credentials.env has CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN ->
+    the free backup artist, FLUX.1 schnell on Cloudflare's free allowance
+    (cf_generate). Same checks, same redraws.
+  * neither -> writes a deterministic geometric placeholder at the right
     dimensions, clearly marked as a placeholder.
 
 It never writes a blank or zero-byte file. A blank deliverable is a failed
@@ -598,6 +602,120 @@ def generate(path, prompt, key, model=None, product="", direction=None,
     raise RuntimeError("no image returned; response keys: " + ",".join(msg.keys()))
 
 
+# THE FREE BACKUP ARTIST (owner, 2026-11-09: "take some workload off Emily
+# when she doesn't have anymore money left. Make sure they are free"). When
+# the paid drawing fails - above all when the day's OpenRouter money is
+# spent - every build used to become a geometric placeholder and wait for
+# the 8pm reset. Cloudflare Workers AI runs FLUX.1 schnell (Apache 2.0, fine
+# to sell) with 10,000 free "neurons" a day on its Free plan, about a
+# hundred drawings at 8 steps (believed, from Cloudflare's published rates).
+# A Free-plan account has no card and cannot be billed: past the allowance
+# Cloudflare refuses, and the build falls back to the placeholder as before.
+#
+# Both values live in Emily's credentials.env, typed in with
+# set-credential.py. The account ID is not a secret; the token is.
+CF_MODEL = "@cf/black-forest-labs/flux-1-schnell"
+CF_NAME = "cloudflare/flux-1-schnell"
+CF_URL = "https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/" + CF_MODEL
+CF_STEPS = 8            # the most it takes; 4 is its default and rougher
+# Cloudflare refuses a longer prompt outright (maxLength 2048, its model page,
+# 2026-11-09). Emily's prompts run 900-2,000 characters once the market
+# notes and the shop's other designs are in, so it is fitted, not refused.
+CF_PROMPT_MAX = 2048
+# It draws in seconds. Kept short because it can start after a paid drawing
+# that hung for post()'s 120, inside emily-new-build's 180 for the whole step.
+CF_TIMEOUT_S = 45
+CORRECTION = "\n\nThe last attempt was wrong:"
+
+
+def cf_keys():
+    """(account ID, token), or None when the backup is not set up. Read after
+    load_credentials(), like image_model()."""
+    account = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+    token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+    return (account, token) if account and token else None
+
+
+def cf_prompt(prompt, product="", limit=CF_PROMPT_MAX):
+    """The directed prompt in at most `limit` characters.
+
+    What gets shortened is the idea's long tail - the market notes and the
+    list of designs the shop already has, which compose() puts last. The art
+    direction (print file, ink colours, no mockup) is never cut, and neither
+    is a redraw's "The last attempt was wrong: ..." - cutting either would
+    draw the very fault the redraw is for.
+    """
+    body, _, fix = prompt.strip().partition(CORRECTION.strip())
+    body = body.rstrip()
+    fix = (CORRECTION + fix) if fix else ""
+    full = directed(body + fix, product)
+    if len(full) <= limit:
+        return full
+    tail = directed("", product)        # "\n\n" + the direction, as directed() adds it
+    room = limit - len(tail) - len(fix)
+    head = body.strip()[:max(room, 0)]
+    if len(head) < len(body.strip()):
+        head = head.rsplit(" ", 1)[0] if " " in head else head
+    return (head + fix + tail)[:limit]
+
+
+def cf_reason(data):
+    """Cloudflare's own words for a refusal - its errors list, which is how
+    it answers a bad token (code 10000, "Authentication error", captured
+    2026-11-09) and, believed, a spent free allowance."""
+    errs = (data or {}).get("errors") or []
+    said = "; ".join(f"{e.get('code')}: {e.get('message')}" for e in errs if isinstance(e, dict))
+    return said or "no reason given"
+
+
+def to_png(src, dst):
+    """FLUX answers a JPEG; every check here (knockout, the pale-art
+    measure, the placeholder test) reads PNG. ffmpeg is on the droplet for
+    Clip already."""
+    import subprocess
+    res = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
+                          "-pix_fmt", "rgb24", str(dst)],
+                         capture_output=True, text=True, timeout=60)
+    if res.returncode != 0 or not Path(dst).is_file():
+        raise RuntimeError(f"could not turn the free drawing into a PNG: {res.stderr.strip()[:150]}")
+
+
+def cf_generate(path, prompt, keys, product="", seed=None, opener=None):
+    """Draw one image on Cloudflare's free allowance. Returns bytes written.
+    Raises with Cloudflare's reason when it refuses - out of free drawings
+    for the day included - so the caller falls back to the placeholder."""
+    import urllib.error
+    account, token = keys
+    body = json.dumps({"prompt": cf_prompt(prompt, product), "steps": CF_STEPS,
+                       "seed": int(seed if seed is not None
+                                   else int.from_bytes(os.urandom(3), "big"))}).encode()
+    req = urllib.request.Request(CF_URL.format(account=account), data=body, headers={
+        "Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    try:
+        with (opener or urllib.request.urlopen)(req, timeout=CF_TIMEOUT_S) as r:
+            data = json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            data = json.loads(e.read() or b"{}")
+        except Exception:
+            data = {}
+        raise RuntimeError(f"free artist refused, HTTP {e.code}: {cf_reason(data)}"[:300]) from None
+    image = ((data.get("result") or {}).get("image")) if isinstance(data, dict) else None
+    if not data.get("success") or not image:
+        raise RuntimeError(f"free artist returned no picture: {cf_reason(data)}"[:300])
+    raw = base64.b64decode(image)
+    jpg = Path(path).with_suffix(".free.jpg")
+    jpg.write_bytes(raw)
+    try:
+        if raw[:8] == b"\x89PNG\r\n\x1a\n":
+            Path(path).write_bytes(raw)
+        else:
+            to_png(jpg, path)
+    finally:
+        jpg.unlink(missing_ok=True)
+    return Path(path).stat().st_size
+
+
 # THE PROOFREAD. An image model draws letters, it does not spell them: the
 # first bookish sweatshirt (2026-10-02) said "I'M JUST HE HER FOR THE BOOKISH
 # MERCH" and an emblem carried that day's date. Nothing read the words back, so
@@ -828,6 +946,55 @@ def cmd_proof(paths):
     return worst
 
 
+def drawn(a, key, model, draw, backup=None, began=None):
+    """Draw, check and redraw with `draw(prompt) -> (bytes, usage)`, then
+    report. One loop for both artists, so the free one's pictures meet every
+    check the paid one's do: the pale-sticker measure, the proofread and the
+    redraw with the fault said plainly. Raises if a drawing cannot be had."""
+    prompt, problems, lines, note = a.prompt, [], [], None
+    # One clock for both artists: the free one starts no redraw once the
+    # paid one's attempts have used the time, or the art step is killed.
+    began = time.monotonic() if began is None else began
+    for attempt in range(1, PROOF_TRIES + 1):
+        if attempt > 1 and time.monotonic() - began > REDRAW_BUDGET_S:
+            note = f"out of time after {attempt - 1} drawing(s): " + "; ".join(problems)
+            break
+        n, usage = draw(prompt)
+        # White art on a sticker prints blank - measured free, before
+        # the proofreader is paid to read it.
+        pale = pale_problem(a.out, a.product)
+        if pale:
+            problems = [pale]
+            prompt = f"{a.prompt}{CORRECTION} {pale}."
+            continue
+        if not key:
+            note = "text not proofread: no OpenRouter key"
+            break
+        try:
+            problems, lines = proof(a.out, key, name=a.name or None)
+        except Exception as exc:
+            # With the day's money spent the proofreader is refused too. The
+            # draft says so out loud and proofreads again before uploading.
+            note = f"text not proofread: {str(exc)[:120]}"
+            break
+        if not problems:
+            break
+        # Drawn again with what went wrong said plainly.
+        prompt = (f"{a.prompt}{CORRECTION} "
+                  + "; ".join(problems) + ". Spell every word exactly; no dates.")
+    report = {"ok": True, "mode": "generated", "model": model,
+              "path": a.out, "bytes": n,
+              "asked_shape": shape(a.product),
+              "got_size": _size_of(a.out),
+              "cost_usd": cost_of(usage),
+              "attempts": attempt, "text": lines,
+              "proof": note or (problems or "clean")}
+    if backup:
+        report["free_backup"] = f"drawn free because the paid drawing failed: {backup}"[:240]
+    print(json.dumps(report))
+    return 0
+
+
 def main():
     if sys.argv[1:2] == ["proof"]:
         return cmd_proof(sys.argv[2:])
@@ -856,44 +1023,29 @@ def main():
     if a.compare:
         return compare(a.prompt, a.compare, key, Path(a.out), a.product)
 
-    if key and not a.placeholder_only:
-        try:
-            model = image_model(a.model)
-            prompt, problems, lines, note = a.prompt, [], [], None
-            began = time.monotonic()
-            for attempt in range(1, PROOF_TRIES + 1):
-                if attempt > 1 and time.monotonic() - began > REDRAW_BUDGET_S:
-                    note = f"out of time after {attempt - 1} drawing(s): " + "; ".join(problems)
-                    break
-                n, usage = generate(a.out, prompt, key, model, a.product)
-                # White art on a sticker prints blank - measured free, before
-                # the proofreader is paid to read it.
-                pale = pale_problem(a.out, a.product)
-                if pale:
-                    problems = [pale]
-                    prompt = f"{a.prompt}\n\nThe last attempt was wrong: {pale}."
-                    continue
-                try:
-                    problems, lines = proof(a.out, key, name=a.name or None)
-                except Exception as exc:
-                    note = f"text not proofread: {str(exc)[:120]}"
-                    break
-                if not problems:
-                    break
-                # Drawn again with what went wrong said plainly.
-                prompt = (f"{a.prompt}\n\nThe last attempt was wrong: "
-                          + "; ".join(problems) + ". Spell every word exactly; no dates.")
-            print(json.dumps({"ok": True, "mode": "generated", "model": model,
-                              "path": a.out, "bytes": n,
-                              "asked_shape": shape(a.product),
-                              "got_size": _size_of(a.out),
-                              "cost_usd": cost_of(usage),
-                              "attempts": attempt, "text": lines,
-                              "proof": note or (problems or "clean")}))
-            return 0
-        except Exception as exc:
-            print(json.dumps({"ok": False, "mode": "generate-failed",
-                              "error": str(exc)[:200]}), file=sys.stderr)
+    cf = cf_keys()
+    if (key or cf) and not a.placeholder_only:
+        model, failed, began = image_model(a.model), None, time.monotonic()
+        if key:
+            try:
+                return drawn(a, key, model,
+                             lambda p: generate(a.out, p, key, model, a.product), began=began)
+            except Exception as exc:
+                failed = str(exc)[:200]
+                print(json.dumps({"ok": False, "mode": "generate-failed",
+                                  "error": failed}), file=sys.stderr)
+        # The free backup, only when the paid drawing could not be had. Not
+        # for --model: that asks for one model by name, and a picture from
+        # another would answer a question nobody asked.
+        if cf and not a.model:
+            try:
+                return drawn(a, key, CF_NAME,
+                             lambda p: (cf_generate(a.out, p, cf, a.product), {"cost": 0.0}),
+                             backup=failed or "no OpenRouter key", began=began)
+            except Exception as exc:
+                print(json.dumps({"ok": False, "mode": "backup-failed", "error": (
+                    (f"{failed} - and the free backup artist: " if failed else "")
+                    + str(exc))[:300]}), file=sys.stderr)
 
     n = placeholder(a.out, a.prompt, a.size)
     print(json.dumps({"ok": True, "mode": "placeholder", "path": a.out, "bytes": n,

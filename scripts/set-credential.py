@@ -58,6 +58,14 @@ SHAPES = {
                      "Etsy wants BOTH values joined by a colon:\n"
                      "      keystring:shared_secret\n"
                      "    Both are on your app's page in the Etsy developer portal."),
+    # Emily's free backup artist. The account ID is 32 letters and digits;
+    # the token is the other value on the same page, and pasting one where
+    # the other goes is the likely slip on a tablet.
+    "CLOUDFLARE_ACCOUNT_ID": (re.compile(r"^[0-9a-f]{32}$"),
+                              "the Account ID is 32 letters and digits (0-9, a-f).\n"
+                              "    It is on the Cloudflare dashboard's Account home, under the\n"
+                              "    three dots next to your account name - Copy account ID.\n"
+                              "    The API token is a different, longer value."),
 }
 
 # Keys that are really two values. ASKED FOR SEPARATELY, and joined here.

@@ -156,7 +156,12 @@ blueprints (`embroidered-...`).
 Keeping builds moving: when the art cannot be drawn (most often the day's
 image money is spent), the build is marked WAITING FOR ART instead of being
 sent to Emily; the `redraw-art` timer (hourly 08:07-22:07 Central,
-`emily-finish.py --redraw`) draws it and then sends it on. **Try again** on a gallery card
+`emily-finish.py --redraw`) draws it and then sends it on. Before that, a free backup artist
+(FLUX.1 schnell on Cloudflare's free allowance, `cf_generate` in emily-assets.py,
+2026-11-09) draws whenever the paid drawing fails, through the same checks;
+it needs `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` in Emily's
+credentials.env, and a Free-plan Cloudflare account cannot be billed. Its
+pictures are not proofread while the money is out - the draft proofreads again. **Try again** on a gallery card
 re-runs a failed draft; `scripts/emily-build.py list | remove | restore`
 (remove archives, never deletes, and refuses while a Printify product points
 at it). Emily's gallery is in her village house (`loadEmilyBuilds`, `retryBuild`).
