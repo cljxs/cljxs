@@ -11810,8 +11810,10 @@ class AnAllOverPrintHasNoBackground(unittest.TestCase):
         src = (SCRIPTS / "emily-assets.py").read_text()
         self.assertIn('ap.add_argument("--product"', src)
         gen = src.split("def main(", 1)[1]
-        self.assertIn("generate(a.out, prompt, key, model, a.product)", gen,
+        self.assertIn("generate(a.out, p, key, model, a.product)", gen,
                       "parsed and never passed is not passed")
+        self.assertIn("cf_generate(a.out, p, cf, a.product)", gen,
+                      "the free backup artist gets the direction too")
 
 
 class TheArtCoversTheFacesOfAFoldedSheet(unittest.TestCase):
@@ -18807,7 +18809,7 @@ class TheDesignDoesNotPrintItsOwnName(unittest.TestCase):
     def test_the_name_reaches_both_proofreads(self):
         nb = (SCRIPTS / "emily-new-build.py").read_text()
         self.assertIn('"--name", str(idea or "")', nb)
-        main = (SCRIPTS / "emily-assets.py").read_text().split("def main(", 1)[1]
+        main = (SCRIPTS / "emily-assets.py").read_text().split("def drawn(", 1)[1]   # both artists' loop
         self.assertIn("proof(a.out, key, name=a.name or None)", main)
         draft = (SCRIPTS / "emily-printify.py").read_text().split("def cmd_draft(", 1)[1].split("\ndef ", 1)[0]
         self.assertIn('proofread(design, name or listing.get("title"))', draft)
@@ -19373,7 +19375,7 @@ class WhiteArtPrintsBlankOnAWhiteSticker(unittest.TestCase):
         self.assertLess(body.index("pale_problem(upload_from"), body.index('"/uploads/images.json"'),
                         "refused before anything is uploaded")
         ea = (SCRIPTS / "emily-assets.py").read_text()
-        loop = ea.split("def main(", 1)[1]
+        loop = ea.split("def drawn(", 1)[1]      # both artists' one loop
         self.assertLess(loop.index("pale_problem(a.out, a.product)"), loop.index("proof(a.out"),
                         "measured before the proofreader is paid")
         self.assertIn("return mod.pale_problem(path, entry)", ea, "one check, imported")
