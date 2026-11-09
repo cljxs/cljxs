@@ -123,6 +123,7 @@ class TheScanAlwaysMeasuresSomething(unittest.TestCase):
         self.m.NICHES, self.m.SCANS, self.m.LAST = state / "niches.json", state / "scans", state / "last-scan.json"
         self.m.SCANS.mkdir(parents=True)
         self.m.STARTER = ["frog sticker", "dog mom mug"]
+        self.m.SEASONS = []                     # the season's phrases are their own test
         self.m.gaps = lambda bps=None: []
         self.m.log = lambda msg: None
         self.selling = {}                       # seed -> its rows sell?
@@ -382,6 +383,74 @@ class EmilyTitlesTheSearch(unittest.TestCase):
         written = json.loads((self.d / "listing.json").read_text())
         self.assertEqual(written["title"], "Cat Meme Sticker | Loading Drama Cat")
         self.assertIn("cat meme sticker", written["tags"])
+
+
+class AHolidayApparelPush(unittest.TestCase):
+    """2026-11-09, the owner, after a best-selling holiday shirt shop: make
+    good designs like these - without copying them. Christmas apparel phrases
+    are measured in season, Scout can be focused on all apparel at once ("a
+    test run where he only suggests the new design rules for shirts"), and
+    Emily draws printed garments in a cute-character house style."""
+
+    def test_the_seasons_phrases_are_measured_first_in_season_only(self):
+        m = load("niche_scan_season", "niche-scan.py")
+        nov, jan = (datetime(2026, 11, 9, tzinfo=timezone.utc), datetime(2026, 1, 9, tzinfo=timezone.utc))
+        self.assertIn("christmas goose sweatshirt", m.in_season(nov))
+        self.assertEqual(m.in_season(jan), [])
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        m.SCANS, m.NICHES = tmp / "scans", tmp / "niches.json"
+        order = [s for s, _src, _age in m.niches({"niches": {}}, now=nov)]
+        self.assertEqual(order[:len(m.in_season(nov))], m.in_season(nov), "never measured, so first")
+        self.assertNotIn("christmas goose sweatshirt", [s for s, _a, _b in m.niches({"niches": {}}, now=jan)])
+
+    def test_no_season_phrase_is_somebody_elses(self):
+        m = load("niche_scan_season_ip", "niche-scan.py")
+        ip = load("ip_check_season", "ip-check.py")
+        for _start, _end, phrases in m.SEASONS:
+            for p in phrases:
+                self.assertIsNone(ip.risky(p)[0], p)
+
+    def test_an_apparel_focus_takes_shirts_and_sweatshirts_and_nothing_else(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        scans = tmp / "agents" / "scout" / "state" / "scans"
+        scans.mkdir(parents=True)
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for seed, r in (("christmas sweatshirt", row("christmas goose sweatshirt", 3000, 40, 7, 1)),
+                        ("dad shirt", row("funny dad shirt", 9000, 60, 8, 2)),
+                        ("frog sticker", row("judging frog sticker", 3000, 25, 5, 0))):
+            (scans / f"{seed.replace(' ', '-')}.json").write_text(
+                json.dumps({"seed": seed, "scanned_at": now, "rows": [r], "excluded": []}))
+        env = dict(os.environ, ECOSYSTEM_ROOT=str(tmp))
+        run = lambda *a: subprocess.run(["python3", str(SCRIPTS / "scout-ideas.py"), *a], capture_output=True,
+                                        text=True, env=env, timeout=120)
+        self.assertIn("focus set: apparel", run("focus", "apparel").stdout)
+        brief = run("brief").stdout
+        self.assertIn("FOCUS: apparel (t-shirts, sweatshirts, hoodies)", brief)
+        self.assertIn("christmas goose sweatshirt", brief)
+        self.assertNotIn("judging frog sticker", brief, "a sticker is not offered under the focus")
+        (tmp / "agents" / "scout" / "state" / "drafts.txt").write_text(
+            "christmas goose sweatshirt | Silly Goose Season | sweatshirt | geese in Santa hats\n"
+            "funny dad shirt | Dad Joke Loading | tshirt | a dad with a coffee\n"
+            "judging frog sticker | Unimpressed Frog | sticker | sarcastic frog\n")
+        r = run("intake")
+        self.assertIn("2 filed, 1 refused", r.stdout)
+        self.assertIn("the focus is apparel", r.stderr)
+
+    def test_emily_draws_printed_apparel_in_the_house_style(self):
+        ea = load("emily_assets_style", "emily-assets.py")
+        ep = load("emily_printify_style", "emily-printify.py")
+        cat = {"tshirt": {"blueprint_title": "Unisex Jersey Short Sleeve Tee", "variant_titles": ["S / White"]},
+               "embroidered-sweatshirt": {"blueprint_title": "Crewneck Sweatshirt (Embroidery)",
+                                          "variant_titles": ["S / Navy"]},
+               "sticker": {"blueprint_title": "Kiss-Cut Stickers"}}
+        ea._catalogue_entry = lambda product: (ep, cat.get(product))
+        self.assertIn(ea.APPAREL_STYLE, ea.directed("geese", "tshirt"))
+        self.assertNotIn(ea.APPAREL_STYLE, ea.directed("geese", "sticker"))
+        self.assertNotIn(ea.APPAREL_STYLE, ea.directed("geese", "embroidered-sweatshirt"),
+                         "a stitched patch keeps its simple shapes")
+        self.assertIn("Never an existing character", ea.APPAREL_STYLE)
 
 
 class ScoutThinksOnSonnet(unittest.TestCase):

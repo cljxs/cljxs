@@ -93,6 +93,27 @@ STARTER = [
 ]
 
 
+# THE SEASON (owner, 2026-11-09: a Christmas apparel push). Phrases measured
+# only between these days, first in line while never measured. Generic
+# themes, never a character or brand - ip-check still sees every one. They
+# leave the list by themselves after the season; a dead one retires as any
+# niche does.
+SEASONS = [
+    ("11-01", "12-15", [
+        "christmas sweatshirt", "funny christmas sweatshirt", "christmas goose sweatshirt",
+        "christmas chicken sweatshirt", "farm animal christmas shirt", "christmas cat sweatshirt",
+        "christmas dog sweatshirt", "christmas book sweatshirt", "christmas coffee sweatshirt",
+        "retro christmas shirt", "teacher christmas shirt", "christmas lights shirt",
+    ]),
+]
+
+
+def in_season(now=None):
+    """The season's phrases for today, or []."""
+    day = (now or datetime.now(timezone.utc)).strftime("%m-%d")
+    return [p for start, end, phrases in SEASONS if start <= day <= end for p in phrases]
+
+
 def _load(name, filename):
     spec = importlib.util.spec_from_file_location(name, SCRIPTS / filename)
     mod = importlib.util.module_from_spec(spec)
@@ -148,7 +169,8 @@ def niches(d=None, now=None):
     Retired niches are not in it."""
     d = d or load()
     now = now or datetime.now(timezone.utc)
-    seeds = dict.fromkeys(STARTER, "starter")
+    seeds = dict.fromkeys(in_season(now), "season")
+    seeds.update(dict.fromkeys(STARTER, "starter"))
     seeds.update({k: v.get("source", "found") for k, v in d["niches"].items()})
     out, seen = [], {same(r) for r in d.get("retired") or {}}
     for seed, source in seeds.items():

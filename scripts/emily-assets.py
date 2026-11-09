@@ -257,6 +257,30 @@ EMBROIDERY_DIRECTION = (
 )
 
 
+# THE APPAREL STYLE (owner, 2026-11-09, after a best-selling holiday shirt
+# shop on TikTok: "How can i get Emily to make good designs like these").
+# What those shirts share, put as a style rather than a copy of any of them:
+# one cute character with a themed prop, warm and funny, drawn in detail,
+# with a few hand-lettered words. Printed garments only - an embroidered
+# patch keeps EMBROIDERY_DIRECTION's simple shapes. The ink colours are
+# ink_direction's, which this does not touch.
+APPAREL_STYLE = (
+    "Style for a printed shirt or sweatshirt: one cute, original character - an animal or a "
+    "cozy everyday object - with a seasonal or themed prop (a scarf, string lights, a mug, a "
+    "stack of books, a pumpkin), warm and a little funny. A detailed cartoon illustration with "
+    "clean bold outlines and soft shading, like a design from a cozy boutique tee shop. If the "
+    "idea has words, a few short words in friendly hand-lettering above or below the character. "
+    "One centered composition sized for a chest print, nothing else in the frame. Never an "
+    "existing character, mascot or brand."
+)
+
+
+def apparel(product):
+    """Is this a printed garment - a shirt, sweatshirt or hoodie, not stitched?"""
+    mod, entry = _catalogue_entry(product)
+    return bool(entry) and mod.is_garment(entry) and not mod.is_embroidered(entry)
+
+
 def embroidered(product):
     """Is this product stitched? emily-printify decides, from its blueprint."""
     mod, entry = _catalogue_entry(product)
@@ -508,6 +532,7 @@ def directed(prompt, product=""):
     return (f"{prompt.strip()}\n\n"
             f"{ALL_OVER_DIRECTION if all_over(product) else PRINT_DIRECTION}"
             + (f"\n\n{EMBROIDERY_DIRECTION}" if embroidered(product) else "")
+            + (f"\n\n{APPAREL_STYLE}" if apparel(product) else "")
             + (f"\n\n{ink}" if ink else ""))
 
 

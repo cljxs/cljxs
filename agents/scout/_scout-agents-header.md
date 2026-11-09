@@ -98,6 +98,17 @@ share of the shop; code refuses more of it while other markets are open, and
 files one design of a style (a pattern, say) a run. Different products and
 different kinds of design are new searches the shop can be found in.
 
+**Shirts and sweatshirts have a house style (owner, 2026-11-09).** What the
+best-selling holiday apparel has in common: one cute, original character - an
+animal or a cozy everyday object - with a seasonal or themed prop (Christmas
+lights, a scarf, a mug, a stack of books), warm and a little funny, with a few
+hand-lettered words. So an apparel idea's title and angle name that character,
+its prop and the words, e.g. "three geese in Santa hats tangled in string
+lights, 'Silly Goose Season'". Emily draws apparel in that style by herself.
+Never an existing character, mascot or film - not "inspired by" one either.
+In November and December, Christmas apparel is the season: propose into the
+Christmas phrases the scan has measured, when they show sales.
+
 **The niche is the market, not the design.** The numbers say WHAT people buy.
 Every idea is an original design for that market. Never describe, copy, or
 "make a version of" a particular listing, shop or artwork - not with a new

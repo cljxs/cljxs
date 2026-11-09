@@ -17605,6 +17605,7 @@ class AWellSellingNicheIsMeasuredInSales(unittest.TestCase):
     def test_oldest_first_never_scanned_first_and_fresh_ones_left(self):
         ns = load("niche_scan_due", "niche-scan.py")
         ns.STARTER = ["frog sticker", "cat lover mug", "dog mom mug"]
+        ns.SEASONS = []                 # the season's phrases are tested in test_scout_scan
         old = (datetime.now(timezone.utc) - timedelta(days=9)).strftime("%Y-%m-%dT%H:%M:%SZ")
         older = (datetime.now(timezone.utc) - timedelta(days=12)).strftime("%Y-%m-%dT%H:%M:%SZ")
         self.scan("frog sticker", [], when=old)
@@ -17619,11 +17620,13 @@ class AWellSellingNicheIsMeasuredInSales(unittest.TestCase):
     def test_somebody_elses_property_is_never_scanned(self):
         ns = load("niche_scan_ip", "niche-scan.py")
         ns.STARTER = ["disney sticker", "frog sticker"]
+        ns.SEASONS = []                 # the season's phrases are tested in test_scout_scan
         self.assertEqual(ns.due(n=5), ["frog sticker"])
 
     def test_new_niches_come_from_the_tags_of_listings_that_sell(self):
         ns = load("niche_scan_find", "niche-scan.py")
         ns.STARTER = ["cat lover mug"]
+        ns.SEASONS = []                 # the season's phrases are tested in test_scout_scan
         self.scan("cat lover mug", [
             self.row("cat lover mug", selling=6, reviews=20,
                      tags=["cat mom gift", "Coffee Mug", "cat", "disney cat", "funny cat mug", "x1!"]),
@@ -17639,6 +17642,7 @@ class AWellSellingNicheIsMeasuredInSales(unittest.TestCase):
     def test_a_run_scans_with_market_scan_and_saves(self):
         ns = load("niche_scan_run", "niche-scan.py")
         ns.STARTER, ran = ["frog sticker"], []
+        ns.SEASONS = []                 # the season's phrases are tested in test_scout_scan
         def fake(cmd, **k):
             ran.append(cmd)
             return types.SimpleNamespace(returncode=0, stdout="  sales: frog sticker - 6 of the top 10\n  saved 3", stderr="")
@@ -17962,6 +17966,7 @@ class TheFirstRealNicheRun(unittest.TestCase):
     def test_a_plural_is_the_same_niche(self):
         ns = load("niche_scan_plural", "niche-scan.py")
         ns.STARTER = ["cat sticker"]
+        ns.SEASONS = []                 # the season's phrases are tested in test_scout_scan
         (self.root / "agents/scout/state/scans/x.json").write_text(json.dumps({"seed": "cat sticker meme", "rows": [
             {"phrase": "cat sticker meme", "selling": 6, "sales_n": 10,
              "tags": ["cat stickers", "cute cat sticker", "cute cat stickers"]}]}))

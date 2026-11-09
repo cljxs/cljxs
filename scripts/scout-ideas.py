@@ -190,6 +190,29 @@ def focus():
     return word or None
 
 
+# "apparel" as a focus: every printed garment at once (owner, 2026-11-09: a
+# test run "where he only suggests the new design rules for shirts" -
+# t-shirts and sweatshirts alike, not one or the other).
+APPAREL_WORDS = ("t-shirt", "tshirt", "shirt", "tee", "sweatshirt", "crewneck", "pullover", "hoodie")
+
+
+def focus_words():
+    """The product words the focus allows - empty when unfocused."""
+    f = focus()
+    return set(APPAREL_WORDS) if f == "apparel" else ({f} if f else set())
+
+
+def in_focus(text):
+    """Is this phrase or product one the focus allows? True when unfocused."""
+    words = focus_words()
+    return not words or product_word_of(text) in words
+
+
+def focus_said():
+    f = focus()
+    return "apparel (t-shirts, sweatshirts, hoodies)" if f == "apparel" else f
+
+
 def is_pending(idea):
     """The one rule for an idea still waiting on the owner. An idea with no
     status, or an empty one, has not been decided. fury-collect.py imports
@@ -219,7 +242,7 @@ def proposable():
             if not phrase or key in seen:
                 continue
             seen.add(key)
-            if want and product_word_of(phrase) != want:
+            if want and not in_focus(phrase):
                 continue
             # A hat, a poster: a market Emily has no product for. The brief
             # listed 'embroidered hat custom' third on 2026-10-08, and propose
@@ -832,9 +855,9 @@ def cmd_intake(_argv):
                         "see scout-ideas.py evidence"))
             continue
         want = focus()
-        if want and product_word_of(product) != want:
+        if want and not in_focus(product):
             bad.append((n, title or line[:40],
-                        f"the focus is {want} - this is a "
+                        f"the focus is {focus_said()} - this is a "
                         f"{product_word_of(product) or product!r}. Clear the "
                         f"focus to propose other products."))
             continue
@@ -1072,17 +1095,17 @@ def cmd_focus(argv):
     scout-ideas.py focus --clear       any product again
     scout-ideas.py focus --word        just the word, for scout-cycle.sh"""
     if "--word" in argv:
-        print(focus() or "")
+        print(focus_said() or "")
         return 0
     if "--clear" in argv:
         FOCUS.unlink(missing_ok=True)
         print("focus cleared - Scout may propose any product again.")
         return 0
     if not argv:
-        print(f"focus: {focus()} - every idea must be one" if focus()
+        print(f"focus: {focus_said()} - every idea must be one" if focus()
               else "no focus - Scout may propose any product.")
         return 0
-    word = product_word_of(" ".join(argv))
+    word = "apparel" if " ".join(argv).strip().lower() == "apparel" else product_word_of(" ".join(argv))
     if not word:
         print(f"{' '.join(argv)!r} is not a product this shop knows. Try a word "
               f"like tote, sticker or hoodie.", file=sys.stderr)
@@ -1090,6 +1113,7 @@ def cmd_focus(argv):
     FOCUS.parent.mkdir(parents=True, exist_ok=True)
     FOCUS.write_text(word + "\n")
     left = proposable()
+    word = focus_said()
     print(f"focus set: {word}. Every idea is a {word} until "
           f"`scout-ideas.py focus --clear`.")
     print(f"{len(left)} measured {word} phrase(s) Scout can propose into now.")
@@ -1138,7 +1162,11 @@ def cmd_brief(_argv):
             used.setdefault(ph, []).append(str(i.get("title") or ""))
     print("FACTS, COUNTED BY CODE - use these numbers, do not recount them:")
     print(f"- ideas waiting on the user's verdict: {pending_count()}")
-    if want:
+    if want == "apparel":
+        print(f"- FOCUS: {focus_said()}. Every idea this run is a printed garment - "
+              f"propose each as the product its phrase names below.\n  Any other "
+              f"product is refused by code, whatever the wording.")
+    elif want:
         print(f"- FOCUS: {want}. Every idea this run is a {want}, with "
               f"\"{want}\" as its product.\n  Any other product is refused "
               f"by code, whatever the wording.")
