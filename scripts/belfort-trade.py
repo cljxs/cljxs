@@ -276,6 +276,25 @@ def regime(doc=None, breadth=None, index="QQQ"):
     return "favorable", why
 
 
+def quick_row():
+    """Belfort Quick in the showdown (owner, 2026-11-09: "add a bar up top for
+    belforts quick trader"): its return since its own start, named with that
+    day - belfort-quick.py board's number, not a second sum. None without a
+    book."""
+    path = Path(__file__).resolve().parent / "belfort-quick.py"
+    spec = importlib.util.spec_from_file_location("belfort_quick_showdown", path)
+    q = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(q)
+        if not q.BOOK.is_file():
+            return None
+        b = q.board()
+    except Exception:
+        return None
+    return {"name": f"Belfort Quick (since {str(b.get('started_utc') or '')[5:10]})",
+            "pct": round(b["pnl_pct"], 2) if b.get("pnl_pct") is not None else None, "own_days": True}
+
+
 def regimes(doc=None):
     """{index: {"state", "why", "judges", "clusters"}} - the market check as
     each index gives it, and which of his clusters each one judges."""
@@ -1166,6 +1185,10 @@ def board():
         aside = {"since": same["since"], "rows": [{"name": "Belfort (AI)", "pct": same["belfort_pct"]},
                                                    {"name": "No-AI book", "pct": same["shadow_pct"]}]}
     vals = [v for _, v in race if v is not None]
+    rows = [{"name": n, "pct": v} for n, v in race]
+    quick = quick_row()
+    if quick:
+        rows.insert(1, quick)          # its own days, so not in the spread
     reports = sorted(REPORTS.glob("*.md"), key=report_order, reverse=True) if REPORTS.is_dir() else []
     return {
         "asof_utc": doc.get("asof_utc"), "regime": state, "regime_why": why, "regimes": regs,
@@ -1173,7 +1196,7 @@ def board():
         # names on old prices - said on the page, not only in a log.
         "data_warning": _doc(FETCH_META).get("health"),
         "stale": sorted(sym for sym, q in quotes.items() if isinstance(q, dict) and q.get("stale")),
-        "showdown": {"basis": basis, "rows": [{"name": n, "pct": v} for n, v in race],
+        "showdown": {"basis": basis, "rows": rows,
                      "spread": round(max(vals) - min(vals), 2) if len(vals) > 1 else None,
                      "aside": aside},
         "books": [{k: b[k] for k in ("book", "value", "return_pct", "open")} for b in books],

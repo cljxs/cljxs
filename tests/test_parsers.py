@@ -20265,6 +20265,28 @@ class TheShortlistIsWhatHeReads(TheMarketsPageDrawsBelfortsOwnNumbers):
         self.assertEqual(sd["aside"]["since"], later)
         self.assertEqual(aside, {"Belfort (AI)": 0.17, "No-AI book": -2.54})
 
+    def test_belfort_quick_has_a_bar_on_its_own_days(self):
+        # Owner, 2026-11-09: "add a bar up top for belforts quick trader".
+        # Its return since its own start, named with that day, out of the
+        # spread (a different period) - belfort-quick.py's own number.
+        state = self.root / "agents" / "belfort" / "state"
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "portfolio.json").write_text(json.dumps({"starting_cash": 10000.0, "cash": 10000.0,
+                                                           "created_utc": "2026-09-01 13:00:00", "positions": [], "trades": []}))
+        run = lambda: json.loads(subprocess.run([sys.executable, str(SCRIPTS / "belfort-trade.py"), "board"],
+                                                capture_output=True, text=True,
+                                                env=dict(os.environ, ECOSYSTEM_ROOT=str(self.root))).stdout)["showdown"]
+        self.assertNotIn("Belfort Quick", " ".join(r["name"] for r in run()["rows"]), "no book, no bar")
+        (state / "quick-portfolio.json").write_text(json.dumps({
+            "mode": "PAPER", "starting_cash": 10000.0, "cash": 10119.34, "positions": [], "trades": [],
+            "halt": {"active": False}, "started_utc": "2026-11-06 20:35:00", "marks": {}}))
+        sd = run()
+        rows = [(r["name"], r["pct"]) for r in sd["rows"]]
+        self.assertEqual(rows[1], ("Belfort Quick (since 11-06)", 1.19))
+        self.assertEqual([n for n, _ in rows], ["Belfort (AI)", "Belfort Quick (since 11-06)", "QQQ", "SPY"])
+        others = [p for n, p in rows if not n.startswith("Belfort Quick") and p is not None]
+        self.assertEqual(sd["spread"], round(max(others) - min(others), 2), "its own days stay out of the spread")
+
 
 class BelfortLearnsFromNumbersNotMemory(unittest.TestCase):
     """Owner, 2026-10-07: "Does it learn from its wins and losses?" It did
