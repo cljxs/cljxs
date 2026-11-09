@@ -112,6 +112,20 @@ shows what runs where; `wake.py check` tests the plan's login.
 * **The user's terminal flattens multi-line pastes.** Give single-line
   commands - no heredocs, no multi-line `python3 -c`.
 
+## Looking things up on the web (TinyFish connector)
+
+For sessions with the TinyFish connector (owner, 2026-11-09 - it is for you,
+not for the agents; the owner will not add money beyond the free $8 wallet):
+
+* `search` and `fetch_content` are free - use them first for any lookup or page read.
+* A paid TinyFish call is fine only when its whole cost is known before it
+  runs and is under $0.05. Say the cost in one line first.
+* Never: `run_web_automation` (billed per step, no step cap, so it cannot
+  be held under 5 cents), monitors (they keep billing per check), deep
+  research, datasets, browser sessions, and never `top_up_wallet`.
+* A page TinyFish cannot read for free (Etsy blocks it) goes to Firecrawl,
+  not to a paid TinyFish tool.
+
 ## Testing
 
 There is no test suite yet, which is why bugs reach the droplet. When you add
