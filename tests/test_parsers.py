@@ -13383,6 +13383,39 @@ class ABuildThatStoppedDoesNotSayBuilding(unittest.TestCase):
         started = (datetime.now(timezone.utc) - timedelta(minutes=12)).strftime("%Y-%m-%d %H:%M:%S")
         self.assertEqual(self.words("in_progress", {"started_at": started})["label"], "building 12 min")
 
+    def test_a_waiting_card_says_what_the_last_try_said(self):
+        # 2026-11-10: a WAITING FOR ART card printed one fixed sentence about
+        # money; the redraw's own reason sat unread in build.json, and the
+        # owner could not see why the free backup artist had not drawn it.
+        if not (self.NODE and (self.API / "node_modules" / "better-sqlite3").is_dir()):
+            self.skipTest("node or the Deck's node_modules are not installed")
+        why = "redraw still failing: the free backup artist is not set up"
+        js = (f"const m=require({json.dumps(str(self.API / 'emily.js'))});"
+              f"process.stdout.write(JSON.stringify(m.statusWords('waiting_for_art', null,"
+              f"{json.dumps({'draft_blocked': {'reason': why}})})))")
+        r = subprocess.run([self.NODE, "-e", js], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        note = json.loads(r.stdout)["note"]
+        self.assertIn("Last try: " + why, note)
+        self.assertNotIn("Last try", self.words("waiting_for_art", None)["note"])
+        self.assertIn("statusWords(statusOf(build, task), task, build)",
+                      (self.API / "emily.js").read_text(), "the build reaches it")
+
+    def test_a_hold_keeps_the_reason_where_the_card_reads_it(self):
+        import tempfile
+        nb = load("emily_new_build_holdwhy", "emily-new-build.py")
+        d = Path(tempfile.mkdtemp())
+        (d / "build.json").write_text('{"idea": "fox"}')
+        nb.hold(d, "the paid drawing failed: HTTP 402")
+        b = json.loads((d / "build.json").read_text())
+        self.assertEqual(b["status"], nb.WAITING)
+        self.assertEqual(b["idea"], "fox")
+        self.assertEqual(b["draft_blocked"]["reason"], "the paid drawing failed: HTTP 402")
+        src = (SCRIPTS / "emily-new-build.py").read_text()
+        self.assertIn('hold(root / "agents" / "emily" / "builds" / slug, art_msg)', src)
+        fin = (SCRIPTS / "emily-finish.py").read_text().split("def to_emily(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn('.hold(d, f"redraw still failing: {msg}")', fin, "Try again keeps it too")
+
     def test_both_pages_print_the_apis_words_not_their_own(self):
         # The Deck kept its own copy of the labels after the village was fixed,
         # and went on saying "building..." about a failed run.
@@ -18992,7 +19025,12 @@ class ARedrawSaysWhyTheArtFailed(unittest.TestCase):
         finally:
             sys.argv = real
         nb = load("emily_new_build_why", "emily-new-build.py")
-        self.assertEqual(nb.why_failed(err.getvalue()), "HTTP Error 402: Payment Required")
+        why = nb.why_failed(err.getvalue())
+        self.assertIn("the paid drawing failed: HTTP Error 402: Payment Required", why)
+        # 2026-11-10, "Why did it not go to the backup?" - the card could not
+        # say. With no Cloudflare keys the reason says so, first, so a short
+        # card never cuts it off.
+        self.assertTrue(why.startswith("the free backup artist is not set up"), why)
         self.assertEqual(nb.why_failed(""), "no reason given")
 
     def test_a_build_with_no_record_gets_one_for_the_reason(self):

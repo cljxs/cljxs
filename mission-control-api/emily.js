@@ -118,7 +118,13 @@ function minutesSince(utc) {
 // it is. The village and the Deck each had their own copy of this, and a fix
 // to one left the other saying "building..." about a run that had failed.
 // { label, warn, note }
-function statusWords(status, task) {
+//
+// `build` is the build's own build.json. A waiting card used to print one
+// fixed sentence - "the image money ran out" - whatever had really happened,
+// and the reason the last redraw wrote (draft_blocked) was never shown: on
+// 2026-11-10 the owner asked why a build had not gone to the free backup
+// artist and the card could not say. Now it says what the last try said.
+function statusWords(status, task, build) {
   const mins = task ? minutesSince(task.started_at) : null;
   switch (status) {
     case 'ready_for_review': return { label: 'ready for review', warn: false, note: null };
@@ -126,10 +132,13 @@ function statusWords(status, task) {
     case 'in_progress':
       return { label: mins === null ? 'building…' : `building ${mins} min`, warn: false, note: null };
     case 'queued': return { label: 'queued', warn: false, note: null };
-    case 'waiting_for_art':
+    case 'waiting_for_art': {
+      const last = build && build.draft_blocked && build.draft_blocked.reason;
       return { label: 'waiting for art', warn: false,
-               note: 'The image money ran out when this was approved, so Emily was not '
-                 + 'woken. The hourly redraw tries again and sends it to her once the art is real.' };
+               note: 'No real art yet, so Emily was not woken. The hourly redraw (8am-10pm '
+                 + 'Central) or Try again draws it and sends it to her once the art is real.'
+                 + (last ? ` Last try: ${String(last).slice(0, 400)}` : '') };
+    }
     case 'failed':
       return { label: 'failed', warn: true,
                note: `Emily's run ended without finishing it${task && task.result
@@ -190,7 +199,7 @@ function describe(slug) {
     slug,
     title: listing.title || build.idea || build.title || slug.replace(/-/g, ' '),
     status: statusOf(build, task),
-    status_words: statusWords(statusOf(build, task), task),
+    status_words: statusWords(statusOf(build, task), task, build),
     task: task ? {
       id: task.id, status: task.status, started_at: task.started_at,
       completed_at: task.completed_at,

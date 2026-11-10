@@ -154,8 +154,8 @@ def why_failed(stderr):
         except ValueError:
             continue
         if isinstance(d, dict) and d.get("error"):
-            return str(d["error"])[:200]
-    return (str(stderr or "").strip()[-200:]) or "no reason given"
+            return str(d["error"])[:300]
+    return (str(stderr or "").strip()[-300:]) or "no reason given"
 
 
 def main():
@@ -223,7 +223,7 @@ def main():
     # (emily-finish.py --redraw) draws it and sends it to her once the art is
     # real. The approval still counts: the idea is not lost.
     if not art_ok or _assets().is_placeholder(root / "agents" / "emily" / "builds" / slug / "design.png"):
-        hold(root / "agents" / "emily" / "builds" / slug)
+        hold(root / "agents" / "emily" / "builds" / slug, art_msg)
         print("  no real art - most likely the day's image money is out. The build is\n"
               "  WAITING FOR ART: the hourly redraw will draw it and then send it to Emily.")
         return 0
@@ -233,8 +233,13 @@ def main():
 WAITING = "waiting_for_art"
 
 
-def hold(bdir):
-    """Mark a build as waiting for its art, keeping anything already in build.json."""
+def hold(bdir, why=None):
+    """Mark a build as waiting for its art, keeping anything already in build.json.
+
+    `why` is the reason the drawing failed, kept as draft_blocked - the field
+    the card prints after "Last try:". A hold without it left the card with
+    one fixed sentence about money whatever had really happened (2026-11-10).
+    """
     path = bdir / "build.json"
     try:
         build = json.loads(path.read_text())
@@ -242,6 +247,9 @@ def hold(bdir):
     except Exception:
         build = {}
     build["status"] = WAITING
+    if why:
+        build["draft_blocked"] = {"reason": str(why)[:400], "exit": 1,
+                                  "when_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")}
     path.write_text(json.dumps(build, indent=1) + "\n")
 
 

@@ -1032,8 +1032,12 @@ def main():
                              lambda p: generate(a.out, p, key, model, a.product), began=began)
             except Exception as exc:
                 failed = str(exc)[:200]
-                print(json.dumps({"ok": False, "mode": "generate-failed",
-                                  "error": failed}), file=sys.stderr)
+                # Says when there is no backup to go to - "why did it not go
+                # to the backup?" (owner, 2026-11-10) is answered on the card.
+                print(json.dumps({"ok": False, "mode": "generate-failed", "error": (
+                    "" if cf else "the free backup artist is not set up (CLOUDFLARE_ACCOUNT_ID "
+                                  "and CLOUDFLARE_API_TOKEN in Emily's credentials.env); ")
+                    + f"the paid drawing failed: {failed}"}), file=sys.stderr)
         # The free backup, only when the paid drawing could not be had. Not
         # for --model: that asks for one model by name, and a picture from
         # another would answer a question nobody asked.

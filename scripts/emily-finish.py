@@ -484,7 +484,9 @@ def to_emily(d):
         ok, msg = generate(d)
         print(f"  {d.name}: {msg}")
         if not ok or needs_art(d):
-            _module("emily_new_build_hold", "emily-new-build.py").hold(d)
+            # The reason kept where the card shows it: a Try again that
+            # failed used to leave no word of why.
+            _module("emily_new_build_hold", "emily-new-build.py").hold(d, f"redraw still failing: {msg}")
             print("  no real art yet - it waits, and the hourly redraw tries again")
             return 1
     print(f"emily-finish: {d.name} has its art - sending it to Emily")
