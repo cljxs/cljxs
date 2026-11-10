@@ -680,15 +680,21 @@ def to_png(src, dst):
         raise RuntimeError(f"could not turn the free drawing into a PNG: {res.stderr.strip()[:150]}")
 
 
-def cf_generate(path, prompt, keys, product="", seed=None, opener=None):
+# EVERYTHING the model accepts. Its own example sends a "seed" as well, and
+# the first real call (2026-11-10, the gingerbread fox) was refused for it:
+# "5006: AiError: Bad input: Additional or unevaluated properties '/seed' at
+# '/' not allowed". So the request is built from this list and nothing else.
+CF_INPUTS = ("prompt", "steps")
+
+
+def cf_generate(path, prompt, keys, product="", opener=None):
     """Draw one image on Cloudflare's free allowance. Returns bytes written.
     Raises with Cloudflare's reason when it refuses - out of free drawings
     for the day included - so the caller falls back to the placeholder."""
     import urllib.error
     account, token = keys
-    body = json.dumps({"prompt": cf_prompt(prompt, product), "steps": CF_STEPS,
-                       "seed": int(seed if seed is not None
-                                   else int.from_bytes(os.urandom(3), "big"))}).encode()
+    asked = {"prompt": cf_prompt(prompt, product), "steps": CF_STEPS}
+    body = json.dumps({k: asked[k] for k in CF_INPUTS}).encode()
     req = urllib.request.Request(CF_URL.format(account=account), data=body, headers={
         "Authorization": f"Bearer {token}", "Content-Type": "application/json"})
     try:

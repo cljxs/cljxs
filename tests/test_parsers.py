@@ -21849,6 +21849,10 @@ class EmilyHasAFreeBackupArtist(unittest.TestCase):
         self.assertFalse((self.d / "design.free.jpg").exists(), "the JPEG is cleaned up")
         self.assertIn("/ai/run/@cf/black-forest-labs/flux-1-schnell", self.sent.full_url)
         self.assertEqual(self.sent.get_header("Authorization"), "Bearer cf-test-token")
+        # Reintroduced bug: the "seed" from Cloudflare's own example, which the
+        # model refused on the first real call (2026-11-10, captured below).
+        self.assertEqual(sorted(json.loads(self.sent.data)), sorted(self.ea.CF_INPUTS))
+        self.assertEqual(sorted(self.ea.CF_INPUTS), ["prompt", "steps"])
 
     def test_out_of_free_drawings_too_is_a_placeholder_with_both_reasons(self):
         code, out, err = self.run_main([], self.reply(status=429, errors=[
@@ -21903,6 +21907,15 @@ class EmilyHasAFreeBackupArtist(unittest.TestCase):
             self.ea.cf_generate(self.out, "x", ("a" * 32, "t"),
                                 opener=self.reply(status=401, errors=real["errors"]))
         self.assertIn("Authentication error", str(e.exception))
+
+    def test_its_bad_input_refusal_is_read_from_the_real_reply(self):
+        # The first real call, 2026-11-10, as the owner's card printed it.
+        real = [{"code": 5006, "message": "AiError: Bad input: Error: Additional or unevaluated "
+                 "properties '/seed' at '/' not allowed (d3ae0b84-1d55-486c-be26-dbc4c0bc9985)"}]
+        with self.assertRaises(RuntimeError) as e:
+            self.ea.cf_generate(self.out, "x", ("a" * 32, "t"),
+                                opener=self.reply(status=400, errors=real))
+        self.assertIn("HTTP 400: 5006: AiError: Bad input", str(e.exception))
 
     def test_the_prompt_fits_and_keeps_the_direction_and_the_correction(self):
         # Cloudflare refuses a prompt over 2048 characters; Emily's run to 2,000
