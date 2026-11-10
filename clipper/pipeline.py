@@ -8,6 +8,7 @@ so a crash, a reboot or a timeout costs the stage in progress and nothing
 before it. The transcript in particular is cached on disk and never redone.
 """
 
+import contextlib
 import fcntl
 import json
 import traceback
@@ -347,11 +348,56 @@ def _postable(conn, clip):
         raise ValueError(f"clip {clip['id']} is already posted - a posted video cannot change")
 
 
+class Remaking(ValueError):
+    """Another remake of this clip is running."""
+
+
+@contextlib.contextmanager
+def one_remake(clip_path, clip_id):
+    """Only one remake of a clip at a time. Two at once write the same
+    NN.recut.part.mp4, and the one that finishes first moves it away from
+    under the other: "Unable to re-open 07.recut.part.mp4 output file for
+    shifting data ... Error writing trailer" (owner's Change length,
+    2026-11-10; reproduced by running two at once). The lock is the
+    operating system's on NN.lock, so it goes with the process holding it,
+    however that process ends. Held already by this process, it is not
+    taken twice (retime holds it around its own recut)."""
+    lock_path = Path(clip_path).with_suffix(".lock")
+    key = str(lock_path.resolve())
+    if key in _HELD:
+        yield
+        return
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Remaking(f"clip {clip_id} is already being remade - wait for that to finish "
+                           f"(a minute or two), then try again") from None
+        _HELD.add(key)
+        try:
+            yield
+        finally:
+            _HELD.discard(key)
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+_HELD = set()
+
+
 def recut(conn, paths, cfg, clip_id):
     """Cut a clip again, same moment and same number, with the source's
     spellings as they are now. Owner, 2026-10-09: the subtitles burned into a
     clip said "Amber Woolf" after the post text was fixed to Wolves. Refused
     once it is posted anywhere: what is out there and the file must match."""
+    clip = conn.execute("SELECT path FROM clips WHERE id = ?", (clip_id,)).fetchone()
+    if not clip:
+        return _recut(conn, paths, cfg, clip_id)          # says there is no such clip
+    with one_remake(clip["path"], clip_id):
+        return _recut(conn, paths, cfg, clip_id)
+
+
+def _recut(conn, paths, cfg, clip_id):
     clip, video, c = _clip_parts(conn, clip_id)
     _postable(conn, clip)
     src = conn.execute("SELECT * FROM sources WHERE id = ?", (video["source_id"],)).fetchone()
@@ -408,7 +454,16 @@ LENGTH_MAX_SECONDS = 180.0
 
 def retime(conn, paths, cfg, clip_id, start_by=0.0, end_by=0.0):
     """Move a clip's start and end by start_by / end_by seconds (negative is
-    earlier) and cut it again. Returns (start, end) on the source's clock."""
+    earlier) and cut it again. Returns (start, end) on the source's clock.
+    One at a time per clip, from reading its times to the new cut."""
+    clip = conn.execute("SELECT path FROM clips WHERE id = ?", (clip_id,)).fetchone()
+    if not clip:
+        return _retime(conn, paths, cfg, clip_id, start_by, end_by)          # says there is no such clip
+    with one_remake(clip["path"], clip_id):
+        return _retime(conn, paths, cfg, clip_id, start_by, end_by)
+
+
+def _retime(conn, paths, cfg, clip_id, start_by, end_by):
     clip, video, c = _clip_parts(conn, clip_id)
     _postable(conn, clip)
     start, end = round(c["start"] + float(start_by), 2), round(c["end"] + float(end_by), 2)

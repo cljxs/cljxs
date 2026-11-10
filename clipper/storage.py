@@ -16,7 +16,7 @@ from pathlib import Path
 
 # Beside 05.mp4: its copy without subtitles, the grid's still, the subtitle
 # file, a half-written render. 05.json stays - it is the clip's record.
-CLIP_FILES = (".mp4", ".clean.mp4", ".poster.jpg", ".ass", ".part.mp4", ".clean.part.mp4")
+CLIP_FILES = (".mp4", ".clean.mp4", ".poster.jpg", ".ass", ".part.mp4", ".clean.part.mp4", ".lock")
 OPEN = ("rendered", "approved")
 
 

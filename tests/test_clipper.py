@@ -1275,6 +1275,36 @@ class Posting(EndToEnd):
         self.assertEqual((row["start"], row["end"]), (self.clip["start"], self.clip["end"]))
         self.assertEqual(path.stat().st_mtime_ns, mtime, "the video was not touched")
 
+    def test_one_remake_of_a_clip_at_a_time(self):
+        # Owner, 2026-11-10, Change length: "ffmpeg failed (254) ... Unable to
+        # re-open 07.recut.part.mp4 output file for shifting data ... Error
+        # writing trailer: No such file or dir". Two remakes of one clip at
+        # once share that file, and the first to finish moves it from under the
+        # other - reproduced by running two `clipper length` together. Held
+        # here the way a running remake holds it.
+        self.ready()
+        path = Path(self.clip["path"])
+        mtime = path.stat().st_mtime_ns
+        lines = [l["text"] for l in self.listing()["lines"]]
+        with open(path.with_suffix(".lock"), "w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            for args in (["length", str(self.clip["id"]), "--end-by=-1"],
+                         ["subtitles", str(self.clip["id"]), "--set-json", json.dumps(["Zebra fish"] + lines[1:])],
+                         ["subtitles", str(self.clip["id"]), "--reset"],
+                         ["recut", str(self.clip["id"])]):
+                code, said = self.cli(*args)
+                self.assertNotEqual(code, 0, args)
+                self.assertIn("is already being remade - wait for that to finish", said, args)
+            row = self.conn.execute("SELECT * FROM clips WHERE id = ?", (self.clip["id"],)).fetchone()
+            self.assertEqual((row["start"], row["end"]), (self.clip["start"], self.clip["end"]),
+                             "a refused change of length changes nothing")
+            self.assertEqual(path.stat().st_mtime_ns, mtime, "and the video is left alone")
+        code, said = self.cli("length", str(self.clip["id"]), "--end-by=-1")
+        self.assertEqual(code, 0, "once the other is done, it goes ahead: " + said)
+        self.assertFalse(list(path.parent.glob("*.recut.*")), "nothing half-made left behind")
+        publish.reject(self.conn, self.clip["id"], "test")
+        self.assertFalse(path.with_suffix(".lock").exists(), "a finished clip's lock goes with its files")
+
     def test_a_posted_clip_is_never_recut(self):
         self.ready()
         publish.approve(self.conn, self.cfg, self.clip["id"], upload=self.upload)
