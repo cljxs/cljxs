@@ -1828,7 +1828,9 @@ class AnApprovalThatNeverFinished(unittest.TestCase):
         self.m.draft = lambda d: self.fail("nothing to draft before Emily has listed it")
         self.m.send_to_emily = lambda d: self.sent.append(d.name) or 0
         real = self.m._module
-        hold = types.SimpleNamespace(hold=lambda d: self.held.append(d.name))
+        self.why = []
+        hold = types.SimpleNamespace(hold=lambda d, why=None: (self.held.append(d.name),
+                                                               self.why.append(why)))
         self.m._module = lambda name, file: hold if file == "emily-new-build.py" else real(name, file)
 
     def draws(self, real_art):
@@ -1852,6 +1854,8 @@ class AnApprovalThatNeverFinished(unittest.TestCase):
         self.draws(real_art=False)
         self.assertEqual(self.retry(), 1)
         self.assertEqual((self.sent, self.held), ([], [self.d.name]))
+        # The reason goes with it, for the card's "Last try:" (2026-11-10).
+        self.assertTrue(self.why[0] and self.why[0].startswith("redraw still failing"), self.why)
 
     def test_real_art_that_never_reached_emily_is_only_sent(self):
         (self.d / "design.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 3000)
