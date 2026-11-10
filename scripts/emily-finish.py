@@ -15,6 +15,7 @@ Nothing here needs judgement: the listing copy and the artwork are already on
 disk, and the blueprint was chosen once by a human.
 
     emily-finish.py <build_dir>
+    emily-finish.py --compare <build>     the paid artist draws the same prompt, side by side
 
 Exits 0 even when it cannot draft. A local build is still a real build - the
 status stays "ready_local", the gallery shows LOCAL ONLY, and the user is told
@@ -32,6 +33,7 @@ Standard library only.
 """
 
 import json
+import shutil
 import os
 import subprocess
 import sys
@@ -276,6 +278,8 @@ def main():
         return to_kisscut("--apply" in sys.argv[2:])
     if sys.argv[1:2] == ["--retry"] and len(sys.argv) > 2:
         return retry(sys.argv[2])
+    if sys.argv[1:2] == ["--compare"] and len(sys.argv) > 2:
+        return compare(sys.argv[2])
     if sys.argv[1:2] == ["--redraw"]:
         return redraw()
     if sys.argv[1:2] in (["--redo"], ["--redraft"]):
@@ -435,17 +439,66 @@ def stuck(builds_root, now=None):
     return sorted(out, key=_when)
 
 
-def generate(d):
-    """Draw a build's art again, through the same step a new build uses, from
-    what it was ordered as. Builds from before order.json fall back to
-    Emily's own listing."""
+def ordered(d):
+    """(idea, brief, product, evidence) a build was ordered as. Builds from
+    before order.json fall back to Emily's own listing."""
     order, listing = _json(d / "order.json"), _json(d / "listing.json")
     idea = order.get("name") or _json(d / "build.json").get("idea") or listing.get("title") or d.name
     brief = order.get("brief") or str(listing.get("description") or "")[:600]
     product = order.get("product") or listing.get("product_type") or ""
+    return idea, brief, product, _json(d / "evidence.json") or None
+
+
+def generate(d):
+    """Draw a build's art again, through the same step a new build uses, from
+    what it was ordered as."""
     nb = _module("emily_new_build_redraw", "emily-new-build.py")
-    evidence = _json(d / "evidence.json") or None
-    return nb.generate_artwork(d.name, idea, brief, product, evidence)
+    return nb.generate_artwork(d.name, *ordered(d))
+
+
+# PAID VS FREE (owner, 2026-11-10, after the free backup artist drew the
+# gingerbread fox: "i wanna see what it would look like on the primary
+# builder for comparison"). The same prompt the build was drawn from, drawn
+# by the paid artist into a folder of its own beside a copy of the build's
+# design - emily-assets' compare, which the gallery already shows. Nothing
+# in the build changes, and the folder is no product: Remove throws it away.
+COMPARE_SUFFIX = "-vs-paid"
+NOW_FILE = "in-the-build-now.png"
+
+
+def compare(raw):
+    d = find_build(raw)
+    if d is None:
+        print(f"emily-finish: no build folder for {raw}")
+        return 1
+    if d.name.endswith(COMPARE_SUFFIX):
+        print(f"emily-finish: {d.name} is a comparison already")
+        return 1
+    ea = _module("emily_assets_compare", "emily-assets.py")
+    nb = _module("emily_new_build_compare", "emily-new-build.py")
+    ea.load_credentials()
+    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    idea, brief, product, evidence = ordered(d)
+    prompt = nb.art_prompt(idea, brief, product, evidence, d.parent)
+    out = d.parent / f"{d.name}{COMPARE_SUFFIX}"
+    model = ea.image_model()
+    print(f"emily-finish: drawing {d.name} with the paid artist ({model}) into {out.name}")
+    code = ea.compare(prompt, model, key, out, product)
+    if not out.is_dir():
+        return code or 1
+    art = d / "design.png"
+    if art.is_file():
+        shutil.copyfile(art, out / NOW_FILE)
+    build = _json(out / "build.json")
+    build.update({"idea": f"{idea} - paid artist vs the build now", "compares": d.name})
+    (out / "build.json").write_text(json.dumps(build, indent=1) + "\n")
+    listing = _json(out / "listing.json")
+    listing["title"] = f"Paid artist vs the build now: {idea}"[:140]
+    listing["description"] = (f"Not a product. {NOW_FILE} is {d.name}'s design as it is now; "
+                              f"the other picture is the paid artist ({model}) drawing the "
+                              f"same prompt. Remove throws this folder away.")
+    (out / "listing.json").write_text(json.dumps(listing, indent=1) + "\n")
+    return code
 
 
 def redraw(limit=REDRAW_PER_RUN):

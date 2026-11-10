@@ -161,7 +161,9 @@ sent to Emily; the `redraw-art` timer (hourly 08:07-22:07 Central,
 2026-11-09) draws whenever the paid drawing fails, through the same checks;
 it needs `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` in Emily's
 credentials.env, and a Free-plan Cloudflare account cannot be billed. Its
-pictures are not proofread while the money is out - the draft proofreads again. **Try again** on a gallery card
+pictures are not proofread while the money is out - the draft proofreads again. `emily-finish.py --compare <build>`
+draws a build's own prompt with the paid artist into `<build>-vs-paid/`,
+beside a copy of the build's design (a folder to look at, never a product). **Try again** on a gallery card
 re-runs a failed draft; `scripts/emily-build.py list | remove | restore`
 (remove archives, never deletes, and refuses while a Printify product points
 at it). Emily's gallery is in her village house (`loadEmilyBuilds`, `retryBuild`).

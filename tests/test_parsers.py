@@ -21940,3 +21940,72 @@ class _Body(io.BytesIO):
 
     def __exit__(self, *a):
         return False
+
+
+class ThePaidArtistCanBeComparedWithABuild(unittest.TestCase):
+    """Owner, 2026-11-10, after the free backup artist drew the gingerbread
+    fox: "i wanna see what it would look like on the primary builder for
+    comparison". emily-finish.py --compare draws the build's own prompt with
+    the paid artist, beside a copy of the build's design."""
+
+    def setUp(self):
+        import tempfile
+        self.root = Path(tempfile.mkdtemp())
+        self.builds = self.root / "agents" / "emily" / "builds"
+        ev = {"phrase": "christmas sweatshirt girls"}
+        for slug, idea in (("fox", "Gingerbread Fox With Scarf"), ("owl", "Snowy Owl Cocoa")):
+            d = self.builds / slug
+            d.mkdir(parents=True)
+            (d / "build.json").write_text(json.dumps({"idea": idea, "evidence": ev}))
+            (d / "order.json").write_text(json.dumps({"name": idea, "brief": "cozy", "product": ""}))
+            (d / "evidence.json").write_text(json.dumps(ev))
+            (d / "design.png").write_bytes(b"\x89PNG\r\n\x1a\n" + slug.encode() * 900)
+        env = unittest.mock.patch.dict(os.environ, {"ECOSYSTEM_ROOT": str(self.root),
+                                                    "OPENROUTER_API_KEY": "or-test"})
+        env.start()
+        self.addCleanup(env.stop)
+        self.fin = load("emily_finish_cmp", "emily-finish.py")
+        real = self.fin._module
+        self.ea = real("emily_assets_cmp2", "emily-assets.py")
+        self.ea.load_credentials = lambda: None
+        self.asked = []
+
+        def generate(path, prompt, key, model=None, product=""):
+            self.asked.append((model, prompt))
+            Path(path).write_bytes(b"\x89PNG\r\n\x1a\npaid" * 500)
+            return 2000, {"cost": 0.039}
+        self.ea.generate = generate
+        self.fin._module = lambda name, file: self.ea if file == "emily-assets.py" else real(name, file)
+
+    def run_compare(self, slug):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return self.fin.compare(slug)
+
+    def test_the_paid_artist_draws_the_builds_own_prompt_beside_it(self):
+        self.assertEqual(self.run_compare("fox"), 0)
+        out = self.builds / "fox-vs-paid"
+        self.assertEqual((out / "in-the-build-now.png").read_bytes(),
+                         (self.builds / "fox" / "design.png").read_bytes())
+        model, prompt = self.asked[0]
+        self.assertEqual(model, self.ea.image_model())
+        self.assertTrue((out / f"{self.ea.safe_name(model)}.png").is_file())
+        nb = load("emily_new_build_cmp", "emily-new-build.py")
+        self.assertEqual(prompt, nb.art_prompt("Gingerbread Fox With Scarf", "cozy", "",
+                                               {"phrase": "christmas sweatshirt girls"}, self.builds))
+        self.assertIn("Paid artist vs the build now", json.loads((out / "listing.json").read_text())["title"])
+        # Nothing in the build itself changed.
+        self.assertFalse((self.builds / "fox" / "listing.json").exists())
+
+    def test_the_build_is_not_told_to_differ_from_itself(self):
+        # Reintroduced bug: prior_designs unfiltered - the fox's redraw and its
+        # comparison were told to draw something unlike the fox.
+        self.run_compare("fox")
+        prompt = self.asked[0][1]
+        already = prompt.split("The shop already sells these", 1)[1]
+        self.assertIn("Snowy Owl Cocoa", already)
+        self.assertNotIn("Gingerbread Fox", already)
+
+    def test_the_hourly_redraw_never_takes_a_comparison_for_a_build(self):
+        self.run_compare("fox")
+        self.assertNotIn("fox-vs-paid", [d.name for d in self.fin.stuck(self.builds, now=10 ** 12)])
+        self.assertEqual(self.run_compare("fox-vs-paid"), 1, "not a comparison of a comparison")

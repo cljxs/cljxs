@@ -77,6 +77,28 @@ def _assets():
 ART_TIMEOUT_S = 180
 
 
+def art_prompt(idea, brief, product, evidence, builds_root):
+    """THE prompt a build's art is drawn from - for a new build, a redraw and
+    emily-finish's --compare, which must ask the paid artist exactly what the
+    build asked.
+
+    Composed in emily-assets.py, imported rather than built again here. This
+    file used to append its own art direction alongside PRINT_DIRECTION,
+    which said the same thing differently, and the two had already drifted
+    on whether text was allowed.
+
+    The shop's other designs for the phrase are things to differ from - but
+    not the build itself: once Emily has recorded it, a redraw or comparison
+    of the gingerbread fox would be told to draw something unlike the
+    gingerbread fox.
+    """
+    ea = _assets()
+    own = str(idea or "").strip().lower()
+    prior = [t for t in ea.prior_designs(builds_root, (evidence or {}).get("phrase"))
+             if t.strip().lower() != own]
+    return ea.compose(idea, brief, product, evidence, prior)
+
+
 def generate_artwork(slug, idea, brief, product, evidence=None):
     """Make the artwork here, in plain code, before Emily ever wakes.
 
@@ -98,15 +120,7 @@ def generate_artwork(slug, idea, brief, product, evidence=None):
     out = root / "agents" / "emily" / "builds" / slug / "design.png"
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    # THE prompt is composed in emily-assets.py, imported rather than built
-    # again here. This line used to append its own art direction - 'Flat
-    # vector illustration ..., clean edges, no text' - alongside
-    # PRINT_DIRECTION, which says the same thing differently. They had
-    # already drifted on whether text was allowed.
-    ea = _assets()
-    prompt = ea.compose(
-        idea, brief, product, evidence,
-        ea.prior_designs(out.parent.parent, (evidence or {}).get("phrase")))
+    prompt = art_prompt(idea, brief, product, evidence, out.parent.parent)
 
     try:
         res = subprocess.run(
