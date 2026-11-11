@@ -152,7 +152,8 @@ class WhatRanAndWhatMoved(Base):
         self.assertIn("clip", b["alone"])
         self.assertNotIn("stan", b["alone"])
         self.assertNotIn("you", b["alone"])
-        self.assertIn("Working alone: Paul, Clip, Peter", self.b.text(b))
+        # Peter feeds Ace Props NFL his defences since 2026-11-11: no longer alone.
+        self.assertIn("Working alone: Paul, Clip\n", self.b.text(b) + "\n")
 
 
 class WhereItShows(unittest.TestCase):

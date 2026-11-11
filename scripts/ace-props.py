@@ -434,7 +434,9 @@ def game_board(event, ladder, store_players, dfn, since=None):
 def props_bets(b=None):
     b = b or book()
     f = b.fold(b.events())
-    return ([x for x in f["open"] if b.is_props(x)], [x for x in f["settled"] if b.is_props(x)], f)
+    # Its own book only: NFL props (book "props-nfl") are graded by ace-props-nfl.py.
+    mine = lambda x: x.get("book") == BOOK
+    return ([x for x in f["open"] if mine(x)], [x for x in f["settled"] if mine(x)], f)
 
 
 def counted(settled):

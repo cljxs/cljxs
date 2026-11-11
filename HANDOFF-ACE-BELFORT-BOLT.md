@@ -180,6 +180,30 @@ counted on bets placed since the 2026-11-03 rule change (`STOP_FROM`; the old
 rule had lost its $1,000, 0-10, and the owner chose a fresh count).
 Logged in the preregistration as not a rule change. `ace-props.py show`.
 
+**Ace Props NFL (2026-11-11, owner: "lets set up another one so we can do all
+nfl player props"):** `scripts/ace-props-nfl.py`, the same rule (ace-props.py's
+own `judge` and numbers, imported) on DraftKings' NFL alternate ladders: pass
+yds, pass TDs, rush yds, rec yds, catches, rush+rec yds. "Bottom 10 at the
+position" is per stat, from Peter's table (`nfl-defense.py ranks`, the one on
+`/peter`). Players' lines from this season's box scores (free, ESPN, with
+nfl-defense.py's reader) in `data/props-nfl-players.json`. Prices from a
+SECOND free The Odds API account - the owner chose it knowing the provider
+may object to two accounts - key `ODDS_API_KEY_NFL` (`set-credential.py ace
+ODDS_API_KEY_NFL`; it never falls back to Ace's `ODDS_API_KEY`). 500 credits
+a month, one per market returned per game: a game is priced once, 20 min to
+3.5 h before kick-off (runs 08:45, 11:45, 15:15, 17:45 ET), only the markets
+where a defence is bottom 10 (`wanted_markets`), nothing once the day's 2
+are placed, at most 95 a week, 10 kept for the closes (one pull of the bets'
+markets about 20 minutes before kick-off). A real week (week 11) priced in
+full is about 65 credits. Book `props-nfl`: out of Ace's measures
+(`is_props`) and out of NBA props (`ace-props.py props_bets` takes book
+`props` only). Own stop at -$1,000. Page: `/ace-props?sport=nfl` (NBA/NFL
+switch on the Props page). `ace-props-nfl.py check` tests the key and shows
+the credits; `check --spend` reads one game (6 credits at most) and shows
+the ladders matched to box scores - run it once before trusting the reader:
+the test reply is shaped from the documentation, not captured, and the real
+one it saves (`data/props-nfl-sample.json`) should replace it.
+
 Scripts: `ace-judge.py` (blind/list/bet/pass/rest/verdict/mark - Ace's only
 way to record judgements), `ace-book.py` (the money, from `state/bets.jsonl`),
 `ace-clv.py` (CLV and Brier; `closing` decides what counts as a close: the last 60 minutes before the start and after the decision it grades - logged as a bug fix 2026-10-26), `ace-sharp.py` (Pinnacle prices from The Odds

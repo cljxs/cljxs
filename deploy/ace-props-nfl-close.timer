@@ -1,0 +1,11 @@
+[Unit]
+Description=Ace Props NFL: closes and settling, every 10 minutes 08:00-23:50 Eastern
+
+[Timer]
+# With no NFL props bet open a run reads one local file and stops. A bet's
+# close is one paid pull of its market 25 minutes or less before kick-off.
+OnCalendar=*-*-* 08..23:00/10 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

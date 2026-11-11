@@ -60,7 +60,8 @@ NODES = [
     ("bolt", "Bolt", "paper crypto trader", ["bolt-cycle"], "/bolt", (92, 52)),
     ("coach", "Coach", "journals and reviews the traders and Ace", ["coach-daily", "coach-weekly"], "/coach", (70, 44)),
     ("ace", "Ace", "paper sports bets", ["ace-cycle", "ace-fetch", "ace-close"], "/ace", (86, 74)),
-    ("aceprops", "Ace Props", "NBA points milestones, plain code", ["ace-props", "ace-props-close"], "/ace-props", (68, 70)),
+    ("aceprops", "Ace Props", "NBA points + NFL yardage ladders, plain code",
+     ["ace-props", "ace-props-close", "ace-props-nfl", "ace-props-nfl-close"], "/ace-props", (68, 70)),
     ("peter", "Peter", "player props, weather, defense", ["peter-defense"], "/peter", (90, 92)),
 ]
 
@@ -73,6 +74,7 @@ WIRES = [
     ("bolt", "coach", "both books' trades, journaled", "scripts/coach.py", "bolt.py"),
     ("ace", "coach", "his settled bets and closing lines", "scripts/coach.py", "ace-book.py"),
     ("ace", "aceprops", "one bankroll, two books", "scripts/ace-props.py", "ace-book.py"),
+    ("peter", "aceprops", "NFL defences by position", "scripts/ace-props-nfl.py", "nfl-defense.py"),
     ("stan", "agentroom", "a pain you approve becomes a plan", "scripts/stan.py", "agentroom"),
     ("scout", "fury", "ideas waiting on you", "scripts/gm.py", "fury.scout.load_ideas"),
     ("knowledge", "fury", "accepted lessons", "scripts/gm.py", "knowledge_facts"),

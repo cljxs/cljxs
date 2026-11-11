@@ -1,0 +1,16 @@
+[Unit]
+Description=Ace Props NFL: price the games kicking off in the next 3.5 hours, four times a day, Eastern
+
+[Timer]
+# Each run prices only games kicking off 20 minutes to 3.5 hours later
+# (ace-props-nfl.py LOOK_AHEAD_H), once each: 08:45 a London game, 11:45 the
+# 1pm games after the inactives, 15:15 the 4pm games, 17:45 the night game.
+# A day with no NFL game spends nothing.
+OnCalendar=*-*-* 08:45 America/New_York
+OnCalendar=*-*-* 11:45 America/New_York
+OnCalendar=*-*-* 15:15 America/New_York
+OnCalendar=*-*-* 17:45 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

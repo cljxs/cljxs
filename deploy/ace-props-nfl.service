@@ -1,0 +1,16 @@
+[Unit]
+Description=Ace Props NFL: NFL yardage and catch ladders by plain code - update, settle, price the games kicking off soon, bet up to 2 a day (no AI; The Odds API's second free account)
+Documentation=https://github.com/cljxs/cljxs
+
+[Service]
+# Added 2026-11-11 (owner). Bets go into Ace's bets.jsonl as book "props-nfl":
+# his bankroll, none of his measures. The first run reads this season's box
+# scores (about 150 games, free), hence the timeout.
+Type=oneshot
+User=root
+Environment=HOME=/root
+WorkingDirectory=/root/ecosystem
+ExecStart=/usr/bin/flock /run/ace-props-nfl.lock /usr/bin/python3 /root/ecosystem/scripts/ace-props-nfl.py run
+TimeoutStartSec=1200
+StandardOutput=journal
+StandardError=journal
