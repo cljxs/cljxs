@@ -73,13 +73,11 @@ VOIDED = ("STATUS_POSTPONED", "STATUS_CANCELED", "STATUS_CANCELLED")
 KEEP_RESULTS_DAYS = 40
 STAMP = "%Y-%m-%d %H:%M:%S"
 PROPS = "props"
-PROPS_NFL = "props-nfl"            # Ace Props NFL (ace-props-nfl.py), 2026-11-11
-PROPS_BOOKS = (PROPS, PROPS_NFL)
 
 
 def is_props(bet):
-    """A bet of an Ace Props book, NBA or NFL: Ace's money, none of his measures."""
-    return (bet or {}).get("book") in PROPS_BOOKS
+    """A bet of the Ace Props book: Ace's money, none of his measures."""
+    return (bet or {}).get("book") == PROPS
 
 
 def utc_now():
@@ -218,7 +216,7 @@ def rebuild(path=None, bank=None):
                     detail=s.get("detail"), book=s.get("book")) for s in book["settled"]]
     doc["open_bets"] = [_open_row(b) for b in book["open"] if not is_props(b)]
     doc["settled_bets"] = [s for s in settled if not is_props(s)]
-    doc["props_open_bets"] = [dict(_open_row(b), book=b.get("book")) for b in book["open"] if is_props(b)]
+    doc["props_open_bets"] = [dict(_open_row(b), book=PROPS) for b in book["open"] if is_props(b)]
     doc["props_settled_bets"] = [s for s in settled if is_props(s)]
     doc["kept_by"] = "ace-book.py from state/bets.jsonl - never edit by hand"
     _write(bank, doc)
@@ -501,7 +499,7 @@ def lines(path=None):
            f"stake ${flat_stake():,.2f} a bet, flat; at most {MAX_OPEN_BETS} open"]
     if props:
         out.append(f"(Ace Props shares the bankroll: {len(props)} bet(s), "
-                   f"${sum(float(x.get('profit') or 0) for x in props):+,.2f} settled - ace-props.py show, ace-props-nfl.py show)")
+                   f"${sum(float(x.get('profit') or 0) for x in props):+,.2f} settled - ace-props.py show)")
     stop = fault_stop(path)
     if stop:
         out.append("STOPPED: " + stop)

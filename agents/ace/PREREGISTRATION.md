@@ -165,11 +165,3 @@ fresh-news bettor matches Ace, the model adds nothing.
   (`ace-judge.py EVIDENCE_FROM`): 60 more bets at or below zero stop him
   again. Gate 2's verdict on the first 60 stands - no edge shown. Every
   number in the table above is unchanged.
-* 2026-11-11 — not a rule change: Ace Props NFL (`scripts/ace-props-nfl.py`),
-  the Ace Props rule on DraftKings' NFL alternate yardage and catch ladders,
-  picked by plain code, is a separate book on the same bankroll (owner's
-  decision). Its bets carry `book: "props-nfl"` and, like Ace Props, are kept
-  out of everything measured here (`ace-book.py is_props`). Its own cap (2 a
-  day) and its own stop ($1,000 of settled losses). Its prices come from a
-  second free The Odds API account, so Ace's Pinnacle budget is untouched.
-  Every number in the table above is unchanged.

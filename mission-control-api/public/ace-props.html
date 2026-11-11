@@ -11,10 +11,7 @@
      price - with the guards of option A. Two bets a day at most, $100 each,
      on Ace's bankroll but out of his record, his cap and his stops. Every
      number comes from /api/ace-props (scripts/ace-props.py); the page draws.
-     Opened from Ace's page and the village menu (?embed=1).
-     ?sport=nfl (owner, 2026-11-11): Ace Props NFL - the same rule on NFL
-     yardage and catch ladders, its own book, cap and stop, priced from a
-     second free Odds API account whose credits the page shows. -->
+     Opened from Ace's page and the village menu (?embed=1). -->
 <style>
   :root{
     --bg:#0a0d16; --panel:#0e1220; --panel2:#121729; --line:rgba(255,255,255,.07); --line2:rgba(255,255,255,.12);
@@ -61,9 +58,6 @@
   .why{color:var(--mute);font-size:12px}
   details{margin-top:6px} summary{cursor:pointer;color:var(--mute);font-size:12px}
   ul{margin:6px 0;padding-left:18px} li{margin:2px 0}
-  .sports{display:flex;gap:4px}
-  .sports a{font-size:12px;letter-spacing:.12em;color:var(--mute);border:1px solid var(--line);border-radius:6px;padding:6px 12px;text-decoration:none}
-  .sports a.on{color:var(--acc2);border-color:var(--acc)}
   .defs{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
   @media (max-width:640px){ .row{grid-template-columns:1fr} .head{padding:12px 14px} .body{padding:12px 14px} }
 </style>
@@ -72,8 +66,7 @@
 <body>
 <div class="frame">
   <div class="head">
-    <div><div class="title" id="title">ACE PROPS</div><div class="who" id="who">NBA points milestones · on Ace's bankroll</div></div>
-    <div class="sports" id="sports"></div>
+    <div><div class="title">ACE PROPS</div><div class="who">NBA points milestones · on Ace's bankroll</div></div>
     <div class="acct" id="acct"></div>
     <div class="sp"></div>
     <a class="btn" id="ace" href="/ace">← Ace</a>
@@ -99,15 +92,6 @@ const when = u => { const d = new Date(String(u || '').replace(' ', 'T') + (/Z$/
   return isNaN(d) ? '' : d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }); };
 
 const EMBED = new URLSearchParams(location.search).has('embed');
-const SPORT = new URLSearchParams(location.search).get('sport') === 'nfl' ? 'nfl' : 'nba';
-const WORDS = { passing_yards: 'pass yds', passing_tds: 'pass TDs', rushing_yards: 'rush yds',
-  receiving_yards: 'rec yds', receptions: 'catches', rush_rec_yards: 'rush+rec yds' };
-$('sports').innerHTML = ['nba', 'nfl'].map(s => `<a class="${s === SPORT ? 'on' : ''}" href="/ace-props?${EMBED ? 'embed=1&' : ''}sport=${s}">${s.toUpperCase()}</a>`).join('');
-if (SPORT === 'nfl') {
-  $('title').textContent = 'ACE PROPS NFL';
-  $('who').textContent = "NFL yardage & catch ladders · on Ace's bankroll";
-  document.title = 'Ace Props NFL';
-}
 if (EMBED) {
   document.body.classList.add('embed');
   $('ace').href = '/ace?embed=1';
@@ -120,7 +104,7 @@ if (EMBED) {
 let D = null, tab = 'board';
 
 async function load() {
-  try { D = await (await fetch(SPORT === 'nfl' ? '/api/ace-props?sport=nfl' : '/api/ace-props', { cache: 'no-store' })).json(); }
+  try { D = await (await fetch('/api/ace-props', { cache: 'no-store' })).json(); }
   catch (e) { $('rule').textContent = 'Could not reach the Deck - it may be restarting.'; return; }
   draw();
 }
@@ -134,9 +118,8 @@ function draw() {
     ['W-L', `<span class="v num">${s.won || 0}-${s.lost || 0}${s.void ? ` · ${s.void} void` : ''}</span>`],
     ['Today', `<span class="v num">${s.today || 0}/${s.cap || 2}</span>`],
     ['Beat the close', `<span class="v num">${has(s.avg_clv_pct) ? `${pp(s.avg_clv_pct)}%` : '—'}</span>`],
-    ...(D.credits ? [['Odds credits', `<span class="v num">${has(D.credits.remaining) ? D.credits.remaining : '—'}</span>`]] : []),
   ].map(([l, v]) => `<div><div class="l">${l}</div>${v}</div>`).join('');
-  $('rule').innerHTML = SPORT === 'nfl' ? nflRule(s, r) : `The opponent must be bottom ${r.bottom} at defending the player's position (G, F or C, this
+  $('rule').innerHTML = `The opponent must be bottom ${r.bottom} at defending the player's position (G, F or C, this
     season's games). His hit rate against those defences this season - however many games that is - is pulled
     ${Math.round((r.shrink || 0) * 100)}% toward the price and must beat it by ${r.gap_min_pts} pts; prices ${r.max_favourite} to
     +${r.max_longshot} only. At most ${r.cap} bets a day, ${money(r.stake)} each, from Ace's bankroll - kept out of his
@@ -149,26 +132,13 @@ function draw() {
   $('body').innerHTML = tab === 'board' ? board(games) : tab === 'open' ? openBets() : tab === 'results' ? results() : defences();
 }
 
-function nflRule(s, r) {
-  const c = D.credits || {};
-  return `The same rule as NBA props, on DraftKings' NFL alternate ladders (${Object.values(r.markets || {}).map(esc).join(', ')}):
-    the opponent must be bottom ${r.bottom} at defending the player's position in that stat (Peter's table, this season).
-    His hit rate against those defences this season is pulled ${Math.round((r.shrink || 0) * 100)}% toward the price and
-    must beat it by ${r.gap_min_pts} pts; prices ${r.max_favourite} to +${r.max_longshot} only. At most ${r.cap} bets a day,
-    ${money(r.stake)} each, from Ace's bankroll - out of his record and NBA props'. Pauses after ${money(-r.stop_usd)} settled.
-    ${c.key ? `Odds credits: ${has(c.remaining) ? c.remaining : 'not read yet'} left this month; ${c.week_spent || 0} of ${c.week_cap} spent this week, ${c.reserve} kept for closes.`
-      : '<b>No second Odds API key yet</b> - nothing is priced until it is put in on the server.'}`;
-}
-
-function rung(r, words) {
-  return `${r.line}+${words ? ' ' + words : ''} at ${price(r.price)} · hit ${pc(r.hit_pct)} of ${r.games} · counted ${pc(r.p_used)} vs ${pc(r.market_pct)} · edge ${pp(r.edge_pts)}`;
+function rung(r) {
+  return `${r.line}+ at ${price(r.price)} · hit ${pc(r.hit_pct)} of ${r.games} · counted ${pc(r.p_used)} vs ${pc(r.market_pct)} · edge ${pp(r.edge_pts)}`;
 }
 
 function board(games) {
   const b = D.board || {};
-  if (!games.length) return `<div class="muted">No board yet today. ${SPORT === 'nfl'
-    ? 'Games are priced at 08:45, 11:45, 15:15 and 17:45 Eastern, each once, 20 minutes to 3½ hours before kick-off'
-    : 'It is drawn at 12:30 and 17:30 Eastern'}${b.day ? ` (last: ${esc(b.day)})` : ''}.</div>`;
+  if (!games.length) return `<div class="muted">No board yet today. It is drawn at 12:30 and 17:30 Eastern${b.day ? ` (last: ${esc(b.day)})` : ''}.</div>`;
   const bet = new Set((D.open || []).concat(D.settled || []).map(x => `${x.match}|${x.athlete}`));
   return `<div class="muted" style="margin-bottom:10px">${esc(b.day || '')} · box scores: ${b.store ? b.store.games : 0} games to ${esc((b.store || {}).latest || '—')}</div>` +
     games.map(g => {
@@ -177,11 +147,11 @@ function board(games) {
       return `<div class="card"><h3>${esc(g.match)} <span class="muted">${esc(when(g.starts_utc))}</span></h3>
         ${g.note ? `<div class="why">${esc(g.note)}</div>` : ''}
         ${clear.map(p => `<div class="row"><div><b>${esc(p.name)}</b> <span class="muted">${esc(p.team)} ${esc(p.pos)} vs ${esc(p.opp)} (rank ${p.opp_rank})</span></div>
-          <div class="num">${esc(rung(p.best, p.words))}</div>
+          <div class="num">${esc(rung(p.best))}</div>
           <div>${bet.has(`${g.match}|${p.name}`) ? '<span class="tag bet">bet</span>' : '<span class="tag">clears</span>'}</div></div>`).join('')
           || '<div class="why">Nobody clears the bar in this game.</div>'}
         ${other.length ? `<details><summary>${other.length} more player(s) and why not</summary><ul>${other.map(p =>
-          `<li><b>${esc(p.name || p.athlete_id)}</b>${p.words ? ` (${esc(p.words)})` : ''} - ${esc(p.why)}</li>`).join('')}</ul></details>` : ''}
+          `<li><b>${esc(p.name || p.athlete_id)}</b> - ${esc(p.why)}</li>`).join('')}</ul></details>` : ''}
       </div>`;
     }).join('');
 }
@@ -210,12 +180,8 @@ function results() {
 function defences() {
   const d = (D.board || {}).defense || {};
   const names = { G: 'Guards', F: 'Forwards', C: 'Centres' };
-  const title = k => { const [pos, stat] = k.split(' '); return stat ? `${pos}s - ${WORDS[stat] || stat}` : (names[pos] || pos); };
-  const said = SPORT === 'nfl'
-    ? `The ${(D.rules || {}).bottom} teams that allow each position the most a game in each stat, this season - Peter's table.`
-    : `The ${(D.rules || {}).bottom} teams that allow the most points a game to each position, over every game they have played this season (since ${esc((D.rules || {}).season_from)}).`;
-  return `<div class="muted" style="margin-bottom:10px">${said}</div>
-    <div class="defs">${Object.entries(d).sort(([a], [b]) => a.localeCompare(b)).map(([pos, x]) => `<div class="card"><h3>${esc(title(pos))}</h3><ul>${(x.bottom || []).map((t, i) =>
+  return `<div class="muted" style="margin-bottom:10px">The ${(D.rules || {}).bottom} teams that allow the most points a game to each position, over every game they have played this season (since ${esc((D.rules || {}).season_from)}).</div>
+    <div class="defs">${Object.entries(d).map(([pos, x]) => `<div class="card"><h3>${names[pos] || pos}</h3><ul>${(x.bottom || []).map((t, i) =>
       `<li>${i + 1}. ${esc(t)} <span class="muted">${x.allowed[t]} a game</span></li>`).join('')}</ul></div>`).join('')
       || '<div class="muted">No box scores yet.</div>'}</div>`;
 }
