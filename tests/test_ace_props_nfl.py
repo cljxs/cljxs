@@ -269,6 +269,21 @@ class ARun(NflCase):
         self.assertEqual(self.paid(), [], "18:00 kick-off is past 3.5 hours from 14:00")
 
 
+class TheOwnersCheck(NflCase):
+
+    def test_the_saved_reply_is_read_again_matched_and_judged_for_free(self):
+        self.odds()
+        self.n.update_players(self.get)
+        self.n._write(self.n.SAMPLE, REPLY)
+        said = []
+        self.assertEqual(self.n.check(get=self.get, sample=True, say=said.append), 0)
+        self.assertEqual(self.calls, [], "no Odds API call, not even the free list")
+        text = "\n".join(said)
+        self.assertIn("rec yds         2 player(s), 2 matched", text)
+        self.assertIn("not matched: Michael Pittman Jr.", text)
+        self.assertIn("CeeDee Lamb 100+ rec yds at +260 vs IND", text)
+
+
 class TheBookItKeeps(NflCase):
 
     def bet(self, **kw):

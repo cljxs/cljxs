@@ -6,6 +6,7 @@ and catch ladders, by plain code, as its own book on Ace's bankroll.
     ace-props-nfl.py run [--dry]      update, settle, then judge the games starting soon and bet
     ace-props-nfl.py close            settle what finished; one price pull just before each bet's kick-off
     ace-props-nfl.py check [--spend]  is the key there, how many credits; --spend reads ONE game (6 credits at most)
+    ace-props-nfl.py check --sample   that one game's saved reply read again, matched and judged (free)
     ace-props-nfl.py players          fill the player store from this season's box scores (free)
     ace-props-nfl.py board --json     what the page draws
     ace-props-nfl.py show             the book in words
@@ -736,10 +737,22 @@ def close(get=None, now=None, key=None, say=log):
 
 # ------------------------------------------------------------------ the owner's check
 
-def check(spend=False, get=None, key=None, say=print):
+def check(spend=False, get=None, key=None, say=print, sample=False):
     """Is the second key there, how many credits are left, and - with
     spend - one game's real ladders read and matched to ESPN's players, so
-    the reading is seen working on a real reply before any bet rests on it."""
+    the reading is seen working on a real reply before any bet rests on it.
+    With sample, the reply `--spend` saved is read again: free."""
+    if sample:
+        reply = _read(SAMPLE, None)
+        if not reply:
+            say("no saved reply yet - run: python3 scripts/ace-props-nfl.py check --spend")
+            return 1
+        g = next((g for g in espn_games(get) if odds_id_for(g, [reply])), None)
+        if not g:
+            say(f"the saved reply ({reply.get('away_team')} at {reply.get('home_team')}) is not on ESPN's board this week")
+            return 1
+        say(f"{g['match']}: the reply saved by check --spend, read again (free)")
+        return reading(g, reply, say)
     key = key or api_key()
     if not key:
         say(f"no {KEY_NAME} yet. Put it in with: python3 scripts/set-credential.py ace {KEY_NAME}")
@@ -763,13 +776,20 @@ def check(spend=False, get=None, key=None, say=print):
     g, oid = pair
     reply, remaining = event_odds(key, oid, list(MARKETS))
     _write(SAMPLE, reply)
-    ladders, returned = ladders_from(reply)
+    _ladders, returned = ladders_from(reply)
     week = week_label(g["season"], g["week"])
     cost = note_spend(usage(week), week, f"check {g['match']}", remaining, len(returned))
+    say(f"{g['match']}: {len(returned)} market(s) back, {cost} credit(s) spent, {remaining} left")
+    return reading(g, reply, say)
+
+
+def reading(g, reply, say=print):
+    """What one real reply reads as: each market's players, how many are
+    matched to this season's box scores, and the game judged by the rule."""
+    ladders, _returned = ladders_from(reply)
     store = _read(STORE, {}) or {}
     who = players(store)
     index = by_name(who, set(g["teams"].values()))
-    say(f"{g['match']}: {len(returned)} market(s) back, {cost} credit(s) spent, {remaining} left")
     for market in MARKETS:
         rows = [(k, v) for k, v in ladders.items() if k[0] == market]
         matched = sum(1 for (m, k), _v in rows if k in index)
@@ -778,6 +798,17 @@ def check(spend=False, get=None, key=None, say=print):
             say(f"      {v['name']}: " + ", ".join(f"{line}+ {p:+d}" for line, p in v["rungs"][:5]))
     if not store.get("games"):
         say("  (the player store is empty - run: python3 scripts/ace-props-nfl.py players)")
+        return 0
+    missing = sorted({v["name"] for (m, k), v in ladders.items() if k not in index})
+    if missing:
+        say(f"  not matched: {', '.join(missing)}")
+    doc = NFL.load()
+    board = game_board(g, ladders, who, doc.get("positions") or {}, defence(doc))
+    clear = [p for p in board["players"] if p.get("best")]
+    say(f"  by the rule: {len(clear)} of {len(board['players'])} ladder(s) clear the bar")
+    for p in clear[:6]:
+        r = p["best"]
+        say(f"      {p['name']} {r['line']}+ {p['words']} at {r['price']:+d} vs {p['opp']} (rank {p['opp_rank']}): {r['why']}")
     return 0
 
 
@@ -852,6 +883,7 @@ def main(argv=None):
     sub.add_parser("close")
     c = sub.add_parser("check")
     c.add_argument("--spend", action="store_true")
+    c.add_argument("--sample", action="store_true", help="read the reply --spend saved again, free")
     sub.add_parser("players")
     j = sub.add_parser("board")
     j.add_argument("--json", action="store_true")
@@ -862,7 +894,7 @@ def main(argv=None):
     elif a.cmd == "close":
         print("\n".join(close()))
     elif a.cmd == "check":
-        return check(a.spend)
+        return check(a.spend, sample=a.sample)
     elif a.cmd == "players":
         store, added = update_players()
         print(f"{added} game(s) added; {len(store.get('games') or {})} this season")
