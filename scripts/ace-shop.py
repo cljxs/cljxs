@@ -25,10 +25,19 @@ EVERY one of them - the least favourable - and it is graded the same way at
 the close. On two-way markets they differ most on long shots, where equal
 margin (what ace-sharp.py's novig uses) flatters the underdog.
 
-THE GUARDS: a price older than FRESH_MIN minutes, at Pinnacle or the book,
-is not used (Pinnacle's prices on The Odds API come from its public site and
-"may incur a delay" - a stale price looks exactly like an edge); a worth of
-more than MAX_EDGE_PCT is taken for a stale or wrong line, not a gift; the
+THE GUARDS (owner, 2026-11-11, option B): the danger is a stale PINNACLE
+price, not a stale US one - Pinnacle's prices on The Odds API come from its
+public site and "may incur a delay", and against a stale Pinnacle every US
+book looks wrong. So:
+  * a US price counts however old its stamp - if it is listed it is on
+    offer, and a slow price is the very thing being looked for;
+  * Pinnacle's must be under PIN_FRESH_MIN minutes old;
+  * the crowd check: Pinnacle's no-vig chance must be within CROWD_PTS of
+    the middle (median) of the US books' no-vig chances, with at least
+    CROWD_MIN books to ask. If Pinnacle disagrees with the books in
+    general, Pinnacle is the likelier one to be wrong: no bet. The median,
+    so the one slow book being bet cannot pull the middle toward itself.
+A worth of more than MAX_EDGE_PCT is taken for a wrong line, not a gift; the
 true chance must be 20-80%; one bet a game, DAILY_CAP a day, $100 flat.
 
 THE KEY is the second free Odds API account (500 credits a month), stored
@@ -82,7 +91,9 @@ METHODS = ("equal margin", "additive", "shin", "odds ratio", "log")
 EDGE_PCT = 2.0                 # the owner's number, 2026-11-11: worth +2% under every method
 MAX_EDGE_PCT = 10.0            # more than this is a stale or wrong line
 TRUE_RANGE = (20.0, 80.0)      # true chance of the side bet, in %
-FRESH_MIN = 30                 # a price older than this is not used
+PIN_FRESH_MIN = 60             # Pinnacle's price older than this is not used (US prices: no limit)
+CROWD_PTS = 3.0                # Pinnacle's no-vig chance within this of the US books' median...
+CROWD_MIN = 2                  # ...asked of at least this many US books
 DAILY_CAP = 5                  # bets a day, Eastern, by when placed
 LOOK_AHEAD_H = 12              # games starting within this...
 NOT_WITHIN_MIN = 20            # ...and not sooner than this
@@ -209,12 +220,30 @@ def h2h(event, key):
 
 
 def fresh(when, now):
-    return when is not None and now - when <= timedelta(minutes=FRESH_MIN)
+    return when is not None and now - when <= timedelta(minutes=PIN_FRESH_MIN)
+
+
+def age_min(when, now):
+    return None if when is None else round((now - when).total_seconds() / 60)
+
+
+def median(xs):
+    xs = sorted(xs)
+    n = len(xs)
+    return None if not n else (xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2)
+
+
+def crowd(event, pin):
+    """(Pinnacle's no-vig home chance, the US books' median, how many books)
+    - all by equal margin, so the two are measured the same way."""
+    us = [h2h(event, k) for k in US_BOOKS]
+    homes = [SHARP.novig(p[0], p[1])[0] for p in us if p]
+    return SHARP.novig(pin[0], pin[1])[0], median(homes), len(homes)
 
 
 def judge_game(ctx, event, now):
-    """One game: Pinnacle's true chances five ways, the best fresh US price
-    on each side, its worth under every method, and the verdict."""
+    """One game: Pinnacle's true chances five ways, the crowd check, the
+    best US price on each side, its worth under every method, the verdict."""
     out = {"event_id": str(ctx.get("event_id")), "sport": ctx.get("sport"), "match": ctx.get("short"),
            "starts_utc": ctx.get("start_utc"), "odds_id": event.get("id"), "sides": {}, "bet": None, "why": ""}
     pin = h2h(event, SHARP_BOOK)
@@ -222,7 +251,16 @@ def judge_game(ctx, event, now):
         out["why"] = "no Pinnacle price"
         return out
     if not fresh(pin[2], now):
-        out["why"] = f"Pinnacle's price is older than {FRESH_MIN} minutes"
+        out["why"] = f"Pinnacle's price is {age_min(pin[2], now)} minutes old - over {PIN_FRESH_MIN}"
+        return out
+    mine, middle, n = crowd(event, pin)
+    out["crowd"] = {"pinnacle_home_pct": mine, "us_median_home_pct": middle, "books": n}
+    if n < CROWD_MIN:
+        out["why"] = f"only {n} US book(s) priced it - too few to check Pinnacle against"
+        return out
+    if abs(mine - middle) > CROWD_PTS:
+        out["why"] = (f"Pinnacle has the home side {mine:g}%, the US books' middle {middle:g}% - "
+                      f"more than {CROWD_PTS:g} pts apart, so Pinnacle is probably stale: no bet")
         return out
     chances = true_chances(pin[:2])
     out["pinnacle"] = {"home": SHARP.american(pin[0]), "away": SHARP.american(pin[1])}
@@ -230,10 +268,10 @@ def judge_game(ctx, event, now):
         offers = []
         for key in US_BOOKS:
             p = h2h(event, key)
-            if p and fresh(p[2], now):
+            if p:
                 offers.append((p[i], key))
         if not offers:
-            out["sides"][side] = {"why": "no fresh US price"}
+            out["sides"][side] = {"why": "no US price"}
             continue
         best, at = max(offers)
         w = worth(best, chances, i)
@@ -501,6 +539,20 @@ def close(now=None, key=None, fetcher=None):
 
 # ------------------------------------------------------------------ the owner's check
 
+def book_ages(events, now):
+    """One line a book: how many games it priced, and how old its price
+    stamps were at this moment (the youngest, the middle, the oldest) - to
+    see what The Odds API's stamps really look like."""
+    out = ["  book          games   price age in minutes (youngest / middle / oldest)"]
+    for k in (SHARP_BOOK,) + US_BOOKS:
+        ages = [age_min(p[2], now) for p in (h2h(e, k) for e in events) if p and p[2]]
+        if not ages:
+            out.append(f"  {k:<13}{0:>5}   - no prices on this plan")
+            continue
+        out.append(f"  {k:<13}{len(ages):>5}   {min(ages)} / {round(median(ages))} / {max(ages)}")
+    return out
+
+
 def check(sport=None, key=None, fetcher=None, now=None, say=print):
     now = now or utc_now()
     key = key or api_key()
@@ -521,12 +573,8 @@ def check(sport=None, key=None, fetcher=None, now=None, say=print):
     if events is None:
         return 1
     say(f"{sport}: {len(events)} game(s) priced, {u.get('remaining')} credits left")
-    seen = {}
-    for e in events:
-        for bk in e.get("bookmakers") or []:
-            seen[bk.get("key")] = seen.get(bk.get("key"), 0) + 1
-    for k in (SHARP_BOOK,) + US_BOOKS:
-        say(f"  {k:<13}{seen.get(k, 0):>3} game(s)" + ("" if seen.get(k) else "  - no prices on this plan"))
+    for line in book_ages(events, now):
+        say(line)
     ctxs = {}
     for c in contexts():
         if c["sport"] == sport:
@@ -534,6 +582,11 @@ def check(sport=None, key=None, fetcher=None, now=None, say=print):
             if e:
                 ctxs[c["event_id"]] = judge_game(c, e, now)
     say(f"  {len(ctxs)} joined to ESPN's games")
+    for g in ctxs.values():
+        c = g.get("crowd")
+        if c and c["us_median_home_pct"] is not None and abs(c["pinnacle_home_pct"] - c["us_median_home_pct"]) > CROWD_PTS:
+            say(f"    crowd check stops {g['match']}: Pinnacle {c['pinnacle_home_pct']:g}% home, "
+                f"US books' middle {c['us_median_home_pct']:g}%")
     rows = sorted(((r["worst_pct"], g["match"], s, r) for g in ctxs.values()
                    for s, r in g["sides"].items() if "worst_pct" in r), key=lambda t: -t[0])
     for w, match, side, r in rows[:8]:

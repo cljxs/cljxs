@@ -186,9 +186,13 @@ ways (equal margin, additive, Shin, odds ratio, log - the page's methods;
 its "margin proportional to odds" equals additive), against the best fresh
 price at nine US books (DraftKings, FanDuel, BetMGM, BetRivers, theScore
 Bet, Hard Rock, Bally, betPARX, Fliff - Caesars and Fanatics are paid-plan
-only). Bets when a price is worth +2% under EVERY method; refuses prices
-older than 30 minutes, worth over 10% (a stale line), or a true chance
-outside 20-80%. One a game, 5 a day, $100, NFL/NBA/college football. Its OWN
+only). Bets when a price is worth +2% under EVERY method. The guards
+(owner's option B, 2026-11-11): a US price counts however old its stamp (a
+slow price is the edge); Pinnacle's must be under 60 minutes old; and the
+crowd check - Pinnacle's no-vig chance within 3 pts of the median of the US
+books' (at least 2), else Pinnacle is taken to be stale and nothing is bet.
+Also refused: worth over 10% (a wrong line), a true chance outside 20-80%.
+`check` prints each book's price ages, to see what the stamps really mean. One a game, 5 a day, $100, NFL/NBA/college football. Its OWN
 paper $10,000 in `agents/ace/state/shop/` through ace-book.py - Ace's book,
 bankroll and preregistered measures never see it. Graded by Pinnacle's
 close, the worst method again. The second free Odds API account

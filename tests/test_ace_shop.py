@@ -80,11 +80,13 @@ class ShopCase(unittest.TestCase):
         self.calls.append((sport, tuple(books)))
         return self.events, 400 - len(self.calls)
 
-    def a_game(self, eid="1", home_price=2.30):
-        """BOS @ NYK: Pinnacle 1.67 / 2.31; FanDuel pays the Knicks `home_price`."""
+    def a_game(self, eid="1", home_price=2.30, fanduel_age=5, pinnacle_age=5):
+        """BOS @ NYK: Pinnacle 1.67 / 2.31, DraftKings and BetMGM near it;
+        FanDuel - the slow book - pays the Knicks `home_price`."""
         self.ctx(eid, "New York Knicks", "Boston Celtics", "BOS @ NYK")
         return event(f"o{eid}", "New York Knicks", "Boston Celtics",
-                     {"pinnacle": (2.31, 1.67, 5), "draftkings": (2.24, 1.68, 5), "fanduel": (home_price, 1.62, 5)})
+                     {"pinnacle": (2.31, 1.67, pinnacle_age), "draftkings": (2.24, 1.68, 5),
+                      "betmgm": (2.25, 1.66, 5), "fanduel": (home_price, 1.62, fanduel_age)})
 
 
 class TheTrueOddsAreTheirs(ShopCase):
@@ -124,30 +126,72 @@ class TheVerdictTakesTheWorstMethod(ShopCase):
         self.assertLess(min(w.values()), 2.0)
         self.assertIsNone(g["bet"])
 
-    def test_a_stale_price_is_not_an_edge(self):
+    def test_a_slow_us_price_counts_however_old(self):
+        # Owner's option B, 2026-11-11: a listed US price is on offer - its age is the edge, not a fault.
         c = self.ctx("1", "New York Knicks", "Boston Celtics", "BOS @ NYK")
-        old_pin = event("o1", "New York Knicks", "Boston Celtics",
-                        {"pinnacle": (2.31, 1.67, 45), "fanduel": (2.50, 1.62, 5)})
-        self.assertIn("older than 30 minutes", self.s.judge_game(c, old_pin, NOW)["why"])
-        old_book = event("o1", "New York Knicks", "Boston Celtics",
-                         {"pinnacle": (2.31, 1.67, 5), "draftkings": (2.24, 1.68, 5), "fanduel": (2.50, 1.62, 45)})
-        g = self.s.judge_game(c, old_book, NOW)
-        self.assertEqual(g["sides"]["home"]["book"], "draftkings", "FanDuel's 45-minute-old 2.50 is not used")
+        g = self.s.judge_game(c, self.a_game(home_price=2.50, fanduel_age=180), NOW)
+        self.assertEqual((g["bet"], g["sides"]["home"]["book"]), ("home", "fanduel"))
+
+    def test_a_stale_pinnacle_is_not_used(self):
+        c = self.ctx("1", "New York Knicks", "Boston Celtics", "BOS @ NYK")
+        g = self.s.judge_game(c, self.a_game(home_price=2.50, pinnacle_age=75), NOW)
+        self.assertIn("75 minutes old - over 60", g["why"])
         self.assertIsNone(g["bet"])
+        self.assertEqual(self.s.judge_game(c, self.a_game(home_price=2.50, pinnacle_age=50), NOW)["bet"], "home")
+
+
+class TheCrowdCheck(ShopCase):
+    """Owner, 2026-11-11: "if his price disagrees with every other book means no bet"."""
+
+    def test_pinnacle_against_every_us_book_is_no_bet(self):
+        # The Knicks have moved to about 47% everywhere but Pinnacle, which still says 42%:
+        # every US book "pays too much" - a stale Pinnacle, not five gifts.
+        c = self.ctx("1", "New York Knicks", "Boston Celtics", "BOS @ NYK")
+        e = event("o1", "New York Knicks", "Boston Celtics",
+                  {"pinnacle": (2.31, 1.67, 5), "draftkings": (2.05, 1.80, 5), "fanduel": (2.08, 1.78, 5),
+                   "betmgm": (2.05, 1.78, 5), "betrivers": (2.10, 1.75, 5)})
+        g = self.s.judge_game(c, e, NOW)
+        self.assertIsNone(g["bet"])
+        self.assertIn("probably stale: no bet", g["why"])
+
+    def test_one_slow_book_cannot_pull_the_middle(self):
+        # FanDuel alone is far off; the median of four books barely moves, so the check passes.
+        c = self.ctx("1", "New York Knicks", "Boston Celtics", "BOS @ NYK")
+        e = self.a_game(home_price=2.55)
+        e["bookmakers"].append(event("x", "New York Knicks", "Boston Celtics",
+                                     {"betrivers": (2.28, 1.66, 5)})["bookmakers"][0])
+        g = self.s.judge_game(c, e, NOW)
+        homes = sorted(self.s.SHARP.novig(h, a)[0] for h, a in ((2.24, 1.68), (2.25, 1.66), (2.55, 1.62), (2.28, 1.66)))
+        self.assertEqual(g["crowd"]["us_median_home_pct"], (homes[1] + homes[2]) / 2, "the middle, not the average")
+        self.assertLessEqual(abs(g["crowd"]["pinnacle_home_pct"] - g["crowd"]["us_median_home_pct"]), 3.0)
+        self.assertEqual(g["bet"], "home")
+
+    def test_too_few_books_to_ask(self):
+        c = self.ctx("1", "New York Knicks", "Boston Celtics", "BOS @ NYK")
+        e = event("o1", "New York Knicks", "Boston Celtics", {"pinnacle": (2.31, 1.67, 5), "fanduel": (2.50, 1.62, 5)})
+        self.assertIn("too few to check Pinnacle against", self.s.judge_game(c, e, NOW)["why"])
+
+    def test_check_shows_how_old_each_books_prices_are(self):
+        lines = self.s.book_ages([self.a_game(home_price=2.50, fanduel_age=40)], NOW)
+        fd = next(l for l in lines if "fanduel" in l)
+        self.assertIn("40 / 40 / 40", fd)
+        self.assertIn("no prices on this plan", next(l for l in lines if "fliff" in l))
+
 
     def test_too_good_to_be_true_and_out_of_range(self):
         c = self.ctx("1", "New York Knicks", "Boston Celtics", "BOS @ NYK")
         g = self.s.judge_game(c, self.a_game(home_price=2.80), NOW)
         self.assertIn("stale or wrong line", g["sides"]["home"]["why"])
         long_shot = event("o1", "New York Knicks", "Boston Celtics",
-                          {"pinnacle": (6.5, 1.13, 5), "fanduel": (7.5, 1.10, 5)})
+                          {"pinnacle": (6.5, 1.13, 5), "draftkings": (6.2, 1.12, 5), "fanduel": (7.5, 1.10, 5)})
         self.assertIn("outside 20-80%", self.s.judge_game(c, long_shot, NOW)["sides"]["home"]["why"])
 
     def test_only_its_nine_books_count(self):
         c = self.ctx("1", "New York Knicks", "Boston Celtics", "BOS @ NYK")
         e = event("o1", "New York Knicks", "Boston Celtics",
-                  {"pinnacle": (2.31, 1.67, 5), "draftkings": (2.24, 1.68, 5), "betonlineag": (2.50, 1.60, 5)})
-        self.assertEqual(self.s.judge_game(c, e, NOW)["sides"]["home"]["book"], "draftkings")
+                  {"pinnacle": (2.31, 1.67, 5), "draftkings": (2.24, 1.68, 5), "betmgm": (2.25, 1.66, 5),
+                   "betonlineag": (2.50, 1.60, 5)})
+        self.assertEqual(self.s.judge_game(c, e, NOW)["sides"]["home"]["book"], "betmgm")
 
 
 class ARun(ShopCase):
@@ -176,7 +220,8 @@ class ARun(ShopCase):
         for i in range(7):
             self.ctx(str(i), f"Home{i}", f"Away{i}", f"A{i} @ H{i}")
             self.events.append(event(f"o{i}", f"Home{i}", f"Away{i}",
-                                     {"pinnacle": (2.31, 1.67, 5), "fanduel": (2.46 + i / 100, 1.62, 5)}))
+                                     {"pinnacle": (2.31, 1.67, 5), "draftkings": (2.24, 1.68, 5),
+                                      "betmgm": (2.25, 1.66, 5), "fanduel": (2.46 + i / 100, 1.62, 5)}))
         self.s.run(now=NOW, fetcher=self.fetcher)
         f = self.s.book().fold(self.s.book().events(self.s.BETS))
         self.assertEqual(len(f["open"]), 5)
