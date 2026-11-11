@@ -358,7 +358,18 @@ function register(app) {
         let d = null;
         try { d = err ? null : JSON.parse(stdout); } catch { d = null; }
         if (!d) return res.status(500).json({ error: String(stderr || err || 'unreadable').slice(-300) });
-        res.json(d);
+        // The Line Shopper (owner, 2026-11-11): one more tab, graded by
+        // ace-shop.py on its own book. If it cannot be read, the others still show.
+        execFile('python3', [path.join(ROOT, 'scripts', 'ace-shop.py'), 'board'],
+          { cwd: ROOT, timeout: 30000, maxBuffer: 16 * 1024 * 1024 }, (err2, out2) => {
+            let shop = null;
+            try { shop = err2 ? null : JSON.parse(out2); } catch { shop = null; }
+            if (shop && d.strategies && d.order) {
+              d.strategies.shop = shop;
+              d.order = [d.order[0], 'shop', ...d.order.slice(1)];
+            }
+            res.json(d);
+          });
       });
   });
 

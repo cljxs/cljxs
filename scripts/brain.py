@@ -59,7 +59,8 @@ NODES = [
      ["belfort-cycle", "belfort-fetch", "belfort-exits", "belfort-review"], "/markets", (88, 30)),
     ("bolt", "Bolt", "paper crypto trader", ["bolt-cycle"], "/bolt", (92, 52)),
     ("coach", "Coach", "journals and reviews the traders and Ace", ["coach-daily", "coach-weekly"], "/coach", (70, 44)),
-    ("ace", "Ace", "paper sports bets", ["ace-cycle", "ace-fetch", "ace-close"], "/ace", (86, 74)),
+    ("ace", "Ace", "paper sports bets (+ the Line Shopper)",
+     ["ace-cycle", "ace-fetch", "ace-close", "ace-shop", "ace-shop-close"], "/ace", (86, 74)),
     ("aceprops", "Ace Props", "NBA points milestones, plain code", ["ace-props", "ace-props-close"], "/ace-props", (68, 70)),
     ("peter", "Peter", "player props, weather, defense", ["peter-defense"], "/peter", (90, 92)),
 ]

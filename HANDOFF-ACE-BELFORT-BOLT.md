@@ -180,6 +180,25 @@ counted on bets placed since the 2026-11-03 rule change (`STOP_FROM`; the old
 rule had lost its $1,000, 0-10, and the owner chose a fresh count).
 Logged in the preregistration as not a rule change. `ace-props.py show`.
 
+**Line Shopper (2026-11-11, owner, from WinnerOdds' True Odds Calculator):**
+`scripts/ace-shop.py`. Pinnacle's moneyline with its margin taken out five
+ways (equal margin, additive, Shin, odds ratio, log - the page's methods;
+its "margin proportional to odds" equals additive), against the best fresh
+price at nine US books (DraftKings, FanDuel, BetMGM, BetRivers, theScore
+Bet, Hard Rock, Bally, betPARX, Fliff - Caesars and Fanatics are paid-plan
+only). Bets when a price is worth +2% under EVERY method; refuses prices
+older than 30 minutes, worth over 10% (a stale line), or a true chance
+outside 20-80%. One a game, 5 a day, $100, NFL/NBA/college football. Its OWN
+paper $10,000 in `agents/ace/state/shop/` through ace-book.py - Ace's book,
+bankroll and preregistered measures never see it. Graded by Pinnacle's
+close, the worst method again. The second free Odds API account
+(`ODDS_API_KEY_NFL`, never Ace's key): one credit per sport per check (ten
+bookmakers count as one region - verified in the API docs), four checks a
+day, a close call per sport per bet window; `ace-shop.py check nba` spends
+one credit to show which books answer and the best edges. A tab on Ace's
+page ("Line Shopper"), merged into `/api/ace/no-ai` by ace.js. The margin
+methods are pinned to the page's own example in tests/test_ace_shop.py.
+
 Scripts: `ace-judge.py` (blind/list/bet/pass/rest/verdict/mark - Ace's only
 way to record judgements), `ace-book.py` (the money, from `state/bets.jsonl`),
 `ace-clv.py` (CLV and Brier; `closing` decides what counts as a close: the last 60 minutes before the start and after the decision it grades - logged as a bug fix 2026-10-26), `ace-sharp.py` (Pinnacle prices from The Odds

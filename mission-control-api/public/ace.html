@@ -413,7 +413,7 @@ function drawReasons() {
 // ------------------------------------------------------------ the no-AI bettors
 // One tab each beside Ace. Every number comes graded from ace-baselines.py
 // (/api/ace/no-ai); this only lays it out.
-const NAMES = { ace: 'Ace', underdog: 'Underdog', steam: 'Steam', sharp: 'Sharp', news: 'News', favourite: 'Favourite', random: 'Random' };
+const NAMES = { ace: 'Ace', shop: 'Line Shopper', underdog: 'Underdog', steam: 'Steam', sharp: 'Sharp', news: 'News', favourite: 'Favourite', random: 'Random' };
 const nameOf = s => NAMES[s] || s.charAt(0).toUpperCase() + s.slice(1);
 let N = null, who = 'ace';
 try { who = localStorage.getItem('ace.who') || 'ace'; } catch (e) { /* private window */ }
@@ -479,7 +479,8 @@ function drawNai() {
         <div class="k">Everyone on the same games, most profit first</div>
         ${lead}
         <div class="desc"><b>${esc(nameOf(who))}</b> - ${esc(me.describe)}</div>
-        <div class="note">Plain code, no AI, flat $100 paper bets at the price when it decided. These don't touch Ace's bankroll.
+        <div class="note">Plain code, no AI, flat $100 paper bets at the price when it decided. These don't touch Ace's bankroll.${who === 'shop'
+          ? ` The Line Shopper has its own paper $10,000${has(me.record.bankroll) ? ` (now ${money(me.record.bankroll)})` : ''}; "vs close" is against Pinnacle's close with its margin taken out five ways, the least of them${has(me.record.credits_left) ? `; ${me.record.credits_left} odds credits left this month` : ''}.` : ''}
           "Vs close" is the price taken against the closing price - above zero means it beat the market.</div>
         <div class="k" style="margin:16px 0 8px">Settled${settled.length ? ` (latest ${settled.length})` : ''}</div>
         ${settled.length ? settled.map(naiTicket).join('') : '<div class="empty">Nothing settled yet.</div>'}
