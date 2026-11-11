@@ -17284,13 +17284,22 @@ class TheNoAIBettorsAndTheBlindScore(unittest.TestCase):
     def picks(self, rows, lines):
         return {s: r["selection"] for s, r, _ in self.bl.decide(rows, lines, self.now, self.clv)}
 
-    def test_random_and_favourite_decide_within_six_hours(self):
+    def test_random_and_favourite_are_retired(self):
+        # Owner, 2026-11-11: "Let's get rid of the favorite and random better".
+        # They bet on every game within 6 hours; neither may bet again.
         got = self.picks(self.rows(), {})
-        self.assertEqual(got["favourite"], "CLE ML")
-        self.assertIn(got["random"], ("CLE ML", "PIT ML"))
-        self.assertEqual(self.picks(self.rows(), {}), got, "the coin is fixed by the game id")
-        self.start = "2026-10-02T03:00Z"                                # 8 hours out
-        self.assertNotIn("favourite", self.picks(self.rows(), {}))
+        self.assertNotIn("favourite", got)
+        self.assertNotIn("random", got)
+        self.assertEqual(set(self.bl.RETIRED) & set(self.bl.STRATEGIES), set())
+        # Their old picks stay in the file as history, but are not reported or shown.
+        out = self.root / "agents/ace/state/baselines.jsonl"
+        (self.root / "agents/ace/data/candidates.json").write_text(json.dumps({"candidates": self.rows()}))
+        self.bl.run(now=self.now, path=out)
+        old = dict(json.loads(out.read_text().splitlines()[0]), strategy="favourite")
+        with out.open("a") as f:
+            f.write(json.dumps(old) + "\n")
+        self.assertNotIn("favourite", self.bl.report(path=out))
+        self.assertNotIn("favourite", self.bl.board_json(path=out)["strategies"])
 
     def test_news_backs_the_injured_teams_opponent_while_the_price_has_not_moved(self):
         inj = {"id": "i1", "team": "CLE", "player": "QB", "status": "Out", "hours_old": 1.0,
@@ -17315,8 +17324,7 @@ class TheNoAIBettorsAndTheBlindScore(unittest.TestCase):
         cands = self.root / "agents/ace/data/candidates.json"
         cands.write_text(json.dumps({"candidates": self.rows()}))
         out = self.root / "agents/ace/state/baselines.jsonl"
-        self.assertEqual({r["strategy"] for r in self.bl.run(now=self.now, path=out)},
-                         {"random", "favourite", "underdog"})
+        self.assertEqual({r["strategy"] for r in self.bl.run(now=self.now, path=out)}, {"underdog"})
         self.assertEqual(self.bl.run(now=self.now, path=out), [], "once a game")
         # The close: 10 minutes before the 23:00 start, after the 19:00 bets.
         # (It was a price seen at the moment of the bet, which is not a
@@ -17327,15 +17335,15 @@ class TheNoAIBettorsAndTheBlindScore(unittest.TestCase):
         (self.root / "agents/ace/state/results.json").write_text(json.dumps(
             {"nfl|401": {"winner": "home", "status": "STATUS_FINAL"}}))
         r = self.bl.report(path=out)
-        fav = r["favourite"]
-        self.assertEqual((fav["bets"], fav["settled"], fav["won"], fav["profit"]), (1, 1, 1, 67.57))
-        self.assertEqual(fav["avg_clv_pct"], self.clv.clv_at(-148, 60.0))
+        dog = r["underdog"]                                     # PIT at +124, CLE won
+        self.assertEqual((dog["bets"], dog["settled"], dog["won"], dog["profit"]), (1, 1, 0, -100.0))
+        self.assertEqual(dog["avg_clv_pct"], self.clv.clv_at(124, 40.0))
         self.assertIn("ace", r)
         # A price four hours before the start is not a close for them either.
         (self.root / "agents/ace/state/lines.json").write_text(json.dumps(
             {f"nfl|PIT @ CLE|{self.start}": {"start_utc": self.start, "last": self.snap(0, 60.0),
                                              "history": [self.snap(0, 60.0)]}}))
-        self.assertIsNone(self.bl.report(path=out)["favourite"]["avg_clv_pct"])
+        self.assertIsNone(self.bl.report(path=out)["underdog"]["avg_clv_pct"])
 
     def test_underdog_takes_the_close_underdog_on_game_day_from_ten(self):
         # Owner, 2026-10-29: "Let's do A ... 38-48% is fine." PIT at 42.8%
@@ -17365,7 +17373,7 @@ class TheNoAIBettorsAndTheBlindScore(unittest.TestCase):
         self.assertEqual((dog["settled"][0]["selection"], dog["settled"][0]["result"], dog["settled"][0]["profit"]),
                          ("PIT ML", "won", 124.0))
         self.assertEqual(dog["record"]["profit"], sum(x["profit"] for x in dog["settled"]))
-        self.assertEqual(b["strategies"]["favourite"]["settled"][0]["profit"], -100.0)
+        self.assertNotIn("favourite", b["order"])
         self.assertTrue(all(b["strategies"][s]["describe"] for s in b["order"]))
 
     def test_aces_row_is_his_own_books(self):

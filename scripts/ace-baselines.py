@@ -13,9 +13,6 @@ whether the AI adds anything: a rule a script can follow might do as well.
 These follow fixed rules on the same candidates, the same prices, flat $100
 stakes, graded on the same closes and the same final scores:
 
-  random     a coin flip per game, fixed by the game's id - what no skill
-             looks like, on this book's prices
-  favourite  the side the market favours, every game
   news       the side a fresh "Out" or "Doubtful" report (3 hours or less)
              favours - the injured team's opponent - and only while the
              price has not moved toward it since (ace-clv.unpriced, the same
@@ -33,15 +30,19 @@ stakes, graded on the same closes and the same final scores:
              Ace's rule is mostly this: if plain code matches him, the AI adds
              nothing; if it beats him, it is the better strategy (more profit).
 
-`random` and `favourite` decide on games starting within 6 hours, about
-when Ace bets; the others decide whenever their signal appears. Each
-strategy bets a game at most once. Nothing here wakes a model or moves
+Each decides whenever its signal appears, and bets a game at most once.
+
+RETIRED (owner, 2026-11-11: "get rid of the favorite and random better"):
+`random` (a coin flip per game) and `favourite` (the market favourite,
+every game within 6 hours) - the two worst of them, -$1,353.83 and
+-$3,508.48 over 610 settled each. They no longer bet and are off the page
+and the report; their picks stay in state/baselines.jsonl as history, which
+ace-edge.py still reads. Nothing here wakes a model or moves
 Ace's bankroll: it writes state/baselines.jsonl and nothing else.
 
 Standard library only.
 """
 
-import hashlib
 import importlib.util
 import json
 import os
@@ -54,8 +55,8 @@ ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", SCRIPTS.parent))
 AGENT = ROOT / "agents" / "ace"
 PICKS = AGENT / "state" / "baselines.jsonl"
 
-STRATEGIES = ("random", "favourite", "news", "sharp", "steam", "underdog")
-EVERY_GAME_WITHIN_HOURS = 6.0
+STRATEGIES = ("news", "sharp", "steam", "underdog")
+RETIRED = ("random", "favourite")     # 2026-11-11, owner: no longer bet or shown
 NEWS_HOURS = 3.0
 NEWS_STATUSES = ("out", "doubtful")
 SHARP_GAP_PTS = 2.0
@@ -66,8 +67,6 @@ STAKE = 100.0
 
 # What each one does, in a line - the page shows these.
 DESCRIBE = {
-    "random": "A coin flip on every game within 6 hours. What no skill looks like at these prices.",
-    "favourite": "The market favourite on every game within 6 hours.",
     "news": "The opponent of a team with a fresh Out or Doubtful report (3 hours or less), while the price has not moved yet.",
     "sharp": "The side Pinnacle rates at least 2 points higher than DraftKings does.",
     "steam": "The side whose DraftKings chance rose 1.5 points or more in the last hour.",
@@ -128,16 +127,8 @@ def decide(rows, lines, now, clv):
         begins = clv.parse_start(start)
         if begins is None or begins <= now:
             continue
-        hours = (begins - now).total_seconds() / 3600
         entry = lines.get(clv.game_key(sport, match, start))
         h, a = sides["home"], sides["away"]
-
-        if hours <= EVERY_GAME_WITHIN_HOURS:
-            flip = int(hashlib.sha1(f"{sport}|{h.get('event_id')}".encode()).hexdigest(), 16) % 2
-            out.append(("random", h if flip == 0 else a, "coin flip by game id"))
-            if h.get("novig_pct") is not None and a.get("novig_pct") is not None:
-                fav = h if float(h["novig_pct"]) >= float(a["novig_pct"]) else a
-                out.append(("favourite", fav, f"market favourite at {fav['novig_pct']}%"))
 
         if h.get("novig_pct") is not None and a.get("novig_pct") is not None:
             dog = h if float(h["novig_pct"]) < float(a["novig_pct"]) else a
@@ -292,7 +283,8 @@ def report(path=None):
     clv, book, lines, results = _sources()
     by = {s: [] for s in STRATEGIES}
     for p in picks(path):
-        by.setdefault(p.get("strategy"), []).append(p)
+        if p.get("strategy") in by:           # a retired bettor's history is not reported
+            by[p["strategy"]].append(p)
     out = {s: score(rows, lines, results, clv, book) for s, rows in by.items()}
     out["ace"] = _ace_record(clv, book, lines, results)
     return out

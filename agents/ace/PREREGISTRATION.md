@@ -50,7 +50,8 @@ genuine +2% edge still shows a loss about 4 times in 10 after 500 bets.
 
 Five bettors with no AI in them (`scripts/ace-baselines.py`) bet the same
 candidate games at flat $100: random, the favourite, fresh news (the AI-free
-version of Ace's rule), Pinnacle-above-DraftKings, and steam. The AI's
+version of Ace's rule), Pinnacle-above-DraftKings, and steam. (Random and the
+favourite were retired on 2026-11-11 - see the change log.) The AI's
 contribution is Ace's CLV minus the best of these on the same games. If the
 fresh-news bettor matches Ace, the model adds nothing.
 
@@ -165,3 +166,10 @@ fresh-news bettor matches Ace, the model adds nothing.
   (`ace-judge.py EVIDENCE_FROM`): 60 more bets at or below zero stop him
   again. Gate 2's verdict on the first 60 stands - no edge shown. Every
   number in the table above is unchanged.
+* 2026-11-11 — the comparison, not a rule of Ace's (owner's decision): the
+  `random` and `favourite` no-AI bettors are retired. They no longer bet and
+  are left out of the report and the page; their picks stay in
+  state/baselines.jsonl. They were the two worst (−$1,353.83 and −$3,508.48
+  over 610 settled each), so the read-out's bar - Ace's CLV against the best
+  of the no-AI bettors - is unchanged by dropping them. Every number in the
+  table above is unchanged.

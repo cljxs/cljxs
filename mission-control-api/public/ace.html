@@ -413,7 +413,7 @@ function drawReasons() {
 // ------------------------------------------------------------ the no-AI bettors
 // One tab each beside Ace. Every number comes graded from ace-baselines.py
 // (/api/ace/no-ai); this only lays it out.
-const NAMES = { ace: 'Ace', shop: 'Line Shopper', underdog: 'Underdog', steam: 'Steam', sharp: 'Sharp', news: 'News', favourite: 'Favourite', random: 'Random' };
+const NAMES = { ace: 'Ace', shop: 'Line Shopper', underdog: 'Underdog', steam: 'Steam', sharp: 'Sharp', news: 'News' };
 const nameOf = s => NAMES[s] || s.charAt(0).toUpperCase() + s.slice(1);
 let N = null, who = 'ace';
 try { who = localStorage.getItem('ace.who') || 'ace'; } catch (e) { /* private window */ }
