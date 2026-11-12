@@ -99,6 +99,8 @@ LOOK_AHEAD_H = 12              # games starting within this...
 NOT_WITHIN_MIN = 20            # ...and not sooner than this
 CLOSE_MIN = 20                 # a bet's close: Pinnacle within this before the start
 CLOSE_GAP_MIN = 15             # one close call per sport in this long
+RECENT_DAYS = 7               # how long the page remembers the near misses
+RECENT_KEEP = 400
 DAILY_CALLS = 18
 RESERVE = 15                   # credits only a close may spend
 STARTING_BANKROLL = 10000.0
@@ -219,6 +221,13 @@ def h2h(event, key):
     return None
 
 
+def price_at_least(decimal):
+    """The American price no worse than a decimal price: rounded toward the
+    better side, so a price shown as enough is enough."""
+    d = float(decimal)
+    return math.ceil((d - 1) * 100) if d >= 2 else math.ceil(-100 / (d - 1))
+
+
 def fresh(when, now):
     return when is not None and now - when <= timedelta(minutes=PIN_FRESH_MIN)
 
@@ -255,13 +264,14 @@ def judge_game(ctx, event, now):
         return out
     mine, middle, n = crowd(event, pin)
     out["crowd"] = {"pinnacle_home_pct": mine, "us_median_home_pct": middle, "books": n}
+    # A game the crowd check stops is still worked out, so the page can show
+    # how close it came - but nothing on it can clear.
+    blocked = None
     if n < CROWD_MIN:
-        out["why"] = f"only {n} US book(s) priced it - too few to check Pinnacle against"
-        return out
-    if abs(mine - middle) > CROWD_PTS:
-        out["why"] = (f"Pinnacle has the home side {mine:g}%, the US books' middle {middle:g}% - "
-                      f"more than {CROWD_PTS:g} pts apart, so Pinnacle is probably stale: no bet")
-        return out
+        blocked = f"only {n} US book(s) priced it - too few to check Pinnacle against"
+    elif abs(mine - middle) > CROWD_PTS:
+        blocked = (f"Pinnacle has the home side {mine:g}%, the US books' middle {middle:g}% - "
+                   f"more than {CROWD_PTS:g} pts apart, so Pinnacle is probably stale: no bet")
     chances = true_chances(pin[:2])
     out["pinnacle"] = {"home": SHARP.american(pin[0]), "away": SHARP.american(pin[1])}
     for i, side in enumerate(("home", "away")):
@@ -276,10 +286,14 @@ def judge_game(ctx, event, now):
         best, at = max(offers)
         w = worth(best, chances, i)
         low = min(w.values())
-        true_pct = round(min(v[i] for v in chances.values()) * 100, 1)
+        least = min(v[i] for v in chances.values())
+        true_pct = round(least * 100, 1)
         row = {"price": SHARP.american(best), "decimal": best, "book": at, "books": len(offers),
                "worth": w, "worst_pct": low, "true_pct": true_pct,
-               "true_by_method": {m: round(v[i] * 100, 2) for m, v in chances.items()}}
+               "true_by_method": {m: round(v[i] * 100, 2) for m, v in chances.items()},
+               "team": (ctx.get(side) or {}).get("abbr") or (ctx.get(side) or {}).get("name"),
+               "pinnacle_price": out["pinnacle"][side],
+               "fair_price": price_at_least(1 / least), "needed_price": price_at_least((1 + EDGE_PCT / 100) / least)}
         mid = sum(v[i] for v in chances.values()) / len(chances) * 100
         if not TRUE_RANGE[0] <= mid <= TRUE_RANGE[1]:
             row["why"] = f"true chance {mid:.0f}% is outside {TRUE_RANGE[0]:g}-{TRUE_RANGE[1]:g}%"
@@ -291,6 +305,10 @@ def judge_game(ctx, event, now):
             row["clears"] = True
             row["why"] = (f"{row['price']:+d} at {at} vs Pinnacle {out['pinnacle'][side]:+d}: worth {low:+.2f}% "
                           f"under every method (best {max(w.values()):+.2f}%)")
+        if blocked and row.pop("clears", None):
+            row["why"] = blocked
+        if blocked:
+            row["blocked"] = blocked
         out["sides"][side] = row
     ok = [(r["worst_pct"], s) for s, r in out["sides"].items() if r.get("clears")]
     if ok:
@@ -471,8 +489,34 @@ def run(now=None, key=None, fetcher=None, dry=False):
     old = _read(BOARD, {}) or {}
     keep = [g for g in old.get("games", []) if old.get("day") == day and g["event_id"] not in {x["event_id"] for x in games}]
     _write(BOARD, {"asof_utc": now.strftime(STAMP), "day": day,
-                   "games": sorted(keep + games, key=lambda g: str(g.get("starts_utc")))})
+                   "games": sorted(keep + games, key=lambda g: str(g.get("starts_utc"))),
+                   "recent": remember(old.get("recent") or [], games, now)})
     return lines
+
+
+def remember(recent, games, now):
+    """Every side looked at in the last RECENT_DAYS, the latest look at each
+    (a game is looked at again each run until it starts or is bet) - so the
+    page can show how close the shopper came."""
+    rows = {(r["event_id"], r["side"]): r for r in recent
+            if (parse_iso(r.get("at")) or now) > now - timedelta(days=RECENT_DAYS)}
+    for g in games:
+        for side, r in g.get("sides", {}).items():
+            if "worst_pct" not in r:
+                continue
+            rows[(g["event_id"], side)] = {
+                "at": now.strftime(ISO), "event_id": g["event_id"], "side": side, "sport": g["sport"],
+                "match": g["match"], "starts_utc": g["starts_utc"], "team": r.get("team"), "price": r["price"],
+                "book": r["book"], "books": r["books"], "worst_pct": r["worst_pct"],
+                "pinnacle_price": r.get("pinnacle_price"), "fair_price": r.get("fair_price"),
+                "needed_price": r.get("needed_price"), "bet": g.get("bet") == side,
+                "why": r.get("blocked") or r.get("why")}
+    return sorted(rows.values(), key=lambda r: -r["worst_pct"])[:RECENT_KEEP]
+
+
+def closest(recent, n=12):
+    """The sides that came nearest the bar without clearing it, nearest first."""
+    return [r for r in recent if not r.get("bet")][:n]
 
 
 def record_closes(open_bets, now, key=None, fetcher=None):
@@ -590,8 +634,8 @@ def check(sport=None, key=None, fetcher=None, now=None, say=print):
     rows = sorted(((r["worst_pct"], g["match"], s, r) for g in ctxs.values()
                    for s, r in g["sides"].items() if "worst_pct" in r), key=lambda t: -t[0])
     for w, match, side, r in rows[:8]:
-        say(f"    {match:<14}{side:<5}{r['price']:>+6d} at {r['book']:<12} worth {w:+.2f}% at worst"
-            f"{'  <- clears' if r.get('clears') else ''}")
+        say(f"    {match:<14}{(r.get('team') or side):<6}{r['price']:>+6d} at {r['book']:<12} worth {w:+.2f}% at worst, "
+            f"needed {r['needed_price']:+d}{'  <- clears' if r.get('clears') else ''}")
     return 0
 
 
@@ -625,7 +669,9 @@ def board_json():
                        "stopped": stop_reason(f["settled"])},
             "open": sorted((row(x) for x in f["open"]), key=lambda x: str(x["starts_utc"])),
             "settled": sorted(settled, key=lambda x: str(x["starts_utc"]), reverse=True)[:40],
-            "board": _read(BOARD, {})}
+            "closest": closest((_read(BOARD, {}) or {}).get("recent") or []),
+            "looked_at": len((_read(BOARD, {}) or {}).get("recent") or []),
+            "edge_pct": EDGE_PCT, "recent_days": RECENT_DAYS}
 
 
 def show_lines():

@@ -459,6 +459,28 @@ function naiTicket(p) {
     </div>`;
 }
 
+// The Line Shopper's near misses (owner, 2026-11-12: "show the closest
+// options it considered and what it would've needed"). ace-shop.py works
+// out every number; "needs" is the worst price that would have been worth
+// the bar under every method, "fair" Pinnacle's true price by the least
+// favourable one.
+function closestCalls(me) {
+  const rows = me.closest || [];
+  const bar = has(me.edge_pct) ? me.edge_pct : 2;
+  const head = `<div class="k" style="margin:18px 0 6px">Closest calls · last ${me.recent_days || 7} days</div>
+    <div class="note" style="margin:0 0 8px">The best US price it found for each side, how far short of +${bar}% it fell,
+      and the price that would have been a bet. ${me.looked_at || 0} sides looked at.</div>`;
+  if (!rows.length) return head + '<div class="empty">Nothing looked at yet - it checks at 10:30, 1:30, 4:30 and 6:45 Eastern.</div>';
+  return head + rows.map(r => `<div class="ticket">
+      <div class="t1"><span class="pick">${esc(r.team || r.side)} <span class="num">${price(r.price)}</span>
+        <span class="mu">at ${esc(r.book)}</span></span>
+        <span class="num ${cls(r.worst_pct)}">${pp(r.worst_pct)}</span></div>
+      <div class="mu">${esc(r.match || '')}${r.sport ? ' · ' + esc(SPORT[r.sport] || r.sport) : ''} · ${esc(when(r.starts_utc))}</div>
+      <div class="mu num">needed <b>${price(r.needed_price)}</b> · fair <b>${price(r.fair_price)}</b> · Pinnacle ${price(r.pinnacle_price)} · ${r.books} books</div>
+      ${/Pinnacle is probably stale|too few/.test(r.why || '') ? `<div class="wy">${esc(r.why)}</div>` : ''}
+    </div>`).join('');
+}
+
 function drawNai() {
   const host = $('naipane');
   if (!N || N.error) {
@@ -488,6 +510,7 @@ function drawNai() {
       <div class="box">
         <div class="k" style="margin-bottom:8px">Open now</div>
         ${open.length ? open.map(naiTicket).join('') : '<div class="empty">Nothing open right now.</div>'}
+        ${who === 'shop' ? closestCalls(me) : ''}
       </div>
     </div>`;
 }

@@ -287,13 +287,78 @@ class TheCloseAndTheResult(ShopCase):
         self.assertEqual((self.root / "agents/ace/state/bets.jsonl").read_text(), "", "Ace never sees it")
 
 
+class HowCloseItCame(ShopCase):
+    """Owner, 2026-11-12: "show the closest options it considered and what
+    it would've needed to make the bet"."""
+
+    def test_the_needed_price_is_exactly_enough(self):
+        c = self.ctx("1", "New York Knicks", "Boston Celtics", "BOS @ NYK")
+        r = self.s.judge_game(c, self.a_game(home_price=2.42), NOW)["sides"]["home"]
+        self.assertIsNone(r.get("clears"))
+        chances = self.s.true_chances((2.31, 1.67))
+        dec = lambda a: 1 + a / 100 if a > 0 else 1 + 100 / -a
+        needed = r["needed_price"]
+        self.assertGreaterEqual(min(self.s.worth(dec(needed), chances, 0).values()), 2.0, "the needed price clears")
+        self.assertLess(min(self.s.worth(dec(needed - 1), chances, 0).values()), 2.0, "one point worse does not")
+        self.assertLess(r["fair_price"], needed)
+        self.assertEqual((r["team"], r["pinnacle_price"]), ("NYK", 131))
+
+    def test_a_game_the_crowd_check_stops_still_shows_how_close(self):
+        c = self.ctx("1", "New York Knicks", "Boston Celtics", "BOS @ NYK")
+        e = event("o1", "New York Knicks", "Boston Celtics",
+                  {"pinnacle": (2.31, 1.67, 5), "draftkings": (2.05, 1.80, 5), "fanduel": (2.08, 1.78, 5),
+                   "betmgm": (2.05, 1.78, 5), "betrivers": (2.10, 1.75, 5)})
+        g = self.s.judge_game(c, e, NOW)
+        self.assertIsNone(g["bet"])
+        self.assertIn("probably stale", g["sides"]["away"]["blocked"])
+        self.assertTrue(all(not r.get("clears") for r in g["sides"].values()))
+
+    def test_the_page_keeps_a_week_of_near_misses_nearest_first(self):
+        self.events = [self.a_game("1", home_price=2.42)]
+        self.s.run(now=NOW, fetcher=self.fetcher)
+        # Looked at again an hour later, a little closer (Pinnacle's stamp is fresh then too).
+        self.events = [self.a_game("1", home_price=2.44, pinnacle_age=-55)]
+        self.s.run(now=NOW + timedelta(hours=1), fetcher=self.fetcher)
+        d = self.s.board_json()
+        near = d["closest"]
+        self.assertEqual(d["looked_at"], 2, "one row a side - the latest look")
+        self.assertEqual((near[0]["team"], near[0]["price"]), ("NYK", 144))
+        self.assertGreaterEqual(near[0]["worst_pct"], near[1]["worst_pct"])
+        later = NOW + timedelta(days=8)
+        self.ctx("2", "Home2", "Away2", "A2 @ H2", start=later + timedelta(hours=3))
+        fresh = -8 * 24 * 60 + 5                                        # stamped 5 minutes before `later`
+        self.events = [event("o2", "Home2", "Away2", {"pinnacle": (2.31, 1.67, fresh), "draftkings": (2.24, 1.68, 5),
+                                                     "betmgm": (2.25, 1.66, 5)}, start=later + timedelta(hours=3))]
+        self.s.run(now=later, fetcher=self.fetcher)
+        self.assertEqual({r["event_id"] for r in self.s.board_json()["closest"]}, {"2"}, "a week old is dropped")
+
+    def test_nearest_first_whatever_order_they_were_looked_at(self):
+        far = self.a_game("1", home_price=2.30)          # looked at first, further off
+        self.ctx("2", "Miami Heat", "Chicago Bulls", "CHI @ MIA")
+        near = event("o2", "Miami Heat", "Chicago Bulls",
+                     {"pinnacle": (2.31, 1.67, 5), "draftkings": (2.24, 1.68, 5), "betmgm": (2.25, 1.66, 5),
+                      "fanduel": (2.44, 1.62, 5)})
+        self.events = [far, near]
+        self.s.run(now=NOW, fetcher=self.fetcher)
+        near_first = self.s.board_json()["closest"]
+        self.assertEqual((near_first[0]["event_id"], near_first[0]["side"]), ("2", "home"))
+        self.assertEqual([r["worst_pct"] for r in near_first], sorted((r["worst_pct"] for r in near_first), reverse=True))
+
+    def test_a_side_it_bet_is_not_a_near_miss(self):
+        self.events = [self.a_game("1", home_price=2.50)]
+        self.s.run(now=NOW, fetcher=self.fetcher)
+        self.assertNotIn("home", [r["side"] for r in self.s.board_json()["closest"]])
+
+
 class WhereItShowsAndWhenItRuns(unittest.TestCase):
 
     def test_a_tab_on_aces_page(self):
         js = (ROOT / "mission-control-api" / "ace.js").read_text()
         self.assertIn("'ace-shop.py'), 'board'", js)
         self.assertIn("d.strategies.shop = shop", js)
-        self.assertIn("shop: 'Line Shopper'", (ROOT / "mission-control-api" / "public" / "ace.html").read_text())
+        page = (ROOT / "mission-control-api" / "public" / "ace.html").read_text()
+        self.assertIn("shop: 'Line Shopper'", page)
+        self.assertIn("${who === 'shop' ? closestCalls(me) : ''}", page)
 
     def test_the_timers(self):
         t = (ROOT / "deploy" / "ace-shop.timer").read_text()
