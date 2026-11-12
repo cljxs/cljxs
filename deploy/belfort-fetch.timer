@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the Belfort fetcher every 10 minutes during US market hours
+
+[Timer]
+# Mon-Fri, every 10 minutes, 09:00-16:50 New York time. The timezone is part
+# of the expression, so this follows US daylight saving automatically.
+# This is plain code with no AI, so it is free to run often.
+OnCalendar=Mon..Fri 09..16:00/10 America/New_York
+Persistent=false
+RandomizedDelaySec=30
+
+[Install]
+WantedBy=timers.target

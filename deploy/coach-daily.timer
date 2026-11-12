@@ -1,0 +1,9 @@
+[Unit]
+Description=Every night, journal the day that just ended (Eastern)
+
+[Timer]
+OnCalendar=*-*-* 00:20 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,611 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<title>Agent Room</title>
+<!-- The Agent Room (owner, 2026-10-14, after screenshots of a tool called
+     CoreOps): type an idea, a planner writes a phased plan, two reviewers
+     critique it, the planner revises it, and it waits here for Approve.
+     Everything comes from scripts/agentroom.py through /api/agentroom;
+     nothing is worked out on this page. The runs are worked by
+     agentroom-runner.service, so closing this page does not stop one. -->
+<style>
+  :root{
+    --bg:#0b1020; --panel:#10172a; --card:#131b31; --line:rgba(148,163,184,.16);
+    --ink:#e6e9f2; --mute:#94a0b8; --dim:#5f6b85;
+    --green:#22c55e; --green2:#4ade80; --amber:#f59e0b; --red:#f43f5e; --blue:#38bdf8; --violet:#a78bfa; --pink:#f472b6;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink)}
+  body{font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased;padding:16px}
+  body.embed{padding:10px;background:rgba(5,8,16,.94)}
+  a{color:inherit}
+  .frame{max-width:1280px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    box-shadow:0 20px 70px rgba(0,0,0,.5);overflow:hidden}
+  .head{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;padding:20px 22px 14px}
+  .head h1{margin:0;font-size:26px;letter-spacing:-.01em}
+  .head .sub{color:var(--mute);margin-top:2px}
+  .pills{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .pill{font-size:12.5px;padding:4px 10px;border-radius:7px;border:1px solid var(--line);color:var(--mute);white-space:nowrap}
+  .pill.g{color:var(--green2);border-color:rgba(34,197,94,.45);background:rgba(34,197,94,.08)}
+  .pill.a{color:#fbbf24;border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.08)}
+  .pill.r{color:#fb7185;border-color:rgba(244,63,94,.45);background:rgba(244,63,94,.08)}
+  .sp{flex:1}
+  .btn{font:600 13px var(--sans);color:var(--ink);background:transparent;border:1px solid var(--line);
+    border-radius:8px;padding:9px 14px;cursor:pointer;text-decoration:none;white-space:nowrap;display:inline-block}
+  .btn:hover{border-color:var(--mute)}
+  #appview{position:fixed;inset:0;z-index:100;display:flex;flex-direction:column;background:var(--bg,#0b0f17)}
+  #appview .appbar{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line)}
+  #appview .appbar .sp{flex:1}
+  #appview iframe{flex:1;width:100%;border:0;background:#fff}
+  .btn.go{color:var(--green2);border-color:rgba(34,197,94,.55);background:rgba(34,197,94,.08)}
+  .btn.warn{color:#fb7185;border-color:rgba(244,63,94,.5)}
+  .btn.new{color:#fff;border-color:rgba(167,139,250,.6);background:rgba(167,139,250,.16)}
+  .btn:disabled{opacity:.5;cursor:default}
+  .notice{margin:0 22px 14px;padding:12px 14px;border:1px solid rgba(245,158,11,.4);border-radius:10px;background:rgba(245,158,11,.06);font-size:13px}
+  .notice code{font-size:12px;background:rgba(0,0,0,.3);padding:1px 5px;border-radius:5px;overflow-wrap:anywhere}
+  .k{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute);font-weight:600}
+  .muted{color:var(--mute);font-size:13px}
+  .err{color:#fb7185}
+  .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:0 22px 14px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+  .stat .v{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
+  .main{display:grid;grid-template-columns:290px minmax(0,1fr);border-top:1px solid var(--line);min-height:480px}
+  .side{border-right:1px solid var(--line);padding:14px;display:flex;flex-direction:column;gap:14px;min-width:0}
+  .runlist{display:flex;flex-direction:column;gap:6px}
+  .run{all:unset;cursor:pointer;display:block;padding:9px 11px;border-radius:9px;border:1px solid transparent}
+  .run:hover{background:rgba(255,255,255,.03)}
+  .run.on{background:rgba(167,139,250,.1);border-color:rgba(167,139,250,.4)}
+  .run .t{font-weight:600;overflow-wrap:anywhere}
+  .run .s{font-size:12px;color:var(--mute)}
+  .agents{display:flex;flex-direction:column;gap:6px}
+  .ag{display:flex;align-items:center;gap:8px;font-size:13px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--dim);flex:none}
+  .dot.busy{background:var(--amber);box-shadow:0 0 0 3px rgba(245,158,11,.18)}
+  .dot.on{background:var(--green)}
+  .ag .role{color:var(--mute);font-size:12px}
+  .content{min-width:0;display:flex;flex-direction:column}
+  .runhead{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}
+  .runhead h2{margin:0;font-size:18px;overflow-wrap:anywhere}
+  .tag{font-size:11px;font-weight:700;letter-spacing:.06em;padding:3px 9px;border-radius:999px;white-space:nowrap;border:1px solid;display:inline-block}
+  .t-green{color:var(--green2);border-color:rgba(34,197,94,.5);background:rgba(34,197,94,.1)}
+  .t-amber{color:#fbbf24;border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.1)}
+  .t-red{color:#fb7185;border-color:rgba(244,63,94,.5);background:rgba(244,63,94,.1)}
+  .t-blue{color:var(--blue);border-color:rgba(56,189,248,.5);background:rgba(56,189,248,.1)}
+  .t-gray{color:#94a3b8;border-color:rgba(148,163,184,.4);background:rgba(148,163,184,.08)}
+  .t-violet{color:var(--violet);border-color:rgba(167,139,250,.5);background:rgba(167,139,250,.1)}
+  .tabs{display:flex;gap:6px;padding:0 14px;border-bottom:1px solid var(--line);overflow-x:auto}
+  .tab{font:600 14px var(--sans);color:var(--mute);background:none;border:0;border-bottom:2px solid transparent;padding:11px 10px;cursor:pointer;white-space:nowrap}
+  .tab.on{color:var(--ink);border-bottom-color:var(--violet)}
+  .pane{padding:16px 18px;flex:1}
+  .gate{margin:14px 18px 0;padding:12px 14px;border:1px solid rgba(34,197,94,.45);border-radius:10px;background:rgba(34,197,94,.06)}
+  .gate textarea{margin-top:8px}
+  .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  /* the room */
+  .chat{display:flex;flex-direction:column;gap:10px}
+  .msg{max-width:860px;border:1px solid var(--line);border-radius:12px;padding:10px 13px;background:var(--card);min-width:0}
+  .msg.owner{align-self:flex-end;background:rgba(167,139,250,.12);border-color:rgba(167,139,250,.35);max-width:min(620px,92%)}
+  .msg.system{background:transparent;border-style:dashed;color:var(--mute);font-size:13px}
+  .msg.error{border-color:rgba(244,63,94,.5);background:rgba(244,63,94,.06)}
+  .msg .who{font-weight:700;font-size:13px;display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}
+  .msg .who .meta{font-weight:400;color:var(--dim);font-size:12px}
+  .msg .body{margin-top:4px;white-space:pre-wrap;overflow-wrap:anywhere}
+  .msg details summary{cursor:pointer;color:var(--mute);font-size:12.5px;margin-top:4px}
+  pre{white-space:pre-wrap;font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#dfe5f1;background:rgba(0,0,0,.25);
+    border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0 0;overflow-wrap:anywhere}
+  /* the plan */
+  .phase{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--card);margin-bottom:10px}
+  .phase .pt{font-weight:700}
+  .phase ul{margin:6px 0 0;padding-left:20px}
+  .phase .dw li{list-style:none;margin-left:-18px}
+  .phase .dw li::before{content:"\25A2  ";color:var(--dim)}
+  h3{margin:16px 0 6px;font-size:15px}
+  .concern{border-left:3px solid var(--line);padding:4px 0 4px 10px;margin:6px 0}
+  .concern.high{border-color:var(--red)} .concern.medium{border-color:var(--amber)} .concern.low{border-color:var(--dim)}
+  .empty{color:var(--mute);padding:40px 10px;text-align:center}
+  .feed{display:flex;flex-direction:column;gap:6px;font-size:12.5px}
+  .feed .f{color:var(--mute);overflow-wrap:anywhere}
+  .feed .f b{color:var(--ink);font-weight:600}
+  /* new run */
+  dialog{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:14px;padding:0;width:min(640px,calc(100vw - 32px))}
+  dialog::backdrop{background:rgba(0,0,0,.6)}
+  .dlg{padding:18px;display:flex;flex-direction:column;gap:10px}
+  label{font-size:13px;color:var(--mute)}
+  input[type=text],textarea{width:100%;font:15px var(--sans);color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px}
+  textarea{min-height:150px;resize:vertical}
+  .check{display:flex;gap:8px;align-items:flex-start;color:var(--ink)}
+  .check input{margin-top:3px;width:18px;height:18px}
+  @media (max-width:820px){
+    body{padding:0}
+    .frame{border-radius:0;border:0}
+    .head{padding:16px 16px 12px}
+    .stats{grid-template-columns:repeat(2,minmax(0,1fr));padding:0 16px 12px}
+    .notice{margin:0 16px 12px}
+    .main{grid-template-columns:minmax(0,1fr)}
+    .side{border-right:0;border-bottom:1px solid var(--line);padding:12px 16px}
+    .runlist{flex-direction:row;overflow-x:auto;padding-bottom:4px}
+    .run{flex:none;max-width:240px;border-color:var(--line)}
+    .runhead,.pane{padding-left:16px;padding-right:16px}
+    .gate{margin:12px 16px 0}
+  }
+</style>
+<script src="/shared/busy.js"></script>
+</head>
+<body>
+<div class="frame">
+  <div class="head">
+    <div>
+      <h1>Agent Room</h1>
+      <div class="sub">Your idea → a planner's phased plan → two reviewers → a revised plan → your Approve.</div>
+      <div class="pills" id="pills"></div>
+    </div>
+    <div class="sp"></div>
+    <div class="acts" style="margin-top:0">
+      <button class="btn" id="bnbtn" style="display:none">⏱ Build now (1 hour)</button>
+      <button class="btn new" id="newbtn">+ New run</button>
+      <a class="btn" id="back" href="/dashboard">← Deck</a>
+      <button class="btn" id="close" style="display:none">✕ Close</button>
+    </div>
+  </div>
+  <div id="notices"></div>
+  <div class="stats" id="stats"></div>
+  <div class="main">
+    <aside class="side">
+      <div><div class="k">Runs</div><div class="runlist" id="runs" style="margin-top:8px"></div></div>
+      <div><div class="k">Agents</div><div class="agents" id="agents" style="margin-top:8px"></div></div>
+      <div><div class="k">Recent activity</div><div class="feed" id="feed" style="margin-top:8px"></div></div>
+    </aside>
+    <section class="content" id="content"><div class="empty">Loading…</div></section>
+  </div>
+</div>
+
+<dialog id="dlg">
+  <form class="dlg" method="dialog" id="newform">
+    <div class="k">New run</div>
+    <label for="ntitle">Name of the project</label>
+    <input type="text" id="ntitle" maxlength="80" placeholder="Family Dinner Planner" required>
+    <label for="nidea">The idea - who it is for, what it does, anything you already know you want</label>
+    <textarea id="nidea" maxlength="8000" placeholder="An app that plans a week of family dinners from what is in the fridge…" required></textarea>
+    <label class="check"><input type="checkbox" id="ndry"><span><b>Practice run</b> - no AI is called and it costs nothing. The replies are made up, so you can see how the room works.</span></label>
+    <div class="muted" id="nmoney"></div>
+    <div class="err" id="nerr"></div>
+    <div class="acts">
+      <button class="btn go" id="nstart" value="start">Start</button>
+      <button class="btn" value="cancel" formnovalidate>Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// Opened from Sylvester's studio in the village (?embed=1): a Close button
+// instead of the way back to the Deck, and Escape closes it too.
+if (new URLSearchParams(location.search).get('embed') === '1') {
+  document.body.classList.add('embed');
+  $('back').style.display = 'none';
+  $('close').style.display = '';
+  const close = () => parent.postMessage({ type: 'agentroom-close' }, '*');
+  $('close').onclick = close;
+  addEventListener('keydown', e => { if (e.key === 'Escape' && !$('dlg').open) close(); });
+}
+
+let deck = null, current = null, detail = null, tab = 'room', busy = false;
+try { current = Number(localStorage.getItem('agentroom.run')) || null; } catch {}
+
+const TAGS = { queued:'t-gray', planning:'t-amber', reviewing:'t-amber', revising:'t-amber',
+  awaiting_approval:'t-violet', approved:'t-green', stopped:'t-gray', failed:'t-red',
+  building:'t-amber', phase_ready:'t-violet', built:'t-green', held:'t-red' };
+const SHORT = { queued:'queued', planning:'planning', reviewing:'reviewing', revising:'revising',
+  awaiting_approval:'needs you', approved:'approved', stopped:'stopped', failed:'failed',
+  building:'building', phase_ready:'needs you', built:'built', held:'HELD' };
+const PHASE_TAG = { todo:['to do','t-gray'], building:['building','t-amber'], paused:['paused till tonight','t-gray'],
+  passed:['passed','t-green'], failed:['failed','t-red'] };
+
+function when(utc) {
+  if (!utc) return '';
+  const d = new Date(utc);
+  return isNaN(d) ? '' : d.toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+}
+function dollars(v, digits = 2) { return v == null ? '?' : '$' + Number(v).toFixed(digits); }
+function spentText(r) { return r.dry ? 'practice - $0' : dollars(r.spent) + (r.spent_known ? '' : ' at most'); }
+
+// "Load failed" is all Safari says when the Deck cannot be reached at all -
+// usually because it is restarting. Said in words instead, with what to do.
+const UNREACHABLE = 'Could not reach the Deck - it may be restarting. Wait a few seconds and try again; nothing was lost.';
+async function api(url, opts) {
+  let r;
+  try { r = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' }, cache: 'no-store' }, opts || {})); }
+  catch (e) { throw new Error(UNREACHABLE); }
+  let j = {};
+  try { j = await r.json(); } catch {}
+  if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+}
+
+function renderTop() {
+  const d = deck, b = d.budget, pills = [];
+  pills.push(d.key.present && !d.key.problem
+    ? '<span class="pill g">● OpenRouter key</span>'
+    : '<span class="pill a">○ No Agent Room key - practice runs only</span>');
+  pills.push(d.runner.alive ? '<span class="pill g">● Runner</span>'
+    : '<span class="pill r">○ Runner is not running</span>');
+  if (b.today != null) {
+    const cls = b.left <= 0 ? 'r' : (b.left < b.cap * 0.25 ? 'a' : 'g');
+    pills.push(`<span class="pill ${cls}">Today ${dollars(b.today)} of ${dollars(b.cap)}</span>`);
+  } else {
+    pills.push(`<span class="pill">Daily cap ${dollars(b.cap)}</span>`);
+  }
+  pills.push(`<span class="pill">Run cap ${dollars(b.run_cap)}</span>`);
+  if (b.apps_cap != null) {
+    const cls = b.apps_today >= b.apps_cap ? 'r' : (b.apps_today > b.apps_cap * 0.75 ? 'a' : '');
+    pills.push(`<span class="pill ${cls}" title="What the built apps' AI helper spent today (resets 8pm Eastern)">Apps' AI ${dollars(b.apps_today)} of ${dollars(b.apps_cap)}</span>`);
+  }
+  const w = d.build_window;
+  if (w && w.open) {
+    pills.push(`<span class="pill a" title="The builder may work now">⏱ Build window open until ${esc(w.until_local)}</span>`);
+  }
+  $('pills').innerHTML = pills.join('');
+  const bn = $('bnbtn');
+  if (w) {
+    bn.style.display = w.open && !w.daytime ? 'none' : '';      // the night's window needs no button
+    bn.textContent = w.open ? '⏹ Close build window' : '⏱ Build now (1 hour)';
+    bn.dataset.open = w.open ? '1' : '';
+  }
+
+  const notes = [];
+  if (!d.runner.alive) notes.push(`<b>The runner is not running</b>, so new runs wait. On the server: <code>systemctl enable --now agentroom-runner.service</code>`);
+  if (d.key.problem) notes.push(`<b>Real runs need the Agent Room's own OpenRouter key.</b> ${esc(d.key.problem)}`);
+  if (b.hard_stop && !/daily$/.test(b.hard_stop)) notes.push(`<b>OpenRouter's own stop on this key:</b> ${esc(b.hard_stop)}. Set a daily limit of ${dollars(b.cap)} on the key at openrouter.ai, so OpenRouter itself stops it.`);
+  if (b.error) notes.push(`Today's spend could not be read: ${esc(b.error)}`);
+  if (d.roles_error) notes.push(`<b>roles.json is broken:</b> ${esc(d.roles_error)}`);
+  $('notices').innerHTML = notes.map(n => `<div class="notice">${n}</div>`).join('');
+
+  const c = d.counts;
+  $('stats').innerHTML = [
+    ['Working', c.working], ['Need you', c.waiting], ['Approved', c.approved],
+    ['Spent today', b.today != null ? dollars(b.today) : '—'],
+  ].map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
+
+  $('runs').innerHTML = d.runs.length ? d.runs.map(r => `
+    <button class="run ${r.id === current ? 'on' : ''}" data-id="${r.id}">
+      <div class="t">${esc(r.title)}</div>
+      <div class="s"><span class="tag ${TAGS[r.state] || 't-gray'}">${esc(SHORT[r.state] || r.state)}</span>
+        ${esc(spentText(r))}</div>
+    </button>`).join('') : '<div class="muted">No runs yet. Press + New run.</div>';
+  document.querySelectorAll('.run').forEach(el => el.onclick = () => select(Number(el.dataset.id)));
+
+  // Who is busy is read off the run being worked - nothing guessed.
+  const live = d.runs.find(r => r.working);
+  const st = live ? live.state : null;
+  const rows = [];
+  if (d.roles) {
+    const p = d.roles.planner;
+    rows.push([p.name, 'Planner', p.model, st === 'planning' || st === 'queued' || st === 'revising']);
+    for (const r of d.roles.reviewers) rows.push([r.name, 'Reviewer', r.model, st === 'reviewing']);
+  }
+  rows.push(['Code', 'Checker and money', 'no AI', !!live]);
+  $('agents').innerHTML = rows.map(([n, role, m, on]) => `
+    <div class="ag"><span class="dot ${on ? 'busy' : (d.runner.alive ? 'on' : '')}"></span>
+      <div style="min-width:0"><div>${esc(n)} <span class="role">· ${esc(role)}</span></div>
+      <div class="role" style="overflow-wrap:anywhere">${esc(m)}</div></div></div>`).join('');
+
+  $('feed').innerHTML = d.activity.length ? d.activity.map(a => `
+    <div class="f"><b>${esc(a.who)}</b> in ${esc(a.title)}: ${esc(a.text.split('\n')[0].slice(0, 110))}
+      <span style="color:var(--dim)"> · ${esc(when(a.ts))}</span></div>`).join('')
+    : '<div class="muted">Nothing yet.</div>';
+}
+
+function msgBody(m) {
+  const t = String(m.text || '');
+  if (m.kind === 'agent') {
+    // A model's reply is JSON for code to read; the readable version is the
+    // Plan and Reviews tabs. The raw reply stays one tap away.
+    return `<details><summary>Show the full reply (${t.length.toLocaleString()} characters)</summary><pre>${esc(t)}</pre></details>`;
+  }
+  return `<div class="body">${esc(t)}</div>`;
+}
+
+function renderRoom() {
+  const ms = detail.messages;
+  return `<div class="chat">${ms.map(m => `
+    <div class="msg ${esc(m.kind)}">
+      <div class="who">${esc(m.who)}
+        <span class="meta">${esc(when(m.ts))}${m.model ? ' · ' + esc(m.model) : ''}${m.cost != null && m.kind !== 'system' ? ' · ' + (m.cost_known ? dollars(m.cost, 4) : 'up to ' + dollars(m.cost, 4)) : ''}</span></div>
+      ${msgBody(m)}
+    </div>`).join('')}</div>`;
+}
+
+function renderPlan() {
+  const p = detail.plan;
+  if (!p) return '<div class="empty">No plan yet - the planner is working on it.</div>';
+  const list = (xs) => xs && xs.length ? `<ul>${xs.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
+  return `
+    <div class="muted">Plan v${detail.plan_version} · ${p.phases.length} phases</div>
+    <h3>Summary</h3><div>${esc(p.summary)}</div>
+    ${p.stack ? `<div class="muted" style="margin-top:6px"><b>Stack:</b> ${esc(p.stack)}</div>` : ''}
+    ${p.changes && p.changes.length ? `<h3>What the planner changed</h3>${list(p.changes)}` : ''}
+    <h3>Phases</h3>
+    ${p.phases.map(ph => `<div class="phase">
+      <div class="pt">Phase ${esc(ph.id)} - ${esc(ph.title)} <span class="tag t-gray" style="margin-left:6px">to do</span></div>
+      ${ph.goal ? `<div class="muted" style="margin-top:2px">${esc(ph.goal)}</div>` : ''}
+      ${list(ph.tasks)}
+      <div class="k" style="margin-top:8px">Done when (checked by code)</div>
+      <ul class="dw">${ph.done_when.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
+    </div>`).join('')}
+    ${p.risks && p.risks.length ? `<h3>Risks</h3>${list(p.risks)}` : ''}
+    ${p.questions && p.questions.length ? `<h3>Questions for you</h3>${list(p.questions)}` : ''}`;
+}
+
+function appUrl(r) {
+  return `${location.protocol}//${location.hostname}:${deck.sites_port}/${encodeURIComponent(r.slug)}/`;
+}
+
+// Opened over this page, with a Close bar (owner, 2026-10-27): a new tab
+// replaced the village when it runs full-screen from the home screen, with
+// no way back but closing it.
+function appLink(r) {
+  if (!r.site || !deck) return '';
+  return `<button class="btn go" data-app="${esc(appUrl(r))}" data-title="${esc(r.title)}">Open the app</button>`;
+}
+
+function openApp(url, title) {
+  closeApp();
+  const o = document.createElement('div');
+  o.id = 'appview';
+  o.innerHTML = `<div class="appbar"><button class="btn" id="appclose">✕ Close app</button>
+    <b>${esc(title || 'App')}</b><span class="sp"></span>
+    <a class="btn" href="${esc(url)}" target="_blank" rel="noopener">Open in Safari ↗</a></div>
+    <iframe src="${esc(url)}" title="${esc(title || 'App')}"></iframe>`;
+  document.body.appendChild(o);
+  $('appclose').onclick = closeApp;
+}
+
+function closeApp() {
+  const o = $('appview');
+  if (o) o.remove();
+}
+
+// The address an Apple Shortcut sends a prompt to (the apps' AI helper).
+function shortcutBox(r) {
+  if (!r.site || !deck) return '';
+  return `<div class="muted" style="margin-top:10px">Shortcut address (for an Apple Shortcut using this app's AI):</div>
+    <div class="acts" style="margin-top:4px"><input id="aiurl" readonly value="${esc(appUrl(r) + '_ai')}" style="flex:1;min-width:0">
+    <button class="btn" id="aicopy">Copy</button></div>`;
+}
+
+function renderBuild() {
+  const rows = detail.build || [];
+  if (!rows.length) return '<div class="empty">Nothing built yet. Approve the plan, then press Start building.</div>';
+  const list = (xs) => xs && xs.length ? `<ul>${xs.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
+  return rows.map(p => {
+    const [label, cls] = PHASE_TAG[p.status] || [p.status, 't-gray'];
+    const rv = p.review;
+    return `<div class="phase">
+      <div class="pt">Phase ${esc(p.phase_id)} - ${esc(p.title)} <span class="tag ${cls}" style="margin-left:6px">${esc(label)}</span></div>
+      <div class="muted">${p.attempts ? `${p.attempts} ${p.attempts === 1 ? 'try' : 'tries'}` : ''}${p.commit_id ? ` · saved as ${esc(p.commit_id)}` : ''}${p.finished_utc ? ` · ${esc(when(p.finished_utc))}` : ''}</div>
+      ${p.summary ? `<details><summary>What the builder says it did</summary><pre>${esc(p.summary)}</pre></details>` : ''}
+      ${p.check_output ? `<details><summary>The tests (run by code, offline)</summary><pre>${esc(p.check_output)}</pre></details>` : ''}
+      ${rv ? `<div style="margin-top:6px"><b>Bug checker:</b> ${esc(rv.summary)}</div>${rv.concerns.map(c => `<div class="concern ${esc(c.severity)}"><b>${esc(c.severity)}</b> - ${esc(c.text)}</div>`).join('')}` : ''}
+    </div>`;
+  }).join('');
+}
+
+function renderReviews() {
+  const rs = detail.reviews;
+  if (!rs.length) return '<div class="empty">No reviews yet.</div>';
+  return rs.map(r => {
+    const v = r.review;
+    if (!v) return `<div class="phase"><div class="pt">${esc(r.reviewer)} · round ${r.round}</div>
+      <div class="muted">This reply could not be read as a review; the planner was given it as written. It is in the Room tab.</div></div>`;
+    return `<div class="phase">
+      <div class="pt">${esc(r.reviewer)} · round ${r.round}
+        <span class="tag ${v.verdict === 'approve' ? 't-green' : 't-amber'}" style="margin-left:6px">${v.verdict === 'approve' ? 'approves' : 'wants changes'}</span></div>
+      <div style="margin-top:4px">${esc(v.summary)}</div>
+      ${v.concerns.map(c => `<div class="concern ${esc(c.severity)}"><b>${esc(c.severity)}</b> · phase ${esc(c.phase)} - ${esc(c.text)}
+        ${c.suggestion ? `<div class="muted">→ ${esc(c.suggestion)}</div>` : ''}</div>`).join('')}
+    </div>`;
+  }).join('');
+}
+
+function renderDetail() {
+  const el = $('content');
+  if (!detail) {
+    el.innerHTML = `<div class="empty">${deck && deck.runs.length ? 'Pick a run on the left.' : 'Press <b>+ New run</b> and type an idea. Tick <b>Practice run</b> to try it free.'}</div>`;
+    return;
+  }
+  const r = detail.run;
+  const w = deck && deck.roles && deck.roles.builder ? deck.roles.builder : null;
+  const night = w ? `between ${esc(w.window.start)} and ${esc(w.window.end)} (${esc(w.window.tz.replace('_', ' '))}), at most ${w.phases_per_night} phases a night` : 'at night';
+  const buildGate = r.state === 'approved' ? `
+    <div class="gate">
+      <b>The plan is approved.</b> <span class="muted">${r.dry ? 'Practice build: no AI, nothing spent, straight away.' : `The builder works ${night}, in its own sandbox, on its own login. Every session is watched; anything odd holds the build for you.`}</span>
+      <div class="acts"><button class="btn go" data-act="build">Start building</button></div>
+    </div>` : r.state === 'building' ? `
+    <div class="gate" style="border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.06)">
+      <b>Building - ${r.phases_passed} of ${r.phases} phases done.</b> <span class="muted">${r.dry ? 'Practice build.' : `The builder works ${night} (or in a build-now window); outside those hours it waits.`} The Build tab shows each phase.</span>
+      ${appLink(r) ? `<div class="acts">${appLink(r)}</div>` : ''}
+    </div>` : r.state === 'phase_ready' ? `
+    <div class="gate">
+      <b>Tonight's work is done - ${r.phases_passed} of ${r.phases} phases built and passing.</b> <span class="muted">Look at it in the Build tab${r.site ? ' and in the app' : ''}. Continue, and building carries on ${r.dry ? 'now' : 'the next night'}.</span>
+      <div class="acts">
+        <button class="btn go" data-act="continue">Continue</button>
+        ${appLink(r)}
+        <button class="btn" id="fxtoggle">Send the last phase back…</button>
+        <button class="btn warn" data-act="stop">Stop</button>
+      </div>
+      <div id="fx" style="display:none">
+        <textarea id="fxnote" maxlength="2000" placeholder="What should the builder change in the last phase?" style="min-height:90px"></textarea>
+        <div class="acts"><button class="btn go" data-act="fixphase">Send it back</button></div>
+      </div>
+    </div>` : r.state === 'held' ? `
+    <div class="gate" style="border-color:rgba(244,63,94,.6);background:rgba(244,63,94,.08)">
+      <b style="color:#fb7185">The build is HELD for you to look at.</b>
+      <div style="margin-top:4px">${esc(r.error || '')}</div>
+      <div class="muted" style="margin-top:4px">Nothing runs until you decide. Read the Room and Build tabs. Resume if it is fine; Stop if it is not.</div>
+      <textarea id="rsnote" maxlength="2000" placeholder="Optional: a note with Resume - the builder, the watchdog and the second opinion all read it. E.g. &quot;The hand-written sample is fine for now.&quot;" style="min-height:70px;margin-top:8px"></textarea>
+      <div class="acts"><button class="btn go" data-act="resume">Resume</button><button class="btn warn" data-act="stop">Stop</button></div>
+    </div>` : r.state === 'stopped' && r.build_started ? `
+    <div class="gate">
+      <b>The build was stopped - ${r.phases_passed} of ${r.phases} phases done.</b> <span class="muted">Resume carries it on from phase ${(r.build_phase || 0) + 1}, on top of what it already wrote, ${r.dry ? 'straight away' : `when the builder may work (${night}, or a build-now window)`}.</span>
+      <div class="acts"><button class="btn go" data-act="resume">Resume</button>${appLink(r)}</div>
+    </div>` : r.state === 'built' ? `
+    <div class="gate">
+      <b>Every phase is built and passing its tests.</b>
+      <div class="acts">${appLink(r)}<button class="btn" id="fxtoggle">Send the last phase back…</button></div>
+      ${shortcutBox(r)}
+      <div id="fx" style="display:none">
+        <textarea id="fxnote" maxlength="2000" placeholder="What should the builder change?" style="min-height:90px"></textarea>
+        <div class="acts"><button class="btn go" data-act="fixphase">Send it back</button></div>
+      </div>
+    </div>` : '';
+  const gate = buildGate || (r.state === 'awaiting_approval' ? `
+    <div class="gate">
+      <b>The plan is waiting for you.</b> <span class="muted">Read it in the Plan tab. Approving saves it to its own project folder; nothing is built or sent anywhere.</span>
+      <div class="acts">
+        <button class="btn go" data-act="approve">Approve plan</button>
+        <button class="btn" id="sbtoggle">Send back with a note…</button>
+        <button class="btn warn" data-act="stop">Stop</button>
+      </div>
+      <div id="sb" style="display:none">
+        <textarea id="sbnote" maxlength="2000" placeholder="What should the planner change?" style="min-height:90px"></textarea>
+        <div class="acts"><button class="btn go" data-act="sendback">Send it back</button></div>
+      </div>
+    </div>` : '');
+  el.innerHTML = `
+    <div class="runhead">
+      <div style="min-width:0;flex:1">
+        <h2>${esc(r.title)}</h2>
+        <div class="muted"><span class="tag ${TAGS[r.state] || 't-gray'}">${esc(SHORT[r.state] || r.state)}</span>
+          ${esc(r.state_label)}${r.stopping ? ' - stopping before the next AI call' : ''}</div>
+        <div class="muted" style="margin-top:4px">${r.dry ? 'Practice run - nothing spent' : 'Spent ' + esc(spentText(r)) + ' of ' + dollars(deck.budget.run_cap)}
+          · ${r.calls} AI ${r.calls === 1 ? 'reply' : 'replies'} · started ${esc(when(r.created_utc))}</div>
+        ${r.error ? `<div class="err" style="margin-top:4px">${esc(r.error)}</div>` : ''}
+        ${r.project_dir ? `<div class="muted" style="margin-top:4px">Saved in <code>${esc(r.project_dir)}</code></div>` : ''}
+      </div>
+      ${r.working && !r.stopping ? '<button class="btn warn" data-act="stop">Stop</button>' : ''}
+      ${r.state === 'failed' ? '<button class="btn go" data-act="retry">Retry</button>' : ''}
+    </div>
+    ${gate}
+    <div class="tabs">
+      ${[['room', 'Room'], ['plan', 'Plan'], ['reviews', 'Reviews'], ...((detail.build || []).length ? [['build', 'Build']] : []), ['idea', 'Idea']].map(([k, n]) =>
+        `<button class="tab ${tab === k ? 'on' : ''}" data-tab="${k}">${n}</button>`).join('')}
+    </div>
+    <div class="pane" id="pane">${tab === 'plan' ? renderPlan() : tab === 'reviews' ? renderReviews() : tab === 'build' ? renderBuild()
+      : tab === 'idea' ? `<div class="body" style="white-space:pre-wrap">${esc(detail.idea)}</div>` : renderRoom()}</div>`;
+  el.querySelectorAll('.tab').forEach(b => b.onclick = () => { tab = b.dataset.tab; renderDetail(); });
+  el.querySelectorAll('[data-act]').forEach(b => b.onclick = () => act(b.dataset.act, b));
+  el.querySelectorAll('[data-app]').forEach(b => b.onclick = () => openApp(b.dataset.app, b.dataset.title));
+  const ac = el.querySelector('#aicopy');
+  if (ac) ac.onclick = () => {
+    // Plain http over Tailscale is not a "secure" page, where the clipboard
+    // API is missing - so select the text and use the older copy command.
+    const i = $('aiurl');
+    i.focus(); i.select(); i.setSelectionRange(0, i.value.length);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    ac.textContent = ok ? 'Copied' : 'Selected - tap Copy';
+  };
+  const t = $('sbtoggle');
+  if (t) t.onclick = () => { const s = $('sb'); s.style.display = s.style.display === 'none' ? 'block' : 'none'; };
+  const f = $('fxtoggle');
+  if (f) f.onclick = () => { const s = $('fx'); s.style.display = s.style.display === 'none' ? 'block' : 'none'; };
+}
+
+async function act(what, btn) {
+  if (!detail) return;
+  const id = detail.run.id;
+  const body = {};
+  if (what === 'sendback' || what === 'fixphase') {
+    body.note = ($(what === 'sendback' ? 'sbnote' : 'fxnote').value || '').trim();
+    if (body.note.length < 3) { alert('Write a note first.'); return; }
+  }
+  if (what === 'resume' && $('rsnote')) {
+    body.note = ($('rsnote').value || '').trim();
+    if (body.note && body.note.length < 3) { alert('Write a little more, or leave the note empty.'); return; }
+  }
+  if (what === 'build' && !detail.run.dry && !confirm('Start building? The builder will work in its night window, in its sandbox, on its own Claude login.')) return;
+  if (what === 'resume' && !confirm(detail.run.state === 'stopped' ? 'Carry on building from where it was stopped?' : 'Resume the build? Only if you have read why it was held and you are happy with it.')) return;
+  if (what === 'stop' && !confirm('Stop this run? It stops before its next AI call.')) return;
+  if (what === 'retry' && !confirm('Carry this run on from where it stopped? What is already done is kept and not paid for again; the step that failed is asked again.')) return;
+  btn.disabled = true;
+  try {
+    await api(`/api/agentroom/runs/${id}/${what}`, { method: 'POST', body: JSON.stringify(body) });
+    if (what === 'approve') tab = 'room';
+  } catch (e) { alert(e.message); }
+  await refresh();
+}
+
+async function select(id) {
+  current = id; tab = 'room';
+  try { localStorage.setItem('agentroom.run', String(id)); } catch {}
+  await refresh();
+}
+
+let lastShown = '';
+async function refresh() {
+  if (busy) return;
+  busy = true;
+  try {
+    deck = await api('/api/agentroom');
+    if (current && !deck.runs.some(r => r.id === current)) current = null;
+    if (!current && deck.runs.length) current = deck.runs[0].id;
+    renderTop();
+    detail = current ? await api(`/api/agentroom/runs/${current}`) : null;
+    // Redraw only when something changed, so a half-typed note or an open
+    // reply is not wiped every few seconds.
+    const sig = detail ? `${detail.run.state}|${detail.messages.length}|${detail.plan_version}|${detail.run.stopping}|${current}|${(detail.build || []).map(p => p.status).join(',')}` : 'none';
+    if (sig !== lastShown || !$('pane')) { lastShown = sig; renderDetail(); }
+  } catch (e) {
+    $('content').innerHTML = `<div class="empty err">${esc(e.message)}</div>`;
+    lastShown = '';
+  } finally { busy = false; }
+}
+
+// Build now (1 hour) / Close build window
+$('bnbtn').onclick = async () => {
+  const closing = $('bnbtn').dataset.open === '1';
+  if (!closing && !confirm('Let the builder work for the next hour? It uses your Claude plan\'s limits while you are using it too - at most a night\'s 3 phases and $5 of plan use. A build that is building starts within a minute; an approved one needs Start building.')) return;
+  if (closing && !confirm('Close the build window? A phase being built now is stopped and carries on next time.')) return;
+  $('bnbtn').disabled = true;
+  try {
+    await api('/api/agentroom/build-now', { method: 'POST', body: JSON.stringify(closing ? { off: true } : { hours: 1 }) });
+  } catch (e) { alert(e.message); }
+  $('bnbtn').disabled = false;
+  await refresh();
+};
+
+// New run
+$('newbtn').onclick = () => {
+  const real = deck && deck.key.present && !deck.key.problem;
+  $('ndry').checked = !real;
+  $('ndry').disabled = !real;
+  $('nmoney').textContent = real
+    ? `A real run may spend up to ${dollars(deck.budget.run_cap)}; the Agent Room may spend ${dollars(deck.budget.cap)} a day. It stops before any call that could go over.`
+    : 'Real runs are off until the Agent Room has its own OpenRouter key, so this will be a practice run.';
+  $('nerr').textContent = '';
+  $('dlg').showModal();
+};
+$('newform').addEventListener('submit', async ev => {
+  if (ev.submitter && ev.submitter.value === 'cancel') return;
+  ev.preventDefault();
+  const title = $('ntitle').value.trim(), idea = $('nidea').value.trim();
+  if (idea.length < 20) { $('nerr').textContent = 'Say a little more about the idea (at least 20 characters).'; return; }
+  $('nstart').disabled = true;
+  try {
+    const r = await api('/api/agentroom/runs', { method: 'POST', body: JSON.stringify({ title, idea, dry: $('ndry').checked }) });
+    $('dlg').close();
+    $('ntitle').value = ''; $('nidea').value = '';
+    await select(r.id);
+  } catch (e) { $('nerr').textContent = e.message; }
+  finally { $('nstart').disabled = false; }
+});
+
+refresh();
+setInterval(() => { if (!document.hidden) refresh(); }, 4000);
+</script>
+</body>
+</html>

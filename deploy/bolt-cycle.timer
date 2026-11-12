@@ -1,0 +1,13 @@
+[Unit]
+Description=Run Bolt every 10 minutes, every day (crypto never closes)
+
+[Timer]
+# Every 10 minutes, around the clock, like Belfort's fetcher but on weekends
+# too. The 1.5-hour buy check is decided inside bolt.py from the clock, so a
+# late or missed tick cannot shift it.
+OnCalendar=*:0/10
+Persistent=false
+RandomizedDelaySec=20
+
+[Install]
+WantedBy=timers.target

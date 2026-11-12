@@ -1,0 +1,11 @@
+[Unit]
+Description=Belfort's monthly review, 08:05 Eastern on the 1st
+
+[Timer]
+OnCalendar=*-*-01 08:05 America/New_York
+# The 1st is the one day it runs: if the droplet was off, run at boot rather
+# than skip a month.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

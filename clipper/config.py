@@ -1,0 +1,152 @@
+"""Where Clipper keeps things, and every setting it runs on - in one place.
+
+Defaults live here. Overrides live in <home>/config.json, which is untracked
+and which the Deck will edit in Phase 3; an unknown key there is an error,
+not a silent no-op, because a misspelt setting that changes nothing is the
+forgotten-edit failure this repo keeps meeting.
+
+Runtime data lives under CLIPPER_HOME (default clipper/var/), not under
+agents/: the dispatcher, preflight and the Deck treat every folder there as an
+agent, and a media folder would read as a broken one.
+"""
+
+import json
+import os
+from pathlib import Path
+
+PACKAGE = Path(__file__).resolve().parent
+ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", PACKAGE.parent))
+
+DEFAULTS = {
+    # --- transcription ------------------------------------------------------
+    # base.en, measured 2026-09-28 on one Xeon thread: 15x realtime, 540 MB
+    # peak. small.en was 5x and 1,155 MB - too much beside the Deck and the
+    # agents on a 2 GB droplet. Set "language" to null for non-English audio
+    # and pick a multilingual model ("base", "small").
+    "transcriber": "faster-whisper",
+    "whisper_model": "base.en",
+    "whisper_threads": 1,
+    # Transcribed ten minutes at a time: the whole 81-minute Trae Young
+    # episode at once peaked at 4.9 GB and was killed on the 2 GB droplet.
+    "whisper_chunk_seconds": 600,
+    # Where the talking is loud but Whisper wrote no word - its voice filter
+    # drops crosstalk - each stretch is listened to again and the words put
+    # back (transcribe.fill). Owner, 2026-10-23: captions skipping sentences.
+    "fill_holes": True,
+    "language": "en",
+
+    # --- finding moments ----------------------------------------------------
+    "min_clip_seconds": 20.0,
+    "max_clip_seconds": 60.0,
+    "target_clip_seconds": 35.0,
+    "max_clips_per_video": 5,
+    # On top of those: moments picked for the laugh they get - a pause in
+    # the talking as loud as the talking (score.laughs). 0 turns it off.
+    "funny_clips_per_video": 2,
+    "min_score": 40.0,
+    # Each stretch of transcript read by Sonnet on the owner's Claude plan,
+    # which marks where every story, argument and bit starts and ends
+    # (stories.py) - so a clip is one complete thought, not the middle of
+    # one. A marked moment may run to story_max_seconds (owner, 2026-10-22:
+    # "up to 90 seconds is fine"); other clips keep max_clip_seconds.
+    "story_reading": True,
+    "story_max_seconds": 90.0,
+    # A gap this long between two words ends a sentence even with no
+    # punctuation - Whisper leaves plenty out.
+    "sentence_pause_seconds": 0.8,
+
+    # A video no longer than max_clip_seconds is one somebody already cut (a
+    # Twitch clip). On: it is trimmed to its moment - setup, the loud bit,
+    # the reaction (trim.py). Off: it is used whole.
+    "trim_clips": True,
+
+    # --- editing ------------------------------------------------------------
+    # "center": crop the middle of the frame (one speaker, centred).
+    # "blur":   whole frame on a blurred copy of itself (wide shots, two people).
+    "crop_mode": "faces",            # framed shot by shot on the people (framing.py); "center" or "blur"
+    "caption_style": "bold-yellow",
+    "caption_uppercase": True,
+    "caption_max_words": 3,
+    "caption_max_chars": 18,
+    "x264_preset": "veryfast",
+    "x264_crf": 21,
+    "loudness_lufs": -14.0,          # what TikTok and Shorts normalise toward
+    "fps": 30,
+    # A source's watermark goes centred, its top edge this far down the
+    # 1920-high frame: under the status bar and TikTok's Following/For You
+    # tabs, well above the captions. Never a corner, never under the
+    # captions - render.watermark_box refuses a spot that would be.
+    "watermark_top": 300,
+    # Shown at its own size; a file wider than this is scaled down evenly
+    # (never stretched) so it stays clear of TikTok's buttons on the right.
+    "watermark_max_width": 600,
+
+    # --- rights -------------------------------------------------------------
+    # Clipping campaigns pay for views, which is commercial use - so a
+    # non-commercial Creative Commons licence is refused unless this is on.
+    "allow_noncommercial": False,
+
+    # --- Spotter, the research assistant ------------------------------------
+    # YouTube category ids: 20 Gaming, 24 Entertainment, 23 Comedy,
+    # 22 People & Blogs, 17 Sports. A category with no chart in the region is
+    # skipped, not an error.
+    "spot_region": "US",
+    "spot_categories": ["20", "24", "23", "22", "17"],
+    "spot_min_subscribers": 500000,  # "top influencers": smaller channels are not ranked
+    "spot_search_creators": 8,       # 100 quota units each
+    "spot_lookback_hours": 72,
+    "spot_daily_units": 3000,        # of the free 10,000/day; the rest is left for uploads later
+    "spot_min_match": 0.5,           # share of a trending clip's words found in the footage
+
+    # --- posting ------------------------------------------------------------
+    "platforms": ["youtube", "tiktok"],
+    # Asked for; YouTube itself keeps uploads private until the Google Cloud
+    # project passes its API audit, and says so in the upload's reply.
+    "youtube_privacy": "public",
+    "youtube_category": "24",        # Entertainment
+    "max_daily_uploads": 6,          # per platform
+    "copy_model": "openai/gpt-5-mini",
+
+    # --- money --------------------------------------------------------------
+    # Phase 1 spends nothing: transcription is local. The ledger and the cap
+    # exist now so the first paid provider cannot be added without them.
+    "daily_budget_usd": 0.25,
+}
+
+
+def home():
+    return Path(os.environ.get("CLIPPER_HOME", PACKAGE / "var"))
+
+
+# Settings of features that are gone - the Twitch chat watcher (removed
+# 2026-10-20: "get rid of this auto clipping bot, I don't use it anymore").
+# A config.json written while it ran may still hold them; they are skipped, so
+# the removal does not stop Clip at its next start.
+RETIRED = {"twitch_spike_ratio", "twitch_spike_min_rate", "twitch_clip_seconds",
+           "twitch_clip_delay_seconds", "twitch_cooldown_seconds", "twitch_keep_best",
+           "twitch_max_clips_per_stream", "twitch_moments_hours"}
+
+
+def load(path=None):
+    """Defaults, overlaid with config.json. Raises on an unknown key."""
+    cfg = dict(DEFAULTS)
+    path = Path(path) if path else home() / "config.json"
+    if path.exists():
+        user = {k: v for k, v in json.loads(path.read_text()).items() if k not in RETIRED}
+        unknown = sorted(set(user) - set(DEFAULTS))
+        if unknown:
+            raise ValueError(f"{path}: unknown setting(s) {', '.join(unknown)} - "
+                             f"known: {', '.join(sorted(DEFAULTS))}")
+        cfg.update(user)
+    return cfg
+
+
+def paths():
+    h = home()
+    return {
+        "home": h,
+        "db": h / "clipper.db",
+        "media": h / "media",          # one folder per source video
+        "clips": h / "clips",          # finished shorts, one folder per video
+        "lock": h / "run.lock",
+    }

@@ -1,0 +1,18 @@
+[Unit]
+Description=Scout's niche scan: re-measure the oldest niches on Etsy, find new ones (no AI)
+Documentation=https://github.com/cljxs/cljxs
+After=network-online.target
+
+[Service]
+# Added 2026-10-02. Scans only ever happened by hand, so Scout's data went
+# past its 14-day limit and it had nothing to propose. This keeps every niche
+# measured - favourites, price and recent sales - and adds niches from the
+# tags of listings that are selling. Never reads or copies a design.
+Type=oneshot
+User=root
+Environment=HOME=/root
+WorkingDirectory=/root/ecosystem
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/niche-scan.py run
+TimeoutStartSec=3600
+StandardOutput=journal
+StandardError=journal

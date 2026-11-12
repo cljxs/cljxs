@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<title>Fury's debrief</title>
+<!-- Fury, the manager (owner, 2026-10-30: "every single other agent give
+     reports to him. I want daily debriefs from him on what needs my
+     attention, what i should be doing"). Today's debrief exactly as
+     scripts/gm.py wrote it - what needs you, the fixes he made himself, and
+     his proposals - read through /api/townhall, answered through
+     /api/gm/:day/:n/:verdict, the Town Hall's own routes. Nothing is decided
+     on this page. Opened from the village frame's navigation (?embed=1). -->
+<style>
+  :root{
+    --bg:#0b1020; --panel:#10172a; --card:#131b31; --line:rgba(148,163,184,.16);
+    --ink:#e6e9f2; --mute:#94a0b8; --dim:#5f6b85;
+    --green:#4ade80; --amber:#f59e0b; --red:#fb7185; --blue:#38bdf8; --gold:#facc15;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink)}
+  body{font:15px/1.55 var(--sans);-webkit-font-smoothing:antialiased;padding:16px}
+  body.embed{padding:10px;background:rgba(5,8,16,.94)}
+  .frame{max-width:860px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    box-shadow:0 20px 70px rgba(0,0,0,.5);overflow:hidden}
+  .head{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;padding:20px 22px 8px}
+  .head h1{margin:0;font-size:26px}
+  .sub{color:var(--mute)}
+  .sp{flex:1}
+  .btn{font:600 13px var(--sans);color:var(--ink);background:transparent;border:1px solid var(--line);
+    border-radius:8px;padding:9px 14px;cursor:pointer;text-decoration:none;white-space:nowrap}
+  .body{padding:6px 22px 22px}
+  .summary{font-size:16px;margin:4px 0 14px;padding:12px 14px;border-left:3px solid var(--gold);background:rgba(250,204,21,.06);border-radius:0 10px 10px 0}
+  h2{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute);margin:18px 0 8px}
+  .item{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:8px}
+  .item.need{border-color:rgba(251,113,133,.4)}
+  .item.fix{border-color:rgba(74,222,128,.35)}
+  .t{font-weight:700}
+  .muted{color:var(--mute);font-size:13px}
+  .pill{display:inline-block;font-size:12px;padding:1px 8px;border-radius:999px;border:1px solid var(--line);margin:4px 6px 0 0}
+  .pill.ok{color:var(--green);border-color:rgba(74,222,128,.45)} .pill.warn{color:var(--amber);border-color:rgba(245,158,11,.45)}
+  .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .yes{font:600 14px var(--sans);color:#06240f;background:var(--green);border:0;border-radius:8px;padding:10px 14px;cursor:pointer}
+  .no{font:600 14px var(--sans);color:var(--ink);background:transparent;border:1px solid var(--line);border-radius:8px;padding:10px 14px;cursor:pointer}
+  details{margin-top:14px} summary{cursor:pointer;color:var(--mute);font-weight:600}
+  .fact{font-size:13px;color:var(--mute);margin:2px 0}
+  .err{color:var(--red)}
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="head">
+    <div><h1>Fury's debrief</h1><div class="sub" id="sub">The manager - every agent reports to him.</div></div>
+    <div class="sp"></div>
+    <a class="btn" href="/brain">Brain map</a>
+    <a class="btn" id="back" href="/dashboard">← Deck</a>
+    <button class="btn" id="close" style="display:none">Close</button>
+  </div>
+  <div class="body" id="body"><div class="muted">Loading Fury's debrief…</div></div>
+</div>
+<script src="/shared/busy.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let G = null, busy = false;
+
+if (new URLSearchParams(location.search).get('embed') === '1') {
+  document.body.classList.add('embed');
+  $('back').style.display = 'none';
+  $('close').style.display = '';
+  const close = () => parent.postMessage({ type: 'fury-close' }, '*');
+  $('close').onclick = close;
+  addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+}
+
+async function load() {
+  try { G = (await (await fetch('/api/townhall', { cache: 'no-store' })).json()).gm; }
+  catch (e) { $('body').innerHTML = '<div class="muted">Could not reach the Deck - it may be restarting.</div>'; return; }
+  draw();
+}
+
+const cites = (facts, ids) => (ids || []).map(f => `<div class="fact">${esc(f)}: ${esc(facts[Number(String(f).slice(1)) - 1] || '?')}</div>`).join('');
+
+function draw() {
+  const g = G || {};
+  if (!g.status || g.status === 'none') {
+    $('body').innerHTML = '<div class="muted">Fury has not written a debrief yet. He writes one each morning after collecting every agent\'s report.</div>';
+    return;
+  }
+  $('sub').textContent = `${g.day} · ${g.status}${g.model ? ' · ' + g.model : ''}`;
+  if (g.status !== 'ran') {
+    $('body').innerHTML = `<div class="item need"><div class="t">No debrief this morning</div><div class="muted">${esc(g.reason || 'no reason recorded')}</div></div>`;
+    return;
+  }
+  const facts = g.facts || [];
+  const needs = (g.attention || []).map(a => `<div class="item need"><div>${esc(a.text)}</div><details><summary>Why</summary>${cites(facts, a.facts)}</details></div>`).join('')
+    || '<div class="muted">Nothing needs you today.</div>';
+  const fixes = (g.fixes || []).map(x => `<div class="item fix"><div class="t">Re-ran ${esc(x.unit)}</div>
+      <div class="muted">${esc(x.status)}: ${esc(x.detail)}</div><div>${esc(x.why)}</div></div>`).join('')
+    || '<div class="muted">No repairs needed this morning.</div>';
+  const props = (g.proposals || []).map(p => {
+    const d = p.decision, sent = p.sent;
+    const who = p.who.charAt(0).toUpperCase() + p.who.slice(1);
+    const state = !d ? '' : d.verdict === 'approve' ? '<span class="pill ok">approved</span>' : '<span class="pill warn">declined</span>';
+    const job = p.task ? `<span class="pill">sends ${esc(who)}: ${esc(p.task)}${p.idea ? ' #' + esc(p.idea) : ''}</span>` : '<span class="pill">your to-do</span>';
+    const sentLine = !sent ? '' : sent.status === 'sent' ? `<div class="muted" style="color:var(--green)">Sent to ${esc(who)}: ${esc(sent.detail)}</div>`
+      : `<div class="muted" style="color:var(--amber)">Not sent: ${esc(sent.detail)}</div>`;
+    const btns = sent && sent.status === 'sent' ? '' : `<div class="acts">
+      <button class="yes" data-n="${p.n}" data-verb="approve" data-task="${p.task ? 1 : ''}" data-busy="${p.task ? 'Sending to ' + esc(who) : 'Saving'}">${p.task ? (sent ? 'Try sending again' : 'Approve & send to ' + esc(who)) : 'Approve (my to-do)'}</button>
+      <button class="no" data-n="${p.n}" data-verb="decline">Decline</button></div>`;
+    return `<div class="item"><div class="t">${p.n}. ${esc(p.title)}</div><div>${job}${state}</div>
+      <div style="margin-top:6px"><b>Do:</b> ${esc(p.action)}</div><div><b>Why:</b> ${esc(p.why)}</div>
+      ${d && d.note ? `<div class="muted">your note: ${esc(d.note)}</div>` : ''}${sentLine}
+      <details><summary>The facts it rests on</summary>${cites(facts, p.facts)}</details>${btns}</div>`;
+  }).join('') || '<div class="muted">No proposals this morning.</div>';
+  const dropped = (g.dropped || []).length ? `<details><summary>Refused by the checks (${g.dropped.length})</summary>${g.dropped.map(x => `<div class="fact">${esc(x.title)} — ${esc(x.reason)}</div>`).join('')}</details>` : '';
+  $('body').innerHTML = `${g.summary ? `<div class="summary">${esc(g.summary)}</div>` : ''}
+    <h2>Needs you</h2>${needs}
+    <h2>Fury fixed himself</h2>${fixes}
+    <h2>What you should do / approve</h2>${props}
+    ${dropped}
+    <details><summary>Every agent's report (${facts.length} facts)</summary>${facts.map((f, i) => `<div class="fact">F${i + 1} ${esc(f)}</div>`).join('')}</details>`;
+  $('body').querySelectorAll('button[data-n]').forEach(b => b.onclick = () => act(Number(b.dataset.n), b.dataset.verb, !!b.dataset.task));
+}
+
+async function act(n, verdict, sends) {
+  if (busy) return;
+  const ask = verdict === 'decline' ? 'Why not? Fury reads this tomorrow so he does not propose it again.'
+    : sends ? 'This sends the job now. Note for Fury (optional):' : 'This one is yours to do. Note for Fury (optional):';
+  const note = window.prompt(ask, '');
+  if (note === null || (verdict === 'decline' && !note.trim())) return;
+  busy = true;
+  try {
+    const r = await fetch(`/api/gm/${encodeURIComponent(G.day)}/${n}/${verdict}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) alert(j.error || `Failed (HTTP ${r.status})`);
+  } catch (e) { alert('Could not reach the Deck.'); }
+  busy = false;
+  load();
+}
+
+load();
+setInterval(() => { if (!busy) load(); }, 120000);
+</script>
+</body>
+</html>

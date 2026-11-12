@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily, read the NFL games that finished since yesterday into the defense ranks
+
+[Timer]
+# Every morning, after the night's games are final: Sunday's and Monday's and
+# Thursday's late kickoffs all end before 1am ET.
+OnCalendar=*-*-* 06:40 America/New_York
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target
