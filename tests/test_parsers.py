@@ -5489,6 +5489,74 @@ class PeterIsGradedFourMoreWays(unittest.TestCase):
             self.assertIn(bit, page)
 
 
+class WhoBeatsPeterAndWhoFallsShort(unittest.TestCase):
+    """Owner, 2026-11-17: "who is doing well this year for his predicted
+    percentages vs who is doing bad vs what he is predicting" - both ways
+    (beats Peter; Peter reads him), a row per player per market, 4+ graded
+    games, a luck range each, on its own Players tab."""
+
+    def setUp(self):
+        self.m = load("props_forecast_players", "props-forecast.py")
+
+    def f(self, game, aid, market, pct, actual, recent=(60, 60, 60)):
+        return {"event_id": str(game), "athlete_id": aid, "player": f"Player {aid}", "team": "DAL", "position": "WR",
+                "market": market, "kickoff_utc": "2026-11-08T18:00Z", "probabilities": {"50": pct}, "actual": actual,
+                "p50": 50.0, "recent": [{"date": "2026-10-01", "value": v} for v in recent]}
+
+    def row(self, rows, aid, market="receiving_yards"):
+        return next(r for r in rows if r["player"] == f"Player {aid}" and r["market"] == market)
+
+    def test_four_games_in_a_market_or_no_row(self):
+        done = [self.f(g, "1", "receiving_yards", 40.0, 80.0) for g in range(3)] + \
+               [self.f(g, "2", "receiving_yards", 40.0, 80.0) for g in range(4)]
+        rows = self.m.player_rows(done)
+        self.assertEqual([r["player"] for r in rows], ["Player 2"])
+
+    def test_a_player_peter_underrates_beats_him_by_more_than_luck(self):
+        # Peter says 40% every game; he clears it in 18 of 20.
+        done = [self.f(g, "1", "receiving_yards", 40.0, 80.0 if g < 18 else 10.0) for g in range(20)]
+        r = self.row(self.m.player_rows(done), "1")
+        self.assertEqual((r["games"], r["said"], r["happened"], r["diff"]), (20, 40.0, 90.0, 50.0))
+        self.assertTrue(r["diff_real"])
+        self.assertGreater(r["diff_range"][0], 0)
+
+    def test_four_games_either_way_is_not_yet_a_finding(self):
+        done = [self.f(g, "1", "receiving_yards", 40.0, 80.0 if g < 3 else 10.0) for g in range(4)]
+        r = self.row(self.m.player_rows(done), "1")
+        self.assertGreater(r["diff"], 0)
+        self.assertFalse(r["diff_real"], "3 of 4 against 40% is inside luck")
+
+    def test_each_market_is_its_own_row(self):
+        done = [self.f(g, "1", "receiving_yards", 40.0, 80.0) for g in range(4)] + \
+               [self.f(g, "1", "receptions", 40.0, 10.0) for g in range(4)]
+        rows = self.m.player_rows(done)
+        self.assertGreater(self.row(rows, "1", "receiving_yards")["diff"], 0)
+        self.assertLess(self.row(rows, "1", "receptions")["diff"], 0)
+
+    def test_how_well_peter_reads_him(self):
+        # Peter says 90% when it lands and 10% when it does not; the last five said 3 in 5.
+        done = [self.f(g, "1", "receiving_yards", 90.0 if g % 2 else 10.0, 80.0 if g % 2 else 10.0, (60, 60, 60, 40, 40))
+                for g in range(20)]
+        r = self.row(self.m.player_rows(done), "1")
+        self.assertGreater(r["skill_pct"], 50)
+        self.assertTrue(r["skill_real"])
+
+    def test_luck_draws_his_games_whole(self):
+        # Two forecasts of one game move together: four games, not eight draws.
+        done = [self.f(g, "1", "receiving_yards", 40.0, 80.0) for g in range(4) for _ in range(2)]
+        r = self.row(self.m.player_rows(done), "1")
+        self.assertEqual((r["games"], r["forecasts"]), (4, 8))
+
+    def test_it_comes_with_the_report_card_and_has_its_own_tab(self):
+        done = [self.f(g, "1", "receiving_yards", 40.0, 80.0) for g in range(4)]
+        r = self.m.calibration_report(done)
+        self.assertEqual(len(r["players"]), 1)
+        self.assertEqual(r["player_min_games"], 4)
+        page = (ROOT / "mission-control-api" / "public" / "peter.html").read_text()
+        for bit in ('data-tab="players"', "function drawPlayers()", "Beating Peter", "Falling short", "plChart()"):
+            self.assertIn(bit, page)
+
+
 class TwoBarsWithNoGameBetweenThem(unittest.TestCase):
     """Stafford came back 76.2% for 200+ AND 76.2% for 225+.
 

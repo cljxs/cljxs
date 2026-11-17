@@ -1376,6 +1376,71 @@ def by_week(done):
     return out
 
 
+# ------------------------------------------------------------------ player by player
+#
+# Owner, 2026-11-17: "who is doing well this year for his predicted
+# percentages vs who is doing bad vs what he is predicting" - both ways, one
+# row per player per market, 4+ graded games, each with a luck range.
+
+PLAYER_MIN_GAMES = 4
+
+
+def _range(draws, resamples):
+    return _middle95(draws, resamples) if draws else None
+
+
+def player_rows(done, min_games=PLAYER_MIN_GAMES, resamples=LUCK_RESAMPLES, seed=LUCK_SEED):
+    """[{player, market, games, said, happened, diff, diff_range, diff_real,
+    skill_pct, skill_range, skill_real}] for every player and market with
+    min_games graded games.
+
+    diff: how much more often he cleared his lines than Peter said, in
+    points - positive, Peter underrates him; negative, Peter overrates him.
+    skill: Peter's skill on him over the simple guess (his last games).
+    Ranges re-draw his games: one game is one draw, all its lines together."""
+    groups = {}
+    for f in done:
+        key = (str(f.get("athlete_id") or f.get("player")), f.get("market") or "?")
+        groups.setdefault(key, []).append(f)
+    rng = random.Random(seed)
+    out = []
+    for (aid, market), fs in sorted(groups.items()):
+        by_game = {}
+        for f in fs:
+            by_game.setdefault(f.get("event_id"), []).append(f)
+        if len(by_game) < min_games:
+            continue
+        games = []
+        for gfs in by_game.values():
+            calls = [(float(p), hit_of(f, t) * 100) for f in gfs for t, p in (f.get("probabilities") or {}).items()]
+            sc = [x for x in (forecast_scores(f) for f in gfs) if x]
+            games.append((len(calls), sum(p for p, _h in calls), sum(h for _p, h in calls),
+                          sum(a for a, _b in sc), sum(b for _a, b in sc)))
+        n = sum(g[0] for g in games)
+        if not n:
+            continue
+        said, happened = sum(g[1] for g in games) / n, sum(g[2] for g in games) / n
+        peter, simple = sum(g[3] for g in games), sum(g[4] for g in games)
+        diffs, skills = [], []
+        for _ in range(resamples):
+            r = _resample(games, rng)
+            k = sum(g[0] for g in r)
+            diffs.append((sum(g[2] for g in r) - sum(g[1] for g in r)) / k)
+            s = sum(g[4] for g in r)
+            if s:
+                skills.append(100 * (1 - sum(g[3] for g in r) / s))
+        d_rng = _range(diffs, resamples)
+        s_rng = _range(skills, resamples) if simple else None
+        last = fs[-1]
+        out.append({"player": last.get("player"), "team": last.get("team"), "position": last.get("position"),
+                    "market": market, "games": len(games), "forecasts": len(fs), "calls": n,
+                    "said": round(said, 1), "happened": round(happened, 1), "diff": round(happened - said, 1),
+                    "diff_range": d_rng, "diff_real": bool(d_rng) and not (d_rng[0] <= 0 <= d_rng[1]),
+                    "skill_pct": round(100 * (1 - peter / simple), 1) if simple else None,
+                    "skill_range": s_rng, "skill_real": bool(s_rng) and not (s_rng[0] <= 0 <= s_rng[1])})
+    return out
+
+
 def calibration_report(forecasts):
     """The calibration, as numbers: what `calibration` prints and what
     Peter's Grade button shows, from one function so the two cannot differ.
@@ -1414,7 +1479,8 @@ def calibration_report(forecasts):
             "min_games": MIN_GAMES_TO_JUDGE, "thin": thin,
             "buckets": [{"from": lo, "to": lo + BUCKET_WIDTH - 1, **b} for lo, b in rows.items()],
             "markets": markets, "market_count": len(split),
-            "skill": skill(done), "middle": middle_misses(done), "weeks": by_week(done)}
+            "skill": skill(done), "middle": middle_misses(done), "weeks": by_week(done),
+            "players": player_rows(done), "player_min_games": PLAYER_MIN_GAMES}
 
 
 def better_lines(r):

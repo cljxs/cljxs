@@ -128,6 +128,25 @@
   .cal th:first-child,.cal td:first-child{text-align:left}
   .cal td{text-align:right;padding:5px 6px;border-bottom:1px solid var(--line)}
   .gap-ok{color:var(--up)} .gap-over{color:var(--down)} .gap-under{color:var(--warn)}
+  /* the players tab (2026-11-17) */
+  .plchips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 12px}
+  .plchip{font:inherit;font-size:11px;letter-spacing:.08em;color:var(--mute);background:transparent;border:1px solid var(--line);
+    border-radius:14px;padding:5px 10px;cursor:pointer}
+  .plchip.on{color:var(--gold2);border-color:var(--gold)}
+  .plbox{margin-bottom:12px}
+  .pl-svg{width:100%;height:auto;display:block;margin-top:6px}
+  .pl-diag{stroke:var(--dim);stroke-width:1.5;stroke-dasharray:4 4}
+  .pl-hit{fill:transparent;cursor:pointer}
+  .pl-dot{stroke:var(--panel2);stroke-width:2}
+  .pl-dot.pl-up,.plbar i.pl-up{fill:var(--up);background:var(--up)}
+  .pl-dot.pl-down,.plbar i.pl-down{fill:var(--down);background:var(--down)}
+  .pl-dot.pl-mid{fill:var(--dim)} .plbar i.pl-mid{background:var(--dim)}
+  .plread{font-size:12px;color:var(--ink);min-height:2.6em;margin-top:6px;padding:6px 8px;border-left:2px solid var(--gold);background:rgba(255,255,255,.02)}
+  .plgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+  .plrow{padding:8px 0;border-top:1px solid var(--line);cursor:pointer;font-size:12px}
+  .plrow:first-of-type{border-top:0}
+  .plbar{display:flex;align-items:center;gap:8px;margin:4px 0}
+  .plbar i{display:block;height:8px;border-radius:4px;min-width:3px;max-width:70%}
   /* week by week, as two charts (2026-11-17) */
   .wk-svg{width:100%;height:auto;display:block;margin-top:4px;overflow:visible}
   .wk-grid{stroke:var(--line);stroke-width:1} .wk-zero{stroke:var(--dim);stroke-width:1}
@@ -529,6 +548,7 @@ async function loadCalibration(job){
   try{ CAL = await (await fetch('/api/props/calibration', {cache:'no-store'})).json(); }
   catch(e){ CAL = {available:false, reason:'the Deck could not be reached'}; }
   drawGrade(job);
+  drawProps();          // the Players tab is drawn from this report
 }
 
 function lastLine(text){
@@ -732,7 +752,7 @@ async function loadProps(){
     return;
   }
   const tabs = propsTabs();
-  if(!tabs.includes(propsTab)) propsTab = tabs[0] || null;
+  if(!tabs.includes(propsTab) && propsTab !== 'players') propsTab = tabs[0] || null;
   drawHead();
   drawProps();
 }
@@ -768,14 +788,109 @@ function drawProps(){
   const g = gameOf(propsEvent);
   const bar = tabs.map(t => `<button class="ptab${t === propsTab ? ' on' : ''}" data-tab="${esc(t)}">`
     + `${esc(String(t).replace(/_/g, ' '))}<span class="ptn">${inView.filter(f => f.market === t).length}</span></button>`).join('');
+  const nPl = (((CAL || {}).report || {}).players || []).length;
+  const barAll = bar + `<button class="ptab${propsTab === 'players' ? ' on' : ''}" data-tab="players">★ Players<span class="ptn">${nPl || ''}</span></button>`;
+  if(propsTab === 'players'){ host.innerHTML = `<div class="ptabs">${barAll}</div>` + drawPlayers(); return; }
   const bars = Array.isArray(spec.thresholds) ? spec.thresholds.map(t => `${t}+`).join(' · ') : '';
-  host.innerHTML = `<div class="ptabs">${bar}</div>
+  host.innerHTML = `<div class="ptabs">${barAll}</div>
     <div class="mhead"><div class="t">${esc(String(propsTab || '').replace(/_/g, ' '))}</div>
       <div class="k">${esc(g ? g.fixture : 'every game')}${bars ? ' · ' + esc(bars) : ''}${spec.unit ? ' ' + esc(spec.unit) : ''}</div></div>`
     + (rows.length
         ? `<div class="fcards">` + rows.map(forecastCard).join('') + `</div>`
         : `<div class="box empty">Nobody ${g ? 'in ' + esc(g.fixture) + ' ' : ''}reaches ${esc(String(propsTab || '').replace(/_/g, ' '))}
            in a quarter of his games - the filter working, not a gap.</div>`);
+}
+
+/* ---------------- players: who beats Peter, who falls short ---------------- */
+// Owner, 2026-11-17: "who is doing well this year for his predicted
+// percentages vs who is doing bad vs what he is predicting" - both ways, a
+// row per player per market, 4+ graded games, a luck range each, as a dot
+// chart and two ranked lists, its own tab. props-forecast.py works out every
+// number (calibration_report's `players`); this lays them out.
+let plMarket = 'all', PL = [];
+const mname = m => String(m || '').replace(/_/g, ' ');
+
+function drawPlayers(){
+  const rep = (CAL || {}).report;
+  if(!rep) return `<div class="box empty">The report card has not loaded yet - the players come with it.</div>`;
+  const all = rep.players || [];
+  const min = rep.player_min_games || 4;
+  if(!all.length) return `<div class="box empty">No player has ${esc(min)} graded games in one market yet.</div>`;
+  const markets = [...new Set(all.map(r => r.market))].sort();
+  if(plMarket !== 'all' && !markets.includes(plMarket)) plMarket = 'all';
+  PL = plMarket === 'all' ? all : all.filter(r => r.market === plMarket);
+  const chips = ['all', ...markets].map(m => `<button class="plchip${m === plMarket ? ' on' : ''}" data-plm="${esc(m)}">${esc(m === 'all' ? 'every market' : mname(m))}</button>`).join('');
+  const over = [...PL].sort((a, b) => b.diff - a.diff).filter(r => r.diff > 0).slice(0, 10);
+  const under = [...PL].sort((a, b) => a.diff - b.diff).filter(r => r.diff < 0).slice(0, 10);
+  const realOver = PL.filter(r => r.diff_real && r.diff > 0).length, realUnder = PL.filter(r => r.diff_real && r.diff < 0).length;
+  return `<div class="mhead"><div class="t">Players</div>
+      <div class="k">${esc(PL.length)} player-markets · ${esc(min)}+ graded games each</div></div>
+    <div class="plchips">${chips}</div>
+    <div class="box plbox">
+      <div class="k">What Peter said vs what happened · each dot one player in one market</div>
+      ${plChart()}
+      <div class="plread" id="plRead">Tap a dot for the player. Above the line he beat Peter; below, he fell short.
+        Coloured only when it is more than luck: ${realOver} beating him, ${realUnder} falling short.</div>
+    </div>
+    <div class="plgrid">
+      <div class="box"><div class="k">Beating Peter · he underrates them</div>${over.map(plRow).join('') || '<div class="empty">nobody</div>'}</div>
+      <div class="box"><div class="k">Falling short · he overrates them</div>${under.map(plRow).join('') || '<div class="empty">nobody</div>'}</div>
+    </div>
+    <div class="note">"Beats Peter" is how many points more often the player cleared his lines than Peter said, across every line and game.
+      "Peter reads him" is Peter's skill on that player over the simple guess (his last 5 games): above 0, Peter adds something.
+      The luck range re-draws the player's games at random; a number is coloured only when it is outside it.
+      A few games swing a lot - a player near the top of a list with a wide range is a maybe, not a finding.</div>`;
+}
+
+function plChart(){
+  const host = $('propsBody');
+  const W = Math.max(280, Math.min(720, Math.round((host && host.clientWidth) || 600) - 40)), H = Math.round(W * 0.62);
+  const L = 36, B = H - 24, T = 8, R = 10;
+  const v = PL.flatMap(r => [r.said, r.happened]);
+  const lo = Math.max(0, Math.floor((Math.min(...v) - 3) / 10) * 10), hi = Math.min(100, Math.ceil((Math.max(...v) + 3) / 10) * 10);
+  const x = p => L + (p - lo) / (hi - lo) * (W - L - R), y = p => B - (p - lo) / (hi - lo) * (B - T);
+  const ticks = []; for(let t = lo; t <= hi; t += (hi - lo > 50 ? 20 : 10)) ticks.push(t);
+  const maxG = Math.max(...PL.map(r => r.games));
+  const dots = PL.map((r, i) => {
+    const rad = 3 + 4 * Math.sqrt(r.games / maxG), cls = !r.diff_real ? 'pl-mid' : r.diff > 0 ? 'pl-up' : 'pl-down';
+    return `<g data-pl="${i}"><circle cx="${x(r.said)}" cy="${y(r.happened)}" r="${rad + 7}" class="pl-hit"></circle>
+      <circle cx="${x(r.said)}" cy="${y(r.happened)}" r="${rad}" class="pl-dot ${cls}"></circle></g>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" class="pl-svg" role="img" aria-label="Each player: what Peter said against what happened">
+    ${ticks.map(t => `<line x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}" class="wk-grid"></line>
+      <text x="${L - 4}" y="${y(t) + 3}" text-anchor="end" class="wk-ax">${t}%</text>
+      <text x="${x(t)}" y="${H - 8}" text-anchor="middle" class="wk-ax">${t}%</text>`).join('')}
+    <line x1="${x(lo)}" y1="${y(lo)}" x2="${x(hi)}" y2="${y(hi)}" class="pl-diag"></line>
+    <text x="${x(hi) - 4}" y="${y(hi) + 14}" text-anchor="end" class="wk-ax">happened = said</text>
+    ${dots}
+    <text x="${W - R}" y="${B - 4}" text-anchor="end" class="wk-ax">Peter said →</text>
+    <text x="${L + 4}" y="${T + 10}" class="wk-ax">↑ happened</text>
+  </svg>`;
+}
+
+function plRange(r){ return r ? `${sgn(r[0])} to ${sgn(r[1])}` : '—'; }
+
+function plRow(r){
+  const i = PL.indexOf(r), mx = Math.max(10, ...PL.map(p => Math.abs(p.diff)));
+  const w = Math.min(100, Math.abs(r.diff) / mx * 100);
+  const sk = r.skill_pct === null || r.skill_pct === undefined ? '—'
+    : `<span class="${r.skill_real ? (r.skill_pct > 0 ? 'gap-ok' : 'gap-over') : ''}">${sgn(r.skill_pct)}%</span>`;
+  return `<div class="plrow" data-pl="${i}">
+    <div class="pln"><b>${esc(r.player)}</b> <span class="muted">${esc(r.team || '')} ${esc(r.position || '')}${plMarket === 'all' ? ' · ' + esc(mname(r.market)) : ''}</span></div>
+    <div class="plbar"><i class="${!r.diff_real ? 'pl-mid' : r.diff > 0 ? 'pl-up' : 'pl-down'}" style="width:${w}%"></i>
+      <span class="num">${sgn(r.diff)} pts</span></div>
+    <div class="muted num">said ${Number(r.said).toFixed(0)}% → happened ${Number(r.happened).toFixed(0)}% · luck ${plRange(r.diff_range)} ·
+      ${esc(r.games)} games · Peter reads him ${sk}</div>
+  </div>`;
+}
+
+function showPlayer(i){
+  const r = PL[i], out = $('plRead');
+  if(!r || !out) return;
+  out.innerHTML = `<b>${esc(r.player)}</b> · ${esc(r.team || '')} ${esc(r.position || '')} · ${esc(mname(r.market))} ·
+    ${esc(r.games)} games: Peter said ${Number(r.said).toFixed(1)}%, it happened ${Number(r.happened).toFixed(1)}%
+    (${sgn(r.diff)} pts, luck ${plRange(r.diff_range)}${r.diff_real ? ' - more than luck' : ' - within luck'}) ·
+    Peter reads him ${r.skill_pct === null || r.skill_pct === undefined ? '—' : sgn(r.skill_pct) + '% (luck ' + plRange(r.skill_range) + ')'}`;
 }
 
 /* ---------------- wiring ---------------- */
@@ -786,7 +901,14 @@ $('gradeBtn').onclick = gradeNow;
 // onclick string would be one apostrophe from breaking the page.
 $('gameList').onclick = e => { const b = e.target.closest('[data-event]'); if(b) pickGame(b.dataset.event); };
 $('gameBox').onclick = e => { const b = e.target.closest('[data-rerun]'); if(b) runForecast(b.dataset.rerun); };
-$('propsBody').onclick = e => { const b = e.target.closest('[data-tab]'); if(b) propsPick(b.dataset.tab); };
+$('propsBody').onclick = e => {
+  const b = e.target.closest('[data-tab]');
+  if(b) return propsPick(b.dataset.tab);
+  const m = e.target.closest('[data-plm]');
+  if(m){ plMarket = m.dataset.plm; return drawProps(); }
+  const d = e.target.closest('[data-pl]');
+  if(d) showPlayer(+d.dataset.pl);
+};
 loadWeek();
 loadProps();
 loadCalibration();
