@@ -101,6 +101,10 @@ INTERVAL_SPAN = 90                # a 90% interval: the 5th to the 95th
 # 20 is a judgement and not a derived number - roughly a full slate's worth
 # of Sundays. It is the bar for "worth reading", not for "proven".
 MIN_GAMES_TO_JUDGE = 20
+# The report card's rows, in points of probability. Owner, 2026-11-17:
+# "Can we break these grading percentages down to 5 percent gaps" - with
+# 3,000+ graded calls, ten-point rows hid the shape inside them.
+BUCKET_WIDTH = 5
 
 # Who gets forecast, and how they are ranked against each other. A
 # quarterback throws thirty-five times a game and a receiver is targeted
@@ -1120,7 +1124,7 @@ def grade_all(pending):
     return graded, skipped
 
 
-def buckets(forecasts, width=10):
+def buckets(forecasts, width=BUCKET_WIDTH):
     """Forecasts grouped by what they predicted, with what actually happened.
 
     The only question that matters: when it said 70%, did it happen about 70%
@@ -1131,7 +1135,7 @@ def buckets(forecasts, width=10):
         if f.get("actual") is None:
             continue
         for t, pct in (f.get("probabilities") or {}).items():
-            # 100.0% would otherwise open a "100-109%" bucket, which is not
+            # 100.0% would otherwise open a "100-104%" bucket, which is not
             # a thing a probability can be. It belongs in the top one.
             lo = min(int(float(pct) // width) * width, 100 - width)
             b = out.setdefault(lo, {"n": 0, "hits": 0, "predicted": 0.0})
@@ -1222,7 +1226,7 @@ def calibration_report(forecasts):
             "waiting": sum(1 for f in forecasts if f.get("actual") is None
                            and f.get("graded_utc") is None),
             "min_games": MIN_GAMES_TO_JUDGE, "thin": thin,
-            "buckets": [{"from": lo, "to": lo + 9, **b} for lo, b in rows.items()],
+            "buckets": [{"from": lo, "to": lo + BUCKET_WIDTH - 1, **b} for lo, b in rows.items()],
             "markets": markets, "market_count": len(split)}
 
 

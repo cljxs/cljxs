@@ -4476,9 +4476,16 @@ class ForecastsAreGradedOrTheyAreDecoration(unittest.TestCase):
 
     def test_a_certainty_does_not_open_a_bucket_above_one_hundred(self):
         # A real run printed a "100-109%" row, which is not a thing a
-        # probability can be. 100% belongs in the top bucket with 90-99.
+        # probability can be. 100% belongs in the top bucket, 95-99.
         rows = [self.forecast_row({"3": 100.0}, actual=5.0)]
-        self.assertEqual(list(self.m.buckets(rows)), [90])
+        self.assertEqual(list(self.m.buckets(rows)), [95])
+
+    def test_the_rows_are_five_points_wide(self):
+        # Owner, 2026-11-17: "break these grading percentages down to 5 percent gaps".
+        rows = [self.forecast_row({"60": 72.0}, actual=80.0), self.forecast_row({"60": 77.0}, actual=10.0)]
+        self.assertEqual(sorted(self.m.buckets(rows)), [70, 75], "72% and 77% are two rows now")
+        r = self.m.calibration_report(rows)
+        self.assertEqual([(b["from"], b["to"]) for b in r["buckets"]], [(70, 74), (75, 79)])
 
     def test_it_says_when_there_is_not_enough_to_conclude(self):
         # A coin lands 7 of 10 often enough that it means nothing, and a
