@@ -5389,6 +5389,102 @@ class EveryMarketIsGradedAgainstItsOwnStat(unittest.TestCase):
         self.assertLess(self.m.buckets(split["receptions"])[90]["gap"], 0)
 
 
+class PeterIsGradedFourMoreWays(unittest.TestCase):
+    """Owner, 2026-11-17, all four: is he better than a simple guess (his
+    last five games); which gaps are real and which are luck; each forecast
+    counted once; is he getting better or worse. The calibration table alone
+    passes a forecaster who adds nothing - "his last five games" can be
+    calibrated too."""
+
+    def setUp(self):
+        self.m = load("props_forecast_four", "props-forecast.py")
+
+    def f(self, game, probs, actual, recent, kickoff="2026-11-08T18:00Z", p50=50.0, market="receiving_yards"):
+        return {"event_id": str(game), "market": market, "unit": "yds", "kickoff_utc": kickoff,
+                "probabilities": probs, "actual": actual, "p50": p50,
+                "recent": [{"date": f"2026-10-{10 + i:02d}T17:00Z", "value": v} for i, v in enumerate(recent)]}
+
+    def test_a_forecaster_who_knows_more_than_the_last_five_games_shows_skill(self):
+        # Peter says 90% when it lands and 10% when it does not; the last
+        # five games said 3 in 5 every time.
+        done = [self.f(g, {"50": 90.0 if g % 2 else 10.0}, 80.0 if g % 2 else 20.0, [60, 60, 60, 40, 40])
+                for g in range(40)]
+        sk = self.m.skill(done)
+        self.assertGreater(sk["skill_pct"], 50)
+        self.assertGreater(sk["range"][0], 0, "and more than luck")
+        self.assertEqual((sk["forecasts"], sk["games"]), (40, 40))
+
+    def test_saying_what_the_last_five_said_is_no_skill(self):
+        done = [self.f(g, {"50": 100 * 3.5 / 6}, 80.0 if g % 2 else 20.0, [60, 60, 60, 40, 40]) for g in range(20)]
+        self.assertEqual(self.m.skill(done)["skill_pct"], 0.0)
+
+    def test_the_simple_guess_never_sees_the_game_itself(self):
+        # A late forecast's recent games can include the game being graded.
+        f = self.f(1, {"50": 50.0}, 80.0, [10, 10, 10])
+        f["recent"].append({"date": "2026-11-08T18:00Z", "value": 80.0})
+        self.assertEqual(self.m.earlier_recent(f), [10.0, 10.0, 10.0])
+        self.assertEqual(self.m.simple_guess(f, 50), 0.5 / 4)
+        self.assertIsNone(self.m.simple_guess(self.f(1, {}, 1.0, [10, 10]), 50), "two games is too few")
+
+    def test_each_forecast_counts_once_however_many_lines_it_has(self):
+        one_line = [self.f(1, {"50": 90.0}, 80.0, [60, 60, 60])]
+        five_lines = [self.f(1, {str(t): 90.0 for t in (10, 20, 30, 40, 50)}, 80.0, [60, 60, 60])]
+        self.assertEqual(self.m.skill(one_line)["forecasts"], 1)
+        self.assertEqual(self.m.skill(five_lines)["forecasts"], 1)
+        self.assertEqual(self.m.skill(one_line)["peter_brier"], self.m.skill(five_lines)["peter_brier"])
+
+    def test_luck_is_wide_for_few_games_and_a_real_gap_stands_out(self):
+        few = [self.f(g, {"60": 72.0}, 80.0 if g < 2 else 10.0, [60, 60, 60]) for g in range(3)]
+        lo, hi = self.m.luck_ranges(few)[70]
+        self.assertGreater(hi - lo, 30, "three games cannot pin a 70% row down")
+        # Says 72% on 60 games, it happens 30%: too confident by more than luck.
+        bad = [self.f(g, {"60": 72.0}, 80.0 if g % 10 < 3 else 10.0, [60, 60, 60]) for g in range(60)]
+        r = self.m.calibration_report(bad)
+        row = next(b for b in r["buckets"] if b["from"] == 70)
+        self.assertTrue(row["real"])
+        self.assertLess(row["luck"][1], 0)
+        # A big gap from six games is not yet more than luck: not coloured.
+        six = [self.f(g, {"60": 72.0}, 80.0 if g < 3 else 10.0, [60, 60, 60]) for g in range(6)]
+        row6 = next(b for b in self.m.calibration_report(six)["buckets"] if b["from"] == 70)
+        self.assertLess(row6["gap"], -5)
+        self.assertFalse(row6["real"], "-22 points from six games is inside luck")
+        honest = [self.f(g, {"60": 72.0}, 80.0 if g % 25 < 18 else 10.0, [60, 60, 60]) for g in range(50)]
+        self.assertFalse(next(b for b in self.m.calibration_report(honest)["buckets"] if b["from"] == 70)["real"])
+
+    def test_luck_draws_whole_games(self):
+        # Ten calls from one game are one piece of evidence: a single game
+        # cannot be re-drawn into anything but itself.
+        one_game = [self.f(1, {"60": 72.0}, 80.0 if i < 5 else 10.0, [60, 60, 60]) for i in range(10)]
+        self.assertEqual(self.m.luck_ranges(one_game)[70], [-22.0, -22.0])
+
+    def test_his_middle_number_against_the_middle_of_his_last_games(self):
+        done = [self.f(1, {"50": 50.0}, 70.0, [40, 50, 60], p50=65.0),
+                self.f(2, {"50": 50.0}, 30.0, [40, 50, 60], p50=35.0)]
+        m = self.m.middle_misses(done)[0]
+        self.assertEqual((m["market"], m["forecasts"], m["peter_off"], m["simple_off"]),
+                         ("receiving_yards", 2, 5.0, 20.0))
+
+    def test_week_by_week_keeps_monday_night_in_its_week(self):
+        self.assertEqual(self.m.week_of("2026-11-12T00:15Z")[0], "2026-11-10", "Thursday night")
+        self.assertEqual(self.m.week_of("2026-11-15T18:00Z")[0], "2026-11-10", "Sunday")
+        self.assertEqual(self.m.week_of("2026-11-17T01:15Z")[0], "2026-11-10", "Monday night, after midnight UTC")
+        self.assertEqual(self.m.week_of("2026-11-20T01:15Z")[0], "2026-11-17", "the next Thursday")
+        done = [self.f(1, {"50": 60.0}, 80.0, [60, 60, 60], kickoff="2026-11-08T18:00Z"),
+                self.f(2, {"50": 60.0}, 20.0, [60, 60, 60], kickoff="2026-11-15T18:00Z")]
+        w = self.m.by_week(done)
+        self.assertEqual([(x["week"], x["happened"]) for x in w], [("Nov 3-Nov 9", 100.0), ("Nov 10-Nov 16", 0.0)])
+
+    def test_the_report_carries_all_four(self):
+        done = [self.f(g, {"50": 70.0}, 80.0, [60, 60, 60]) for g in range(3)]
+        r = self.m.calibration_report(done)
+        for k in ("skill", "middle", "weeks"):
+            self.assertTrue(r[k], k)
+        self.assertIn("luck", r["buckets"][0])
+        page = (ROOT / "mission-control-api" / "public" / "peter.html").read_text()
+        for fn in ("skillBlock(c.skill)", "middleBlock(c.middle)", "weeksBlock(c.weeks)", "luckOf(b.luck)"):
+            self.assertIn(fn, page)
+
+
 class TwoBarsWithNoGameBetweenThem(unittest.TestCase):
     """Stafford came back 76.2% for 200+ AND 76.2% for 225+.
 

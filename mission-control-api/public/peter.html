@@ -520,7 +520,14 @@ function lastLine(text){
 }
 
 // Within five points either way reads as honest; the colour is only that.
-function gapClass(g){ return Math.abs(g) <= 5 ? 'gap-ok' : g < 0 ? 'gap-over' : 'gap-under'; }
+// Owner, 2026-11-17: a gap is coloured only when it is bigger than luck
+// explains - props-forecast.py re-draws the graded games whole and says so
+// (`real`). Rows from before the luck ranges existed fall back to 5 points.
+function gapClass(g, real){
+  const off = real === undefined ? Math.abs(g) > 5 : real;
+  return !off ? 'gap-ok' : g < 0 ? 'gap-over' : 'gap-under';
+}
+const luckOf = l => l ? `${sgn(l[0])} to ${sgn(l[1])}` : '—';
 const sgn = x => (x > 0 ? '+' : '') + Number(x).toFixed(1);
 
 // The script's warning is wrapped for a terminal; here its first line is the
@@ -555,25 +562,72 @@ function drawGrade(job, note){
     const c = CAL.report;
     const rows = c.buckets.map(b => `<tr><td>${esc(b.from)}–${esc(b.to)}%</td>
       <td class="num">${Number(b.predicted).toFixed(1)}%</td><td class="num">${Number(b.observed).toFixed(1)}%</td>
-      <td class="num ${gapClass(b.gap)}">${sgn(b.gap)}</td><td class="num">${esc(b.n)}</td></tr>`).join('');
+      <td class="num ${gapClass(b.gap, b.real)}">${sgn(b.gap)}</td><td class="num muted">${luckOf(b.luck)}</td>
+      <td class="num">${esc(b.n)}</td></tr>`).join('');
     const markets = c.markets
-      ? `<table class="cal"><tr><th>Market</th><th>Said</th><th>Happened</th><th>Gap</th><th>Calls</th></tr>`
+      ? `<table class="cal"><tr><th>Market</th><th>Said</th><th>Happened</th><th>Gap</th><th>Luck</th><th>Calls</th></tr>`
         + c.markets.map(m => `<tr><td>${esc(String(m.market).replace(/_/g, ' '))}</td>
           <td class="num">${Number(m.predicted).toFixed(1)}%</td><td class="num">${Number(m.observed).toFixed(1)}%</td>
-          <td class="num ${gapClass(m.gap)}">${sgn(m.gap)}</td><td class="num">${esc(m.calls)}</td></tr>`).join('') + `</table>`
+          <td class="num ${gapClass(m.gap, m.real)}">${sgn(m.gap)}</td><td class="num muted">${luckOf(m.luck)}</td>
+          <td class="num">${esc(m.calls)}</td></tr>`).join('') + `</table>`
       : c.market_count > 1 ? `<div class="note" style="margin-top:8px">By market: held back until ${esc(c.min_games)} games -
           split this thin, every row would be noise.</div>` : '';
     body = `<div class="gradebig num">${esc(c.graded)} graded</div>
       <div class="muted">from ${esc(c.games)} game${c.games === 1 ? '' : 's'} · ${esc(c.calls)} calls${
         c.waiting ? ` · ${esc(c.waiting)} waiting on a final` : ''}</div>
       ${c.thin ? thinNote(c.thin) : ''}
-      <table class="cal"><tr><th>He said</th><th>Avg</th><th>Happened</th><th>Gap</th><th>Calls</th></tr>${rows}</table>
+      ${skillBlock(c.skill)}
+      <table class="cal"><tr><th>He said</th><th>Avg</th><th>Happened</th><th>Gap</th><th>Luck</th><th>Calls</th></tr>${rows}</table>
       ${markets}
       <div class="note" style="margin-top:8px">A gap near zero means his percentages mean what they say.
         <span class="gap-over">Negative</span>: too confident - the one that would cost money.
-        <span class="gap-under">Positive</span>: too cautious. Green is within 5 points.</div>`;
+        <span class="gap-under">Positive</span>: too cautious. "Luck" is how far the gap swings when the same
+        number of games is drawn again at random; a gap is coloured only when it is outside that range.</div>
+      ${middleBlock(c.middle)}
+      ${weeksBlock(c.weeks)}`;
   }
   host.innerHTML = `<div class="k">Report card · when he says 70%, does it happen?</div>${run}${body}`;
+}
+
+// 1. Is he better than a simple guess? (owner, 2026-11-17)
+function skillBlock(sk){
+  if(!sk || sk.skill_pct === null || sk.skill_pct === undefined) return '';
+  const r = sk.range, sure = r && (r[0] > 0 || r[1] < 0);
+  const cls = !sure ? '' : r[0] > 0 ? 'gap-ok' : 'gap-over';
+  const verdict = !r ? 'not enough games for a luck range yet'
+    : r[0] > 0 ? 'better than the simple guess, by more than luck'
+    : r[1] < 0 ? 'worse than the simple guess, by more than luck'
+    : 'not yet distinguishable from the simple guess';
+  return `<div class="k" style="margin-top:12px">Better than a simple guess?</div>
+    <div class="gradebig num ${cls}" style="font-size:22px">${sgn(sk.skill_pct)}% skill</div>
+    <div class="muted">against ${esc(sk.simple)}, on the same ${esc(sk.forecasts)} forecasts from ${esc(sk.games)} games
+      ${r ? `· luck range ${sgn(r[0])} to ${sgn(r[1])}` : ''} - ${esc(verdict)}.</div>
+    <div class="note">Each forecast scored once (the Brier score, averaged over its lines). Above 0 he adds something
+      the guess does not; 0 or below, the guess does as well.</div>`;
+}
+
+// 3. One forecast at a time, in plain units: how far his middle number landed.
+function middleBlock(rows){
+  if(!rows || !rows.length) return '';
+  return `<div class="k" style="margin-top:14px">How far his middle number landed</div>
+    <table class="cal"><tr><th>Market</th><th>Forecasts</th><th>He missed by</th><th>Guess missed by</th></tr>${
+      rows.map(m => `<tr><td>${esc(String(m.market).replace(/_/g, ' '))}</td><td class="num">${esc(m.forecasts)}</td>
+        <td class="num ${m.peter_off < m.simple_off ? 'gap-ok' : 'gap-over'}">${Number(m.peter_off).toFixed(1)} ${esc(m.unit)}</td>
+        <td class="num">${Number(m.simple_off).toFixed(1)} ${esc(m.unit)}</td></tr>`).join('')}</table>
+    <div class="note">On average, the distance from his middle number (half his games above it, half below) to what
+      happened, beside the middle of his last games. Smaller is better.</div>`;
+}
+
+// 4. Week by week: is he getting better or worse?
+function weeksBlock(rows){
+  if(!rows || !rows.length) return '';
+  return `<div class="k" style="margin-top:14px">Week by week</div>
+    <table class="cal"><tr><th>Week</th><th>Forecasts</th><th>Said</th><th>Happened</th><th>Gap</th><th>Skill</th></tr>${
+      rows.map(w => `<tr><td>${esc(w.week)}</td><td class="num">${esc(w.forecasts)}</td>
+        <td class="num">${Number(w.said).toFixed(1)}%</td><td class="num">${Number(w.happened).toFixed(1)}%</td>
+        <td class="num">${sgn(w.gap)}</td>
+        <td class="num ${w.skill_pct === null ? '' : w.skill_pct > 0 ? 'gap-ok' : 'gap-over'}">${w.skill_pct === null ? '—' : sgn(w.skill_pct) + '%'}</td></tr>`).join('')}</table>
+    <div class="note">One week is a handful of games - read the run of weeks, not any one row.</div>`;
 }
 
 /* ---------------- the forecasts ---------------- */

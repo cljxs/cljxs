@@ -57,7 +57,7 @@ import ssl
 import sys
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -1196,6 +1196,186 @@ def too_thin_to_judge(games, calls):
             f"about {MIN_GAMES_TO_JUDGE} games.")
 
 
+# ------------------------------------------------------------------ grading him better
+#
+# Owner, 2026-11-17, all four of: is he better than a simple guess; which
+# gaps are real and which are luck; each forecast counted once; is he getting
+# better or worse. The calibration table says his percentages mean what they
+# say. It cannot say they are worth anything: "his hit rate in his last five
+# games" can be calibrated too. These can.
+
+LUCK_RESAMPLES = 400        # re-draws of the graded games for the luck ranges
+LUCK_SEED = 20261117        # fixed, so the page does not flicker between loads
+SIMPLE_MIN = 3              # the simple guess needs this many earlier games
+
+
+def hit_of(f, t):
+    return 1.0 if float(f["actual"]) >= float(t) else 0.0
+
+
+def earlier_recent(f):
+    """His recent values from games played before this forecast's kick-off
+    - never the game itself, which a forecast made late could have seen."""
+    kick = str(f.get("kickoff_utc") or "")[:10]
+    return [float(g["value"]) for g in (f.get("recent") or [])
+            if g.get("value") is not None and (not kick or str(g.get("date") or "")[:10] < kick)]
+
+
+def simple_guess(f, t):
+    """The simple guess for one threshold: how often his recent earlier
+    games cleared it, pulled half a game toward 50% so five out of five is
+    not a certainty. None without SIMPLE_MIN earlier games."""
+    vals = earlier_recent(f)
+    if len(vals) < SIMPLE_MIN:
+        return None
+    return (sum(1 for v in vals if v >= float(t)) + 0.5) / (len(vals) + 1)
+
+
+def forecast_scores(f):
+    """(Peter's Brier score, the simple guess's) for one forecast: each the
+    mean over its thresholds of (chance - what happened) squared - one score
+    per forecast, however many thresholds it has. Lower is better."""
+    probs = f.get("probabilities") or {}
+    pairs = [(float(p) / 100, simple_guess(f, t), hit_of(f, t)) for t, p in probs.items()]
+    pairs = [x for x in pairs if x[1] is not None]
+    if not pairs:
+        return None
+    n = len(pairs)
+    return (sum((p - h) ** 2 for p, _s, h in pairs) / n, sum((s - h) ** 2 for _p, s, h in pairs) / n)
+
+
+def _resample(games, rng):
+    return [games[rng.randrange(len(games))] for _ in games]
+
+
+def luck_ranges(done, width=BUCKET_WIDTH, resamples=LUCK_RESAMPLES, seed=LUCK_SEED):
+    """{bucket: [low, high]} - the range of the gap that re-drawing the same
+    number of games, whole, gives 95% of the time. Whole games, because the
+    calls inside one game share its defence, script and weather: counted
+    one by one they would make luck look far smaller than it is."""
+    per = {}
+    for f in done:
+        g = per.setdefault(f.get("event_id"), {})
+        for t, pct in (f.get("probabilities") or {}).items():
+            lo = min(int(float(pct) // width) * width, 100 - width)
+            b = g.setdefault(lo, [0, 0.0, 0.0])
+            b[0] += 1
+            b[1] += float(pct)
+            b[2] += hit_of(f, t) * 100
+    games = list(per.values())
+    rng = random.Random(seed)
+    gaps = {}
+    for _ in range(resamples):
+        tot = {}
+        for g in _resample(games, rng):
+            for lo, (n, said, hits) in g.items():
+                a = tot.setdefault(lo, [0, 0.0, 0.0])
+                a[0] += n
+                a[1] += said
+                a[2] += hits
+        for lo, (n, said, hits) in tot.items():
+            gaps.setdefault(lo, []).append((hits - said) / n)
+    return {lo: _middle95(v, resamples) for lo, v in gaps.items()}
+
+
+def _middle95(values, resamples):
+    """The 2.5th and 97.5th percentiles; a bucket missing from some re-draws
+    counts those as unknown, and a bucket in under half of them has no range."""
+    if not values or len(values) < resamples / 2:
+        return None
+    v = sorted(values)
+    return [round(v[int(0.025 * (len(v) - 1))], 1), round(v[int(0.975 * (len(v) - 1))], 1)]
+
+
+def skill(done, resamples=LUCK_RESAMPLES, seed=LUCK_SEED):
+    """Is he better than the simple guess, on the forecasts both made?
+    Skill = 1 - his Brier score / the guess's, in %: above 0 he adds
+    something, 0 he adds nothing, below 0 the guess was better. With its
+    luck range, games re-drawn whole."""
+    per = {}
+    for f in done:
+        sc = forecast_scores(f)
+        if sc:
+            g = per.setdefault(f.get("event_id"), [0, 0.0, 0.0])
+            g[0] += 1
+            g[1] += sc[0]
+            g[2] += sc[1]
+    games = list(per.values())
+    n = sum(g[0] for g in games)
+    if not n:
+        return None
+    peter, simple = sum(g[1] for g in games), sum(g[2] for g in games)
+    rng = random.Random(seed)
+    draws = []
+    for _ in range(resamples):
+        r = _resample(games, rng)
+        s = sum(g[2] for g in r)
+        if s:
+            draws.append(100 * (1 - sum(g[1] for g in r) / s))
+    return {"forecasts": n, "games": len(games), "peter_brier": round(peter / n, 4),
+            "simple_brier": round(simple / n, 4),
+            "skill_pct": round(100 * (1 - peter / simple), 1) if simple else None,
+            "range": _middle95(draws, resamples), "simple": f"his last {RECENT_GAMES} games"}
+
+
+def middle_misses(done):
+    """Per market, how far his middle number (p50) landed from what
+    happened, beside the middle of his last games: the plain-words check,
+    one forecast at a time. Averages of the distance, in the market's unit."""
+    out = {}
+    for f in done:
+        vals = earlier_recent(f)
+        if f.get("p50") is None or len(vals) < SIMPLE_MIN:
+            continue
+        a = float(f["actual"])
+        m = out.setdefault(f.get("market") or "?", [0, 0.0, 0.0, f.get("unit") or ""])
+        m[0] += 1
+        m[1] += abs(float(f["p50"]) - a)
+        m[2] += abs(percentile(sorted(vals), 50) - a)
+    return [{"market": k, "forecasts": n, "peter_off": round(p / n, 1), "simple_off": round(s / n, 1), "unit": u}
+            for k, (n, p, s, u) in sorted(out.items())]
+
+
+def market_luck(rs, resamples=LUCK_RESAMPLES, seed=LUCK_SEED):
+    """One market's whole-table gap range: luck_ranges with a single bucket."""
+    return luck_ranges(rs, width=100, resamples=resamples, seed=seed).get(0)
+
+
+def week_of(kickoff):
+    """(the Tuesday an NFL week starts, its label) for a kick-off time. A
+    Monday-night game kicks off after midnight UTC, so six hours are taken
+    off first and it stays in its own week."""
+    try:
+        t = datetime.strptime(str(kickoff)[:16], "%Y-%m-%dT%H:%M") - timedelta(hours=6)
+    except ValueError:
+        return None, None
+    d = t.date()
+    start = d - timedelta(days=(d.weekday() - 1) % 7)
+    end = start + timedelta(days=6)
+    return start.isoformat(), f"{start:%b} {start.day}-{end:%b} {end.day}"
+
+
+def by_week(done):
+    """One row a week: forecasts, games, what he said and what happened on
+    average across every call, and his skill over the simple guess."""
+    weeks = {}
+    for f in done:
+        start, label = week_of(f.get("kickoff_utc"))
+        if start:
+            weeks.setdefault((start, label), []).append(f)
+    out = []
+    for (start, label), fs in sorted(weeks.items()):
+        calls = [(float(p), hit_of(f, t)) for f in fs for t, p in (f.get("probabilities") or {}).items()]
+        sk = skill(fs, resamples=0)
+        said = sum(p for p, _h in calls) / len(calls)
+        happened = 100 * sum(h for _p, h in calls) / len(calls)
+        out.append({"week": label, "from": start, "forecasts": len(fs),
+                    "games": len({f.get("event_id") for f in fs}), "said": round(said, 1),
+                    "happened": round(happened, 1), "gap": round(happened - said, 1),
+                    "skill_pct": sk["skill_pct"] if sk else None})
+    return out
+
+
 def calibration_report(forecasts):
     """The calibration, as numbers: what `calibration` prints and what
     Peter's Grade button shows, from one function so the two cannot differ.
@@ -1207,6 +1387,10 @@ def calibration_report(forecasts):
     if not done:
         return None
     rows = buckets(done)
+    luck = luck_ranges(done)
+    for lo, b in rows.items():
+        b["luck"] = luck.get(lo)
+        b["real"] = bool(b["luck"]) and not (b["luck"][0] <= 0 <= b["luck"][1])
     n = sum(b["n"] for b in rows.values())
     games = games_graded(done)
     thin = too_thin_to_judge(games, n)
@@ -1219,15 +1403,41 @@ def calibration_report(forecasts):
             calls = sum(b["n"] for b in mb.values())
             pred = sum(b["predicted"] * b["n"] for b in mb.values()) / calls
             obs = 100.0 * sum(b["hits"] for b in mb.values()) / calls
+            rng = market_luck(rs)
             markets.append({"market": market, "predicted": round(pred, 1),
                             "observed": round(obs, 1), "gap": round(obs - pred, 1),
-                            "calls": calls})
+                            "calls": calls, "luck": rng,
+                            "real": bool(rng) and not (rng[0] <= 0 <= rng[1])})
     return {"graded": len(done), "games": games, "calls": n,
             "waiting": sum(1 for f in forecasts if f.get("actual") is None
                            and f.get("graded_utc") is None),
             "min_games": MIN_GAMES_TO_JUDGE, "thin": thin,
             "buckets": [{"from": lo, "to": lo + BUCKET_WIDTH - 1, **b} for lo, b in rows.items()],
-            "markets": markets, "market_count": len(split)}
+            "markets": markets, "market_count": len(split),
+            "skill": skill(done), "middle": middle_misses(done), "weeks": by_week(done)}
+
+
+def better_lines(r):
+    """The four checks of 2026-11-17, in words, for the terminal."""
+    out = []
+    sk = r.get("skill")
+    if sk and sk["skill_pct"] is not None:
+        rng = sk["range"]
+        out += [f"\n  Better than a simple guess ({sk['simple']}), on {sk['forecasts']} forecasts "
+                f"from {sk['games']} games:",
+                f"    skill {sk['skill_pct']:+.1f}%" + (f"  (luck range {rng[0]:+.1f} to {rng[1]:+.1f})" if rng else "")
+                + "  - above 0 he adds something; 0 or below, the guess does as well"]
+    if r.get("middle"):
+        out.append(f"\n  {'market':<20}{'his middle missed by':>22}{'the guess missed by':>22}")
+        for m in r["middle"]:
+            out.append(f"  {m['market']:<20}{m['peter_off']:>17.1f} {m['unit']:<4}{m['simple_off']:>17.1f} {m['unit']}")
+    if r.get("weeks"):
+        out.append(f"\n  {'week':<16}{'forecasts':>10}{'said':>8}{'happened':>10}{'gap':>7}{'skill':>8}")
+        for w in r["weeks"]:
+            sk = "-" if w["skill_pct"] is None else f"{w['skill_pct']:+.1f}%"
+            out.append(f"  {w['week']:<16}{w['forecasts']:>10}{w['said']:>7.1f}%{w['happened']:>9.1f}%"
+                       f"{w['gap']:>+7.1f}{sk:>8}")
+    return out
 
 
 def cmd_calibration(as_json=False):
@@ -1249,8 +1459,10 @@ def cmd_calibration(as_json=False):
     print("  " + "-" * 45)
     for b in r["buckets"]:
         said = f"{b['from']}-{b['to']}%"
+        luck = b.get("luck")
         print(f"  {said:<10}{b['predicted']:>9.1f}%{b['observed']:>9.1f}%"
-              f"{b['gap']:>+8.1f}{b['n']:>7}")
+              f"{b['gap']:>+8.1f}{b['n']:>7}"
+              + (f"   luck {luck[0]:+.1f} to {luck[1]:+.1f}{'  <- real' if b.get('real') else ''}" if luck else ""))
 
     if r["markets"]:
         print(f"\n  {'market':<20}{'predicted':>10}{'happened':>10}{'gap':>8}"
@@ -1266,6 +1478,9 @@ def cmd_calibration(as_json=False):
         print(f"\n  The per-market breakdown is held back until "
               f"{MIN_GAMES_TO_JUDGE} games: splitting\n  {n} correlated calls "
               f"seven ways produces rows nobody should read.")
+
+    for line in better_lines(r):
+        print(line)
 
     print(f"\n  A row whose gap is near zero is a forecast that means what it "
           f"says.\n  Consistently positive means it is too cautious; negative "
