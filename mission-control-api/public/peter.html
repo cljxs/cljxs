@@ -128,6 +128,22 @@
   .cal th:first-child,.cal td:first-child{text-align:left}
   .cal td{text-align:right;padding:5px 6px;border-bottom:1px solid var(--line)}
   .gap-ok{color:var(--up)} .gap-over{color:var(--down)} .gap-under{color:var(--warn)}
+  /* week by week, as two charts (2026-11-17) */
+  .wk-svg{width:100%;height:auto;display:block;margin-top:4px;overflow:visible}
+  .wk-grid{stroke:var(--line);stroke-width:1} .wk-zero{stroke:var(--dim);stroke-width:1}
+  .wk-ax{fill:var(--dim);font-size:10px;font-family:var(--mono)}
+  .wk-lab{fill:var(--ink);font-size:11px;font-family:var(--mono)} .wk-mute{fill:var(--mute)}
+  .wk-said{fill:none;stroke:var(--mute);stroke-width:2;stroke-dasharray:5 4}
+  .wk-hap{fill:none;stroke:var(--gold2);stroke-width:2}
+  .wk-dot{fill:var(--gold2);stroke:var(--panel2);stroke-width:2}
+  .wk-up{fill:var(--up)} .wk-down{fill:var(--down)}
+  .wk-hit{fill:transparent;cursor:pointer} .wk-hit:hover,.wk-hit.on{fill:rgba(255,255,255,.05)}
+  .wk-legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:11px;color:var(--mute);margin-top:6px} .wk-legend b{color:var(--ink);font-weight:600}
+  .wk-key{display:inline-block;width:16px;height:0;vertical-align:middle;margin-right:6px;border-top:2px solid var(--gold2)}
+  .wk-key-said{border-top:2px dashed var(--mute)}
+  .wk-sub{font-size:11px;letter-spacing:.06em;color:var(--ink);margin-top:10px}
+  .wk-read{font-size:12px;color:var(--ink);min-height:2.6em;margin-top:6px;padding:6px 8px;border-left:2px solid var(--gold);background:rgba(255,255,255,.02)}
+  .wk-table{margin-top:6px} .wk-table summary{cursor:pointer;color:var(--mute);font-size:12px}
   .thin{color:var(--warn);font-size:11.5px;line-height:1.55;margin-top:8px}
   .gradebig{font-size:22px;font-weight:800;color:var(--gold2)}
 
@@ -618,17 +634,92 @@ function middleBlock(rows){
       happened, beside the middle of his last games. Smaller is better.</div>`;
 }
 
-// 4. Week by week: is he getting better or worse?
+// 4. Week by week: is he getting better or worse? Two small charts, not a
+// table (owner, 2026-11-17: "make this a graph or something more readable
+// instead of a long small box"). Tap a week for its numbers - a tap works on
+// the iPad, where a hover does not. The table stays one tap away.
+let WEEKS = [];
+const shortWeek = w => { const [, m, d] = String(w.from || '').split('-'); return m ? `${+m}/${+d}` : esc(w.week); };
+
 function weeksBlock(rows){
   if(!rows || !rows.length) return '';
-  return `<div class="k" style="margin-top:14px">Week by week</div>
-    <table class="cal"><tr><th>Week</th><th>Forecasts</th><th>Said</th><th>Happened</th><th>Gap</th><th>Skill</th></tr>${
-      rows.map(w => `<tr><td>${esc(w.week)}</td><td class="num">${esc(w.forecasts)}</td>
-        <td class="num">${Number(w.said).toFixed(1)}%</td><td class="num">${Number(w.happened).toFixed(1)}%</td>
-        <td class="num">${sgn(w.gap)}</td>
-        <td class="num ${w.skill_pct === null ? '' : w.skill_pct > 0 ? 'gap-ok' : 'gap-over'}">${w.skill_pct === null ? '—' : sgn(w.skill_pct) + '%'}</td></tr>`).join('')}</table>
-    <div class="note">One week is a handful of games - read the run of weeks, not any one row.</div>`;
+  WEEKS = rows;
+  // Drawn at the card's own width, so a 10px label is 10px on the iPad's
+  // narrow card and on a wide screen alike (a fixed viewBox shrank them).
+  const box = $('gradeBox');
+  const W = Math.max(240, Math.round((box && box.clientWidth) || 300) - 4);
+  const L = 34, R = 8, n = rows.length, step = (W - L - R) / Math.max(n, 1);
+  const xc = i => L + step * (i + 0.5);
+  const every = Math.ceil(n / Math.max(2, Math.floor(W / 70)));   // a date label every ~70px
+  const xlab = (y) => rows.map((w, i) => i % every && i !== n - 1 ? '' :
+    `<text x="${xc(i)}" y="${y}" text-anchor="middle" class="wk-ax">${shortWeek(w)}</text>`).join('');
+  const hits = (top, h) => rows.map((w, i) =>
+    `<rect class="wk-hit" data-wk="${i}" x="${L + step * i}" y="${top}" width="${step}" height="${h}"></rect>`).join('');
+
+  // Chart 1: said vs happened, one y-scale in %.
+  const vals = rows.flatMap(w => [w.said, w.happened]);
+  const lo = Math.floor((Math.min(...vals) - 2) / 5) * 5, hi = Math.ceil((Math.max(...vals) + 2) / 5) * 5;
+  const H1 = 130, T1 = 10, B1 = 108;
+  const y1 = v => B1 - (v - lo) / (hi - lo) * (B1 - T1);
+  const line = k => rows.map((w, i) => `${i ? 'L' : 'M'}${xc(i).toFixed(1)},${y1(w[k]).toFixed(1)}`).join(' ');
+  const grid1 = [lo, (lo + hi) / 2, hi].map(v => `<line x1="${L}" x2="${W - R}" y1="${y1(v)}" y2="${y1(v)}" class="wk-grid"></line>
+    <text x="${L - 4}" y="${y1(v) + 3}" text-anchor="end" class="wk-ax">${v}%</text>`).join('');
+  const last = rows[n - 1];
+  const chart1 = `<svg viewBox="0 0 ${W} ${H1}" class="wk-svg" role="img" aria-label="What he said and what happened, by week">
+      ${grid1}
+      <path d="${line('said')}" class="wk-said"></path>
+      <path d="${line('happened')}" class="wk-hap"></path>
+      ${rows.map((w, i) => `<circle cx="${xc(i)}" cy="${y1(w.happened)}" r="4" class="wk-dot"></circle>`).join('')}
+      ${xlab(H1 - 6)}${hits(0, H1)}
+    </svg>`;
+
+  // Chart 2: skill per week, bars from zero.
+  const sk = rows.map(w => w.skill_pct).filter(v => v !== null && v !== undefined);
+  const m = Math.max(10, ...sk.map(Math.abs));
+  const lim = Math.ceil(m / 10) * 10, H2 = 120, T2 = 8, B2 = 98, Z = (T2 + B2) / 2;
+  const y2 = v => Z - v / lim * (B2 - T2) / 2;
+  const bw = Math.min(26, step * 0.6);
+  const bars = rows.map((w, i) => {
+    const v = w.skill_pct;
+    if(v === null || v === undefined) return `<text x="${xc(i)}" y="${Z + 3}" text-anchor="middle" class="wk-ax">–</text>`;
+    const top = Math.min(y2(v), Z), h = Math.max(Math.abs(y2(v) - Z), 1.5);
+    return `<rect x="${xc(i) - bw / 2}" y="${top}" width="${bw}" height="${h}" rx="3" class="${v >= 0 ? 'wk-up' : 'wk-down'}"></rect>`;
+  }).join('');
+  const lastSk = [...rows].reverse().find(w => w.skill_pct !== null && w.skill_pct !== undefined);
+  const iLast = rows.lastIndexOf(lastSk);
+  const chart2 = `<svg viewBox="0 0 ${W} ${H2}" class="wk-svg" role="img" aria-label="His skill over the simple guess, by week">
+      ${[lim, 0, -lim].map(v => `<line x1="${L}" x2="${W - R}" y1="${y2(v)}" y2="${y2(v)}" class="${v ? 'wk-grid' : 'wk-zero'}"></line>
+        <text x="${L - 4}" y="${y2(v) + 3}" text-anchor="end" class="wk-ax">${v > 0 ? '+' : ''}${v}%</text>`).join('')}
+      ${bars}
+      ${lastSk ? `<text x="${xc(iLast)}" y="${lastSk.skill_pct >= 0 ? y2(lastSk.skill_pct) - 5 : y2(lastSk.skill_pct) + 12}" text-anchor="middle" class="wk-lab">${sgn(lastSk.skill_pct)}%</text>` : ''}
+      ${xlab(H2 - 6)}${hits(0, H2)}
+    </svg>`;
+
+  return `<div class="k" style="margin-top:16px">Week by week</div>
+    <div class="wk-legend"><span><i class="wk-key wk-key-hap"></i>happened <b>${Number(last.happened).toFixed(1)}%</b></span>
+      <span><i class="wk-key wk-key-said"></i>he said <b>${Number(last.said).toFixed(1)}%</b></span><span>latest week</span></div>
+    ${chart1}
+    <div class="wk-sub">Skill over the simple guess <span class="muted">- green: he beat it that week</span></div>
+    ${chart2}
+    <div class="wk-read" id="wkRead">Tap a week for its numbers.</div>
+    <details class="wk-table"><summary>show the table</summary>
+      <table class="cal"><tr><th>Week of</th><th>Fcsts</th><th>Said</th><th>Happened</th><th>Skill</th></tr>${
+        rows.map(w => `<tr><td>${shortWeek(w)}</td><td class="num">${esc(w.forecasts)}</td>
+          <td class="num">${Number(w.said).toFixed(1)}%</td><td class="num">${Number(w.happened).toFixed(1)}%</td>
+          <td class="num">${w.skill_pct === null ? '—' : sgn(w.skill_pct) + '%'}</td></tr>`).join('')}</table></details>
+    <div class="note">One week is a handful of games - read the run of weeks, not any one of them.</div>`;
 }
+
+document.addEventListener('click', e => {
+  const r = e.target.closest('.wk-hit');
+  if(!r) return;
+  const i = +r.dataset.wk, w = WEEKS[i], out = $('wkRead');
+  if(!w || !out) return;
+  document.querySelectorAll('.wk-hit').forEach(x => x.classList.toggle('on', +x.dataset.wk === i));
+  out.innerHTML = `<b>${esc(w.week)}</b> · ${esc(w.forecasts)} forecasts, ${esc(w.games)} games · said
+    ${Number(w.said).toFixed(1)}% · happened ${Number(w.happened).toFixed(1)}% (${sgn(w.gap)}) · skill
+    ${w.skill_pct === null ? '— (no last-5 games saved yet)' : sgn(w.skill_pct) + '%'}`;
+});
 
 /* ---------------- the forecasts ---------------- */
 

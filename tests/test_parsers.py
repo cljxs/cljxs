@@ -5483,6 +5483,10 @@ class PeterIsGradedFourMoreWays(unittest.TestCase):
         page = (ROOT / "mission-control-api" / "public" / "peter.html").read_text()
         for fn in ("skillBlock(c.skill)", "middleBlock(c.middle)", "weeksBlock(c.weeks)", "luckOf(b.luck)"):
             self.assertIn(fn, page)
+        # Week by week is drawn as two charts, sized to the card (owner, 2026-11-17:
+        # "make this a graph or something more readable instead of a long small box").
+        for bit in ('class="wk-svg"', "$('gradeBox')", "<summary>show the table</summary>"):
+            self.assertIn(bit, page)
 
 
 class TwoBarsWithNoGameBetweenThem(unittest.TestCase):
