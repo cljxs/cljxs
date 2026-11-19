@@ -1,0 +1,6 @@
+Warren is not an OpenClaw agent: scripts/warren.py, run from the Deck's
+Check a stock button and on warren-recheck.timer. Code computes every
+number; each check asks Opus ONE question on the owner's Claude plan
+(warren in tasks/engines.json, wake.py ask, web search only, never a bill),
+at most RUNS_PER_DAY a day. There is no AGENTS.md to build. preflight.py and
+deploy.sh read this file.

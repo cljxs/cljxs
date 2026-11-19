@@ -6391,7 +6391,9 @@ class EachHouseLooksLikeItsTrade(unittest.TestCase):
         themed = self.themed()
         # Stan (2026-10-15): Sylvester's idea man, who hunts for software to
         # build - an idea lab with a lightbulb on the roof, and a telescope.
-        self.assertEqual(sorted(themed), ["ace", "belfort", "bolt", "emily", "paul", "scout", "stan"])
+        # Warren (2026-11-19): the stock analyst - a brick house with a ticker
+        # band, checklist windows and a clock, and a newsstand.
+        self.assertEqual(sorted(themed), ["ace", "belfort", "bolt", "emily", "paul", "scout", "stan", "warren"])
         for name, (prop, h) in themed.items():
             self.assertIn(f"themed('{name}',", self.html, f"{name} has no house drawn")
             self.assertIn(f"generateTexture('{prop}',", self.html, f"{name}'s {prop} is never drawn")

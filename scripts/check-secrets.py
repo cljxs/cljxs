@@ -59,6 +59,11 @@ BROAD_SHAPES = [
     (re.compile(r"\b[A-Za-z0-9_-]{40,}\b"), "a 40+ character token-shaped run"),
 ]
 
+# A name made only of whole capitalised words - an SEC XBRL tag such as
+# NetCashProvidedByUsedInOperatingActivities, in Warren's fixtures
+# (2026-11-19) - is not a token: no random 40-character token is that regular.
+WORDS_ONLY = re.compile(r"(?:[A-Z][a-z]+)+")
+
 # Where a credential could plausibly end up, and so where the broad pattern is
 # allowed to run: fixtures, which are captured from the live droplet, and any
 # agent state directory, which is where every credential in this ecosystem
@@ -123,7 +128,7 @@ def content_findings(path, shapes):
     out = []
     for n, line in enumerate(text.splitlines(), 1):
         for pat, what in shapes:
-            m = pat.search(line)
+            m = next((x for x in pat.finditer(line) if not WORDS_ONLY.fullmatch(x.group(0))), None)
             if m:
                 # The match itself is never printed. Saying where it is, is
                 # enough to fix it; printing it would put the secret in a log.

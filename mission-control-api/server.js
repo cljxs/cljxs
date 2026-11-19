@@ -20,6 +20,7 @@ const paulRoutes = require('./paul');
 const shopRoutes = require('./shop');
 const agentroomRoutes = require('./agentroom');
 const stanRoutes = require('./stan');
+const warrenRoutes = require('./warren');
 const attentionRoutes = require('./attention');
 
 const PORT = Number(process.env.PORT || 3001);
@@ -364,6 +365,12 @@ app.get('/stan', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'stan.html'));
 });
 
+// Warren: the Before-You-Buy Checklist, filled in (owner, 2026-11-19).
+// Opened from his house in the village.
+app.get('/warren', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'warren.html'));
+});
+
 app.get('/village', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'village.html'));
 });
@@ -384,6 +391,7 @@ paulRoutes.register(app);
 shopRoutes.register(app);
 agentroomRoutes.register(app);
 stanRoutes.register(app);
+warrenRoutes.register(app);
 attentionRoutes.register(app);
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'mission-control-api' }));

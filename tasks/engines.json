@@ -25,7 +25,9 @@
     "fury is the manager's morning (scripts/gm.py run): one question on Sonnet, no tools;",
     "his safe fixes are plain-code re-runs and wake no model.",
     "reddit is scripts/reddit_search.py: Reddit read through web search for Scout,",
-    "Stan and Belfort, one question a day each, web search only, never billed."
+    "Stan and Belfort, one question a day each, web search only, never billed.",
+    "warren is scripts/warren.py: the before-you-buy checklist. Code computes every number; one",
+    "question on Opus a check (web search only) writes the judgment parts. Never falls back to a bill."
   ],
   "agents": {
     "ace": {
@@ -81,6 +83,12 @@
       "engine": "claude",
       "model": "haiku",
       "max_turns": 6,
+      "fallback": "none"
+    },
+    "warren": {
+      "engine": "claude",
+      "model": "opus",
+      "max_turns": 8,
       "fallback": "none"
     }
   }

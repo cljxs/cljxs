@@ -189,3 +189,8 @@ coach/
 
 # How long each test class last took (scripts/run-tests.py) - this machine's, not history
 tests/.timings.json
+
+# Warren (stock checklist): his checks, holdings and SEC cache stay on the droplet.
+agents/warren/state/
+agents/warren/reports/
+agents/warren/MEMORY.md
