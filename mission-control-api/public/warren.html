@@ -87,6 +87,17 @@
   .btn.del{color:#f0a3a3;border-color:rgba(240,163,163,.4)}
   .btn.del.arm{background:#f0a3a3;color:#2a0b0b}
   #h-msg{margin-top:8px}
+  [hidden]{display:none !important}
+  .stockpage{padding:16px 22px 22px}
+  .stockpage .ed{background:none;border:0;padding:0;margin:0}
+  .stock-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+  .stock-head{display:flex;gap:14px;align-items:center;margin-bottom:12px}
+  .stock-head .sym{font:700 30px/1 var(--serif, Georgia, serif);color:var(--gold)}
+  .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:14px}
+  @media (max-width:700px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px}
+  .stat .n{font-size:11px;color:var(--mute)}
+  .stat .v{font-size:17px;font-weight:700;margin-top:3px}
   .verdict{display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:18px;border-radius:12px;margin-bottom:14px;border:1px solid}
   .verdict.Buy{background:rgba(34,197,94,.1);border-color:rgba(34,197,94,.5)}
   .verdict.Wait{background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.5)}
@@ -193,6 +204,8 @@
       </div>
     </div>
   </div>
+  <!-- One stock you own, as its own page (owner, 2026-11-19): Back returns to the checklist screen -->
+  <div id="stock" class="stockpage" hidden></div>
 </div>
 
 <script src="/shared/busy.js"></script>
@@ -241,6 +254,11 @@ function draw() {
     || '<div class="muted">None yet.</div>';
   document.querySelectorAll('#checks button').forEach(b => b.onclick = () => open(b.dataset.s));
   drawHoldings();
+  // Redraw an open stock page with fresh numbers - but never under your
+  // fingers while you are typing in it.
+  const typing = document.activeElement && $('stock').contains(document.activeElement)
+    && /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
+  if (openHold && !typing) drawStock();
   if ($('h-sec').options.length === 1) (D.sectors || []).forEach(s => $('h-sec').add(new Option(s, s)));
   const rc = D.rechecks || [];
   $('recheck-card').style.display = rc.length ? '' : 'none';
@@ -397,7 +415,7 @@ function drawNewsSummary() {
   $('news-sum').innerHTML = parts.join('');
   $('news-now').onclick = async () => {
     const r = await fetch('/api/warren/news', { method: 'POST' });
-    if (!r.ok) { const j = await r.json().catch(() => ({})); $('h-msg').innerHTML = `<span class="err">${esc(j.error || 'Could not start')}</span>`; }
+    if (!r.ok) { const j = await r.json().catch(() => ({})); msg(`<span class="err">${esc(j.error || 'Could not start')}</span>`); }
     load();
   };
 }
@@ -416,25 +434,82 @@ function newsBody(h) {
 function drawHoldings() {
   const hs = D.holdings || [];
   drawNewsSummary();
-  $('holdings').innerHTML = hs.map(h => `<div class="own${openHold === h.symbol ? ' open' : ''}">
+  $('holdings').innerHTML = hs.map(h => `<div class="own">
       <button class="own-row" data-own="${esc(h.symbol)}"><div class="top"><span><b>${esc(h.symbol)}</b> <span class="muted">${esc(h.sector)}</span></span>
-        <span class="num">${bell(h.symbol)}${dollars(h.amount)}<span class="chev">${openHold === h.symbol ? '&#9662;' : '&#9656;'}</span></span></div>
-        <div class="why">${breakeven(h)}</div></button>
-      ${openHold === h.symbol ? editor(h) : ''}</div>`).join('')
+        <span class="num">${bell(h.symbol)}${dollars(h.amount)}<span class="chev">&#9656;</span></span></div>
+        <div class="why">${breakeven(h)}</div></button></div>`).join('')
     || '<div class="muted">Nothing yet. Add what you own so Step 6 can check how much is in one sector.</div>';
-  document.querySelectorAll('[data-own]').forEach(b => b.onclick = () => {
-    openHold = openHold === b.dataset.own ? null : b.dataset.own;
-    holdTab = alertsFor(b.dataset.own).some(a => !a.seen) ? 'news' : 'edit'; $('h-msg').innerHTML = ''; drawHoldings();
-  });
-  document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { holdTab = b.dataset.tab; drawHoldings(); });
-  const h = hs.find(x => x.symbol === openHold);
-  if (!h) return;
+  document.querySelectorAll('[data-own]').forEach(b => b.onclick = () => openStock(b.dataset.own));
+}
+
+// ---- one stock you own, as the main page
+function msg(html) { $(openHold ? 's-msg' : 'h-msg').innerHTML = html; }
+function openStock(sym) {
+  openHold = sym;
+  holdTab = alertsFor(sym).some(a => !a.seen) ? 'news' : 'edit';
+  document.querySelector('.grid').hidden = true;
+  $('stock').hidden = false;
+  try { history.pushState({ stock: sym }, ''); } catch { /* the page still works without history */ }
+  drawStock();
+  window.scrollTo({ top: 0 });
+}
+function closeStock(fromHistory) {
+  if (!openHold) return;
+  openHold = null;
+  $('stock').hidden = true;
+  $('stock').innerHTML = '';
+  document.querySelector('.grid').hidden = false;
+  if (!fromHistory) { try { if (history.state && history.state.stock) history.back(); } catch { /* ignore */ } }
+  draw();
+  window.scrollTo({ top: 0 });
+}
+window.addEventListener('popstate', () => closeStock(true));
+function drawStock() {
+  const h = (D.holdings || []).find(x => x.symbol === openHold);
+  if (!h) { closeStock(); return; }
+  const p = h.position || {}, chk = (D.checks || []).find(c => c.symbol === h.symbol);
+  const stat = (label, val, sub) => `<div class="stat"><div class="n">${label}</div><div class="v">${val}</div>${sub ? `<div class="why">${sub}</div>` : ''}</div>`;
+  const now = p.price ? `${h.live ? 'now, ' + new Date(h.price_as_of).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'at its last check'}` : '';
+  const checkCard = chk
+    ? `<div class="card"><div class="k">Warren's checklist</div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${dpill(chk.decision)}
+          <span class="muted">checked ${when(chk.when_utc)}</span>
+          <button class="btn sm" id="s-open">Open the full check</button>
+          <button class="btn sm" id="s-rerun" data-busy="Warren is re-checking - a minute or two">Re-run</button></div></div>`
+    : `<div class="card"><div class="k">Warren's checklist</div><div class="why">No check of ${esc(h.symbol)} yet - run one to get its sell rules,
+        the words Warren watches the news for, and its numbers.</div>
+        <button class="btn sm go" id="s-run" style="margin-top:8px">Run the checklist on ${esc(h.symbol)}</button></div>`;
+  $('stock').innerHTML = `
+    <div class="stock-top"><button class="btn" id="s-back">&larr; Back to Warren</button>${bell(h.symbol)}</div>
+    <div class="stock-head"><div class="sym">${esc(h.symbol)}</div>
+      <div><div><b>${esc((chk && chk.company) || h.symbol)}</b></div><div class="muted">${esc(h.sector)}</div></div></div>
+    <div class="stats">
+      ${stat('Value', p.value != null ? usd(p.value) : dollars(h.amount), p.price ? `${usd(p.price)} a share, ${now}` : '')}
+      ${stat('Gain or loss', p.gain != null ? gainText(p) : '-', '')}
+      ${stat('Breakeven', p.breakeven ? usd(p.breakeven) : '-', 'your average price paid')}
+      ${stat('Shares', p.shares != null ? Number(p.shares).toLocaleString(undefined, { maximumFractionDigits: 4 }) : '-', `${dollars(h.amount)} paid`)}
+    </div>
+    ${checkCard}
+    <div class="card">${editor(h)}<div id="s-msg" class="why" style="margin-top:8px"></div></div>`;
+  $('s-back').onclick = () => closeStock();
+  if ($('s-open')) $('s-open').onclick = () => { const s = h.symbol; closeStock(); open(s); };
+  if ($('s-rerun')) $('s-rerun').onclick = async () => {
+    const r = await fetch('/api/warren/check/' + encodeURIComponent(h.symbol));
+    if (!r.ok) return msg('<span class="err">Could not read the last check</span>');
+    const c = await r.json();
+    closeStock(); rerun(c);
+  };
+  if ($('s-run')) $('s-run').onclick = () => {
+    const s = h.symbol; closeStock();
+    $('f-sym').value = s; $('f-amt').focus(); $('f-sym').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+  document.querySelectorAll('#stock [data-tab]').forEach(b => b.onclick = () => { holdTab = b.dataset.tab; drawStock(); });
   const v = id => $(id) ? $(id).value : '';
   if (holdTab === 'edit') {
     $('e-save').onclick = () => holdings({ action: 'add', symbol: h.symbol, amount: v('e-amt'), avg_price: v('e-avg'), sector: v('e-sec') });
     $('e-del').onclick = e => {
       if (!e.target.classList.contains('arm')) { e.target.classList.add('arm'); e.target.textContent = `Tap again to delete ${h.symbol}`; return; }
-      openHold = null; holdings({ action: 'remove', symbol: h.symbol });
+      holdings({ action: 'remove', symbol: h.symbol });
     };
   } else if (holdTab === 'news') {
     document.querySelectorAll('[data-seen]').forEach(b => b.onclick = async () => {
@@ -482,12 +557,12 @@ function editor(h) {
 async function holdings(body) {
   const r = await fetch('/api/warren/holdings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const out = await r.json().catch(() => ({}));
-  if (!r.ok) { $('h-msg').innerHTML = `<span class="err">${esc(out.error || 'That did not save')}</span>`; return; }
+  if (!r.ok) { msg(`<span class="err">${esc(out.error || 'That did not save')}</span>`); return; }
   const sale = out.sale;
-  $('h-msg').innerHTML = sale ? `Sold ${sale.shares} ${esc(sale.symbol)} at ${usd(sale.price)} for ${usd(sale.proceeds)}: ${gainText(sale)} against your breakeven of ${usd(sale.avg_price)}.`
+  const said = sale ? `Sold ${sale.shares} ${esc(sale.symbol)} at ${usd(sale.price)} for ${usd(sale.proceeds)}: ${gainText(sale)} against your breakeven of ${usd(sale.avg_price)}.`
     : body.action === 'remove' ? `${esc(body.symbol)} deleted.` : `${esc(body.symbol)} saved.`;
-  holdTab = 'edit';
   await load();
+  msg(said);
 }
 
 $('h-add').onclick = () => holdings({ action: 'add', symbol: $('h-sym').value.trim().toUpperCase(), amount: $('h-amt').value,
