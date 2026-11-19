@@ -45,6 +45,9 @@ STATE = AGENT / "state"
 CHECKS = STATE / "checks"
 CACHE = STATE / "cache"
 HOLDINGS = STATE / "holdings.json"
+PRICES = STATE / "prices.json"      # the holdings' latest prices, at most PRICE_FRESH_MIN old
+SALES = STATE / "sales.json"        # every sale you record, with its gain or loss
+PRICE_FRESH_MIN = 15
 RUNS = STATE / "runs.json"
 RECHECKS = STATE / "rechecks.json"
 
@@ -76,6 +79,7 @@ TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
 CONCEPT_URL = "https://data.sec.gov/api/xbrl/companyconcept/CIK{cik:010d}/us-gaap/{tag}.json"
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=1y&interval=1d&events=div"
+QUOTE_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=5d&interval=1d"
 SUMMARY_URL = "https://api.nasdaq.com/api/quote/{sym}/summary?assetclass=stocks"
 FORECAST_URL = "https://api.nasdaq.com/api/analyst/{sym}/earnings-forecast"
 
@@ -1124,6 +1128,60 @@ def cmd_show(a):
     return 0
 
 
+def prices(symbols, get=None, now=None):
+    """Each holding's price now: kept in PRICES, fetched again when older
+    than PRICE_FRESH_MIN minutes - all at once, so the page does not wait on
+    fourteen requests one after another. A symbol Yahoo will not answer is
+    left out; the caller falls back to that stock's last check."""
+    from concurrent.futures import ThreadPoolExecutor
+    now = now or time.time()
+    cache = read_json(PRICES, {}) or {}
+    stale = [s for s in symbols if now - (cache.get(s) or {}).get("t", 0) > PRICE_FRESH_MIN * 60]
+
+    def one(sym):
+        try:
+            return sym, price_facts(get_json(QUOTE_URL.format(sym=sym), get))["price"]
+        except Exception:
+            return sym, None
+    if stale:
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for sym, price in pool.map(one, stale):
+                if price:
+                    cache[sym] = {"price": round(price, 2), "t": now,
+                                  "as_of_utc": datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="minutes")}
+        write_json(PRICES, cache)
+    return {s: cache[s] for s in symbols if s in cache}
+
+
+def bought(h, spent, price):
+    """Buying more: the new average is everything paid over every share."""
+    old_amt, avg = float(h.get("amount") or 0), h.get("avg_price")
+    if old_amt and not avg:
+        raise SystemExit("add your average price paid first, so Warren can work out the new one")
+    shares = (old_amt / avg if avg else 0) + spent / price
+    amount = old_amt + spent
+    return {**h, "amount": r2(amount), "avg_price": round(amount / shares, 4)}
+
+
+def sold(h, shares, price):
+    """Selling: the average price paid does not move; what is left is the
+    remaining shares at that price. The gain or loss on the shares sold is
+    what you made (before fees)."""
+    avg = h.get("avg_price")
+    if not avg:
+        raise SystemExit("add your average price paid first, so Warren can work out the gain")
+    held = float(h["amount"]) / avg
+    if shares is None:
+        shares = held
+    if shares <= 0 or shares > held + 1e-6:
+        raise SystemExit(f"you hold {held:.4f} shares of {h['symbol']}")
+    left = max(held - shares, 0)
+    rest = None if left < 1e-6 else {**h, "amount": r2(left * avg)}
+    return rest, {"symbol": h["symbol"], "shares": round(shares, 4), "price": price, "avg_price": avg,
+                  "proceeds": r2(shares * price), "gain": r2(shares * (price - avg)),
+                  "gain_pct": r1(100 * (price / avg - 1))}
+
+
 def cmd_deck(a):
     rows = []
     if CHECKS.is_dir():
@@ -1134,11 +1192,17 @@ def cmd_deck(a):
                              "when_utc": c["when_utc"], "decision": c["decision"], "ratings": ratings(c),
                              "amount": (c.get("inputs") or {}).get("amount"), "changes": c.get("changes") or []})
     rows.sort(key=lambda r: r["when_utc"], reverse=True)
+    hs = holdings()
+    live = prices([h["symbol"] for h in hs])
     held = []
-    for h in holdings():
-        c = latest(h["symbol"]) or {}
-        price = (c.get("numbers") or {}).get("price")
-        held.append({**h, "position": position(h, price), "price_as_of": (c.get("numbers") or {}).get("as_of")})
+    for h in hs:
+        q = live.get(h["symbol"])
+        if q:
+            price, as_of = q["price"], q["as_of_utc"]
+        else:                                   # Yahoo did not answer: the last check's price, dated
+            c = (latest(h["symbol"]) or {}).get("numbers") or {}
+            price, as_of = c.get("price"), c.get("as_of")
+        held.append({**h, "position": position(h, price), "price_as_of": as_of, "live": bool(q)})
     print(json.dumps({"checks": rows, "holdings": held, "runs_today": runs_today(),
                       "runs_per_day": RUNS_PER_DAY, "sectors": SECTORS,
                       "rechecks": (read_json(RECHECKS, []) or [])[-20:]}))
@@ -1152,7 +1216,25 @@ def cmd_holdings(a):
         raise SystemExit("a ticker is letters, like KMI")
     old = next((h for h in hs if h["symbol"] == sym), {})
     hs = [h for h in hs if h["symbol"] != sym]
-    if a.action == "add":
+    sale = None
+    if a.action in ("buy", "sell"):
+        if a.price is None or not 0 < a.price < 1e6:
+            raise SystemExit("the price per share, like 27.50")
+    if a.action == "buy":
+        if not a.amount or a.amount <= 0:
+            raise SystemExit("how many dollars did you spend?")
+        if not old:
+            raise SystemExit(f"{sym} is not in your list - add it first")
+        hs.append(bought(old, float(a.amount), float(a.price)))
+    elif a.action == "sell":
+        if not old:
+            raise SystemExit(f"{sym} is not in your list")
+        rest, sale = sold(old, None if a.all else a.shares, float(a.price))
+        if rest:
+            hs.append(rest)
+        sale["when_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        write_json(SALES, (read_json(SALES, []) or []) + [sale])
+    elif a.action == "add":
         sector = a.sector or old.get("sector") or ((latest(sym) or {}).get("sector"))
         if sector not in SECTORS:
             raise SystemExit(f"which sector is {sym}? one of: {', '.join(SECTORS)}")
@@ -1164,7 +1246,7 @@ def cmd_holdings(a):
             h["avg_price"] = round(float(avg), 4)
         hs.append(h)
     write_json(HOLDINGS, {"holdings": sorted(hs, key=lambda h: h["symbol"])})
-    print(json.dumps({"holdings": sorted(hs, key=lambda h: h["symbol"])}))
+    print(json.dumps({"holdings": sorted(hs, key=lambda h: h["symbol"]), "sale": sale}))
     return 0
 
 
@@ -1243,11 +1325,14 @@ def main(argv=None):
     s.set_defaults(fn=cmd_show)
     sub.add_parser("deck").set_defaults(fn=cmd_deck)
     h = sub.add_parser("holdings")
-    h.add_argument("action", choices=("add", "remove"))
+    h.add_argument("action", choices=("add", "remove", "buy", "sell"))
     h.add_argument("symbol")
     h.add_argument("amount", nargs="?", type=float)
     h.add_argument("--sector")
     h.add_argument("--avg-price", type=float, help="average price paid per share: your breakeven")
+    h.add_argument("--price", type=float, help="buy/sell: the price per share")
+    h.add_argument("--shares", type=float, help="sell: how many shares")
+    h.add_argument("--all", action="store_true", help="sell: every share")
     h.set_defaults(fn=cmd_holdings)
     sub.add_parser("recheck").set_defaults(fn=cmd_recheck)
     so = sub.add_parser("sources")

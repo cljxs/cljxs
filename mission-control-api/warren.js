@@ -83,9 +83,10 @@ function register(app) {
   app.post('/api/warren/holdings', async (req, res) => {
     const b = req.body || {};
     const s = sym(b.symbol);
-    const action = b.action === 'remove' ? 'remove' : 'add';
+    const action = ['remove', 'buy', 'sell'].includes(b.action) ? b.action : 'add';
     if (!s) return res.status(400).json({ error: 'a ticker is letters, like KMI' });
     const args = ['holdings', action, s];
+    const price = () => num(b.price, 0.0001, 999999);
     if (action === 'add') {
       const amount = num(b.amount, 0, 100000000);
       if (amount === null) return res.status(400).json({ error: 'how much is in it?' });
@@ -95,6 +96,19 @@ function register(app) {
         const avg = num(b.avg_price, 0.0001, 999999);
         if (avg === null) return res.status(400).json({ error: 'the average price paid is a dollar amount per share, like 27.50' });
         args.push(`--avg-price=${avg}`);
+      }
+    } else if (action === 'buy') {
+      const spent = num(b.amount, 0.01, 100000000);
+      if (spent === null || price() === null) return res.status(400).json({ error: 'how many dollars, at what price per share?' });
+      args.push(String(spent), `--price=${price()}`);
+    } else if (action === 'sell') {
+      if (price() === null) return res.status(400).json({ error: 'at what price per share?' });
+      args.push(`--price=${price()}`);
+      if (b.all === true) args.push('--all');
+      else {
+        const shares = num(b.shares, 0.000001, 100000000);
+        if (shares === null) return res.status(400).json({ error: 'how many shares did you sell?' });
+        args.push(`--shares=${shares}`);
       }
     }
     const r = await python(args);

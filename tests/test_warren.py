@@ -10,6 +10,7 @@ Each test names the mistake it guards against.
 
 import importlib.util
 import json
+import time
 import os
 import shutil
 import subprocess
@@ -345,6 +346,63 @@ class YourBreakeven(Base):
                                        get, lambda q: (True, json.dumps(ANSWER)), lambda p, g, t: 1 / 0)["position"])
 
 
+class BuyingAndSelling(Base):
+    """The owner asked (2026-11-19) to change a holding when he buys or sells,
+    and to see the gain on every one, not just the stocks Warren checked."""
+
+    def test_buying_more_moves_the_average_to_everything_paid_over_every_share(self):
+        h = self.w.bought({"symbol": "KMI", "amount": 100, "avg_price": 20, "sector": "Energy"}, 60, 15)
+        self.assertEqual((h["amount"], h["avg_price"], h["sector"]), (160, 17.7778, "Energy"))   # 9 shares
+        self.assertRaises(SystemExit, self.w.bought, {"symbol": "KMI", "amount": 100}, 60, 15)
+
+    def test_selling_keeps_the_average_and_says_what_you_made(self):
+        rest, sale = self.w.sold({"symbol": "KMI", "amount": 100, "avg_price": 20}, 2, 25)
+        self.assertEqual((rest["amount"], rest["avg_price"]), (60, 20))                     # 3 shares left
+        self.assertEqual((sale["proceeds"], sale["gain"], sale["gain_pct"]), (50, 10, 25.0))
+        rest, sale = self.w.sold({"symbol": "KMI", "amount": 100, "avg_price": 20}, None, 18)
+        self.assertEqual((rest, sale["shares"], sale["gain"]), (None, 5, -10))
+        self.assertRaises(SystemExit, self.w.sold, {"symbol": "KMI", "amount": 100, "avg_price": 20}, 6, 25)
+
+    def run_cli(self, *args):
+        return subprocess.run([sys.executable, str(ROOT / "scripts" / "warren.py"), "holdings", *args],
+                              capture_output=True, text=True, env={**os.environ, "ECOSYSTEM_ROOT": self.tmp.name}, timeout=60)
+
+    def test_a_sale_is_logged_and_selling_everything_removes_the_stock(self):
+        self.run_cli("add", "KMI", "100", "--sector=Energy", "--avg-price=20")
+        self.run_cli("sell", "KMI", "--shares=1", "--price=30")
+        r = self.run_cli("sell", "KMI", "--all", "--price=30")
+        self.assertEqual(json.loads(r.stdout)["holdings"], [])
+        self.assertEqual([s["gain"] for s in self.w.read_json(self.w.SALES)], [10, 40])
+
+    def test_prices_are_fetched_together_and_kept_for_fifteen_minutes(self):
+        asked = []
+
+        def chart(url, ua=None, headers=None):
+            asked.append(url.split("/chart/")[1].split("?")[0])
+            if "NOPE" in url:
+                raise IOError("no such ticker")
+            return fx("warren-yahoo-chart-hims.json")
+        got = self.w.prices(["HIMS", "NOPE"], chart, now=1000)
+        self.assertEqual((got["HIMS"]["price"], "NOPE" in got), (16.51, False))
+        self.w.prices(["HIMS"], chart, now=1000 + 14 * 60)
+        self.assertEqual(sorted(asked), ["HIMS", "NOPE"], "fresh for 15 minutes")
+        self.w.prices(["HIMS"], chart, now=1000 + 16 * 60)
+        self.assertEqual(asked.count("HIMS"), 2)
+
+    def test_every_holding_shows_its_gain_not_only_the_checked_ones(self):
+        import io
+        from contextlib import redirect_stdout
+        self.w.write_json(self.w.HOLDINGS, {"holdings": [{"symbol": "KMI", "amount": 100, "sector": "Energy", "avg_price": 25},
+                                                         {"symbol": "NVDA", "amount": 100, "sector": "Technology", "avg_price": 150}]})
+        t = time.time()
+        self.w.write_json(self.w.PRICES, {"KMI": {"price": 30, "t": t, "as_of_utc": "x"}, "NVDA": {"price": 120, "t": t, "as_of_utc": "x"}})
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.w.cmd_deck(None)
+        pct = {h["symbol"]: h["position"]["gain_pct"] for h in json.loads(out.getvalue())["holdings"]}
+        self.assertEqual(pct, {"KMI": 20.0, "NVDA": -20.0})
+
+
 class TheSitesSayWhoRefused(Base):
     """The first live check (HIMS, 2026-11-19) died on a bare 'HTTP Error
     403: Forbidden' traceback: the SEC refuses a User-Agent with no contact
@@ -469,6 +527,8 @@ class ThePageAndTheApi(Base):
             self.skipTest("node or the Deck's node_modules are not installed")
         root = Path(self.tmp.name)
         (root / "scripts").symlink_to(ROOT / "scripts")
+        # a fresh price, so the deck does not go to Yahoo from a test
+        self.w.write_json(self.w.PRICES, {"KMI": {"price": 30.25, "t": time.time(), "as_of_utc": "2026-11-19T16:00+00:00"}})
         js = (
             f"const express=require({json.dumps(str(self.API / 'node_modules' / 'express'))});"
             f"const w=require({json.dumps(str(self.API / 'warren.js'))});"
@@ -484,6 +544,10 @@ class ThePageAndTheApi(Base):
             "out.add=await go('POST','/api/warren/holdings',{action:'add',symbol:'kmi',amount:125,sector:'Energy',avg_price:'27.5'});"
             "out.badavg=await go('POST','/api/warren/holdings',{action:'add',symbol:'KMI',amount:125,avg_price:-3});"
             "out.deck=await go('GET','/api/warren');"
+            "out.buybad=await go('POST','/api/warren/holdings',{action:'buy',symbol:'KMI',amount:55});"
+            "out.buy=await go('POST','/api/warren/holdings',{action:'buy',symbol:'KMI',amount:55,price:27.5});"
+            "out.sellbad=await go('POST','/api/warren/holdings',{action:'sell',symbol:'KMI',price:30});"
+            "out.sell=await go('POST','/api/warren/holdings',{action:'sell',symbol:'KMI',price:30,all:true});"
             "out.rm=await go('POST','/api/warren/holdings',{action:'remove',symbol:'KMI'});"
             "out.show=await go('GET','/api/warren/check/KMI');"
             "process.stdout.write(JSON.stringify(out));srv.close();});")
@@ -502,6 +566,12 @@ class ThePageAndTheApi(Base):
         self.assertEqual({k: h[k] for k in ("symbol", "amount", "sector", "avg_price")},
                          {"symbol": "KMI", "amount": 125.0, "sector": "Energy", "avg_price": 27.5})
         self.assertEqual(h["position"]["breakeven"], 27.5)
+        self.assertEqual((h["position"]["price"], h["live"]), (30.25, True))
+        self.assertEqual(out["buybad"][0], 400, "a buy needs its price")
+        self.assertEqual(json.loads(out["buy"][1])["holdings"][0]["amount"], 180)
+        self.assertEqual(out["sellbad"][0], 400, "a sale needs its shares, or all")
+        sale = json.loads(out["sell"][1])
+        self.assertEqual((sale["sale"]["gain"], sale["holdings"]), (16.36, []))   # 6.5455 shares x $2.50
         self.assertEqual(json.loads(out["rm"][1])["holdings"], [])
         self.assertEqual(out["show"][0], 404)
 
