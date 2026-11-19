@@ -451,6 +451,40 @@ class AFigureACompanyStoppedReporting(Base):
         self.assertEqual((what, rating), ("borrowing to cover losses and building", "Yellow"), "it buys back no stock")
 
 
+class EachAbbreviationShowsItsEquation(Base):
+    """The owner asked (2026-11-19) for the math beside each abbreviation.
+    Each ratio row carries its equation and this stock's numbers in it, and
+    the worked answer is the same number the row shows."""
+
+    def build(self, sym):
+        return self.w.build(sym, {"amount": 100, "months": 12, "goal": "both", "why": "", "hold_drop": "yes"},
+                            get, lambda q: (True, json.dumps(ANSWER)), lambda p, g, t: 1 / 0)
+
+    def test_every_abbreviation_has_its_equation(self):
+        for sym in ("KMI", "ASTS"):
+            c = self.build(sym)
+            for st in c["steps"].values():
+                for r in st["rows"]:
+                    if any(a in r["check"] for a in ("FCF", "EBITDA", "P/E", "PEG", "P/S", "EPS", "yield", "coverage", "margin")):
+                        self.assertTrue(r.get("formula"), f"{sym}: {r['check']} has no equation")
+            t = c["steps"]["price"]["table"]
+            self.assertEqual(len(t["formulas"]), len(t["rows"]))
+            self.assertIn("market cap ÷ revenue", t["formulas"][[r[0] for r in t["rows"]].index("P/S")])
+
+    def test_the_worked_numbers_end_in_the_number_shown(self):
+        c = self.build("ASTS")
+        price = {r["check"]: r for r in c["steps"]["price"]["rows"]}
+        self.assertEqual(price["Price/Sales (P/S)"]["math"], "$10.48B ÷ $143M = 73.33")
+        self.assertTrue(price["Price/Sales (P/S)"]["answer"].startswith("73.33"))
+        lev = c["steps"]["debt"]["rows"][0]
+        self.assertIn("net debt = $4.09B − $2.80B = $1.29B", lev["math"])
+        self.assertIn("EBITDA = -$729M + $79M = -$650M", lev["math"])
+        k = self.build("KMI")
+        cash = {r["check"]: r for r in k["steps"]["cash"]["rows"]}
+        y = cash["Dividend yield"]
+        self.assertTrue(y["math"].endswith(f"= {y['answer']}"), y)
+
+
 class TheSitesSayWhoRefused(Base):
     """The first live check (HIMS, 2026-11-19) died on a bare 'HTTP Error
     403: Forbidden' traceback: the SEC refuses a User-Agent with no contact

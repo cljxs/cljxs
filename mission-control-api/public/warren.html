@@ -95,6 +95,8 @@
   td.r{white-space:nowrap}
   .why{color:var(--mute);font-size:12.5px}
   .why.red{color:#f0a3a3}
+  .formula{font:11.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;color:#c9b27a;margin-top:4px}
+  .formula .worked{display:block;color:var(--mute)}
   .up{color:#5fd39a;font-weight:600}
   .down{color:#f0a3a3;font-weight:600}
   .reasons{margin:8px 0 0;padding-left:18px;color:#f0a3a3;font-size:13.5px;line-height:1.5}
@@ -240,7 +242,7 @@ async function open(symbol, fromJob) {
 }
 
 function rowsTable(rows) {
-  return `<table><tr><th>Check</th><th>Answer</th><th>Rating</th></tr>${rows.map(r => `<tr><td>${esc(r.check)}</td>
+  return `<table><tr><th>Check</th><th>Answer</th><th>Rating</th></tr>${rows.map(r => `<tr><td>${esc(r.check)}${r.formula ? `<div class="formula">${esc(r.formula)}${r.math ? `<span class="worked">= ${esc(r.math)}</span>` : ''}</div>` : ''}</td>
     <td>${esc(r.answer)}${r.why ? `<div class="why${r.rating === 'Red' ? ' red' : ''}">${r.rating === 'Red' ? '<b>Why Red:</b> ' : ''}${esc(r.why)}</div>` : ''}</td><td class="r">${pill(r.rating)}</td></tr>`).join('')}</table>`;
 }
 
@@ -275,7 +277,7 @@ function report(c) {
     ${rk.debt_note ? `<p class="muted">Warren: ${esc(rk.debt_note)}</p>` : ''}<div class="foot">${esc(d.note || '')}</div>`)}
   ${sec('price', 5, 'Is the price fair? Compare with its sector', `
     <table><tr><th>Metric</th>${p.table.columns.map(x => `<th>${esc(x)}</th>`).join('')}</tr>
-    ${p.table.rows.map(r => `<tr>${r.map((v, j) => `<td class="${j ? 'num' : ''}">${esc(v || (j ? '-' : ''))}</td>`).join('')}</tr>`).join('')}</table>
+    ${p.table.rows.map((r, k) => `<tr>${r.map((v, j) => `<td class="${j ? 'num' : ''}">${esc(v || (j ? '-' : ''))}${!j && (p.table.formulas || [])[k] ? `<div class="formula">${esc(p.table.formulas[k])}</div>` : ''}</td>`).join('')}</tr>`).join('')}</table>
     <div style="margin-top:12px">${rowsTable(p.rows)}</div>
     <div class="k" style="margin-top:14px">Chart check</div>
     <table>${p.chart.map(([q, a]) => `<tr><td>${esc(q)}</td><td>${esc(a)}</td></tr>`).join('')}</table>

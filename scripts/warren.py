@@ -576,12 +576,85 @@ def derive(n):
     n["pe_forward"] = r1(g("price") / eps_ntm) if eps_ntm and eps_ntm > 0 and g("price") else None
     gr = g("eps_growth")
     n["peg"] = r2(n["pe_forward"] / gr) if n["pe_forward"] and gr and gr > 0 else None
+    n["math"] = worked_math(n)
     # Part B of Step 4: the latest full year's cash, line by line.
     last = lambda k: (g(k + "_years") or [[None, None]])[-1][1]
     n["fy"] = {"year_end": (g("ocf_years") or [[None]])[-1][0], "ocf": last("ocf"), "capex": last("capex"),
                "dividends": last("dividends") or 0, "buybacks": last("buybacks") or 0,
                "net_borrowing": (last("debt_issued") or 0) - (last("debt_repaid") or 0)}
     return n
+
+
+# Every abbreviation the page uses, as its equation (owner, 2026-11-19: "add
+# the math equations next to the abbreviations"). Matched on a row's label.
+FORMULAS = [
+    ("Free cash flow", "fcf", "FCF (free cash flow) = operating cash flow − capex (spending on buildings and equipment)"),
+    ("Dividend coverage", "coverage", "Coverage = FCF ÷ dividends paid"),
+    ("Payout ratio", "payout", "Payout = dividends paid ÷ net income × 100"),
+    ("Dividend yield", "yield", "Yield = dividends per share (last 12 months) ÷ price × 100"),
+    ("FCF yield", "fcf_yield", "FCF yield = FCF ÷ market cap × 100"),
+    ("Leverage", "leverage", "Leverage = net debt ÷ EBITDA · net debt = total debt − cash · "
+                              "EBITDA (earnings before interest, tax, depreciation and amortization) = "
+                              "operating income + depreciation and amortization"),
+    ("Interest coverage", "interest_cover", "Interest coverage = EBIT (operating income) ÷ interest expense"),
+    ("Total debt vs", "debt_change", "Change = (debt now − debt a year ago) ÷ debt a year ago × 100"),
+    ("Forward P/E", "pe_forward", "Forward P/E (price-to-earnings) = price ÷ expected EPS over the next 12 months"),
+    ("EV/EBITDA", "ev_ebitda", "EV/EBITDA = enterprise value ÷ EBITDA · EV = market cap + net debt"),
+    ("PEG", "peg", "PEG (P/E-to-growth) = forward P/E ÷ expected yearly EPS growth (%)"),
+    ("Price/Sales", "ps", "P/S (price-to-sales) = market cap ÷ revenue (last 12 months)"),
+    ("P/S", "ps", "P/S (price-to-sales) = market cap ÷ revenue (last 12 months)"),
+    ("EPS", "eps", "EPS (earnings per share) = net income ÷ shares"),
+    ("Profit margin", "margin", "Profit margin = net income ÷ revenue × 100"),
+]
+
+
+def worked_math(n):
+    """The same equations with this stock's numbers in them, so every ratio
+    on the page can be checked by hand. Built from the figures derive used."""
+    g, m = n.get, {}
+    def put(key, text, *needed):
+        if all(x is not None for x in needed):
+            m[key] = text
+    put("fcf", f"{money(g('ocf_ttm'))} − {money(g('capex_ttm'))} = {money(g('fcf_ttm'))}", g("ocf_ttm"), g("capex_ttm"))
+    put("coverage", f"{money(g('fcf_ttm'))} ÷ {money(g('dividends_ttm'))} = {g('coverage')}x", g("coverage"))
+    put("payout", f"{money(g('dividends_ttm'))} ÷ {money(g('net_income_ttm'))} × 100 = {g('payout')}%", g("payout"))
+    put("yield", f"${g('div_per_share_ttm')} ÷ ${g('price')} × 100 = {g('yield')}%", g("div_per_share_ttm"), g("price"))
+    put("fcf_yield", f"{money(g('fcf_ttm'))} ÷ {money(g('market_cap'))} × 100 = {g('fcf_yield')}%", g("fcf_yield"))
+    ebitda = (f"EBITDA = {money(g('op_income_ttm'))} + {money(g('dna_ttm'))} = {money(g('ebitda_ttm'))}"
+              if g("ebitda_ttm") is not None else None)
+    nd = (f"net debt = {money(g('debt'))} − {money(g('cash') or 0)} = {money(g('net_debt'))}"
+          if g("net_debt") is not None else None)
+    put("leverage", " · ".join(x for x in (nd, ebitda, f"{money(g('net_debt'))} ÷ {money(g('ebitda_ttm'))} = {g('leverage')}x"
+                                            if g("leverage") is not None else None) if x), nd or ebitda)
+    put("interest_cover", f"{money(g('op_income_ttm'))} ÷ {money(g('interest_ttm'))} = {g('interest_cover')}x", g("interest_cover"))
+    if g("debt") is not None and g("debt_year_ago"):
+        m["debt_change"] = (f"({money(g('debt'))} − {money(g('debt_year_ago'))}) ÷ {money(g('debt_year_ago'))} × 100 = "
+                            f"{pct(g('debt'), g('debt_year_ago')):+.0f}%")
+    put("pe_forward", f"${g('price')} ÷ ${g('eps_ntm')} = {g('pe_forward')}", g("pe_forward"))
+    put("ev_ebitda", f"EV = {money(g('market_cap'))} + {money(g('net_debt'))} = {money(g('ev'))} · "
+                     f"{money(g('ev'))} ÷ {money(g('ebitda_ttm'))} = {g('ev_ebitda')}", g("ev_ebitda"))
+    put("peg", f"{g('pe_forward')} ÷ {g('eps_growth')} = {g('peg')}", g("peg"))
+    put("ps", f"{money(g('market_cap'))} ÷ {money(g('revenue_ttm'))} = {g('ps')}", g("ps"))
+    put("margin", f"{money(g('net_income_ttm'))} ÷ {money(g('revenue_ttm'))} × 100 = {g('margin_ttm')}% (last 12 months)",
+        g("margin_ttm"))
+    return m
+
+
+def explain(steps, n):
+    """Puts each row's equation, and its worked numbers, beside it."""
+    math = n.get("math") or {}
+    for st in steps.values():
+        for r in st.get("rows") or []:
+            for label, key, formula in FORMULAS:
+                if r["check"].startswith(label) or (label == "EPS" and r["check"].startswith("EPS")):
+                    r["formula"] = formula
+                    if key in math:
+                        r["math"] = math[key]
+                    break
+        if "table" in st:
+            st["table"]["formulas"] = [next((f for label, _, f in FORMULAS if row_[0].startswith(label)), "")
+                                       for row_ in st["table"]["rows"]]
+    return steps
 
 
 # --------------------------------------------------------------- the ratings
@@ -1114,6 +1187,7 @@ def build(symbol, inputs, get=None, ask=None, peer_numbers=None):
     steps = {"business": rate_business(ai), "growth": rate_growth(n, ai), "cash": rate_cash(n),
              "debt": rate_debt(n), "price": rate_price(n, peers, sector, (ai or {}).get("cyclical")),
              "risk": rate_risk(ai, concentration(holdings(), sym, float(inputs["amount"]), sector), inputs, sector)}
+    explain(steps, n)
     decision, why = decide(steps)
     now = datetime.now(timezone.utc)
     return {"symbol": sym, "company": n["company"], "sector": sector, "when_utc": now.isoformat(timespec="seconds"),
