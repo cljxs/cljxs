@@ -27,7 +27,9 @@
     "reddit is scripts/reddit_search.py: Reddit read through web search for Scout,",
     "Stan and Belfort, one question a day each, web search only, never billed.",
     "warren is scripts/warren.py: the before-you-buy checklist. Code computes every number; one",
-    "question on Opus a check (web search only) writes the judgment parts. Never falls back to a bill."
+    "question on Opus a check (web search only) writes the judgment parts. Never falls back to a bill.",
+    "warren-news is warren.py news: new headlines on the owner's holdings, judged against each",
+    "stock's sell rules and buy-more test, one question per run with no tools, capped a day."
   ],
   "agents": {
     "ace": {
@@ -89,6 +91,12 @@
       "engine": "claude",
       "model": "opus",
       "max_turns": 8,
+      "fallback": "none"
+    },
+    "warren-news": {
+      "engine": "claude",
+      "model": "sonnet",
+      "max_turns": 1,
       "fallback": "none"
     }
   }

@@ -72,6 +72,16 @@
   .ed .tabs .btn.on{border-color:var(--gold);color:var(--gold)}
   .ed label{display:block;font-size:12px;color:var(--mute);margin:8px 0 4px}
   .ed .acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .bell{font-size:12px;font-weight:700;padding:1px 6px;border-radius:7px;margin-right:6px}
+  .bell.sell{background:rgba(240,163,163,.18);color:#f0a3a3}
+  .bell.buy{background:rgba(95,211,154,.18);color:#5fd39a}
+  .news-sum{font-size:13px;margin:4px 0 10px}
+  .news-sum .btn{margin-left:6px}
+  .alert{border-left:3px solid var(--line);padding:6px 0 8px 10px;margin-bottom:10px;font-size:13px}
+  .alert.sell{border-color:#f0a3a3}
+  .alert.buy{border-color:#5fd39a}
+  .alert.seen{opacity:.6}
+  .ed .tabs{flex-wrap:wrap}
   .btn.del{color:#f0a3a3;border-color:rgba(240,163,163,.4)}
   .btn.del.arm{background:#f0a3a3;color:#2a0b0b}
   #h-msg{margin-top:8px}
@@ -154,7 +164,8 @@
       </div>
 
       <div class="card">
-        <div class="k">What I own - tap one to edit, buy or sell</div>
+        <div class="k">What I own - tap one to edit, buy, sell or read its news</div>
+        <div id="news-sum" class="news-sum"></div>
         <div id="holdings"></div>
         <div id="h-msg" class="why"></div>
         <div class="k" style="margin-top:14px">Add a stock</div>
@@ -212,7 +223,7 @@ async function load() {
     D = await (await fetch('/api/warren')).json();
   } catch (e) { D = { ok: false, error: String(e) }; }
   draw();
-  const running = D && D.job && D.job.state === 'running';
+  const running = D && ((D.job && D.job.state === 'running') || (D.newsJob && D.newsJob.state === 'running'));
   clearTimeout(poll);
   if (running) poll = setTimeout(load, 4000);
   else if (D && D.job && D.job.state === 'done' && shown !== D.job.symbol && D.job.symbol) open(D.job.symbol, true);
@@ -284,7 +295,7 @@ function report(c) {
   const sec = (k, ix, title, body) => `<div class="card" id="st-${k}"><h2>Step ${ix}: ${title} ${pill(s[k].rating)}</h2>${body}</div>`;
   const p = s.price, d = s.debt, rk = s.risk;
   const html = `
-  <div class="verdict ${esc(c.decision)}"><div class="big">${esc(c.decision)}</div>
+  <div class="verdict ${esc(c.decision)}"><div class="big">${esc(c.decision)}<button class="btn sm" id="rerun" style="display:block;margin-top:8px" data-busy="Warren is re-checking - a minute or two">Re-run</button></div>
     <div style="flex:1;min-width:220px"><b>${esc(c.company)} (${esc(c.symbol)})</b> &middot; ${esc(c.sector)} &middot; $${esc(n.price)}<br>
     <span>${esc(c.decision_why)}</span>${(c.caution || []).length ? `<div class="caution">&#9888; Check before acting: ${esc(c.caution.join(' '))}</div>` : ''}${(c.decision_reasons || []).length ? `<ul class="reasons">${c.decision_reasons.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}${(c.changes || []).length ? `<div class="why">Since the last check: ${esc(c.changes.join(', '))}</div>` : ''}</div></div>
   <div class="tiles">${tiles}</div>
@@ -325,6 +336,7 @@ function report(c) {
     ${Object.entries(c.sources || {}).map(([k, u]) => safe(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(k)}</a>` : '').join(' &middot; ')}
     <div class="foot">Checked ${when(c.when_utc)}. Educational only, not personalized financial advice.</div></div>`;
   $('report').innerHTML = html;
+  $('rerun').onclick = () => rerun(c);
   document.querySelectorAll('[data-go]').forEach(t => t.onclick = () => $(t.dataset.go).scrollIntoView({ behavior: 'smooth' }));
 }
 
@@ -353,16 +365,53 @@ function breakeven(h) {
 }
 
 let openHold = null, holdTab = 'edit';
+const alertsFor = sym => ((D.news || {}).alerts || []).filter(a => a.symbol === sym);
+function bell(sym) {
+  const un = alertsFor(sym).filter(a => !a.seen);
+  if (!un.length) return '';
+  const sell = un.some(a => a.signal === 'sell');
+  return `<span class="bell ${sell ? 'sell' : 'buy'}" title="${un.length} news alert${un.length === 1 ? '' : 's'}">&#128276; ${un.length}</span>`;
+}
+function drawNewsSummary() {
+  const n = D.news || {}, last = n.last || {};
+  const parts = [];
+  if (n.unseen) parts.push(`<b>${n.unseen} news alert${n.unseen === 1 ? '' : 's'}</b>`
+    + (n.sell ? ` &middot; <span class="down">${n.sell} to consider selling</span>` : '')
+    + (n.buy ? ` &middot; <span class="up">${n.buy} to consider buying more</span>` : '') + ' - tap the stock with the bell');
+  else parts.push('No news alerts.');
+  const running = D.newsJob && D.newsJob.state === 'running';
+  parts.push(`<div class="why">${last.run_utc ? `Last read ${when(last.run_utc)}${last.note ? ` - ${esc(last.note)}` : `: ${last.new} new headline${last.new === 1 ? '' : 's'}, ${last.alerts} alert${last.alerts === 1 ? '' : 's'}`}.` : 'Warren reads the news on what you own every two hours, 7:20 am to 9:20 pm ET.'}
+    <button class="btn sm" id="news-now" ${running ? 'disabled' : ''}>${running ? 'Reading the news...' : 'Check news now'}</button></div>`);
+  $('news-sum').innerHTML = parts.join('');
+  $('news-now').onclick = async () => {
+    const r = await fetch('/api/warren/news', { method: 'POST' });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); $('h-msg').innerHTML = `<span class="err">${esc(j.error || 'Could not start')}</span>`; }
+    load();
+  };
+}
+function newsBody(h) {
+  const al = alertsFor(h.symbol);
+  if (!al.length) return '<div class="why">No news alerts for this stock yet. Warren flags headlines that touch its sell rules or its buy-more test from the last check.</div>';
+  return al.map(a => `<div class="alert ${a.signal}${a.seen ? ' seen' : ''}">
+      <div><span class="pill ${a.signal === 'sell' ? 'R' : 'G'}">${a.signal === 'sell' ? 'Consider selling' : 'Consider buying more'}</span>
+        <span class="muted">${esc(a.publisher || '')}${a.published ? ' &middot; ' + esc(a.published.replace(/ [+-]\d{4}$/, '').replace(/:\d\d$/, '')) : ''}</span></div>
+      <div style="margin:4px 0">${/^https:\/\/[^\s"'<>]+$/.test(a.link || '') ? `<a href="${esc(a.link)}" target="_blank" rel="noopener">${esc(a.title)}</a>` : esc(a.title)}</div>
+      <div>${esc(a.why)}</div>
+      ${a.rule ? `<div class="why">Touches your sell rule: ${esc(a.rule)}</div>` : a.signal === 'buy' ? '<div class="why">Touches your buy-more test.</div>' : ''}
+      ${a.seen ? '' : `<button class="btn sm" data-seen="${esc(a.id)}" style="margin-top:6px">Dismiss</button>`}</div>`).join('');
+}
 function drawHoldings() {
   const hs = D.holdings || [];
+  drawNewsSummary();
   $('holdings').innerHTML = hs.map(h => `<div class="own${openHold === h.symbol ? ' open' : ''}">
       <button class="own-row" data-own="${esc(h.symbol)}"><div class="top"><span><b>${esc(h.symbol)}</b> <span class="muted">${esc(h.sector)}</span></span>
-        <span class="num">${dollars(h.amount)}<span class="chev">${openHold === h.symbol ? '&#9662;' : '&#9656;'}</span></span></div>
+        <span class="num">${bell(h.symbol)}${dollars(h.amount)}<span class="chev">${openHold === h.symbol ? '&#9662;' : '&#9656;'}</span></span></div>
         <div class="why">${breakeven(h)}</div></button>
       ${openHold === h.symbol ? editor(h) : ''}</div>`).join('')
     || '<div class="muted">Nothing yet. Add what you own so Step 6 can check how much is in one sector.</div>';
   document.querySelectorAll('[data-own]').forEach(b => b.onclick = () => {
-    openHold = openHold === b.dataset.own ? null : b.dataset.own; holdTab = 'edit'; $('h-msg').innerHTML = ''; drawHoldings();
+    openHold = openHold === b.dataset.own ? null : b.dataset.own;
+    holdTab = alertsFor(b.dataset.own).some(a => !a.seen) ? 'news' : 'edit'; $('h-msg').innerHTML = ''; drawHoldings();
   });
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { holdTab = b.dataset.tab; drawHoldings(); });
   const h = hs.find(x => x.symbol === openHold);
@@ -374,6 +423,12 @@ function drawHoldings() {
       if (!e.target.classList.contains('arm')) { e.target.classList.add('arm'); e.target.textContent = `Tap again to delete ${h.symbol}`; return; }
       openHold = null; holdings({ action: 'remove', symbol: h.symbol });
     };
+  } else if (holdTab === 'news') {
+    document.querySelectorAll('[data-seen]').forEach(b => b.onclick = async () => {
+      await fetch('/api/warren/alerts', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: b.dataset.seen, symbol: h.symbol }) });
+      load();
+    });
   } else if (holdTab === 'buy') {
     $('e-buy').onclick = () => holdings({ action: 'buy', symbol: h.symbol, amount: v('b-amt'), price: v('b-price') });
   } else {
@@ -387,7 +442,9 @@ function editor(h) {
   const tab = (k, t) => `<button class="btn sm${holdTab === k ? ' on' : ''}" data-tab="${k}">${t}</button>`;
   const now = p.price ? `value="${p.price}"` : '';
   let body;
-  if (holdTab === 'edit') {
+  if (holdTab === 'news') {
+    body = newsBody(h);
+  } else if (holdTab === 'edit') {
     body = `<label>$ in it (what you paid in total)</label><input id="e-amt" type="number" min="0" step="0.01" value="${h.amount}">
       <label>Average price paid per share</label><input id="e-avg" type="number" min="0" step="0.01" value="${h.avg_price ?? ''}">
       <label>Sector</label><select id="e-sec">${(D.sectors || []).map(s => `<option${s === h.sector ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select>
@@ -405,7 +462,8 @@ function editor(h) {
       <div class="acts"><button class="btn go sm" id="e-sell">Save the sale</button></div>
       <div class="why">Your breakeven stays the same; Warren shows what you made or lost on the shares sold.</div>`;
   }
-  return `<div class="ed"><div class="tabs">${tab('edit', 'Edit')}${tab('buy', 'Bought more')}${tab('sell', 'Sold')}</div>${body}</div>`;
+  const un = alertsFor(h.symbol).filter(a => !a.seen).length;
+  return `<div class="ed"><div class="tabs">${tab('news', 'News' + (un ? ` (${un})` : ''))}${tab('edit', 'Edit')}${tab('buy', 'Bought more')}${tab('sell', 'Sold')}</div>${body}</div>`;
 }
 
 async function holdings(body) {
@@ -428,12 +486,23 @@ $('run').onclick = async () => {
   if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(body.symbol) || !(body.amount > 0) || !(body.months > 0)) {
     alert('Fill in the ticker, the amount and how many months.'); return;
   }
+  startCheck(body);
+};
+
+async function startCheck(body) {
   const r = await fetch('/api/warren/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) { alert(j.error || 'Warren could not start'); return; }
   shown = null;
+  window.scrollTo({ top: 0, behavior: 'smooth' });
   load();
-};
+}
+
+// Re-run a saved check with the same basics (owner, 2026-11-19)
+function rerun(c) {
+  const i = c.inputs || {};
+  startCheck({ symbol: c.symbol, amount: i.amount, months: i.months, goal: i.goal, why: i.why || '', hold_drop: i.hold_drop });
+}
 
 load();
 </script>

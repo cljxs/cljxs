@@ -16,6 +16,7 @@ const SYM_RE = /^[A-Z][A-Z0-9.\-]{0,9}$/;
 const JOB_TIMEOUT_MS = 15 * 60 * 1000;
 
 let job = null;
+let newsJob = null;     // "Check news now": one at a time, like a check
 
 function python(args, timeout = 60000) {
   return new Promise(resolve => {
@@ -46,7 +47,7 @@ function register(app) {
   app.get('/api/warren', async (req, res) => {
     const r = await python(['deck']);
     if (!r.ok) return res.json({ ok: false, error: said(r) || 'warren.py deck failed', job });
-    try { res.json(Object.assign({ ok: true, job }, JSON.parse(r.stdout))); }
+    try { res.json(Object.assign({ ok: true, job, newsJob }, JSON.parse(r.stdout))); }
     catch { res.json({ ok: false, error: 'warren.py deck printed something that is not JSON', job }); }
   });
 
@@ -78,6 +79,30 @@ function register(app) {
       mine.finished_utc = new Date().toISOString();
     })();
     res.status(202).json({ job });
+  });
+
+  app.post('/api/warren/alerts', async (req, res) => {
+    const b = req.body || {};
+    const id = b.id === 'all' ? 'all' : String(b.id || '');
+    if (!/^(all|[0-9a-f]{8})$/.test(id)) return res.status(400).json({ error: 'which alert?' });
+    const args = ['alerts', 'seen', id];
+    if (b.symbol) { const s = sym(b.symbol); if (!s) return res.status(400).json({ error: 'a ticker is letters' }); args.push(`--symbol=${s}`); }
+    const r = await python(args);
+    if (!r.ok) return res.status(409).json({ ok: false, error: said(r) });
+    try { res.json(JSON.parse(r.stdout)); } catch { res.json({ ok: true }); }
+  });
+
+  app.post('/api/warren/news', (req, res) => {
+    if (newsJob && newsJob.state === 'running') return res.status(409).json({ error: 'Warren is already reading the news', newsJob });
+    newsJob = { state: 'running', started_utc: new Date().toISOString(), finished_utc: null, error: null };
+    const mine = newsJob;
+    (async () => {
+      const r = await python(['news'], JOB_TIMEOUT_MS);
+      mine.state = r.ok ? 'done' : 'failed';
+      mine.error = r.ok ? null : said(r);
+      mine.finished_utc = new Date().toISOString();
+    })();
+    res.status(202).json({ newsJob });
   });
 
   app.post('/api/warren/holdings', async (req, res) => {
@@ -117,4 +142,4 @@ function register(app) {
   });
 }
 
-module.exports = { register, _reset: () => { job = null; } };
+module.exports = { register, _reset: () => { job = null; newsJob = null; } };

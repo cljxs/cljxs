@@ -1,0 +1,21 @@
+[Unit]
+Description=Warren's news watch - new headlines on the stocks you own, judged against each one's sell rules and buy-more test
+Documentation=https://github.com/cljxs/cljxs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=ECOSYSTEM_ROOT=/root/ecosystem
+WorkingDirectory=/root/ecosystem
+# Belfort's hourly headlines for the names he follows, the rest fetched with
+# his fetcher. Only when there are new headlines: one Sonnet question on the
+# plan (no tools), at most warren.py NEWS_ASKS_PER_DAY a day. Alerts go to
+# agents/warren/state/alerts.json - What I own and the village badge.
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/warren.py news
+TimeoutStartSec=900
+StandardOutput=journal
+StandardError=journal

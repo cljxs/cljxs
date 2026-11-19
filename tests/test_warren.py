@@ -10,6 +10,7 @@ Each test names the mistake it guards against.
 
 import importlib.util
 import json
+from datetime import datetime, timedelta, timezone
 import time
 import os
 import shutil
@@ -557,6 +558,138 @@ class ASecondSourceChecksTheFigures(Base):
         self.assertNotIn("second_source", self.w.numbers("KMI", get))
 
 
+class NewsOnWhatYouOwn(Base):
+    """The owner asked (2026-11-19): when impactful news, good or bad, hits a
+    stock he owns, tell him whether it is a reason to consider selling or
+    buying more - using what Belfort already collects. The headlines below
+    are made up for the test (Belfort's captured feed is redacted); the
+    feed's parsing is tested on the real capture in test_parsers."""
+
+    NOW = datetime(2026, 11, 19, 18, 0, tzinfo=timezone.utc)
+
+    def head(self, sym, hid, title, days=0):
+        when = (self.NOW - timedelta(days=days)).strftime("%a, %d %b %Y %H:%M:%S +0000")
+        return {"symbol": sym, "id": hid, "title": title, "publisher": "example.invalid",
+                "published": when, "link": f"https://example.invalid/{hid}"}
+
+    def setUp(self):
+        super().setUp()
+        self.w.write_json(self.w.HOLDINGS, {"holdings": [
+            {"symbol": "KMI", "amount": 100, "sector": "Energy", "avg_price": 25},
+            {"symbol": "HIMS", "amount": 150, "sector": "Health Care", "avg_price": 21.8}]})
+        self.w.save({"symbol": "HIMS", "company": "Hims & Hers Health, Inc.", "when_utc": "2026-11-19T15:00:00+00:00",
+                     "decision": "Skip", "steps": {"risk": {"rating": "Green", "rows": [], "buy_more": "if it turns a profit"}},
+                     "ai": {"sell_rules": ["I would sell if a regulator stops its compounded drugs.",
+                                           "I would sell if subscribers start to fall.",
+                                           "I would sell if it borrows heavily again."]}})
+        self.fetched = []
+
+    def belfort(self, heads, hours_old=1, symbols=("KMI", "OKE")):
+        p = self.w.BELFORT_NEWS
+        p.parent.mkdir(parents=True, exist_ok=True)
+        asof = (self.NOW - timedelta(hours=hours_old)).strftime("%Y-%m-%d %H:%M:%S")
+        p.write_text(json.dumps({"asof_utc": asof, "symbols": list(symbols), "headlines": heads}))
+
+    def fetch(self, heads):
+        def f(syms):
+            self.fetched.append(list(syms))
+            return [h for h in heads if h["symbol"] in syms]
+        return f
+
+    def test_belforts_headlines_are_used_and_only_the_rest_fetched(self):
+        self.belfort([self.head("KMI", "aaaa0001", "Kinder Morgan wins pipeline contract"),
+                      self.head("OKE", "aaaa0002", "ONEOK news")])
+        heads, where = self.w.holding_headlines(["KMI", "HIMS"], self.NOW,
+                                                self.fetch([self.head("HIMS", "bbbb0001", "FDA letter to Hims & Hers")]))
+        self.assertEqual(self.fetched, [["HIMS"]])
+        self.assertEqual(sorted(h["id"] for h in heads), ["aaaa0001", "bbbb0001"], "OKE is not owned")
+        self.assertEqual(where, {"from_belfort": ["KMI"], "fetched": ["HIMS"]})
+
+    def test_a_stale_belfort_file_is_not_trusted_and_old_news_is_not_news(self):
+        self.belfort([self.head("KMI", "aaaa0001", "old Belfort copy")], hours_old=5)
+        heads, _ = self.w.holding_headlines(["KMI"], self.NOW, self.fetch([
+            self.head("KMI", "cccc0001", "fresh"), self.head("KMI", "cccc0002", "last week", days=7)]))
+        self.assertEqual(self.fetched, [["KMI"]])
+        self.assertEqual([h["id"] for h in heads], ["cccc0001"])
+
+    def test_the_question_carries_each_stocks_own_rules(self):
+        q = self.w.news_question([{"symbol": "HIMS", "company": "Hims & Hers Health, Inc.",
+                                   "sell_rules": ["I would sell if a regulator stops its compounded drugs."],
+                                   "buy_more": "if it turns a profit",
+                                   "headlines": [self.head("HIMS", "bbbb0001", "FDA letter to Hims & Hers")]}])
+        self.assertIn("1. I would sell if a regulator stops its compounded drugs.", q)
+        self.assertIn("Buy more if: if it turns a profit", q)
+        self.assertIn("[bbbb0001] FDA letter to Hims & Hers", q)
+
+    def test_only_answers_code_can_stand_behind_become_alerts(self):
+        by = {h["id"]: h for h in (self.head("HIMS", "bbbb0001", "FDA warns Hims & Hers over 2 drugs"),
+                                     self.head("KMI", "aaaa0001", "Kinder Morgan wins pipeline contract"))}
+        rules = {"HIMS": ["r1", "r2", "r3"], "KMI": []}
+        ans = json.dumps({"alerts": [
+            {"id": "bbbb0001", "symbol": "HIMS", "signal": "sell", "rule": 1, "why": "A regulator warned it about 2 of its drugs."},
+            {"id": "aaaa0001", "symbol": "KMI", "signal": "buy", "rule": 0, "why": "A big new contract."},
+            {"id": "zzzz9999", "symbol": "KMI", "signal": "buy", "rule": 0, "why": "made up headline"},
+            {"id": "aaaa0001", "symbol": "HIMS", "signal": "sell", "rule": 0, "why": "wrong stock"},
+            {"id": "bbbb0001", "symbol": "HIMS", "signal": "hold", "rule": 0, "why": "not a signal"},
+            {"id": "bbbb0001", "symbol": "HIMS", "signal": "sell", "rule": 7, "why": "no such rule"},
+            {"id": "aaaa0001", "symbol": "KMI", "signal": "buy", "rule": 0, "why": "It is worth 40% more now."}]})
+        got = self.w.read_news_answer("```json\n" + ans + "\n```", by, rules)
+        self.assertEqual([(x["id"], x["signal"], x["rule"]) for x in got],
+                         [("bbbb0001", "sell", "r1"), ("aaaa0001", "buy", None)])
+        self.assertIsNone(self.w.read_news_answer("I could not decide", by, rules))
+
+    def run_watch(self, heads, answer=None, ok=True):
+        asked = []
+
+        def ask(q):
+            asked.append(q)
+            return ok, json.dumps(answer or {"alerts": []})
+        st = self.w.watch_news(self.NOW, self.fetch(heads), ask)
+        return st, asked
+
+    def test_a_run_asks_once_saves_alerts_and_does_not_repeat_them(self):
+        heads = [self.head("HIMS", "bbbb0001", "FDA warns Hims & Hers"), self.head("KMI", "aaaa0001", "Kinder Morgan quarterly dividend")]
+        one = {"id": "bbbb0001", "symbol": "HIMS", "signal": "sell", "rule": 1, "why": "A regulator warning touches rule one."}
+        ans = {"alerts": [one, dict(one)]}                       # the same alert twice in one answer
+        st, asked = self.run_watch(heads, ans)
+        self.assertEqual((st["new"], st["alerts"], len(asked)), (2, 1, 1))
+        b = self.w.news_board()
+        self.assertEqual((b["unseen"], b["sell"], b["buy"]), (1, 1, 0))
+        self.assertEqual(b["alerts"][0]["rule"], "I would sell if a regulator stops its compounded drugs.")
+        st, asked = self.run_watch(heads, ans)
+        self.assertEqual((st["new"], len(asked)), (0, 0), "nothing new: no question")
+        self.assertEqual(self.w.news_board()["unseen"], 1)
+
+    def test_an_unanswered_question_is_asked_again_next_run(self):
+        heads = [self.head("HIMS", "bbbb0001", "FDA warns Hims & Hers")]
+        st, _ = self.run_watch(heads, ok=False)
+        self.assertIn("asked again", st["note"])
+        st, asked = self.run_watch(heads)
+        self.assertEqual((st["new"], len(asked)), (1, 1))
+
+    def test_questions_stop_at_the_days_cap(self):
+        for i in range(self.w.NEWS_ASKS_PER_DAY):
+            self.run_watch([self.head("KMI", f"dddd{i:04d}", f"news {i}")])
+        st, asked = self.run_watch([self.head("KMI", "eeee0001", "one more")])
+        self.assertEqual(len(asked), 0)
+        self.assertIn("already today", st["note"])
+
+    def test_dismissing_and_the_village_badge(self):
+        heads = [self.head("HIMS", "bbbb0001", "FDA warns Hims & Hers"), self.head("KMI", "aaaa0001", "Kinder Morgan contract")]
+        self.run_watch(heads, {"alerts": [
+            {"id": "bbbb0001", "symbol": "HIMS", "signal": "sell", "rule": 1, "why": "Regulator."},
+            {"id": "aaaa0001", "symbol": "KMI", "signal": "buy", "rule": 0, "why": "Contract."}]})
+        spec = importlib.util.spec_from_file_location("att_w", ROOT / "scripts" / "attention.py")
+        att = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(att)
+        att._load = lambda name, file: self.w
+        a = att.warren()
+        self.assertEqual((a["n"], a["tone"]), (2, "alert"))
+        self.w.cmd_alerts(type("A", (), {"id": "bbbb0001", "symbol": "HIMS"})())
+        a = att.warren()
+        self.assertEqual((a["n"], a["tone"]), (1, "todo"))
+
+
 class TheSitesSayWhoRefused(Base):
     """The first live check (HIMS, 2026-11-19) died on a bare 'HTTP Error
     403: Forbidden' traceback: the SEC refuses a User-Agent with no contact
@@ -698,6 +831,8 @@ class ThePageAndTheApi(Base):
             "out.add=await go('POST','/api/warren/holdings',{action:'add',symbol:'kmi',amount:125,sector:'Energy',avg_price:'27.5'});"
             "out.badavg=await go('POST','/api/warren/holdings',{action:'add',symbol:'KMI',amount:125,avg_price:-3});"
             "out.deck=await go('GET','/api/warren');"
+            "out.badalert=await go('POST','/api/warren/alerts',{id:'../x'});"
+            "out.allseen=await go('POST','/api/warren/alerts',{id:'all'});"
             "out.buybad=await go('POST','/api/warren/holdings',{action:'buy',symbol:'KMI',amount:55});"
             "out.buy=await go('POST','/api/warren/holdings',{action:'buy',symbol:'KMI',amount:55,price:27.5});"
             "out.sellbad=await go('POST','/api/warren/holdings',{action:'sell',symbol:'KMI',price:30});"
@@ -716,6 +851,9 @@ class ThePageAndTheApi(Base):
         deck = json.loads(out["deck"][1])
         self.assertTrue(deck["ok"], deck)
         self.assertEqual(out["badavg"][0], 400, "a negative price never reaches the command line")
+        self.assertEqual(out["badalert"][0], 400, "an alert id never reaches the command line unchecked")
+        self.assertEqual(json.loads(out["allseen"][1]), {"unseen": 0})
+        self.assertEqual(deck["news"]["unseen"], 0)
         h = deck["holdings"][0]
         self.assertEqual({k: h[k] for k in ("symbol", "amount", "sector", "avg_price")},
                          {"symbol": "KMI", "amount": 125.0, "sector": "Energy", "avg_price": 27.5})

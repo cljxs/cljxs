@@ -16,6 +16,7 @@ badge and the page it opens can never disagree:
     agentroom  plans waiting for an approval, held runs  (agentroom.py deck)
     bolt       a book that does not balance, or no prices for half an hour
                (bolt.py)
+    warren     news alerts on stocks the owner holds    (warren.py news_board)
 
 tone is "todo" (a decision is yours to make) or "alert" (something is
 wrong). A source that cannot be read says so in `error` and counts nothing:
@@ -98,7 +99,19 @@ def bolt(now=None):
     return {"n": len(why), "tone": "alert", "why": why}
 
 
-SOURCES = {"shop": shop, "stan": stan, "agentroom": agentroom, "bolt": bolt}
+def warren():
+    """News alerts on what the owner holds, not yet dismissed (warren.py
+    news_board). A sell alert is an alert; buy-more ones are a decision."""
+    b = _load("warren_att", "warren.py").news_board()
+    why = []
+    if b["sell"]:
+        why.append(plural(b["sell"], "headline") + " that may be a reason to sell")
+    if b["buy"]:
+        why.append(plural(b["buy"], "headline") + " that may be a reason to buy more")
+    return {"n": b["unseen"], "tone": "alert" if b["sell"] else "todo", "why": why}
+
+
+SOURCES = {"shop": shop, "stan": stan, "agentroom": agentroom, "bolt": bolt, "warren": warren}
 
 
 def attention():

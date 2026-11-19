@@ -4101,7 +4101,7 @@ const NAV = [['deck', '🛰', 'Command Deck'], ['fury', '🧭', "Fury's debrief"
   ['belfort', '🏦', 'Markets'], ['bolt', '⚡', 'Bolt'], ['coach', '📓', 'Trading Coach'], ['paul', '📐', "Paul's Studio"], ['emily', '🎨', "Emily's Studio"], ['shop', '🛍', 'Shop'],
   ['stan', '💡', 'Stan'], ['warren', '🎩', 'Warren'], ['agentroom', '🧩', 'Agent Room'], ['brain', '🧠', 'Brain map']];
 // attention.py's tabs and the Deck's stale rule, keyed the way NAV is.
-const ATT_KEY = { shop: 'shop', stan: 'stan', agentroom: 'agentroom', bolt: 'bolt' };
+const ATT_KEY = { shop: 'shop', stan: 'stan', agentroom: 'agentroom', bolt: 'bolt', warren: 'warren' };
 let ATT = {}, LAST_PULL = 0;
 
 const agoTxt = m => m === null || m === undefined ? 'never' : m < 1 ? 'just now' : m < 90 ? Math.round(m) + 'm ago'

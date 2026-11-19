@@ -301,7 +301,7 @@ def parse_rss(raw, limit=25):
         if title:
             link = tag("link") or ""
             host = urllib.parse.urlsplit(link).hostname or ""
-            items.append({"title": title[:180], "published": tag("pubDate"),
+            items.append({"title": title[:180], "published": tag("pubDate"), "link": link[:400],
                           # what a buy cites (belfort-trade.py --headline): the
                           # same headline keeps the same id across refreshes
                           "id": hashlib.sha1(title.encode()).hexdigest()[:8],

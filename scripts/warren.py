@@ -50,6 +50,18 @@ SALES = STATE / "sales.json"        # every sale you record, with its gain or lo
 PRICE_FRESH_MIN = 15
 RUNS = STATE / "runs.json"
 RECHECKS = STATE / "rechecks.json"
+# News on what you own (owner, 2026-11-19): new headlines on each holding,
+# judged against that stock's sell rules and buy-more test from its last
+# check. Belfort's hourly headlines are used for the names he follows; the
+# rest are fetched with his fetcher.
+ALERTS = STATE / "alerts.json"
+NEWS_SEEN = STATE / "news-seen.json"
+BELFORT_NEWS = ROOT / "agents" / "belfort" / "data" / "news.json"
+BELFORT_NEWS_FRESH_H = 3          # older than this and Warren fetches the names himself
+NEWS_MAX_AGE_DAYS = 4             # a headline older than this is old news, not an alert
+NEWS_ASKS_PER_DAY = 8             # Sonnet questions a day, at most
+NEWS_ASK_TIMEOUT = 300
+ALERTS_KEPT = 300
 
 # Opus on the plan is the owner's to spend; a check is one question, a
 # re-check another. Ten a day is far more than one person buys.
@@ -1400,6 +1412,196 @@ def save(check):
     return path
 
 
+# ------------------------------------------------------------ news watcher
+
+def headline_time(h):
+    from email.utils import parsedate_to_datetime
+    try:
+        return parsedate_to_datetime(h.get("published") or "")
+    except (TypeError, ValueError):
+        return None
+
+
+def holding_headlines(symbols, now=None, fetch=None):
+    """Headlines on each holding: Belfort's, for the names he already
+    follows and when his file is fresh; the rest fetched with Belfort's own
+    fetch_news - one request a name, his pace. Each tagged with its symbol."""
+    now = now or datetime.now(timezone.utc)
+    doc = read_json(BELFORT_NEWS, {}) or {}
+    try:
+        asof = datetime.strptime(doc.get("asof_utc", ""), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        fresh = now - asof < timedelta(hours=BELFORT_NEWS_FRESH_H)
+    except ValueError:
+        fresh = False
+    covered = set(doc.get("symbols") or []) if fresh else set()
+    got = [h for h in doc.get("headlines") or [] if fresh and h.get("symbol") in symbols]
+    rest = [s for s in symbols if s not in covered]
+    if rest:
+        fetch = fetch or (lambda syms: _load("belfort_fetch_for_warren", "belfort-fetch.py").fetch_news(syms))
+        got += fetch(rest)
+    old = now - timedelta(days=NEWS_MAX_AGE_DAYS)
+    return [h for h in got if (headline_time(h) or now) >= old], {"from_belfort": sorted(set(symbols) & covered),
+                                                                    "fetched": rest}
+
+
+def news_question(groups):
+    """One question for every holding with new headlines. The model judges
+    words against the owner's own rules; it is told to state no numbers but
+    those in the headline."""
+    parts = []
+    for g in groups:
+        rules = "\n".join(f"   {i}. {r}" for i, r in enumerate(g["sell_rules"], 1)) \
+            or "   (no saved checklist - judge whether it changes the case for owning it at all)"
+        heads = "\n".join(f"   [{h['id']}] {h['title']} ({h.get('publisher') or '?'}, {h.get('published') or '?'})"
+                          for h in g["headlines"])
+        parts.append(f"{g['symbol']} - {g['company']}\n  Sell rules:\n{rules}\n  Buy more if: {g['buy_more'] or '(none saved)'}\n"
+                     f"  New headlines:\n{heads}")
+    return ("You watch a small investor's stocks. For each stock below are the owner's own rules for selling and for "
+            "buying more, and today's new headlines. Pick only the headlines that are real news about the company "
+            "itself and would make a careful owner consider selling or buying more - because they touch one of the "
+            "rules, or are big on their own: earnings or guidance, a lawsuit or investigation, new shares or debt, "
+            "a merger, a major contract won or lost, a regulator's decision, a key partner or leader leaving. Leave "
+            "out routine coverage, price-move recaps, lists of stocks to buy, and opinion pieces. A headline about "
+            "another company only counts if it plainly names this one.\n\n"
+            + "\n\n".join(parts) +
+            "\n\nAnswer with JSON only, no prose: {\"alerts\": [{\"id\": \"headline id\", \"symbol\": \"TICKER\", "
+            "\"signal\": \"sell\" or \"buy\", \"rule\": the sell rule's number it touches, or 0, "
+            "\"why\": \"one plain sentence for a beginner\"}]}. An empty list is a fine answer. "
+            "Use no number in 'why' that is not in the headline.")
+
+
+def read_news_answer(text, by_id, rules_of):
+    """The alerts code can stand behind: a real headline on the stock it
+    names, a signal of sell or buy, a rule that exists, a short reason with
+    no number the headline does not have. Anything else is dropped."""
+    t = (text or "").strip()
+    if t.startswith("```"):
+        t = t.strip("`").split("\n", 1)[-1]
+    a, b = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[a:b + 1])
+    except (ValueError, TypeError):
+        return None
+    out = []
+    for x in d.get("alerts") or []:
+        if not isinstance(x, dict):
+            continue
+        h = by_id.get(str(x.get("id")))
+        sig, why = x.get("signal"), str(x.get("why") or "").strip()
+        try:
+            rule = int(x.get("rule") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not h or h["symbol"] != str(x.get("symbol", "")).upper() or sig not in ("sell", "buy"):
+            continue
+        if not why or len(why) > 300 or not 0 <= rule <= len(rules_of.get(h["symbol"]) or []):
+            continue
+        if any(num not in h["title"] for num in re.findall(r"\d[\d.,]*", why)):
+            continue
+        out.append({"id": h["id"], "symbol": h["symbol"], "signal": sig, "why": why,
+                    "rule": (rules_of[h["symbol"]][rule - 1] if rule else None),
+                    "title": h["title"], "publisher": h.get("publisher"), "link": h.get("link"),
+                    "published": h.get("published")})
+    return out
+
+
+def news_asks_today(now=None, bump=False):
+    d = read_json(NEWS_SEEN, {}) or {}
+    day = et_time.day(now)
+    n = int(d.get("asks") or 0) if d.get("ask_day") == day else 0
+    if bump:
+        d.update(ask_day=day, asks=n + 1)
+        write_json(NEWS_SEEN, d)
+    return n + (1 if bump else 0)
+
+
+def watch_news(now=None, fetch=None, ask=None):
+    """One run: new headlines on what you own -> at most one question ->
+    alerts. A headline is marked seen only once it has been judged, so a
+    failed question is asked again next run, never silently skipped."""
+    now = now or datetime.now(timezone.utc)
+    hs = holdings()
+    status = {"run_utc": now.isoformat(timespec="minutes"), "holdings": len(hs), "new": 0, "alerts": 0, "note": ""}
+    seen_doc = read_json(NEWS_SEEN, {}) or {}
+    seen = set(seen_doc.get("ids") or [])
+    if not hs:
+        status["note"] = "nothing in What I own"
+        return _news_done(seen_doc, seen, status)
+    heads, where = holding_headlines([h["symbol"] for h in hs], now, fetch)
+    status.update(where)
+    new = [h for h in heads if h["id"] not in seen]
+    status["new"] = len(new)
+    if not new:
+        status["note"] = "no new headlines"
+        return _news_done(seen_doc, seen, status)
+    if news_asks_today(now) >= NEWS_ASKS_PER_DAY:
+        status["note"] = f"{NEWS_ASKS_PER_DAY} news questions already today - the rest wait for tomorrow"
+        return _news_done(seen_doc, seen, status)
+    groups, rules_of = [], {}
+    for h in hs:
+        mine = [x for x in new if x["symbol"] == h["symbol"]]
+        if not mine:
+            continue
+        c = latest(h["symbol"]) or {}
+        risk = (c.get("steps") or {}).get("risk") or {}
+        rules = list((c.get("ai") or {}).get("sell_rules") or [])
+        rules_of[h["symbol"]] = rules
+        groups.append({"symbol": h["symbol"], "company": c.get("company") or h["symbol"], "sell_rules": rules,
+                       "buy_more": risk.get("buy_more") or (c.get("ai") or {}).get("buy_more"), "headlines": mine})
+    ask = ask or (lambda q: _load("wake_warren_news", "wake.py").ask("warren-news", q, NEWS_ASK_TIMEOUT))
+    news_asks_today(now, bump=True)
+    ok, text = ask(news_question(groups))
+    got = read_news_answer(text, {h["id"]: h for h in new}, rules_of) if ok else None
+    if got is None:
+        status["note"] = "the news question was not answered - the same headlines are asked again next run" \
+            if not ok else "the answer was not readable JSON - asked again next run"
+        return _news_done(seen_doc, seen, status)
+    found = now.isoformat(timespec="seconds")
+    alerts = (read_json(ALERTS, {}) or {}).get("alerts") or []
+    have = {(a["id"], a["symbol"]) for a in alerts}
+    added = 0
+    for x in got:
+        if (x["id"], x["symbol"]) not in have:
+            have.add((x["id"], x["symbol"]))
+            alerts.append(dict(x, found_utc=found, seen=False))
+            added += 1
+    write_json(ALERTS, {"alerts": alerts[-ALERTS_KEPT:]})
+    seen |= {h["id"] for h in new}
+    status["alerts"] = added
+    return _news_done(seen_doc, seen, status)
+
+
+def _news_done(seen_doc, seen, status):
+    seen_doc = dict(read_json(NEWS_SEEN, {}) or {}, ids=sorted(seen)[-3000:], last=status)
+    write_json(NEWS_SEEN, seen_doc)
+    return status
+
+
+def cmd_news(a):
+    print(json.dumps(watch_news()))
+    return 0
+
+
+def cmd_alerts(a):
+    d = read_json(ALERTS, {}) or {}
+    for x in d.get("alerts") or []:
+        if a.id == "all" or (x["id"] == a.id and (not a.symbol or x["symbol"] == a.symbol.upper())):
+            x["seen"] = True
+    write_json(ALERTS, d)
+    print(json.dumps({"unseen": sum(not x.get("seen") for x in d.get("alerts") or [])}))
+    return 0
+
+
+def news_board():
+    """What the page and the village badge show: unseen alerts first, then
+    the last few dismissed, and how the last run went."""
+    alerts = (read_json(ALERTS, {}) or {}).get("alerts") or []
+    unseen = [x for x in alerts if not x.get("seen")]
+    return {"alerts": list(reversed(unseen)) + list(reversed([x for x in alerts if x.get("seen")]))[:20],
+            "unseen": len(unseen), "sell": sum(x["signal"] == "sell" for x in unseen),
+            "buy": sum(x["signal"] == "buy" for x in unseen), "last": (read_json(NEWS_SEEN, {}) or {}).get("last")}
+
+
 def latest(symbol):
     d = CHECKS / symbol.upper()
     files = sorted(d.glob("*.json")) if d.is_dir() else []
@@ -1524,7 +1726,7 @@ def cmd_deck(a):
             c = (latest(h["symbol"]) or {}).get("numbers") or {}
             price, as_of = c.get("price"), c.get("as_of")
         held.append({**h, "position": position(h, price), "price_as_of": as_of, "live": bool(q)})
-    print(json.dumps({"checks": rows, "holdings": held, "runs_today": runs_today(),
+    print(json.dumps({"checks": rows, "holdings": held, "runs_today": runs_today(), "news": news_board(),
                       "runs_per_day": RUNS_PER_DAY, "sectors": SECTORS,
                       "rechecks": (read_json(RECHECKS, []) or [])[-20:]}))
     return 0
@@ -1656,6 +1858,12 @@ def main(argv=None):
     h.add_argument("--all", action="store_true", help="sell: every share")
     h.set_defaults(fn=cmd_holdings)
     sub.add_parser("recheck").set_defaults(fn=cmd_recheck)
+    sub.add_parser("news").set_defaults(fn=cmd_news)
+    al = sub.add_parser("alerts")
+    al.add_argument("action", choices=("seen",))
+    al.add_argument("id")
+    al.add_argument("--symbol")
+    al.set_defaults(fn=cmd_alerts)
     so = sub.add_parser("sources")
     so.add_argument("symbol", nargs="?", default="KMI")
     so.set_defaults(fn=cmd_sources)

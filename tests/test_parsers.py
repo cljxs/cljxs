@@ -16298,7 +16298,9 @@ class BelfortReadsNewsForAllThirty(unittest.TestCase):
     def test_the_real_feed_parses(self):
         items = self.fetch.parse_rss(self.RSS.decode())
         self.assertEqual(len(items), 20)
+        # the article's link, for Warren's news alerts to open (2026-11-19)
         self.assertEqual(items[0], {"title": "headline 1", "published": "Thu, 01 Oct 2026 03:26:17 +0000",
+                                    "link": "https://example.invalid/article-2",
                                     "id": "a649c928", "publisher": "example.invalid"})
 
     def test_every_name_is_asked_for_and_tagged(self):

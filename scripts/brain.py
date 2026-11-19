@@ -63,7 +63,7 @@ NODES = [
      ["ace-cycle", "ace-fetch", "ace-close", "ace-shop", "ace-shop-close"], "/ace", (86, 74)),
     ("aceprops", "Ace Props", "NBA points milestones, plain code", ["ace-props", "ace-props-close"], "/ace-props", (68, 70)),
     ("peter", "Peter", "player props, weather, defense", ["peter-defense"], "/peter", (90, 92)),
-    ("warren", "Warren", "the Before-You-Buy checklist for any US stock", ["warren-recheck"], "/warren", (90, 10)),
+    ("warren", "Warren", "the Before-You-Buy checklist for any US stock, and news on what you own", ["warren-recheck", "warren-news"], "/warren", (90, 10)),
 ]
 
 # (from, to, what passes, the file and the line in it that does it). The test
@@ -75,6 +75,7 @@ WIRES = [
     ("bolt", "coach", "both books' trades, journaled", "scripts/coach.py", "bolt.py"),
     ("ace", "coach", "his settled bets and closing lines", "scripts/coach.py", "ace-book.py"),
     ("ace", "aceprops", "one bankroll, two books", "scripts/ace-props.py", "ace-book.py"),
+    ("belfort", "warren", "his hourly headlines, for news on what you own", "scripts/warren.py", "BELFORT_NEWS"),
     ("stan", "agentroom", "a pain you approve becomes a plan", "scripts/stan.py", "agentroom"),
     ("scout", "fury", "ideas waiting on you", "scripts/gm.py", "fury.scout.load_ideas"),
     ("knowledge", "fury", "accepted lessons", "scripts/gm.py", "knowledge_facts"),
@@ -85,7 +86,7 @@ WIRES = [
 WIRES += [(nid, "fury", "reports its runs and failures", "scripts/gm.py", "health_facts")
           for nid, *_ in NODES if nid not in ("you", "fury", "knowledge")]
 
-ATTENTION_NODE = {"shop": "shop", "stan": "stan", "agentroom": "agentroom", "bolt": "bolt"}
+ATTENTION_NODE = {"shop": "shop", "stan": "stan", "agentroom": "agentroom", "bolt": "bolt", "warren": "warren"}
 
 
 def _load(name, file):
