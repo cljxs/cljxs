@@ -108,6 +108,8 @@ def warren():
         why.append(plural(b["sell"], "headline") + " that may be a reason to sell")
     if b["buy"]:
         why.append(plural(b["buy"], "headline") + " that may be a reason to buy more")
+    if b.get("watch"):
+        why.append(plural(b["watch"], "headline") + " about what your sell or buy-more rules watch for")
     return {"n": b["unseen"], "tone": "alert" if b["sell"] else "todo", "why": why}
 
 

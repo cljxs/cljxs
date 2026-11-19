@@ -638,13 +638,14 @@ class NewsOnWhatYouOwn(Base):
                          [("bbbb0001", "sell", "r1"), ("aaaa0001", "buy", None)])
         self.assertIsNone(self.w.read_news_answer("I could not decide", by, rules))
 
-    def run_watch(self, heads, answer=None, ok=True):
+    def run_watch(self, heads, answer=None, ok=True, searched=()):
         asked = []
 
         def ask(q):
             asked.append(q)
             return ok, json.dumps(answer or {"alerts": []})
-        st = self.w.watch_news(self.NOW, self.fetch(heads), ask)
+        st = self.w.watch_news(self.NOW, self.fetch(heads), ask,
+                               search=lambda sym, company, rt: [h for h in searched if h["symbol"] == sym])
         return st, asked
 
     def test_a_run_asks_once_saves_alerts_and_does_not_repeat_them(self):
@@ -688,6 +689,98 @@ class NewsOnWhatYouOwn(Base):
         self.w.cmd_alerts(type("A", (), {"id": "bbbb0001", "symbol": "HIMS"})())
         a = att.warren()
         self.assertEqual((a["n"], a["tone"]), (1, "todo"))
+
+
+class TheOwnersOwnWordsAreSearchedFor(Base):
+    """The owner asked (2026-11-19): if the news talks about what his sell
+    rules or buy-more test watch for, he wants to know - as part of the whole
+    search, not the only part. ASTS's real rules, and a real Google News feed
+    for ASTS captured that day."""
+
+    ASTS = {"symbol": "ASTS", "company": "AST SpaceMobile, Inc.", "when_utc": "2026-11-19T18:00:00+00:00", "decision": "Skip",
+            "ai": {"sell_rules": [
+                "I would sell if launches of new BlueBird satellites keep slipping and the company fails to reach the coverage needed for continuous commercial service in the US.",
+                "I would sell if a major carrier partner such as AT&T or Verizon cuts back or ends its agreement, or if a rival like SpaceX's Starlink direct-to-cell service wins the carriers over.",
+                "I would sell if the company loses or fails to secure the spectrum rights it needs, or if it has to raise money on terms that badly dilute shareholders before paying revenue starts flowing."]},
+            "steps": {"risk": {"rating": "Green", "rows": [], "buy_more":
+                "Buying more would make sense if the company starts continuous commercial service with its carrier partners, keeps launching on schedule, and revenue starts growing steadily from paying subscribers rather than one-off contracts."}}}
+
+    def setUp(self):
+        super().setUp()
+        self.rt = self.w.rule_terms(self.ASTS)
+        self.feed = fx("warren-google-news-asts.xml")
+
+    def test_each_rule_gives_its_own_words(self):
+        self.assertEqual(self.rt["sell"][0][:3], ["BlueBird", "launches", "satellites"])
+        self.assertTrue({"AT&T", "Verizon", "SpaceX", "Starlink"} <= set(self.rt["sell"][1]))
+        self.assertTrue({"spectrum", "offering", "dilution"} <= set(self.rt["sell"][2]), "dilute -> the words headlines use")
+        own = self.w.watch_terms("if Hims & Hers loses its fight with the FDA", "Hims & Hers Health, Inc.")
+        self.assertIn("FDA", own)
+        self.assertFalse({"Hims", "Hers"} & set(own), "the company's own name would match every headline")
+        self.assertIn("subscribers", self.rt["buy"])
+
+    def test_the_search_is_the_name_and_the_rules_words(self):
+        q = self.w.search_query(self.ASTS["company"], self.rt)
+        self.assertTrue(q.startswith('"AST SpaceMobile" (BlueBird OR "AT&T" OR Verizon OR SpaceX OR Starlink'), q)
+        self.assertTrue(q.endswith(") when:7d"))
+        self.assertEqual(self.w.short_name("Hims & Hers Health, Inc."), "Hims & Hers")
+
+    def test_a_real_feed_is_read_with_its_publishers(self):
+        heads = self.w.search_headlines("ASTS", self.ASTS["company"], self.rt, get=lambda url: self.feed)
+        self.assertEqual(len(heads), self.w.SEARCH_PER_NAME)
+        offer = next(h for h in heads if "offer 10M shares" in h["title"])
+        self.assertEqual((offer["title"], offer["publisher"]),
+                         ("AST Spacemobile files to offer 10M shares as part of Firefly agreement", "TradingView"))
+        carriers = next(h for h in heads if h["title"].startswith("When will AT&T"))
+        self.assertIn("AT&T and Verizon", carriers["title"], "the feed's &amp; is read as &")
+
+    def test_headlines_are_matched_to_the_rule_they_talk_about(self):
+        hits = lambda t: [(k, n) for k, n, _ in self.w.rule_hits(t, self.rt)]
+        self.assertIn(("sell", 3), hits("AST Spacemobile files to offer 10M shares as part of Firefly agreement"))
+        self.assertIn(("sell", 2), hits("When will AT&T and Verizon phones use AST SpaceMobile satellites?"))
+        self.assertIn(("sell", 1), hits("AST SpaceMobile Plans Its Own Rocket to Speed Satellite Launches and Cut Costs"))
+        self.assertEqual(hits("AST SpaceMobile (ASTS) Takes a Beating. Here's What Happened"), [])
+        verizon = self.w.rule_hits("AT&T and Verizon phones", self.rt)[0]
+        self.assertTrue(self.w.strong(verizon))
+        self.assertFalse(self.w.strong(("sell", 1, ["launches"])), "one plain word is the model's to judge")
+        self.assertTrue(self.w.strong(("sell", 3, ["offering"])), "a word headlines use for 'dilute'")
+
+    def test_both_halves_of_the_search_are_judged_together(self):
+        self.w.write_json(self.w.HOLDINGS, {"holdings": [{"symbol": "ASTS", "amount": 1039, "sector": "Communication Services",
+                                                          "avg_price": 68.57}]})
+        self.w.save(dict(self.ASTS))
+        now = datetime(2026, 11, 19, 20, 0, tzinfo=timezone.utc)
+        yahoo = [{"symbol": "ASTS", "id": "y0000001", "title": "AST SpaceMobile shares rise", "publisher": "example.invalid",
+                  "published": "Thu, 19 Nov 2026 15:00:00 +0000"}]
+        asked = []
+
+        def ask(q):
+            asked.append(q)
+            return True, json.dumps({"alerts": []})          # the model leaves everything out
+        st = self.w.watch_news(now, lambda syms: [h for h in yahoo if h["symbol"] in syms], ask,
+                               search=lambda sym, company, rt: self.w.search_headlines(sym, company, rt, get=lambda u: self.feed))
+        q = asked[0]
+        self.assertIn("[y0000001] AST SpaceMobile shares rise", q, "Yahoo's half is still there")
+        self.assertIn("<- mentions sell rule 2: Starlink", q)
+        self.assertIn("<- mentions sell rule 3: offering", q)
+        self.assertNotIn("When will AT&T", q, "6 days old: older than NEWS_MAX_AGE_DAYS")
+        self.assertEqual(st["searched"], ["ASTS"])
+        b = self.w.news_board()
+        self.assertEqual(sorted(x["title"][:40] for x in b["alerts"]),       # the two strong ones within 4 days
+                         ["AST SpaceMobile: “We’re not like Musk or", "AST Spacemobile files to offer 10M share"])
+        offer = next(x for x in b["alerts"] if "offer 10M shares" in x["title"])
+        self.assertEqual((offer["signal"], offer["by"]), ("watch", "words"), "the model left it out; the words did not")
+        self.assertEqual(offer["why"], "It mentions offering - words from your sell rule 3.")
+        self.assertTrue(offer["rule"].startswith("I would sell if the company loses or fails to secure the spectrum"))
+
+    def test_the_page_shows_the_words(self):
+        self.w.save(dict(self.ASTS))
+        import io
+        from contextlib import redirect_stdout
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.w.cmd_show(type("A", (), {"symbol": "ASTS"})())
+        self.assertEqual(json.loads(out.getvalue())["watch_terms"], self.rt)
 
 
 class TheSitesSayWhoRefused(Base):

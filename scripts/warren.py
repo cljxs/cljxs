@@ -25,6 +25,8 @@ Data (all free, no keys):
 """
 
 import argparse
+import hashlib
+import html
 import importlib.util
 import json
 import os
@@ -32,6 +34,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -62,6 +65,14 @@ NEWS_MAX_AGE_DAYS = 4             # a headline older than this is old news, not 
 NEWS_ASKS_PER_DAY = 8             # Sonnet questions a day, at most
 NEWS_ASK_TIMEOUT = 300
 ALERTS_KEPT = 300
+# The owner's own words as search terms (2026-11-19: "if something is talked
+# about from his what would make him sell and buy i want to know ... part of
+# the overall search, not the only part"): each holding's rules give a
+# Google News search, and every headline is matched against them.
+NEWS_SEARCH_URL = "https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en"
+SEARCH_PER_NAME = 15
+SEARCH_TERMS = 8                  # terms in one search, names first
+WATCH_ALERTS_PER_STOCK = 3        # code's own "worth a look" alerts, per stock per run
 
 # Opus on the plan is the owner's to spend; a check is one question, a
 # re-check another. Ten a day is far more than one person buys.
@@ -1444,6 +1455,147 @@ def holding_headlines(symbols, now=None, fetch=None):
                                                                     "fetched": rest}
 
 
+WATCH_STOP = set("""
+would sell sells selling buying more make makes sense company companies business keeps keep fails fail
+needed needs need major rather than starts start growing steadily continuous steady every their there where which
+while about after before again against being below between could during further other others those through under
+until very will with without into onto from that this these them they then when what because also only some such
+just even much many most less like over above along among since next last year years quarter quarters month months
+week weeks time times today number numbers level levels price prices stock stocks share investor investors market
+markets new big small high low good bad well able made enough already still really paying pays paid pay terms
+term badly instead flowing flows one-off someone something service services customers customer
+""".split())
+# Words a rule uses for an idea, and the words headlines use for it.
+WATCH_SYNONYMS = {
+    "dilut": ["offering", "dilution", "offer"], "raise money": ["offering", "raises", "offer"],
+    "issuing new shares": ["offering", "offer"], "borrow": ["debt", "notes", "convertible", "loan"],
+    "lawsuit": ["lawsuit", "sues", "class action"], "regulator": ["FDA", "FCC", "SEC", "regulator", "probe"],
+    "partner": ["partner", "partnership"], "subscriber": ["subscribers"], "guidance": ["guidance", "outlook"],
+    "profit": ["profit", "profitable"], "spectrum": ["spectrum", "FCC"],
+}
+
+
+def stem(w):
+    w = w.lower().strip("'’")
+    for suf in ("ing", "ed", "es", "s"):
+        if len(w) > len(suf) + 4 and w.endswith(suf):
+            return w[: -len(suf)]
+    return w
+
+
+def watch_terms(text, company=""):
+    """The words in one rule worth watching the news for: names (BlueBird,
+    Verizon, AT&T, Starlink), the rule's own nouns (launches, spectrum,
+    coverage), and the words headlines use for its idea (dilute -> offering).
+    Code, not a model: the same rule always gives the same words."""
+    own = {stem(w) for w in re.findall(r"[A-Za-z&]+", company or "")}
+    out, seen = [], set()
+
+    def add(t):
+        k = stem(t)
+        if k not in seen and k not in own:
+            seen.add(k)
+            out.append(t)
+    words = [re.sub(r"['’]s$", "", w) for w in re.findall(r"[A-Za-z][A-Za-z&'’\-]*[A-Za-z]", text or "")]
+    for i, w in enumerate(words):
+        proper = (w[0].isupper() and i > 0) or "&" in w or (w.isupper() and len(w) >= 2)
+        if proper and (len(w) >= 3 or "&" in w) and w.lower() not in WATCH_STOP:
+            add(w)
+    low = (text or "").lower()
+    for key, syn in WATCH_SYNONYMS.items():
+        if key in low:
+            for t in syn:
+                add(t)
+    for w in words:
+        if len(w) >= 6 and not w[0].isupper() and w.lower() not in WATCH_STOP:
+            add(w.lower())
+    return out
+
+
+def rule_terms(check):
+    """{"sell": [the words of rule 1, 2, 3], "buy": the buy-more test's words}."""
+    c = check or {}
+    company = c.get("company") or ""
+    rules = (c.get("ai") or {}).get("sell_rules") or []
+    buy = ((c.get("steps") or {}).get("risk") or {}).get("buy_more") or (c.get("ai") or {}).get("buy_more") or ""
+    return {"sell": [watch_terms(re.sub(r"^\s*I would sell if\s*", "", r, flags=re.I), company) for r in rules],
+            "buy": watch_terms(re.sub(r"^\s*Buying more would make sense if\s*", "", buy, flags=re.I), company)}
+
+
+def term_hits(title, terms):
+    """The terms a headline uses: a whole word starting with the term's stem
+    (launch: launches, launched), or the exact name (AT&T)."""
+    low = html.unescape(title or "").lower()
+    toks = re.findall(r"[a-z0-9&'’\-]+", low)
+    hits = []
+    for t in terms:
+        k = stem(t)
+        if (" " in t and t.lower() in low) or any(x == k or x.startswith(k) for x in toks):
+            hits.append(t)
+    return hits
+
+
+def rule_hits(title, rt):
+    """[(kind, rule number or 0, [terms])] for each rule the headline touches."""
+    out = []
+    for i, terms in enumerate(rt.get("sell") or [], 1):
+        h = term_hits(title, terms)
+        if h:
+            out.append(("sell", i, h))
+    h = term_hits(title, rt.get("buy") or [])
+    if h:
+        out.append(("buy", 0, h))
+    return out
+
+
+CURATED = {t for syn in WATCH_SYNONYMS.values() for t in syn}
+
+
+def strong(hit):
+    """Two of one rule's words, one of its names, or a word headlines use for
+    its idea (offering, for "dilute"): enough that code flags the headline
+    itself if the model leaves it out."""
+    return len(hit[2]) >= 2 or any(t[0].isupper() or t in CURATED for t in hit[2])
+
+
+def short_name(company):
+    n = re.sub(r",?\s+(Inc\.?|Incorporated|Corporation|Corp\.?|Holdings?|Co\.?|Ltd\.?|plc|N\.V\.|S\.A\.)$", "",
+               company or "", flags=re.I)
+    n = re.sub(r"\s+(Health|Group|Technologies|Platforms)$", "", n).strip()
+    return n or company
+
+
+def search_query(company, rt):
+    """'"AST SpaceMobile" (BlueBird OR Verizon OR ...) when:7d' - names
+    first, then each rule's own words, at most SEARCH_TERMS of them."""
+    every = [t for terms in (rt.get("sell") or []) + [rt.get("buy") or []] for t in terms]
+    ranked = sorted(dict.fromkeys(every), key=lambda t: (not t[0].isupper(), every.index(t)))[:SEARCH_TERMS]
+    if not ranked or not company:
+        return None
+    q = " OR ".join(f'"{t}"' if " " in t or "&" in t else t for t in ranked)
+    return f'"{short_name(company)}" ({q}) when:7d'
+
+
+def search_headlines(symbol, company, rt, get=None):
+    """Google News for the stock's name with its rules' words - one request
+    a stock. Titles there end ' - Publisher', which becomes the publisher."""
+    q = search_query(company, rt)
+    if not q:
+        return []
+    url = NEWS_SEARCH_URL.format(q=urllib.parse.quote_plus(q))
+    bf = _load("belfort_fetch_for_warren", "belfort-fetch.py")
+    raw = (get or (lambda u: bf.http_get(u, ua=NASDAQ_HEADERS["User-Agent"])))(url)
+    raw = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+    out = []
+    for it in bf.parse_rss(raw, SEARCH_PER_NAME):
+        title, pub = html.unescape(it["title"]), it.get("publisher")
+        if " - " in title:
+            title, pub = title.rsplit(" - ", 1)
+        out.append({"symbol": symbol, "title": title[:180], "publisher": pub, "published": it.get("published"),
+                    "link": it.get("link"), "id": hashlib.sha1(title.encode()).hexdigest()[:8], "via": "search"})
+    return out
+
+
 def news_question(groups):
     """One question for every holding with new headlines. The model judges
     words against the owner's own rules; it is told to state no numbers but
@@ -1452,7 +1604,10 @@ def news_question(groups):
     for g in groups:
         rules = "\n".join(f"   {i}. {r}" for i, r in enumerate(g["sell_rules"], 1)) \
             or "   (no saved checklist - judge whether it changes the case for owning it at all)"
-        heads = "\n".join(f"   [{h['id']}] {h['title']} ({h.get('publisher') or '?'}, {h.get('published') or '?'})"
+        def mark(h):
+            return "".join(f"\n      <- mentions {'sell rule ' + str(n) if k == 'sell' else 'the buy-more test'}: "
+                           f"{', '.join(t)}" for k, n, t in h.get("hits") or [])
+        heads = "\n".join(f"   [{h['id']}] {h['title']} ({h.get('publisher') or '?'}, {h.get('published') or '?'}){mark(h)}"
                           for h in g["headlines"])
         parts.append(f"{g['symbol']} - {g['company']}\n  Sell rules:\n{rules}\n  Buy more if: {g['buy_more'] or '(none saved)'}\n"
                      f"  New headlines:\n{heads}")
@@ -1462,10 +1617,13 @@ def news_question(groups):
             "rules, or are big on their own: earnings or guidance, a lawsuit or investigation, new shares or debt, "
             "a merger, a major contract won or lost, a regulator's decision, a key partner or leader leaving. Leave "
             "out routine coverage, price-move recaps, lists of stocks to buy, and opinion pieces. A headline about "
-            "another company only counts if it plainly names this one.\n\n"
+            "another company only counts if it plainly names this one. A headline marked 'mentions' uses words "
+            "from one of the owner's own rules: look at it closely - if it really is about what that rule watches "
+            "for but does not yet change the case, answer it as watch; if it only names the words in passing "
+            "(a price recap, a list of stocks), leave it out.\n\n"
             + "\n\n".join(parts) +
             "\n\nAnswer with JSON only, no prose: {\"alerts\": [{\"id\": \"headline id\", \"symbol\": \"TICKER\", "
-            "\"signal\": \"sell\" or \"buy\", \"rule\": the sell rule's number it touches, or 0, "
+            "\"signal\": \"sell\", \"buy\" or \"watch\", \"rule\": the sell rule's number it touches, or 0, "
             "\"why\": \"one plain sentence for a beginner\"}]}. An empty list is a fine answer. "
             "Use no number in 'why' that is not in the headline.")
 
@@ -1492,7 +1650,7 @@ def read_news_answer(text, by_id, rules_of):
             rule = int(x.get("rule") or 0)
         except (TypeError, ValueError):
             continue
-        if not h or h["symbol"] != str(x.get("symbol", "")).upper() or sig not in ("sell", "buy"):
+        if not h or h["symbol"] != str(x.get("symbol", "")).upper() or sig not in ("sell", "buy", "watch"):
             continue
         if not why or len(why) > 300 or not 0 <= rule <= len(rules_of.get(h["symbol"]) or []):
             continue
@@ -1500,6 +1658,7 @@ def read_news_answer(text, by_id, rules_of):
             continue
         out.append({"id": h["id"], "symbol": h["symbol"], "signal": sig, "why": why,
                     "rule": (rules_of[h["symbol"]][rule - 1] if rule else None),
+                    "matched": sorted({t for _, _, ts in h.get("hits") or [] for t in ts}),
                     "title": h["title"], "publisher": h.get("publisher"), "link": h.get("link"),
                     "published": h.get("published")})
     return out
@@ -1515,7 +1674,7 @@ def news_asks_today(now=None, bump=False):
     return n + (1 if bump else 0)
 
 
-def watch_news(now=None, fetch=None, ask=None):
+def watch_news(now=None, fetch=None, ask=None, search=None):
     """One run: new headlines on what you own -> at most one question ->
     alerts. A headline is marked seen only once it has been judged, so a
     failed question is asked again next run, never silently skipped."""
@@ -1529,6 +1688,28 @@ def watch_news(now=None, fetch=None, ask=None):
         return _news_done(seen_doc, seen, status)
     heads, where = holding_headlines([h["symbol"] for h in hs], now, fetch)
     status.update(where)
+    # The second half of the search: each stock's own rules as search words
+    # (Google News), and every headline, from either half, matched to them.
+    terms, status["searched"], status["search_failed"] = {}, [], []
+    old = now - timedelta(days=NEWS_MAX_AGE_DAYS)
+    for h in hs:
+        c = latest(h["symbol"])
+        if not c:
+            continue
+        rt = terms[h["symbol"]] = rule_terms(c)
+        try:
+            found = (search or search_headlines)(h["symbol"], c.get("company") or "", rt)
+            status["searched"].append(h["symbol"])
+        except Exception as e:
+            status["search_failed"].append(f"{h['symbol']}: {str(e)[:60]}")
+            continue
+        heads += [x for x in found if (headline_time(x) or now) >= old]
+    uniq = {}
+    for x in heads:
+        uniq.setdefault(x["id"], x)
+    heads = list(uniq.values())
+    for x in heads:
+        x["hits"] = rule_hits(x["title"], terms[x["symbol"]]) if x["symbol"] in terms else []
     new = [h for h in heads if h["id"] not in seen]
     status["new"] = len(new)
     if not new:
@@ -1556,6 +1737,21 @@ def watch_news(now=None, fetch=None, ask=None):
         status["note"] = "the news question was not answered - the same headlines are asked again next run" \
             if not ok else "the answer was not readable JSON - asked again next run"
         return _news_done(seen_doc, seen, status)
+    # A headline that strongly uses one rule's words - two of them, or one of
+    # its names - is always shown, even when the model left it out.
+    answered = {x["id"] for x in got}
+    for sym in rules_of:
+        flagged = [x for x in new if x["symbol"] == sym and x["id"] not in answered
+                   and any(strong(hit) for hit in x["hits"])]
+        flagged.sort(key=lambda x: headline_time(x) or now, reverse=True)
+        for x in flagged[:WATCH_ALERTS_PER_STOCK]:
+            kind, n, words = next(hit for hit in x["hits"] if strong(hit))
+            got.append({"id": x["id"], "symbol": sym, "signal": "watch", "by": "words",
+                        "why": f"It mentions {', '.join(words)} - words from your "
+                               + (f"sell rule {n}." if kind == "sell" else "buy-more test."),
+                        "rule": (rules_of[sym][n - 1] if kind == "sell" and n <= len(rules_of[sym]) else None),
+                        "matched": words, "title": x["title"], "publisher": x.get("publisher"),
+                        "link": x.get("link"), "published": x.get("published")})
     found = now.isoformat(timespec="seconds")
     alerts = (read_json(ALERTS, {}) or {}).get("alerts") or []
     have = {(a["id"], a["symbol"]) for a in alerts}
@@ -1599,7 +1795,8 @@ def news_board():
     unseen = [x for x in alerts if not x.get("seen")]
     return {"alerts": list(reversed(unseen)) + list(reversed([x for x in alerts if x.get("seen")]))[:20],
             "unseen": len(unseen), "sell": sum(x["signal"] == "sell" for x in unseen),
-            "buy": sum(x["signal"] == "buy" for x in unseen), "last": (read_json(NEWS_SEEN, {}) or {}).get("last")}
+            "buy": sum(x["signal"] == "buy" for x in unseen), "watch": sum(x["signal"] == "watch" for x in unseen),
+            "last": (read_json(NEWS_SEEN, {}) or {}).get("last")}
 
 
 def latest(symbol):
@@ -1647,6 +1844,7 @@ def cmd_show(a):
     if not c:
         print(f"no check of {a.symbol.upper()} yet", file=sys.stderr)
         return 1
+    c["watch_terms"] = rule_terms(c)
     print(json.dumps(c))
     return 0
 

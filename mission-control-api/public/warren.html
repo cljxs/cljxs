@@ -74,6 +74,8 @@
   .ed .acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
   .bell{font-size:12px;font-weight:700;padding:1px 6px;border-radius:7px;margin-right:6px}
   .bell.sell{background:rgba(240,163,163,.18);color:#f0a3a3}
+  .bell.watch{background:rgba(245,194,107,.18);color:#f5c26b}
+  .amber{color:#f5c26b}
   .bell.buy{background:rgba(95,211,154,.18);color:#5fd39a}
   .news-sum{font-size:13px;margin:4px 0 10px}
   .news-sum .btn{margin-left:6px}
@@ -258,6 +260,14 @@ async function open(symbol, fromJob) {
   draw();
 }
 
+function watchWords(c) {
+  const w = c.watch_terms;
+  if (!w || !((w.sell || []).some(x => x.length) || (w.buy || []).length)) return '';
+  const line = (label, t) => t.length ? `<li><b>${label}:</b> ${t.map(esc).join(', ')}</li>` : '';
+  return `<div class="k" style="margin-top:14px">Words Warren watches the news for</div>
+    <div class="why">If you own this stock, Warren searches the news for these and tells you when a headline uses them.</div>
+    <ul>${(w.sell || []).map((t, i) => line(`Sell rule ${i + 1}`, t)).join('')}${line('Buy more', w.buy || [])}</ul>`;
+}
 function checkedLine(r) {
   const c = r.checked;
   if (!c) return '';
@@ -331,6 +341,7 @@ function report(c) {
     ${(c.ai && c.ai.sell_rules || []).length ? `<div class="k" style="margin-top:14px">3 things that would make me sell</div><ul>${c.ai.sell_rules.map(x => `<li>I would sell if ${esc((y => y.charAt(0).toLowerCase() + y.slice(1))(x.replace(/^I would sell if\s*/i, '')))}</li>`).join('')}</ul>` : ''}
     ${(rk.risks || []).length ? `<div class="k" style="margin-top:14px">Risks from the latest news and filings</div><ul>${rk.risks.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
     ${rk.buy_more ? `<p><b>What would make me buy more:</b> ${esc(rk.buy_more)}</p>` : ''}
+    ${watchWords(c)}
     <p class="muted">Warren re-checks this stock automatically after its next quarterly report.</p>`)}
   <div class="card"><div class="k">Sources</div>
     ${Object.entries(c.sources || {}).map(([k, u]) => safe(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(k)}</a>` : '').join(' &middot; ')}
@@ -369,15 +380,16 @@ const alertsFor = sym => ((D.news || {}).alerts || []).filter(a => a.symbol === 
 function bell(sym) {
   const un = alertsFor(sym).filter(a => !a.seen);
   if (!un.length) return '';
-  const sell = un.some(a => a.signal === 'sell');
-  return `<span class="bell ${sell ? 'sell' : 'buy'}" title="${un.length} news alert${un.length === 1 ? '' : 's'}">&#128276; ${un.length}</span>`;
+  const sell = un.some(a => a.signal === 'sell'), buy = un.some(a => a.signal === 'buy');
+  return `<span class="bell ${sell ? 'sell' : buy ? 'buy' : 'watch'}" title="${un.length} news alert${un.length === 1 ? '' : 's'}">&#128276; ${un.length}</span>`;
 }
 function drawNewsSummary() {
   const n = D.news || {}, last = n.last || {};
   const parts = [];
   if (n.unseen) parts.push(`<b>${n.unseen} news alert${n.unseen === 1 ? '' : 's'}</b>`
     + (n.sell ? ` &middot; <span class="down">${n.sell} to consider selling</span>` : '')
-    + (n.buy ? ` &middot; <span class="up">${n.buy} to consider buying more</span>` : '') + ' - tap the stock with the bell');
+    + (n.buy ? ` &middot; <span class="up">${n.buy} to consider buying more</span>` : '')
+    + (n.watch ? ` &middot; <span class="amber">${n.watch} about your rules</span>` : '') + ' - tap the stock with the bell');
   else parts.push('No news alerts.');
   const running = D.newsJob && D.newsJob.state === 'running';
   parts.push(`<div class="why">${last.run_utc ? `Last read ${when(last.run_utc)}${last.note ? ` - ${esc(last.note)}` : `: ${last.new} new headline${last.new === 1 ? '' : 's'}, ${last.alerts} alert${last.alerts === 1 ? '' : 's'}`}.` : 'Warren reads the news on what you own every two hours, 7:20 am to 9:20 pm ET.'}
@@ -393,11 +405,12 @@ function newsBody(h) {
   const al = alertsFor(h.symbol);
   if (!al.length) return '<div class="why">No news alerts for this stock yet. Warren flags headlines that touch its sell rules or its buy-more test from the last check.</div>';
   return al.map(a => `<div class="alert ${a.signal}${a.seen ? ' seen' : ''}">
-      <div><span class="pill ${a.signal === 'sell' ? 'R' : 'G'}">${a.signal === 'sell' ? 'Consider selling' : 'Consider buying more'}</span>
+      <div><span class="pill ${a.signal === 'sell' ? 'R' : a.signal === 'buy' ? 'G' : 'Y'}">${a.signal === 'sell' ? 'Consider selling' : a.signal === 'buy' ? 'Consider buying more' : 'Worth a look'}</span>
         <span class="muted">${esc(a.publisher || '')}${a.published ? ' &middot; ' + esc(a.published.replace(/ [+-]\d{4}$/, '').replace(/:\d\d$/, '')) : ''}</span></div>
       <div style="margin:4px 0">${/^https:\/\/[^\s"'<>]+$/.test(a.link || '') ? `<a href="${esc(a.link)}" target="_blank" rel="noopener">${esc(a.title)}</a>` : esc(a.title)}</div>
       <div>${esc(a.why)}</div>
       ${a.rule ? `<div class="why">Touches your sell rule: ${esc(a.rule)}</div>` : a.signal === 'buy' ? '<div class="why">Touches your buy-more test.</div>' : ''}
+      ${(a.matched || []).length ? `<div class="why">Words from your rules in it: ${esc(a.matched.join(', '))}</div>` : ''}
       ${a.seen ? '' : `<button class="btn sm" data-seen="${esc(a.id)}" style="margin-top:6px">Dismiss</button>`}</div>`).join('');
 }
 function drawHoldings() {
