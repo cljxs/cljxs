@@ -46,9 +46,12 @@ def get(url, ua=None, headers=None):
         return fx("warren-sec-companyfacts-aapl.json")
     if "companyfacts/CIK0001773751" in url:
         return fx("warren-sec-companyfacts-hims.json")
-    if "HIMS" in url.upper() and "sec.gov" not in url:
-        kind = "yahoo-chart" if "/chart/" in url else "nasdaq-summary" if "/summary" in url else "nasdaq-forecast"
-        return fx(f"warren-{kind}-hims.json")
+    if "companyfacts/CIK0001780312" in url:
+        return fx("warren-sec-companyfacts-asts.json")
+    for sym in ("HIMS", "ASTS"):
+        if sym in url.upper() and "sec.gov" not in url:
+            kind = "yahoo-chart" if "/chart/" in url else "nasdaq-summary" if "/summary" in url else "nasdaq-forecast"
+            return fx(f"warren-{kind}-{sym.lower()}.json")
     if "/chart/" in url:
         return fx("warren-yahoo-chart-kmi-divs.json")
     if "/summary" in url:
@@ -401,6 +404,51 @@ class BuyingAndSelling(Base):
             self.w.cmd_deck(None)
         pct = {h["symbol"]: h["position"]["gain_pct"] for h in json.loads(out.getvalue())["holdings"]}
         self.assertEqual(pct, {"KMI": 20.0, "NVDA": -20.0})
+
+
+class AFigureACompanyStoppedReporting(Base):
+    """ASTS, the owner's own holding (2026-11-19): it moved revenue to a new
+    tag in 2025, stopped tagging operating income after 2024 and EPS after
+    2022. Warren read $4M of revenue (2024's), an EBITDA that was its
+    depreciation alone (leverage 16.9x for a company losing $700M a year),
+    no EPS, a margin of -14,279%, and 'borrowing for buybacks' for a company
+    that buys back nothing. Real SEC, Yahoo and Nasdaq captures for ASTS."""
+
+    def setUp(self):
+        super().setUp()
+        self.n = self.w.numbers("ASTS", get)
+
+    def test_revenue_is_read_from_the_tag_it_uses_now(self):
+        self.assertEqual(self.n["revenue_years"][-1], ["2025-12-31", 70918000])
+        self.assertEqual(self.n["revenue_ttm"], 142880000)      # 70.9M + 88.6M (2026 to Sept) - 16.6M (2025 to Sept)
+
+    def test_old_operating_income_is_not_this_years(self):
+        self.assertEqual(self.n["op_income_from"], "pre-tax income plus interest")
+        self.assertLess(self.n["ebitda_ttm"], 0)
+        self.assertIsNone(self.n["leverage"])
+        self.assertEqual(self.w.rate_debt(self.n)["rows"][0]["rating"], "Red")
+
+    def test_a_stale_figure_is_dropped(self):
+        n = {"ocf_ttm_end": "2026-09-30", "net_income_ttm_end": "2026-09-30", "op_income_ttm": 5, "op_income_ttm_end": "2024-12-31",
+             "pretax_ttm": -100, "pretax_ttm_end": "2026-09-30", "interest_ttm": 10, "op_income_years": [["2024-12-31", 5]]}
+        self.w.stale_figures(n)
+        self.assertEqual((n["op_income_ttm"], n["op_income_years"]), (-90, []))
+        self.assertIn("op_income", n["stale"])
+
+    def test_eps_is_worked_out_when_the_company_stopped_reporting_it(self):
+        self.assertEqual(self.n["eps_from"], "net income over shares")
+        sh = dict(self.n["shares_years"])
+        self.assertEqual(self.n["eps_years"][-1], ["2025-12-31", round(-341940000 / sh["2025-12-31"], 2)])
+
+    def test_the_words_match_a_company_that_burns_cash(self):
+        g = {r["check"]: r for r in self.w.rate_growth(self.n, None)["rows"]}
+        self.assertFalse(g["Profit margin"]["answer"].startswith(";"))
+        self.assertEqual(self.n["margin_years"][-1], ["2025-12-31", -482.2])       # -$341.9M on $70.9M
+        self.assertEqual(g["Revenue, last 3 years"]["rating"], "Green")
+        c = {r["check"]: r for r in self.w.rate_cash(self.n)["rows"]}
+        self.assertIn("burns about $17.20", c["FCF yield (FCF / market cap)"]["why"])
+        what, rating, why = self.w.debt_purpose(self.n)
+        self.assertEqual((what, rating), ("borrowing to cover losses and building", "Yellow"), "it buys back no stock")
 
 
 class TheSitesSayWhoRefused(Base):

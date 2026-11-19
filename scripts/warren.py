@@ -100,7 +100,10 @@ CAPITAL_HEAVY_OK = {"Energy", "Utilities", "Real Estate", "Communication Service
 # InterestExpense to InterestIncomeExpenseNonoperatingNet), so `pick_tag`
 # takes the one with the newest annual figure, then this order.
 TAGS = {
-    "revenue": ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"),
+    # ASTS (2026-11-19) moved to the IncludingAssessedTax tag in 2025 and
+    # read as $4M of revenue - its 2024 figure - instead of $71M.
+    "revenue": ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet",
+                "RevenueFromContractWithCustomerIncludingAssessedTax"),
     "eps": ("EarningsPerShareDiluted",),
     "net_income": ("NetIncomeLoss",),
     "ocf": ("NetCashProvidedByUsedInOperatingActivities",),
@@ -108,6 +111,12 @@ TAGS = {
     "dividends": ("PaymentsOfDividendsCommonStock", "PaymentsOfDividends", "DividendsCommonStockCash"),
     "buybacks": ("PaymentsForRepurchaseOfCommonStock",),
     "op_income": ("OperatingIncomeLoss",),
+    # When a company stops reporting operating income (ASTS, since 2024),
+    # EBIT is pre-tax income plus interest.
+    "pretax": ("IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+               "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"),
+    # For EPS by hand when the EPS tag stopped (ASTS, since 2022)
+    "shares": ("WeightedAverageNumberOfDilutedSharesOutstanding", "WeightedAverageNumberOfSharesOutstandingBasic"),
     "dna": ("DepreciationDepletionAndAmortization", "DepreciationAndAmortization",
             "DepreciationAmortizationAndAccretionNet"),
     "interest": ("InterestExpense", "InterestExpenseNonoperating", "InterestExpenseDebt",
@@ -477,7 +486,8 @@ def numbers(symbol, get=None, tickers=None):
         s, tag = series(facts, key)
         n[key + "_years"] = [[e[:10], v] for e, v in s[-4:]]
         n[key + "_tag"] = tag
-        n[key + "_ttm"], n[key + "_ttm_end"] = ttm(facts, key) if key not in ("eps", "dps") else (None, None)
+        n[key + "_ttm"], n[key + "_ttm_end"] = ttm(facts, key) if key not in ("eps", "dps", "shares") else (None, None)
+    stale_figures(n)
 
     debt = debt_at(facts)
     cash = dict(instants(facts, "CashAndCashEquivalentsAtCarryingValue"))
@@ -496,6 +506,41 @@ def numbers(symbol, get=None, tickers=None):
     return derive(n)
 
 
+STALE_DAYS = 200
+
+
+def stale_figures(n):
+    """A tag a company stopped using still holds its old figures. ASTS's
+    last operating income was 2024: read as this year's, it made EBITDA its
+    depreciation alone and leverage 16.9x for a company losing $700M a year.
+    A figure ending STALE_DAYS before the company's latest report is
+    dropped, and the gaps are filled by arithmetic on figures that are
+    current: EBIT from pre-tax income plus interest, EPS from net income
+    over shares."""
+    latest = max((n.get(k + "_ttm_end") or "" for k in ("ocf", "net_income")), default="")
+    if not latest:
+        return
+    n["stale"] = []
+    for key in TAGS:
+        end = n.get(key + "_ttm_end")
+        if end and (ddate(latest) - ddate(end)).days > STALE_DAYS:
+            n[key + "_ttm"] = n[key + "_ttm_end"] = None
+            n["stale"].append(key)
+        yrs_ = n.get(key + "_years") or []
+        if yrs_ and (ddate(latest) - ddate(yrs_[-1][0])).days > STALE_DAYS + 365:
+            n[key + "_years"] = []
+            if key not in n["stale"]:
+                n["stale"].append(key)
+    if n.get("op_income_ttm") is None and n.get("pretax_ttm") is not None:
+        n["op_income_ttm"] = n["pretax_ttm"] + (n.get("interest_ttm") or 0)
+        n["op_income_from"] = "pre-tax income plus interest"
+    if not n.get("eps_years"):
+        sh = {e: v for e, v in n.get("shares_years") or []}
+        n["eps_years"] = [[e, round(v / sh[e], 2)] for e, v in n.get("net_income_years") or [] if sh.get(e)]
+        if n["eps_years"]:
+            n["eps_from"] = "net income over shares"
+
+
 def derive(n):
     """The checklist's arithmetic on the raw figures. Pure: tests feed it."""
     g = n.get
@@ -505,8 +550,8 @@ def derive(n):
     years = {e: v for e, v in g("ocf_years") or []}
     cap = {e: v for e, v in g("capex_years") or []}
     n["fcf_years"] = [[e, years[e] - cap[e]] for e in years if e in cap]
-    n["margin_years"] = [[e, r1(100 * v / r)] for (e, v), (e2, r) in zip(g("net_income_years") or [], g("revenue_years") or [])
-                         if e == e2 and r]
+    rv = {e: v for e, v in g("revenue_years") or []}
+    n["margin_years"] = [[e, r1(100 * v / rv[e])] for e, v in g("net_income_years") or [] if rv.get(e)]
     n["margin_ttm"] = r1(100 * ni / rev) if ni is not None and rev else None
     div = g("dividends_ttm") or 0
     n["coverage"] = r2(n["fcf_ttm"] / div) if div and n["fcf_ttm"] is not None else None
@@ -607,10 +652,13 @@ def rate_growth(n, ai):
     if mar and mar[-1] is not None and mar[-1] < 0:
         mar_t = "down"
         mar_why = "it lost money over the last 12 months" + (" - " + mar_why if mar_why and trend(mar) == "down" else "")
-    rows = [row("Revenue, last 3 years", yrs(ry) + (f"; {money(n['revenue_ttm'])} last 12 months" if n.get("revenue_ttm") else ""),
+    rows = [row("Revenue, last 3 years", "; ".join(x for x in (yrs(ry), f"{money(n['revenue_ttm'])} last 12 months"
+                                                             if n.get("revenue_ttm") else "") if x) or "not reported",
                 r(rev_t), why(rev_t, "revenue")),
-            row("EPS, last 3 years", yrs(ey, lambda v: f"${v:.2f}"), r(eps_t), eps_why),
-            row("Profit margin", yrs(my, lambda v: f"{v}%") + (f"; {n['margin_ttm']}% last 12 months" if n.get("margin_ttm") is not None else ""),
+            row("EPS, last 3 years", yrs(ey, lambda v: f"${v:.2f}") or "not reported", r(eps_t),
+                eps_why + ("; worked out as net income over shares - the company stopped reporting EPS" if n.get("eps_from") else "")),
+            row("Profit margin", "; ".join(x for x in (yrs(my, lambda v: f"{v}%"),
+                                                       f"{n['margin_ttm']}% last 12 months" if n.get("margin_ttm") is not None else "") if x),
                 r(mar_t), mar_why)]
     if ai:
         rows.append(row("Did profits jump mainly because of high commodity prices?", ai["commodity_why"],
@@ -663,7 +711,9 @@ def rate_cash(n):
     rows.append(row("FCF yield (FCF / market cap)", f"{fy}%" if fy is not None else "n/a",
                     YELLOW if fy is None else GREEN if fy >= 5 else RED if fy < 2 else YELLOW,
                     "could not be worked out" if fy is None else "" if fy >= 5 else
-                    f"for every $100 of the company you buy, it makes about ${max(fy, 0):.2f} of free cash a year - "
+                    f"for every $100 of the company you buy, it burns about ${-fy:.2f} of cash a year - it spends "
+                    "more than it brings in, so you are paying for a future it has not reached yet" if fy < 0 else
+                    f"for every $100 of the company you buy, it makes about ${fy:.2f} of free cash a year - "
                     "the price is high next to the cash it makes (5% or more is good)" if fy < 2 else
                     "a fair amount of cash for the price, not a bargain (5% or more is good)"))
     return {"rating": overall(rows), "rows": rows}
@@ -680,7 +730,11 @@ def debt_purpose(n):
         return "dividend on a loan", RED, "operating cash is less than the dividends paid"
     if borrow <= 0 and ocf >= div + capex:
         return "own cash", GREEN, "operating cash covered the dividend and the spending, and debt did not grow"
-    if borrow > 0 and buy > 0.5 * ocf:
+    if borrow > 0 and ocf < 0:
+        return "borrowing to cover losses and building", YELLOW, (
+            f"its business used {money(-ocf)} of cash, so the new borrowing ({money(borrow)}) paid for the losses "
+            "as well as the building - it works only if what it builds starts paying")
+    if borrow > 0 and buy > 0 and buy > 0.5 * ocf:
         return "borrowing for buybacks", YELLOW, "debt rose while it spent heavily buying back stock"
     if borrow > 0 and ocf >= div + capex:
         return "borrowing to grow", GREEN, (
@@ -730,8 +784,10 @@ def rate_debt(n):
     quick = fy.get("ocf") - fy.get("dividends") if fy.get("ocf") is not None else None
     rows.append(row("What is the debt paying for?", what, rating, why))
     return {"rating": overall(rows), "rows": rows, "part_b": part_b, "year_end": fy.get("year_end"),
-            "note": "Leverage here is operating income plus depreciation from the SEC filings; a company's own "
-                    "'adjusted EBITDA' usually adds more and shows a lower figure.",
+            "note": ("This company stopped reporting operating income, so EBITDA here is pre-tax income plus interest "
+                     "plus depreciation, from the SEC filings." if n.get("op_income_from") else
+                     "Leverage here is operating income plus depreciation from the SEC filings; a company's own "
+                     "'adjusted EBITDA' usually adds more and shows a lower figure."),
             "quick_test": money(quick), "quick_test_ok": quick is not None and quick >= 0,
             "pays_dividend": bool(fy.get("dividends"))}
 
