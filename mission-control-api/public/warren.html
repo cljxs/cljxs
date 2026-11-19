@@ -81,6 +81,8 @@
   td.r{white-space:nowrap}
   .why{color:var(--mute);font-size:12.5px}
   .why.red{color:#f0a3a3}
+  .up{color:#5fd39a;font-weight:600}
+  .down{color:#f0a3a3;font-weight:600}
   .reasons{margin:8px 0 0;padding-left:18px;color:#f0a3a3;font-size:13.5px;line-height:1.5}
   .num{font-variant-numeric:tabular-nums}
   ul{margin:6px 0 0 18px;padding:0}
@@ -136,6 +138,7 @@
           <input id="h-sym" placeholder="Ticker" maxlength="10" autocapitalize="characters">
           <input id="h-amt" type="number" min="0" step="1" placeholder="$ in it">
         </div>
+        <input id="h-avg" type="number" min="0" step="0.01" placeholder="Average price paid per share" style="margin-top:8px">
         <select id="h-sec" style="margin-top:8px"><option value="">Sector (from its last check)</option></select>
         <button class="btn sm" id="h-add" style="margin-top:8px">Add or update</button>
       </div>
@@ -200,8 +203,9 @@ function draw() {
       ${dpill(c.decision)}</button>`).join('')
     || '<div class="muted">None yet.</div>';
   document.querySelectorAll('#checks button').forEach(b => b.onclick = () => open(b.dataset.s));
-  $('holdings').innerHTML = (D.holdings || []).map(h => `<div class="hold"><span><b>${esc(h.symbol)}</b> <span class="muted">${esc(h.sector)}</span></span>
-      <span class="num">$${Number(h.amount).toLocaleString()} <button class="btn sm" data-rm="${esc(h.symbol)}">Remove</button></span></div>`).join('')
+  $('holdings').innerHTML = (D.holdings || []).map(h => `<div class="hold" style="flex-wrap:wrap"><span><b>${esc(h.symbol)}</b> <span class="muted">${esc(h.sector)}</span></span>
+      <span class="num">$${Number(h.amount).toLocaleString()} <button class="btn sm" data-rm="${esc(h.symbol)}">Remove</button></span>
+      <div class="why" style="flex-basis:100%">${breakeven(h)}</div></div>`).join('')
     || '<div class="muted">Nothing yet. Add what you own so Step 6 can check how much is in one sector.</div>';
   document.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => holdings({ action: 'remove', symbol: b.dataset.rm }));
   if ($('h-sec').options.length === 1) (D.sectors || []).forEach(s => $('h-sec').add(new Option(s, s)));
@@ -246,7 +250,8 @@ function report(c) {
     <tr><td>How long</td><td>${esc(i.months)} months</td></tr>
     <tr><td>Buying for</td><td>${esc(i.goal)}</td></tr>
     <tr><td>Why</td><td>${esc(i.why || '-')}</td></tr>
-    <tr><td>Could I hold through a 30% drop?</td><td>${esc(i.hold_drop)}</td></tr></table></div>
+    <tr><td>Could I hold through a 30% drop?</td><td>${esc(i.hold_drop)}</td></tr>
+    ${c.position ? ownedRows(c.position, i.amount) : ''}</table></div>
   ${sec('business', 1, 'Know the business', rowsTable(s.business.rows))}
   ${sec('growth', 2, 'Is it growing and profitable?', rowsTable(s.growth.rows))}
   ${sec('cash', 3, 'Does it make cash, and is the dividend safe?', rowsTable(s.cash.rows))}
@@ -276,13 +281,36 @@ function report(c) {
   document.querySelectorAll('[data-go]').forEach(t => t.onclick = () => $(t.dataset.go).scrollIntoView({ behavior: 'smooth' }));
 }
 
+const usd = v => '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const signed = v => (v >= 0 ? '+' : '-') + usd(Math.abs(v));
+function gainText(p) {
+  if (p.gain == null) return '';
+  return `<span class="${p.gain >= 0 ? 'up' : 'down'}">${signed(p.gain)} (${p.gain_pct >= 0 ? '+' : ''}${p.gain_pct}%)</span>`;
+}
+function ownedRows(p, amount) {
+  if (!p.breakeven) return `<tr><td>Already own</td><td>$${Number(p.amount).toLocaleString()} - add your average price paid under What I own to see your breakeven</td></tr>`;
+  let t = `<tr><td>Already own</td><td>${Number(p.shares).toLocaleString(undefined, { maximumFractionDigits: 4 })} shares for $${Number(p.amount).toLocaleString()}</td></tr>
+    <tr><td>Breakeven (average price paid)</td><td><b>${usd(p.breakeven)}</b><div class="why">before any trading fees</div></td></tr>`;
+  if (p.price) t += `<tr><td>At today's price</td><td>${usd(p.value)}: ${gainText(p)}</td></tr>`;
+  if (p.after) t += `<tr><td>After buying $${Number(amount).toLocaleString()} more</td><td>breakeven <b>${usd(p.after.breakeven)}</b> on ${Number(p.after.shares).toLocaleString(undefined, { maximumFractionDigits: 4 })} shares</td></tr>`;
+  return t;
+}
+function breakeven(h) {
+  const p = h.position || {};
+  if (!p.breakeven) return 'Add your average price paid to see your breakeven.';
+  let t = `Breakeven <b>${usd(p.breakeven)}</b> &middot; ${Number(p.shares).toLocaleString(undefined, { maximumFractionDigits: 4 })} shares`;
+  if (p.price) t += ` &middot; ${usd(p.price)} at its last check${h.price_as_of ? ` (${esc(h.price_as_of)})` : ''}: ${gainText(p)}`;
+  return t;
+}
+
 async function holdings(body) {
   const r = await fetch('/api/warren/holdings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!r.ok) alert((await r.json().catch(() => ({}))).error || 'That did not save');
   load();
 }
 
-$('h-add').onclick = () => holdings({ action: 'add', symbol: $('h-sym').value.trim().toUpperCase(), amount: $('h-amt').value, sector: $('h-sec').value });
+$('h-add').onclick = () => holdings({ action: 'add', symbol: $('h-sym').value.trim().toUpperCase(), amount: $('h-amt').value,
+  avg_price: $('h-avg').value, sector: $('h-sec').value });
 
 $('run').onclick = async () => {
   const body = { symbol: $('f-sym').value.trim().toUpperCase(), amount: $('f-amt').value, months: $('f-mon').value,

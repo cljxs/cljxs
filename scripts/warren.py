@@ -814,6 +814,32 @@ def comparison(n, peers):
                                 for c in cols] for label, k, unit in keys]}
 
 
+def position(holding, price, amount=0):
+    """What you already own of this stock, from the holdings list: your
+    average price paid is your breakeven (before any trading fees), and
+    buying `amount` more at `price` moves it. Code's arithmetic, not a
+    model's (owner, 2026-11-19)."""
+    if not holding:
+        return None
+    paid = float(holding.get("amount") or 0)
+    avg = holding.get("avg_price")
+    out = {"amount": r2(paid), "avg_price": avg, "breakeven": avg}
+    if not avg or avg <= 0:
+        return out
+    shares = paid / avg
+    out["shares"] = round(shares, 4)
+    if price:
+        out["price"] = price
+        out["value"] = r2(shares * price)
+        out["gain"] = r2(shares * price - paid)
+        out["gain_pct"] = r1(100 * (price / avg - 1))
+        if amount:
+            more = amount / price
+            out["after"] = {"shares": round(shares + more, 4), "paid": r2(paid + amount),
+                            "breakeven": r2((paid + amount) / (shares + more))}
+    return out
+
+
 def concentration(holdings, symbol, amount, sector):
     """This stock's and this sector's share of everything after the buy. With
     no other holdings recorded there is nothing to measure against."""
@@ -1035,6 +1061,8 @@ def build(symbol, inputs, get=None, ask=None, peer_numbers=None):
             "peers": [{k: p.get(k) for k in ("symbol", "company", "pe_forward", "peg", "ps", "ev_ebitda", "yield", "leverage",
                                              "margin_ttm", "change_1y")} for p in peers],
             "ai": ai, "ai_note": ai_note, "steps": steps, "decision": decision, "decision_why": why, "decision_reasons": red_reasons(steps),
+            "position": position(next((h for h in holdings() if h.get("symbol") == sym), None), n.get("price"),
+                                 float(inputs["amount"])),
             "data_filed": n.get("data_filed"),
             "sources": {"sec": FACTS_URL.format(cik=n["cik"]), "price": CHART_URL.format(sym=sym),
                         "nasdaq": SUMMARY_URL.format(sym=sym), "forecast": FORECAST_URL.format(sym=sym)}}
@@ -1106,7 +1134,12 @@ def cmd_deck(a):
                              "when_utc": c["when_utc"], "decision": c["decision"], "ratings": ratings(c),
                              "amount": (c.get("inputs") or {}).get("amount"), "changes": c.get("changes") or []})
     rows.sort(key=lambda r: r["when_utc"], reverse=True)
-    print(json.dumps({"checks": rows, "holdings": holdings(), "runs_today": runs_today(),
+    held = []
+    for h in holdings():
+        c = latest(h["symbol"]) or {}
+        price = (c.get("numbers") or {}).get("price")
+        held.append({**h, "position": position(h, price), "price_as_of": (c.get("numbers") or {}).get("as_of")})
+    print(json.dumps({"checks": rows, "holdings": held, "runs_today": runs_today(),
                       "runs_per_day": RUNS_PER_DAY, "sectors": SECTORS,
                       "rechecks": (read_json(RECHECKS, []) or [])[-20:]}))
     return 0
@@ -1117,12 +1150,19 @@ def cmd_holdings(a):
     sym = a.symbol.upper()
     if not SYMBOL_RE.match(sym):
         raise SystemExit("a ticker is letters, like KMI")
+    old = next((h for h in hs if h["symbol"] == sym), {})
     hs = [h for h in hs if h["symbol"] != sym]
     if a.action == "add":
-        sector = a.sector or ((latest(sym) or {}).get("sector"))
+        sector = a.sector or old.get("sector") or ((latest(sym) or {}).get("sector"))
         if sector not in SECTORS:
             raise SystemExit(f"which sector is {sym}? one of: {', '.join(SECTORS)}")
-        hs.append({"symbol": sym, "amount": round(float(a.amount or 0), 2), "sector": sector})
+        h = {"symbol": sym, "amount": round(float(a.amount or 0), 2), "sector": sector}
+        avg = a.avg_price if a.avg_price is not None else old.get("avg_price")   # an update keeps the price it had
+        if avg is not None:
+            if not 0 < avg < 1e6:
+                raise SystemExit("the average price paid is a dollar amount per share, like 27.50")
+            h["avg_price"] = round(float(avg), 4)
+        hs.append(h)
     write_json(HOLDINGS, {"holdings": sorted(hs, key=lambda h: h["symbol"])})
     print(json.dumps({"holdings": sorted(hs, key=lambda h: h["symbol"])}))
     return 0
@@ -1207,6 +1247,7 @@ def main(argv=None):
     h.add_argument("symbol")
     h.add_argument("amount", nargs="?", type=float)
     h.add_argument("--sector")
+    h.add_argument("--avg-price", type=float, help="average price paid per share: your breakeven")
     h.set_defaults(fn=cmd_holdings)
     sub.add_parser("recheck").set_defaults(fn=cmd_recheck)
     so = sub.add_parser("sources")

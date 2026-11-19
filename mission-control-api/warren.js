@@ -91,6 +91,11 @@ function register(app) {
       if (amount === null) return res.status(400).json({ error: 'how much is in it?' });
       args.push(String(amount));
       if (b.sector) args.push(`--sector=${String(b.sector).slice(0, 40)}`);
+      if (b.avg_price !== undefined && b.avg_price !== '' && b.avg_price !== null) {
+        const avg = num(b.avg_price, 0.0001, 999999);
+        if (avg === null) return res.status(400).json({ error: 'the average price paid is a dollar amount per share, like 27.50' });
+        args.push(`--avg-price=${avg}`);
+      }
     }
     const r = await python(args);
     if (!r.ok) return res.status(409).json({ ok: false, error: said(r) });

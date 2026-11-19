@@ -303,6 +303,48 @@ class ALossMakerIsPricedOnSales(Base):
         self.assertNotIn("dividend", why)
 
 
+class YourBreakeven(Base):
+    """The owner asked (2026-11-19): add the average price paid, so Warren
+    knows the breakeven. The arithmetic is code's, checked by hand here."""
+
+    def test_breakeven_gain_and_the_new_average_after_buying_more(self):
+        p = self.w.position({"symbol": "KMI", "amount": 100, "avg_price": 20}, 25, 50)
+        self.assertEqual((p["breakeven"], p["shares"], p["value"], p["gain"], p["gain_pct"]), (20, 5, 125, 25, 25.0))
+        # 5 shares for $100, then 2 more for $50: 7 shares for $150 -> $21.43 each
+        self.assertEqual(p["after"], {"shares": 7, "paid": 150, "breakeven": 21.43})
+
+    def test_a_loss_is_negative_and_buying_lower_brings_breakeven_down(self):
+        p = self.w.position({"amount": 100, "avg_price": 20}, 15, 60)
+        self.assertEqual((p["gain"], p["gain_pct"]), (-25, -25.0))
+        self.assertEqual(p["after"]["breakeven"], 17.78)       # 9 shares for $160
+
+    def test_no_price_paid_means_no_breakeven_not_a_guess(self):
+        p = self.w.position({"amount": 100}, 25, 50)
+        self.assertEqual(p, {"amount": 100, "avg_price": None, "breakeven": None})
+        self.assertIsNone(self.w.position(None, 25))
+
+    def run_cli(self, *args):
+        return subprocess.run([sys.executable, str(ROOT / "scripts" / "warren.py"), "holdings", *args],
+                              capture_output=True, text=True, env={**os.environ, "ECOSYSTEM_ROOT": self.tmp.name}, timeout=60)
+
+    def test_updating_the_amount_keeps_the_price_paid(self):
+        self.run_cli("add", "KMI", "100", "--sector=Energy", "--avg-price=20")
+        r = self.run_cli("add", "KMI", "150")
+        h = json.loads(r.stdout)["holdings"][0]
+        self.assertEqual((h["amount"], h["avg_price"], h["sector"]), (150, 20, "Energy"))
+        self.assertEqual(self.run_cli("add", "KMI", "150", "--avg-price=0").returncode, 1)
+
+    def test_a_check_of_a_stock_you_own_shows_your_position(self):
+        self.w.write_json(self.w.HOLDINGS, {"holdings": [{"symbol": "KMI", "amount": 100, "sector": "Energy", "avg_price": 25}]})
+        c = self.w.build("KMI", {"amount": 50, "months": 12, "goal": "both", "why": "", "hold_drop": "yes"},
+                         get, lambda q: (True, json.dumps(ANSWER)), lambda p, g, t: 1 / 0)
+        price = c["numbers"]["price"]
+        self.assertEqual(c["position"]["breakeven"], 25)
+        self.assertAlmostEqual(c["position"]["gain"], 100 * price / 25 - 100, places=1)
+        self.assertIsNone(self.w.build("HIMS", {"amount": 50, "months": 12, "goal": "both", "why": "", "hold_drop": "yes"},
+                                       get, lambda q: (True, json.dumps(ANSWER)), lambda p, g, t: 1 / 0)["position"])
+
+
 class TheSitesSayWhoRefused(Base):
     """The first live check (HIMS, 2026-11-19) died on a bare 'HTTP Error
     403: Forbidden' traceback: the SEC refuses a User-Agent with no contact
@@ -439,7 +481,8 @@ class ThePageAndTheApi(Base):
             "out.badcheck=await go('POST','/api/warren/check',{symbol:'../etc',amount:5,months:3});"
             "out.noamount=await go('POST','/api/warren/check',{symbol:'KMI',months:3});"
             "out.nosector=await go('POST','/api/warren/holdings',{action:'add',symbol:'KMI',amount:125});"
-            "out.add=await go('POST','/api/warren/holdings',{action:'add',symbol:'kmi',amount:125,sector:'Energy'});"
+            "out.add=await go('POST','/api/warren/holdings',{action:'add',symbol:'kmi',amount:125,sector:'Energy',avg_price:'27.5'});"
+            "out.badavg=await go('POST','/api/warren/holdings',{action:'add',symbol:'KMI',amount:125,avg_price:-3});"
             "out.deck=await go('GET','/api/warren');"
             "out.rm=await go('POST','/api/warren/holdings',{action:'remove',symbol:'KMI'});"
             "out.show=await go('GET','/api/warren/check/KMI');"
@@ -454,7 +497,11 @@ class ThePageAndTheApi(Base):
         self.assertEqual(out["add"][0], 200, out["add"])
         deck = json.loads(out["deck"][1])
         self.assertTrue(deck["ok"], deck)
-        self.assertEqual(deck["holdings"], [{"symbol": "KMI", "amount": 125.0, "sector": "Energy"}])
+        self.assertEqual(out["badavg"][0], 400, "a negative price never reaches the command line")
+        h = deck["holdings"][0]
+        self.assertEqual({k: h[k] for k in ("symbol", "amount", "sector", "avg_price")},
+                         {"symbol": "KMI", "amount": 125.0, "sector": "Energy", "avg_price": 27.5})
+        self.assertEqual(h["position"]["breakeven"], 27.5)
         self.assertEqual(json.loads(out["rm"][1])["holdings"], [])
         self.assertEqual(out["show"][0], 404)
 
