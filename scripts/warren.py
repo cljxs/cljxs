@@ -137,16 +137,31 @@ def _load(name, file):
     return mod
 
 
-def http_get(url, ua=None):
+def http_get(url, ua=None, headers=None):
     """Belfort's fetcher - its retries and rate-limit wait - not a second one."""
-    return _load("belfort_fetch_for_warren", "belfort-fetch.py").http_get(url, ua=ua)
+    return _load("belfort_fetch_for_warren", "belfort-fetch.py").http_get(url, ua=ua, headers=headers)
+
+
+# Nasdaq's API turns away a request that does not look like its own web page
+# asking: the droplet's first `warren.py sources` (2026-11-19) failed both
+# Nasdaq lines with Belfort's plain User-Agent. These are the headers
+# nasdaq.com's own pages send. No Accept-Encoding: urllib does not unzip.
+NASDAQ_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Origin": "https://www.nasdaq.com",
+    "Referer": "https://www.nasdaq.com/",
+}
 
 
 def get_json(url, get=None):
     sec = "sec.gov" in url
     ua = sec_ua() if sec and get is None else None
+    headers = NASDAQ_HEADERS if "nasdaq.com" in url else None
     try:
-        raw = (get or http_get)(url, ua=ua)
+        raw = (get or http_get)(url, ua=ua, headers=headers)
     except urllib.error.HTTPError as e:
         why = {403: "refused the request", 404: "has no such page", 429: "said too many requests"}
         raise FetchError(f"{site_of(url)} {why.get(e.code, 'answered an error')} (HTTP {e.code})") from e

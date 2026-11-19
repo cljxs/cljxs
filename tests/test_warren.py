@@ -36,7 +36,7 @@ def fx(name):
     return (FIX / name).read_text()
 
 
-def get(url, ua=None):
+def get(url, ua=None, headers=None):
     if "company_tickers" in url:
         return fx("warren-sec-company-tickers.json")
     if "companyfacts/CIK0001506307" in url:
@@ -251,7 +251,7 @@ class TheSitesSayWhoRefused(Base):
     def test_a_403_names_the_site(self):
         import urllib.error
 
-        def refuse(url, ua=None):
+        def refuse(url, ua=None, headers=None):
             raise urllib.error.HTTPError(url, 403, "Forbidden", {}, None)
         with self.assertRaises(self.w.FetchError) as e:
             self.w.get_json("https://data.sec.gov/api/xbrl/companyfacts/CIK0001506307.json", refuse)
@@ -265,11 +265,46 @@ class TheSitesSayWhoRefused(Base):
         self.assertNotIn("Traceback", r.stderr)
         self.assertIn("sec-contact", r.stderr)
 
+    def test_nasdaq_is_asked_as_its_own_page_would_ask(self):
+        # The droplet's Nasdaq lines failed with Belfort's plain User-Agent.
+        seen = {}
+
+        def record(url, ua=None, headers=None):
+            seen[url.split("/")[2]] = headers or {}
+            return get(url, ua)
+        self.w.get_json(self.w.SUMMARY_URL.format(sym="KMI"), record)
+        self.w.get_json(self.w.CHART_URL.format(sym="KMI"), record)
+        nas = seen["api.nasdaq.com"]
+        self.assertTrue(nas["User-Agent"].startswith("Mozilla/5.0 ("))
+        self.assertEqual(nas["Origin"], "https://www.nasdaq.com")
+        self.assertNotIn("Accept-Encoding", nas, "urllib would hand back gzip bytes")
+        self.assertEqual(seen["query1.finance.yahoo.com"], {}, "Yahoo keeps Belfort's working request")
+
+    def test_belforts_fetcher_sends_the_extra_headers(self):
+        bf = self.w._load("bf_headers_t", "belfort-fetch.py")
+        sent = {}
+
+        class R:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return b"{}"
+
+        def fake_open(req, timeout=None, context=None):
+            sent.update(req.headers)
+            return R()
+        bf.urllib.request.urlopen, real = fake_open, bf.urllib.request.urlopen
+        try:
+            bf.http_get("https://api.nasdaq.com/x", headers={"Origin": "https://www.nasdaq.com"})
+        finally:
+            bf.urllib.request.urlopen = real
+        self.assertEqual(sent.get("Origin"), "https://www.nasdaq.com")
+        self.assertIn("belfort-fetch", sent.get("User-agent", ""))
+
     def test_sources_says_which_site_answers(self):
         import io
         from contextlib import redirect_stdout
 
-        def no_nasdaq(url, ua=None):
+        def no_nasdaq(url, ua=None, headers=None):
             if "nasdaq" in url:
                 raise IOError("blocked")
             return get(url, ua)

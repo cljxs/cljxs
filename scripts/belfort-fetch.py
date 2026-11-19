@@ -100,11 +100,14 @@ def log(msg):
     print(f"[belfort-fetch {datetime.now(timezone.utc):%H:%M:%S}] {msg}", flush=True)
 
 
-def http_get(url, retries=2, ua=None):
+def http_get(url, retries=2, ua=None, headers=None):
+    """`headers` adds to (or replaces) the two defaults - Warren's Nasdaq
+    requests need a browser's (2026-11-19)."""
     last = None
     for attempt in range(retries + 1):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": ua or UA, "Accept": "application/json, */*"})
+            req = urllib.request.Request(url, headers={"User-Agent": ua or UA, "Accept": "application/json, */*",
+                                                       **(headers or {})})
             ctx = ssl.create_default_context()
             with urllib.request.urlopen(req, timeout=TIMEOUT, context=ctx) as r:
                 return r.read()
