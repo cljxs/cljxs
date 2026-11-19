@@ -31,6 +31,7 @@ import os
 import re
 import sys
 import time
+import urllib.error
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -52,7 +53,25 @@ RECHECKS = STATE / "rechecks.json"
 RUNS_PER_DAY = 10
 ASK_TIMEOUT = 600
 
-SEC_UA = os.environ.get("WARREN_SEC_UA", "cljxs-ecosystem warren stock checklist (github.com/cljxs)")
+# The SEC refuses (403) any request whose User-Agent lacks a name and a
+# contact email - its fair-access rule. The first live check (HIMS,
+# 2026-11-19) was refused for exactly that. The owner's contact is his to
+# set, never in the code: WARREN_SEC_UA, or one line in this file.
+SEC_CONTACT = STATE / "sec-contact"
+SEC_HELP = ("the SEC needs a contact email before it will answer. Set it once on the droplet: "
+            "echo you@example.com > agents/warren/state/sec-contact")
+
+
+def sec_ua():
+    if os.environ.get("WARREN_SEC_UA"):
+        return os.environ["WARREN_SEC_UA"]
+    try:
+        contact = SEC_CONTACT.read_text().strip()
+    except OSError:
+        contact = ""
+    if "@" not in contact or " " in contact:
+        raise FetchError(SEC_HELP)
+    return f"cljxs-ecosystem warren {contact}"
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
 CONCEPT_URL = "https://data.sec.gov/api/xbrl/companyconcept/CIK{cik:010d}/us-gaap/{tag}.json"
@@ -100,6 +119,17 @@ DEBT_TAGS = ("LongTermDebtNoncurrent", "DebtCurrent", "LongTermDebtCurrent", "Lo
 
 # --------------------------------------------------------------- plumbing
 
+SITES = {"sec.gov": "the SEC", "yahoo.com": "Yahoo", "nasdaq.com": "Nasdaq"}
+
+
+class FetchError(Exception):
+    """A data site refused or failed - said in one line, naming the site."""
+
+
+def site_of(url):
+    return next((name for host, name in SITES.items() if host in url), url.split("/")[2])
+
+
 def _load(name, file):
     spec = importlib.util.spec_from_file_location(name, SCRIPTS / file)
     mod = importlib.util.module_from_spec(spec)
@@ -114,7 +144,14 @@ def http_get(url, ua=None):
 
 def get_json(url, get=None):
     sec = "sec.gov" in url
-    raw = (get or http_get)(url, ua=SEC_UA if sec else None)
+    ua = sec_ua() if sec and get is None else None
+    try:
+        raw = (get or http_get)(url, ua=ua)
+    except urllib.error.HTTPError as e:
+        why = {403: "refused the request", 404: "has no such page", 429: "said too many requests"}
+        raise FetchError(f"{site_of(url)} {why.get(e.code, 'answered an error')} (HTTP {e.code})") from e
+    except OSError as e:
+        raise FetchError(f"could not reach {site_of(url)} ({e})") from e
     if sec:
         time.sleep(0.15)   # SEC asks for under 10 requests a second
     return json.loads(raw)
@@ -1016,6 +1053,28 @@ def cmd_recheck(a):
     return 0
 
 
+def cmd_sources(a, get=None):
+    """Can this machine read each of Warren's sites? One line each - free,
+    no model woken. The question a 403 on the page leaves open."""
+    sym = a.symbol.upper()
+    tries = [("SEC company list", TICKERS_URL), ("Yahoo price chart", CHART_URL.format(sym=sym)),
+             ("Nasdaq summary (optional)", SUMMARY_URL.format(sym=sym)),
+             ("Nasdaq forecasts (optional)", FORECAST_URL.format(sym=sym))]
+    bad = 0
+    for i, (what, url) in enumerate(tries):
+        try:
+            d = get_json(url, get)
+            if i == 0:
+                cik, _ = cik_for(sym, d)
+                if cik:
+                    tries.insert(1, ("SEC filings", FACTS_URL.format(cik=cik)))
+            print(f"OK    {what}")
+        except Exception as e:
+            bad += 0 if "optional" in what else 1
+            print(f"FAIL  {what}: {e}")
+    return 1 if bad else 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1038,8 +1097,15 @@ def main(argv=None):
     h.add_argument("--sector")
     h.set_defaults(fn=cmd_holdings)
     sub.add_parser("recheck").set_defaults(fn=cmd_recheck)
+    so = sub.add_parser("sources")
+    so.add_argument("symbol", nargs="?", default="KMI")
+    so.set_defaults(fn=cmd_sources)
     a = p.parse_args(argv)
-    return a.fn(a)
+    try:
+        return a.fn(a)
+    except (FetchError, LookupError) as e:
+        print(f"{e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

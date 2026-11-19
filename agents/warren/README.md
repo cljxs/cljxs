@@ -20,3 +20,13 @@ Then the checklist's decision rule: Skip / Wait / Buy.
     state/cache/                         SEC files, kept for hours, not committed
 
 Code: scripts/warren.py. Page: /warren (the Deck), Warren's house in the village.
+
+## Setting up on the droplet (once)
+
+The SEC refuses any request without a contact email in it. Set yours once:
+
+    echo you@example.com > agents/warren/state/sec-contact
+
+Then check every data site from this machine (free, no model):
+
+    python3 scripts/warren.py sources

@@ -227,6 +227,61 @@ class AWholeCheck(Base):
         self.assertEqual(self.w.latest("kmi")["symbol"], "KMI")
 
 
+class TheSitesSayWhoRefused(Base):
+    """The first live check (HIMS, 2026-11-19) died on a bare 'HTTP Error
+    403: Forbidden' traceback: the SEC refuses a User-Agent with no contact
+    email, and the page could not say which site had refused."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ.pop("WARREN_SEC_UA", None)
+
+    def test_no_contact_set_says_how_to_set_one(self):
+        with self.assertRaises(self.w.FetchError) as e:
+            self.w.sec_ua()
+        self.assertIn("sec-contact", str(e.exception))
+
+    def test_the_contact_goes_in_the_sec_user_agent(self):
+        self.w.SEC_CONTACT.parent.mkdir(parents=True)
+        self.w.SEC_CONTACT.write_text("owner@example.com\n")
+        self.assertEqual(self.w.sec_ua(), "cljxs-ecosystem warren owner@example.com")
+        self.w.SEC_CONTACT.write_text("not an address\n")
+        self.assertRaises(self.w.FetchError, self.w.sec_ua)
+
+    def test_a_403_names_the_site(self):
+        import urllib.error
+
+        def refuse(url, ua=None):
+            raise urllib.error.HTTPError(url, 403, "Forbidden", {}, None)
+        with self.assertRaises(self.w.FetchError) as e:
+            self.w.get_json("https://data.sec.gov/api/xbrl/companyfacts/CIK0001506307.json", refuse)
+        self.assertEqual(str(e.exception), "the SEC refused the request (HTTP 403)")
+
+    def test_the_command_prints_one_line_not_a_traceback(self):
+        r = subprocess.run([sys.executable, str(ROOT / "scripts" / "warren.py"), "check", "KMI",
+                            "--amount", "100", "--months", "12"], capture_output=True, text=True,
+                           env={**os.environ, "ECOSYSTEM_ROOT": self.tmp.name}, timeout=60)
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("sec-contact", r.stderr)
+
+    def test_sources_says_which_site_answers(self):
+        import io
+        from contextlib import redirect_stdout
+
+        def no_nasdaq(url, ua=None):
+            if "nasdaq" in url:
+                raise IOError("blocked")
+            return get(url, ua)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = self.w.cmd_sources(type("A", (), {"symbol": "kmi"})(), no_nasdaq)
+        lines = out.getvalue().splitlines()
+        self.assertEqual(code, 0, "Nasdaq is optional")
+        self.assertEqual([l.split()[0] for l in lines], ["OK", "OK", "OK", "FAIL", "FAIL"])
+        self.assertIn("SEC filings", lines[1])
+
+
 class TheSecretScanReadsTheFixtures(Base):
 
     def test_an_xbrl_tag_is_not_a_token_but_a_token_still_is(self):
