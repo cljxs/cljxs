@@ -43,6 +43,11 @@ def get(url, ua=None, headers=None):
         return fx("warren-sec-companyfacts-kmi.json")
     if "companyfacts/CIK0000320193" in url:
         return fx("warren-sec-companyfacts-aapl.json")
+    if "companyfacts/CIK0001773751" in url:
+        return fx("warren-sec-companyfacts-hims.json")
+    if "HIMS" in url.upper() and "sec.gov" not in url:
+        kind = "yahoo-chart" if "/chart/" in url else "nasdaq-summary" if "/summary" in url else "nasdaq-forecast"
+        return fx(f"warren-{kind}-hims.json")
     if "/chart/" in url:
         return fx("warren-yahoo-chart-kmi-divs.json")
     if "/summary" in url:
@@ -225,6 +230,77 @@ class AWholeCheck(Base):
         self.assertEqual(c["steps"]["debt"]["quick_test"], "$3.31B")
         self.w.save(c)
         self.assertEqual(self.w.latest("kmi")["symbol"], "KMI")
+
+
+class ALossMakerIsPricedOnSales(Base):
+    """The first live check, HIMS (2026-11-19): losing money, all its debt in
+    convertible notes. Warren read the notes as no debt at all, said the debt
+    "did not grow" after it borrowed $970M, tried a P/E on a loss, and showed
+    Reds with no reason. Real SEC, Yahoo and Nasdaq captures for HIMS."""
+
+    def setUp(self):
+        super().setUp()
+        self.n = self.w.numbers("HIMS", get)
+
+    def test_convertible_notes_are_debt(self):
+        self.assertEqual((self.n["company"], self.n["price"]), ("Hims & Hers Health, Inc.", 16.51), "HIMS's own chart")
+        self.assertEqual((self.n["debt"], self.n["debt_as_of"]), (1367393000, "2026-09-30"))
+        self.assertEqual(self.n["debt_year_ago"], 971023000)
+        self.assertEqual(self.n["fy"]["net_borrowing"], 970000000)
+
+    def test_a_company_with_a_loan_and_a_profit_still_reads_its_loan_first(self):
+        # KMI reports LongTermDebt; its components must not be added twice.
+        k = self.w.numbers("KMI", get)
+        self.assertNotIn("Convertible", json.dumps({t: 1 for t in self.kmi["facts"]["us-gaap"]}))
+        self.assertGreater(k["debt"], 0)
+
+    def test_a_loss_is_priced_on_sales_not_earnings(self):
+        self.assertTrue(self.n["unprofitable"])
+        self.assertIsNone(self.n["pe_forward"])
+        self.assertEqual(self.n["ps"], 1.35)          # Nasdaq market cap / revenue, last 12 months
+        p = self.w.rate_price(self.n, [{"symbol": "X", "ps": 1.0}], "Health Care", False)
+        checks = {r["check"]: r for r in p["rows"]}
+        self.assertNotIn("Forward P/E", checks)
+        self.assertEqual(checks["Price/Sales (P/S)"]["rating"], "Red", "35% dearer than the rival")
+        self.assertIn("not making a profit", checks["Price/Sales (P/S)"]["why"])
+        self.assertEqual(checks["PEG"]["rating"], "n/a")
+        self.assertEqual(checks["EV/EBITDA"]["rating"], "n/a")
+        self.assertIn("P/S", [r[0] for r in p["table"]["rows"]])
+
+    def test_a_profit_is_still_priced_on_earnings(self):
+        k = self.w.numbers("KMI", get)
+        self.assertFalse(k["unprofitable"])
+        rows = [r["check"] for r in self.w.rate_price(k, [], "Energy", False)["rows"]]
+        self.assertIn("Forward P/E", rows)
+        self.assertNotIn("Price/Sales (P/S)", rows)
+
+    def test_debt_with_negative_earnings_is_red_not_unknown(self):
+        self.assertIsNone(self.n["leverage"], "a negative EBITDA makes a negative ratio, not a low one")
+        lev = self.w.rate_debt(self.n)["rows"][0]
+        self.assertEqual(lev["rating"], "Red")
+        self.assertIn("negative", lev["why"])
+
+    def test_every_row_that_is_not_green_says_why(self):
+        for sym in ("HIMS", "KMI"):
+            n = self.n if sym == "HIMS" else self.w.numbers("KMI", get)
+            conc = {"stock_pct": 60, "sector_pct": 70, "total": 1000}
+            steps = {"growth": self.w.rate_growth(n, ANSWER), "cash": self.w.rate_cash(n), "debt": self.w.rate_debt(n),
+                     "price": self.w.rate_price(n, [], "Energy", False),
+                     "risk": self.w.rate_risk({}, conc, {"hold_drop": "no"}, "Energy")}
+            for k, st in steps.items():
+                for r in st["rows"]:
+                    if r["rating"] != "Green":
+                        self.assertTrue(r["why"], f"{sym} {k}: {r['check']} is {r['rating']} with no reason")
+
+    def test_the_decision_names_its_reasons(self):
+        c = self.w.build("HIMS", {"amount": 150, "months": 8, "goal": "growth", "why": "", "hold_drop": "yes"},
+                         get, lambda q: (True, json.dumps(ANSWER)), lambda p, g, t: 1 / 0)
+        self.assertEqual(c["decision"], "Skip")
+        self.assertIn("Step 4 (debt) - Leverage (net debt / EBITDA): it owes more than it holds in cash",
+                      "\n".join(c["decision_reasons"]))
+        self.assertNotIn("dividend", c["decision_why"], "HIMS pays no dividend")
+        why = c["steps"]["debt"]["rows"][-1]["why"]
+        self.assertNotIn("dividend", why)
 
 
 class TheSitesSayWhoRefused(Base):

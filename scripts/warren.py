@@ -108,13 +108,17 @@ TAGS = {
             "DepreciationAmortizationAndAccretionNet"),
     "interest": ("InterestExpense", "InterestExpenseNonoperating", "InterestExpenseDebt",
                  "InterestIncomeExpenseNonoperatingNet", "InterestPaidNet"),
-    "debt_issued": ("ProceedsFromIssuanceOfLongTermDebt", "ProceedsFromIssuanceOfDebt"),
+    "debt_issued": ("ProceedsFromIssuanceOfLongTermDebt", "ProceedsFromIssuanceOfDebt",
+                    "ProceedsFromIssuanceOfSeniorLongTermDebt", "ProceedsFromConvertibleDebt"),
     "debt_repaid": ("RepaymentsOfLongTermDebt", "RepaymentsOfDebt"),
     "dps": ("CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid"),
 }
 OUTFLOWS = {"capex", "dividends", "buybacks", "debt_repaid"}
 DEBT_TAGS = ("LongTermDebtNoncurrent", "DebtCurrent", "LongTermDebtCurrent", "LongTermDebt",
-             "CommercialPaper", "ShortTermBorrowings")
+             "CommercialPaper", "ShortTermBorrowings",
+             # A company whose only debt is convertible notes tags nothing
+             # above: HIMS's $1.37B (2026-11-19) read as "no debt".
+             "ConvertibleDebtNoncurrent", "ConvertibleDebtCurrent", "ConvertibleNotesPayable")
 
 
 # --------------------------------------------------------------- plumbing
@@ -360,6 +364,10 @@ def debt_at(facts):
             out[end] = g("LongTermDebtNoncurrent") + cur
         elif g("LongTermDebt") is not None:
             out[end] = g("LongTermDebt") + (g("CommercialPaper") or 0) + (g("ShortTermBorrowings") or 0)
+        elif g("ConvertibleDebtNoncurrent") is not None or g("ConvertibleDebtCurrent") is not None:
+            out[end] = (g("ConvertibleDebtNoncurrent") or 0) + (g("ConvertibleDebtCurrent") or 0) + (g("ShortTermBorrowings") or 0)
+        elif g("ConvertibleNotesPayable") is not None:
+            out[end] = g("ConvertibleNotesPayable") + (g("ShortTermBorrowings") or 0)
     return dict(sorted(out.items()))
 
 
@@ -504,12 +512,18 @@ def derive(n):
     op, dna = g("op_income_ttm"), g("dna_ttm")
     n["ebitda_ttm"] = op + dna if op is not None and dna is not None else None
     n["net_debt"] = g("debt") - (g("cash") or 0) if g("debt") is not None else None
-    n["leverage"] = r1(n["net_debt"] / n["ebitda_ttm"]) if n["net_debt"] is not None and n["ebitda_ttm"] else None
+    n["leverage"] = (r1(n["net_debt"] / n["ebitda_ttm"]) if n["net_debt"] is not None and n["ebitda_ttm"]
+                     and n["ebitda_ttm"] > 0 else None)
     it = g("interest_ttm")
     n["interest_cover"] = r1(op / it) if op is not None and it else None
     n["ev"] = g("market_cap") + n["net_debt"] if g("market_cap") and n["net_debt"] is not None else g("market_cap")
     n["ev_ebitda"] = r1(n["ev"] / n["ebitda_ttm"]) if n["ev"] and n["ebitda_ttm"] and n["ebitda_ttm"] > 0 else None
+    rev_ok = rev is not None and rev > 0
+    n["ps"] = r2(g("market_cap") / rev) if g("market_cap") and rev_ok else None
     eps_ntm = g("eps_ntm")
+    # Losing money now, or expected to over the next year: P/E means nothing,
+    # and Step 5 prices it on sales.
+    n["unprofitable"] = (ni is not None and ni <= 0) or (eps_ntm is not None and eps_ntm <= 0)
     n["pe_forward"] = r1(g("price") / eps_ntm) if eps_ntm and eps_ntm > 0 and g("price") else None
     gr = g("eps_growth")
     n["peg"] = r2(n["pe_forward"] / gr) if n["pe_forward"] and gr and gr > 0 else None
@@ -568,7 +582,8 @@ def rate_business(ai):
 
 def rate_growth(n, ai):
     """The last three fiscal years (and the last twelve months), as the
-    checklist asks - not every year the filings happen to carry."""
+    checklist asks - not every year the filings happen to carry. Every row
+    that is not Green says why, in words (owner, 2026-11-19)."""
     ry, ey, my = (n.get(k) or [] for k in ("revenue_years", "eps_years", "margin_years"))
     ry, ey, my = ry[-3:], ey[-3:], my[-3:]
     rev = [v for _, v in ry] + ([n["revenue_ttm"]] if n.get("revenue_ttm") else [])
@@ -576,16 +591,28 @@ def rate_growth(n, ai):
     mar = [v for _, v in my] + ([n["margin_ttm"]] if n.get("margin_ttm") is not None else [])
     def r(t):
         return {"up": GREEN, "down": RED}.get(t, YELLOW)
-    eps_t = trend(eps)
+    def why(t, what):
+        return {None: f"not enough years of {what} reported to see a trend",
+                "down": f"{what} fell two periods in a row",
+                "flat": f"{what} went up and down - no clear trend"}.get(t, "")
+    rev_t, eps_t, mar_t = trend(rev), trend(eps), trend(mar)
+    eps_why = why(eps_t, "earnings per share")
     if eps and eps[-1] is not None and eps[-1] < 0:
-        eps_t = "down"
-    rows = [row("Revenue, last 3 years", yrs(ry) + (f"; {money(n['revenue_ttm'])} last 12 months" if n.get("revenue_ttm") else ""), r(trend(rev))),
-            row("EPS, last 3 years", yrs(ey, lambda v: f"${v:.2f}"), r(eps_t)),
+        eps_t, eps_why = "down", "the latest year lost money"
+    mar_why = why(mar_t, "profit margin")
+    if mar and mar[-1] is not None and mar[-1] < 0:
+        mar_t = "down"
+        mar_why = "it lost money over the last 12 months" + (" - " + mar_why if mar_why and trend(mar) == "down" else "")
+    rows = [row("Revenue, last 3 years", yrs(ry) + (f"; {money(n['revenue_ttm'])} last 12 months" if n.get("revenue_ttm") else ""),
+                r(rev_t), why(rev_t, "revenue")),
+            row("EPS, last 3 years", yrs(ey, lambda v: f"${v:.2f}"), r(eps_t), eps_why),
             row("Profit margin", yrs(my, lambda v: f"{v}%") + (f"; {n['margin_ttm']}% last 12 months" if n.get("margin_ttm") is not None else ""),
-                {"up": GREEN, "down": RED}.get(trend(mar), YELLOW))]
+                r(mar_t), mar_why)]
     if ai:
         rows.append(row("Did profits jump mainly because of high commodity prices?", ai["commodity_why"],
-                        {"no": GREEN, "partly": YELLOW, "yes": RED}[ai["commodity_boost"]]))
+                        {"no": GREEN, "partly": YELLOW, "yes": RED}[ai["commodity_boost"]],
+                        {"no": "", "partly": "some of the profit rode on high commodity prices, which can fall back",
+                         "yes": "the profit mostly rode on high commodity prices - when they fall, so will it"}[ai["commodity_boost"]]))
     return {"rating": overall(rows), "rows": rows}
 
 
@@ -593,25 +620,34 @@ def rate_cash(n):
     rows = []
     fcf, ocf = n.get("fcf_ttm"), n.get("ocf_ttm")
     if fcf is None:
-        rows.append(row("Free cash flow (last 12 months)", "not reported", YELLOW))
+        rows.append(row("Free cash flow (last 12 months)", "not reported", YELLOW, "its filings did not give the cash figures"))
     elif fcf >= 0:
         rows.append(row("Free cash flow (last 12 months)", money(fcf), GREEN))
     else:
         weak = ocf is None or ocf <= 0 or (n.get("dividends_ttm") or 0) > ocf
         rows.append(row("Free cash flow (last 12 months)", money(fcf), RED if weak else YELLOW,
-                        "operating cash is weak" if weak else "negative from heavy building - Step 4 says whether that is healthy"))
+                        "it spent more cash than it brought in, and its day-to-day business is not making enough"
+                        if weak else "negative from heavy building - Step 4 says whether that is healthy"))
     paid = n.get("dividends_ttm") or 0
     if paid:
         cov = n.get("coverage")
         rows.append(row("Dividend coverage (FCF / dividends paid)", f"{cov}x" if cov is not None else "n/a",
-                        YELLOW if cov is None else GREEN if cov >= 1.5 else RED if cov < 1.0 else YELLOW))
+                        YELLOW if cov is None else GREEN if cov >= 1.5 else RED if cov < 1.0 else YELLOW,
+                        "could not be worked out" if cov is None else "" if cov >= 1.5 else
+                        "free cash flow does not cover the dividend - the gap comes from savings or loans" if cov < 1.0 else
+                        "covered, but with little room to spare (1.5x or more is comfortable)"))
         po = n.get("payout")
         heavy = n.get("_capital_heavy")
-        rows.append(row("Payout ratio", f"{po}% of earnings" if po is not None else "n/a",
-                        YELLOW if po is None else GREEN if po < 60 else (YELLOW if heavy else RED) if po > 90 else YELLOW,
-                        "normal for pipelines, utilities and REITs - trust coverage" if heavy and po and po >= 60 else ""))
+        po_rating = YELLOW if po is None else GREEN if po < 60 else (YELLOW if heavy else RED) if po > 90 else YELLOW
+        po_why = ("normal for pipelines, utilities and REITs - trust coverage" if heavy and po and po >= 60 else
+                  "no profit to pay it from" if po is None else "" if po < 60 else
+                  "it pays out over 90% of its profit - little is left if profits dip" if po > 90 else
+                  "it pays out 60-90% of its profit - fine if profits are steady, tight if not")
+        rows.append(row("Payout ratio", f"{po}% of earnings" if po is not None else "n/a", po_rating, po_why))
         y = n.get("yield") or 0
-        rows.append(row("Dividend yield", f"{y}%", RED if y > 8 else GREEN if 2 <= y <= 5 else YELLOW))
+        rows.append(row("Dividend yield", f"{y}%", RED if y > 8 else GREEN if 2 <= y <= 5 else YELLOW,
+                        "a yield above 8% often means the market expects a cut" if y > 8 else "" if 2 <= y <= 5 else
+                        "under 2% - a small income" if y < 2 else "high - make sure the coverage above holds"))
         dps = [v for _, v in n.get("dps_years") or []]
         if len(dps) >= 2:
             cut = any(b < a - 1e-9 for a, b in zip(dps, dps[1:]))
@@ -621,7 +657,11 @@ def rate_cash(n):
         rows.append(row("Dividend", "pays no dividend", YELLOW, "nothing to cover - judge it on growth"))
     fy = n.get("fcf_yield")
     rows.append(row("FCF yield (FCF / market cap)", f"{fy}%" if fy is not None else "n/a",
-                    YELLOW if fy is None else GREEN if fy >= 5 else RED if fy < 2 else YELLOW))
+                    YELLOW if fy is None else GREEN if fy >= 5 else RED if fy < 2 else YELLOW,
+                    "could not be worked out" if fy is None else "" if fy >= 5 else
+                    f"for every $100 of the company you buy, it makes about ${max(fy, 0):.2f} of free cash a year - "
+                    "the price is high next to the cash it makes (5% or more is good)" if fy < 2 else
+                    "a fair amount of cash for the price, not a bargain (5% or more is good)"))
     return {"rating": overall(rows), "rows": rows}
 
 
@@ -638,31 +678,46 @@ def debt_purpose(n):
         return "own cash", GREEN, "operating cash covered the dividend and the spending, and debt did not grow"
     if borrow > 0 and buy > 0.5 * ocf:
         return "borrowing for buybacks", YELLOW, "debt rose while it spent heavily buying back stock"
+    if borrow > 0 and ocf >= div + capex:
+        return "borrowing to grow", GREEN, (
+            f"its own cash already covered {'the dividend and ' if div else ''}its spending, so the new borrowing "
+            f"({money(borrow)}) went to growth, deals or savings - Warren's note on its debt says which")
     if borrow > 0:
-        return "borrowing to grow", GREEN, "operating cash covered the dividend; new borrowing paid for projects"
+        return "borrowing to grow", GREEN, (("operating cash covered the dividend; " if div else "")
+                                            + "new borrowing paid for the building its own cash could not")
     return "own cash", GREEN, "operating cash and its own savings paid for everything"
 
 
 def rate_debt(n):
     heavy = n.get("_capital_heavy")
     rows = []
-    lev = n.get("leverage")
-    if n.get("net_debt") is not None and n["net_debt"] <= 0:
+    lev, nd, eb = n.get("leverage"), n.get("net_debt"), n.get("ebitda_ttm")
+    if nd is not None and nd <= 0:
         rows.append(row("Leverage (net debt / EBITDA)", "more cash than debt", GREEN))
+    elif nd is not None and eb is not None and eb <= 0:
+        rows.append(row("Leverage (net debt / EBITDA)", f"{money(nd)} net debt, EBITDA {money(eb)}", RED,
+                        "it owes more than it holds in cash, and its earnings (EBITDA) are negative - nothing is paying the debt down"))
     elif lev is None:
-        rows.append(row("Leverage (net debt / EBITDA)", "n/a", YELLOW))
+        rows.append(row("Leverage (net debt / EBITDA)", "n/a", YELLOW,
+                        "no debt was found in its filings" if n.get("debt") is None else "its earnings were not reported"))
     else:
         g, r = (4.5, 5.5) if heavy else (2.0, 3.5)
         rows.append(row("Leverage (net debt / EBITDA)", f"{lev}x", GREEN if lev < g else RED if lev > r else YELLOW,
-                        "normal for its industry is 3.5-5.5x" if heavy else ""))
-    ic = n.get("interest_cover")
+                        ("normal for its industry is 3.5-5.5x; " if heavy else "") +
+                        ("" if lev < g else f"it would take about {lev:.0f} years of earnings to repay its debt"
+                         f" (under {g:g}x is comfortable, over {r:g}x is risky)")))
+    ic, op = n.get("interest_cover"), n.get("op_income_ttm")
     rows.append(row("Interest coverage", f"{ic}x" if ic is not None else "n/a",
-                    YELLOW if ic is None else GREEN if ic > 8 else RED if ic < 3 else YELLOW))
+                    YELLOW if ic is None else GREEN if ic > 8 else RED if ic < 3 else YELLOW,
+                    "no interest expense was reported" if ic is None else "" if ic > 8 else
+                    "its operating profit is negative, so earnings are not covering the interest" if op is not None and op < 0 else
+                    "operating profit covers its interest bill less than 3 times" if ic < 3 else
+                    "operating profit covers its interest 3-8 times - fine, not roomy (over 8x is comfortable)"))
     d0, d1 = n.get("debt"), n.get("debt_year_ago")
     if d0 is not None and d1:
         ch = pct(d0, d1)
         rows.append(row("Total debt vs. a year ago", f"{money(d0)} vs. {money(d1)}", GREEN if ch <= 5 else YELLOW if ch <= 25 else RED,
-                        "" if ch <= 25 else "up a lot - Part B says why"))
+                        "" if ch <= 5 else f"up {ch:.0f}% in a year" + (" - Part B says why" if ch > 25 else "")))
     what, rating, why = debt_purpose(n)
     fy = n.get("fy") or {}
     part_b = [["Operating cash flow", money(fy.get("ocf"))], ["Capital expenditure", money(fy.get("capex"))],
@@ -673,7 +728,8 @@ def rate_debt(n):
     return {"rating": overall(rows), "rows": rows, "part_b": part_b, "year_end": fy.get("year_end"),
             "note": "Leverage here is operating income plus depreciation from the SEC filings; a company's own "
                     "'adjusted EBITDA' usually adds more and shows a lower figure.",
-            "quick_test": money(quick), "quick_test_ok": quick is not None and quick >= 0}
+            "quick_test": money(quick), "quick_test_ok": quick is not None and quick >= 0,
+            "pays_dividend": bool(fy.get("dividends"))}
 
 
 def peer_avg(peers, key):
@@ -682,29 +738,49 @@ def peer_avg(peers, key):
 
 
 def rate_price(n, peers, sector, cyclical):
+    """A company losing money has no P/E worth the name, so it is priced on
+    sales instead - P/S against its rivals' P/S - and PEG, built on P/E, does
+    not apply (owner, 2026-11-19, after HIMS)."""
     rows = []
+    loss = n.get("unprofitable")
     pe, ev, peg = n.get("pe_forward"), n.get("ev_ebitda"), n.get("peg")
-    ape, aev = peer_avg(peers, "pe_forward"), peer_avg(peers, "ev_ebitda")
-    def vs(mine, avg, label):
+    def vs(mine, avg, label, typical=None):
         if mine is None:
-            return row(label, "n/a", YELLOW)
+            return row(label, "n/a", YELLOW, "could not be worked out from the data")
         if avg is None:
-            lo_hi = PE_TYPICAL.get(sector) if label.startswith("Forward") else None
-            if lo_hi:
-                return row(label, f"{mine} (sector normal {lo_hi[0]}-{lo_hi[1]})",
-                           GREEN if mine <= lo_hi[1] else YELLOW if mine <= lo_hi[1] * 1.25 else RED)
-            return row(label, f"{mine} (no peers to compare)", YELLOW)
-        if mine <= avg or (peg is not None and peg < 1.5):
-            r = GREEN
+            if typical:
+                r = GREEN if mine <= typical[1] else YELLOW if mine <= typical[1] * 1.25 else RED
+                return row(label, f"{mine} (sector normal {typical[0]}-{typical[1]})", r,
+                           "" if r == GREEN else f"above the {typical[0]}-{typical[1]} that is normal for its sector")
+            return row(label, f"{mine} (no peers to compare)", YELLOW, "no rival's figure to compare it with")
+        if mine <= avg or (not loss and peg is not None and peg < 1.5):
+            r, why = GREEN, ""
         elif mine <= avg * 1.25:
-            r = YELLOW
+            r, why = YELLOW, f"up to a quarter dearer than its rivals' average of {avg}"
         else:
-            r = RED
-        return row(label, f"{mine} vs. peer average {avg}", r)
-    rows.append(vs(pe, ape, "Forward P/E"))
-    rows.append(vs(ev, aev, "EV/EBITDA"))
-    rows.append(row("PEG", f"{peg}" if peg is not None else "earnings not expected to grow" if n.get("eps_ntm") else "n/a",
-                    GREEN if peg is not None and peg < 1.5 else RED if peg is not None and peg > 2.5 else YELLOW))
+            r, why = RED, f"{pct(mine, avg):.0f}% dearer than its rivals' average of {avg}"
+        return row(label, f"{mine} vs. peer average {avg}", r, why)
+    if loss:
+        ps = vs(n.get("ps"), peer_avg(peers, "ps"), "Price/Sales (P/S)")
+        ps["why"] = ("it is not making a profit, so it is priced on sales instead of earnings"
+                     + ("; " + ps["why"] if ps["why"] else ""))
+        rows.append(ps)
+    else:
+        rows.append(vs(pe, peer_avg(peers, "pe_forward"), "Forward P/E", PE_TYPICAL.get(sector)))
+    if n.get("ebitda_ttm") is not None and n["ebitda_ttm"] <= 0:
+        rows.append(row("EV/EBITDA", "doesn't apply", "n/a", "its EBITDA is negative, so there is nothing to divide by"))
+    else:
+        rows.append(vs(ev, peer_avg(peers, "ev_ebitda"), "EV/EBITDA"))
+    if loss:
+        rows.append(row("PEG", "doesn't apply", "n/a", "PEG is built on P/E, which needs a profit"))
+    else:
+        rows.append(row("PEG", f"{peg}" if peg is not None else "earnings not expected to grow" if n.get("eps_ntm") else "n/a",
+                        GREEN if peg is not None and peg < 1.5 else RED if peg is not None and peg > 2.5 else YELLOW,
+                        "" if peg is not None and peg < 1.5 else
+                        "analysts expect earnings to shrink, so there is no growth to pay for" if peg is None and n.get("eps_ntm") else
+                        "no analyst growth forecast" if peg is None else
+                        "you would pay a lot for its expected growth (under 1.5 is good)" if peg > 2.5 else
+                        "a fair price for its growth, not cheap (under 1.5 is good)"))
     eps = [v for _, v in n.get("eps_years") or []]
     if cyclical and pe is not None and pe < 10 and eps and eps[-1] == max(eps):
         rows.append(row("Cyclical trap?", "a very low P/E at record profits", RED,
@@ -730,7 +806,7 @@ def where(n):
 
 def comparison(n, peers):
     cols = [n] + list(peers)
-    keys = [("Forward P/E", "pe_forward", ""), ("PEG", "peg", ""), ("EV/EBITDA", "ev_ebitda", ""),
+    keys = [("Forward P/E", "pe_forward", ""), ("PEG", "peg", ""), ("P/S", "ps", ""), ("EV/EBITDA", "ev_ebitda", ""),
             ("Dividend yield", "yield", "%"), ("Leverage", "leverage", "x"), ("Profit margin", "margin_ttm", "%"),
             ("1-year price change", "change_1y", "%")]
     return {"columns": [c["symbol"] for c in cols],
@@ -754,29 +830,50 @@ def rate_risk(ai, conc, inputs, sector):
     rows = []
     rules = (ai or {}).get("sell_rules") or []
     rows.append(row("3 things that would make me sell", "listed below" if rules else "write your own three",
-                    GREEN if len(rules) == 3 else YELLOW))
+                    GREEN if len(rules) == 3 else YELLOW, "" if len(rules) == 3 else "Warren could not write three"))
     if conc is None:
-        rows.append(row("How much of my money is in this sector?", "add your holdings to check this", YELLOW))
+        rows.append(row("How much of my money is in this sector?", "add your holdings to check this", YELLOW,
+                        "with no holdings listed, Warren cannot tell how concentrated you would be"))
     else:
         rows.append(row("How much of my money is in this stock?", f"{conc['stock_pct']}% of ${conc['total']:,.0f}",
-                        GREEN if conc["stock_pct"] <= 30 else YELLOW))
+                        GREEN if conc["stock_pct"] <= 30 else YELLOW,
+                        "" if conc["stock_pct"] <= 30 else "more than 30% of your money in one stock"))
         rows.append(row("How much is in this sector?", f"{conc['sector_pct']}% in {sector}",
-                        RED if conc["sector_pct"] > 50 else GREEN))
+                        RED if conc["sector_pct"] > 50 else GREEN,
+                        "more than half your money would be in one sector - one bad year for it hits everything" if conc["sector_pct"] > 50 else ""))
     if inputs.get("hold_drop") == "no":
-        rows.append(row("Could I hold through a 30% drop?", "no - invest less or pick a steadier stock", YELLOW))
+        rows.append(row("Could I hold through a 30% drop?", "no - invest less or pick a steadier stock", YELLOW,
+                        "you said a 30% drop would make you sell - stocks like this one can drop that much"))
     return {"rating": overall(rows), "rows": rows, "risks": (ai or {}).get("risks") or [],
             "buy_more": (ai or {}).get("buy_more"), "debt_note": (ai or {}).get("debt_note")}
 
 
+STEP_NAMES = {"business": "Step 1 (the business)", "growth": "Step 2 (growth)", "cash": "Step 3 (cash)",
+              "debt": "Step 4 (debt)", "price": "Step 5 (price)", "risk": "Step 6 (risk)"}
+
+
+def red_reasons(steps):
+    """Each Red step, with the row that turned it Red and why - the decision
+    names its reasons instead of quoting the rule (owner, 2026-11-19)."""
+    out = []
+    for k, name in STEP_NAMES.items():
+        st = steps.get(k) or {}
+        if st.get("rating") != RED:
+            continue
+        bad = [r for r in st.get("rows") or [] if r.get("rating") == RED]
+        out += [f"{name} - {r['check']}: {r['why'] or r['answer']}" for r in bad] or [name]
+    return out
+
+
 def decide(steps):
-    """The checklist's decision rule, word for word."""
+    """The checklist's decision rule, word for word, then the reasons."""
     r = {k: v["rating"] for k, v in steps.items()}
     if r["cash"] == RED or r["debt"] == RED:
-        return "Skip", "Step 3 or Step 4 is Red: a shaky dividend or a dividend on a loan is not worth the risk."
+        return "Skip", "Step 3 or Step 4 is Red - weak cash or risky debt is the hardest problem to fix."
     reds = [k for k, v in r.items() if v == RED]
-    yellows = sum(1 for v in r.values() if v == YELLOW)
-    if reds or yellows >= 3:
-        why = "a step is Red" if reds else f"{yellows} steps are Yellow"
+    yellows = [k for k, v in r.items() if v == YELLOW]
+    if reds or len(yellows) >= 3:
+        why = "a step is Red" if reds else f"{len(yellows)} steps are Yellow (" + ", ".join(STEP_NAMES[k] for k in yellows) + ")"
         if reds == ["risk"]:
             why = "the only Red is your portfolio, not the stock: keep this sector to about half your money or less, then it becomes a Buy"
         return "Wait", f"{why[0].upper() + why[1:]}. Re-check after the next earnings report or a lower price."
@@ -786,7 +883,7 @@ def decide(steps):
 # --------------------------------------------------------------- the one question
 
 def facts_for_ai(n):
-    lines = [f"Price ${n['price']}; forward P/E {n.get('pe_forward')}; profit margin {n.get('margin_ttm')}%",
+    lines = [f"Price ${n['price']}; forward P/E {n.get('pe_forward')}; price/sales {n.get('ps')}; profit margin {n.get('margin_ttm')}%",
              f"Revenue by year: {yrs(n.get('revenue_years') or [])}",
              f"Free cash flow, last 12 months: {money(n.get('fcf_ttm'))}; dividends paid {money(n.get('dividends_ttm'))}",
              f"Net debt {money(n.get('net_debt'))}; leverage {n.get('leverage')}x; interest coverage {n.get('interest_cover')}x",
@@ -935,9 +1032,9 @@ def build(symbol, inputs, get=None, ask=None, peer_numbers=None):
     now = datetime.now(timezone.utc)
     return {"symbol": sym, "company": n["company"], "sector": sector, "when_utc": now.isoformat(timespec="seconds"),
             "inputs": inputs, "numbers": {k: v for k, v in n.items() if not k.startswith("_")},
-            "peers": [{k: p.get(k) for k in ("symbol", "company", "pe_forward", "peg", "ev_ebitda", "yield", "leverage",
+            "peers": [{k: p.get(k) for k in ("symbol", "company", "pe_forward", "peg", "ps", "ev_ebitda", "yield", "leverage",
                                              "margin_ttm", "change_1y")} for p in peers],
-            "ai": ai, "ai_note": ai_note, "steps": steps, "decision": decision, "decision_why": why,
+            "ai": ai, "ai_note": ai_note, "steps": steps, "decision": decision, "decision_why": why, "decision_reasons": red_reasons(steps),
             "data_filed": n.get("data_filed"),
             "sources": {"sec": FACTS_URL.format(cik=n["cik"]), "price": CHART_URL.format(sym=sym),
                         "nasdaq": SUMMARY_URL.format(sym=sym), "forecast": FORECAST_URL.format(sym=sym)}}

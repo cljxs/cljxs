@@ -80,6 +80,8 @@
   th{color:var(--mute);font-weight:600;font-size:12px;border-top:0}
   td.r{white-space:nowrap}
   .why{color:var(--mute);font-size:12.5px}
+  .why.red{color:#f0a3a3}
+  .reasons{margin:8px 0 0;padding-left:18px;color:#f0a3a3;font-size:13.5px;line-height:1.5}
   .num{font-variant-numeric:tabular-nums}
   ul{margin:6px 0 0 18px;padding:0}
   .status{padding:12px 14px;border:1px solid rgba(232,194,106,.4);border-radius:10px;background:rgba(232,194,106,.08);margin-bottom:14px}
@@ -223,7 +225,7 @@ async function open(symbol, fromJob) {
 
 function rowsTable(rows) {
   return `<table><tr><th>Check</th><th>Answer</th><th>Rating</th></tr>${rows.map(r => `<tr><td>${esc(r.check)}</td>
-    <td>${esc(r.answer)}${r.why ? `<div class="why">${esc(r.why)}</div>` : ''}</td><td class="r">${pill(r.rating)}</td></tr>`).join('')}</table>`;
+    <td>${esc(r.answer)}${r.why ? `<div class="why${r.rating === 'Red' ? ' red' : ''}">${r.rating === 'Red' ? '<b>Why Red:</b> ' : ''}${esc(r.why)}</div>` : ''}</td><td class="r">${pill(r.rating)}</td></tr>`).join('')}</table>`;
 }
 
 function report(c) {
@@ -234,7 +236,7 @@ function report(c) {
   const html = `
   <div class="verdict ${esc(c.decision)}"><div class="big">${esc(c.decision)}</div>
     <div style="flex:1;min-width:220px"><b>${esc(c.company)} (${esc(c.symbol)})</b> &middot; ${esc(c.sector)} &middot; $${esc(n.price)}<br>
-    <span>${esc(c.decision_why)}</span>${(c.changes || []).length ? `<div class="why">Since the last check: ${esc(c.changes.join(', '))}</div>` : ''}</div></div>
+    <span>${esc(c.decision_why)}</span>${(c.decision_reasons || []).length ? `<ul class="reasons">${c.decision_reasons.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}${(c.changes || []).length ? `<div class="why">Since the last check: ${esc(c.changes.join(', '))}</div>` : ''}</div></div>
   <div class="tiles">${tiles}</div>
   ${c.ai_note ? `<div class="status">${esc(c.ai_note)}</div>` : ''}
   <div class="card"><h2>Step 0: The basics</h2><table>
@@ -252,7 +254,7 @@ function report(c) {
     <div class="k">Part A: how much</div>${rowsTable(d.rows)}
     <div class="k" style="margin-top:14px">Part B: the ${esc((d.year_end || '').slice(0, 4))} cash flow, line by line</div>
     <table>${(d.part_b || []).map(([l, v]) => `<tr><td>${esc(l)}</td><td class="num">${esc(v)}</td></tr>`).join('')}</table>
-    <p><b>Quick test:</b> operating cash &minus; dividends paid = <b>${esc(d.quick_test)}</b>. ${d.quick_test_ok ? 'Positive, so the dividend is <b>not</b> paid on a loan.' : '<span class="err">Negative: the dividend is being paid on a loan.</span>'}</p>
+    <p><b>Quick test:</b> ${d.pays_dividend === false ? 'it paid no dividend that year, so no dividend can be paid on a loan.' : `operating cash &minus; dividends paid = <b>${esc(d.quick_test)}</b>. ${d.quick_test_ok ? 'Positive, so the dividend is <b>not</b> paid on a loan.' : '<span class="err">Negative: the dividend is being paid on a loan.</span>'}`}</p>
     ${rk.debt_note ? `<p class="muted">Warren: ${esc(rk.debt_note)}</p>` : ''}<div class="foot">${esc(d.note || '')}</div>`)}
   ${sec('price', 5, 'Is the price fair? Compare with its sector', `
     <table><tr><th>Metric</th>${p.table.columns.map(x => `<th>${esc(x)}</th>`).join('')}</tr>
