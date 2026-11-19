@@ -95,6 +95,12 @@
   td.r{white-space:nowrap}
   .why{color:var(--mute);font-size:12.5px}
   .why.red{color:#f0a3a3}
+  .chk{font-size:12px;margin-top:4px}
+  .chk.ok{color:#5fd39a}
+  .chk.bad{color:#f5c26b}
+  .src{font-size:11.5px;margin-top:3px;color:var(--mute)}
+  .src a{color:var(--blue)}
+  .caution{margin-top:8px;padding:8px 10px;border-radius:8px;background:rgba(245,194,107,.12);color:#f5c26b;font-size:13px}
   .formula{font:11.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;color:#c9b27a;margin-top:4px}
   .formula .worked{display:block;color:var(--mute)}
   .up{color:#5fd39a;font-weight:600}
@@ -241,8 +247,34 @@ async function open(symbol, fromJob) {
   draw();
 }
 
+function checkedLine(r) {
+  const c = r.checked;
+  if (!c) return '';
+  if (c.status === 'match') return `<div class="chk ok" title="${esc(c.items.map(x => `${x.label}: ${x.ours}`).join(' · '))}">&#10003; Nasdaq's figures agree</div>`;
+  return `<div class="chk bad">&#9888; Nasdaq disagrees: ${c.items.filter(x => x.status === 'disagree').map(x => `${esc(x.label)} - Warren ${esc(x.ours)}, Nasdaq ${esc(x.theirs)}`).join('; ')}</div>`;
+}
+function sourceLine(r) {
+  return (r.sources || []).length ? `<div class="src">Source: ${r.sources.map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}</a>`).join(' &middot; ')}</div>` : '';
+}
+function secondCard(c) {
+  const ss = (c.numbers || {}).second_source;
+  if (!ss) return '';
+  const alarms = (c.numbers || {}).alarms || [];
+  let body;
+  if (ss.status === 'not checked') body = `<span class="muted">Not checked: ${esc(ss.why || '')}</span>`;
+  else body = `Nasdaq's statements for the quarter ending ${esc(ss.period_end)}: <b>${ss.matched} of ${ss.compared}</b> key figures match Warren's.`
+    + (ss.disagree && ss.disagree.length ? `<ul class="reasons">${Object.values(ss.figures).filter(f => f.status === 'disagree').map(f => `<li>${esc(f.label)}: Warren ${esc(money(f.ours))}, Nasdaq ${esc(money(f.theirs))}</li>`).join('')}</ul>` : '');
+  const al = alarms.length ? `<div class="k" style="margin-top:10px">Warren's own alarms</div><ul class="reasons">${alarms.map(a => `<li>${esc(a)}</li>`).join('')}</ul>` : '<div class="why">No impossible combinations found.</div>';
+  return `<div class="card"><h2>Checked against a second source</h2>${body}${al}</div>`;
+}
+function money(v) {
+  if (v == null) return '-';
+  const a = Math.abs(v), sgn = v < 0 ? '-' : '';
+  return a >= 1e9 ? `${sgn}$${(a / 1e9).toFixed(2)}B` : a >= 1e6 ? `${sgn}$${Math.round(a / 1e6)}M` : `${sgn}$${Math.round(a).toLocaleString()}`;
+}
+
 function rowsTable(rows) {
-  return `<table><tr><th>Check</th><th>Answer</th><th>Rating</th></tr>${rows.map(r => `<tr><td>${esc(r.check)}${r.formula ? `<div class="formula">${esc(r.formula)}${r.math ? `<span class="worked">= ${esc(r.math)}</span>` : ''}</div>` : ''}</td>
+  return `<table><tr><th>Check</th><th>Answer</th><th>Rating</th></tr>${rows.map(r => `<tr><td>${esc(r.check)}${r.formula ? `<div class="formula">${esc(r.formula)}${r.math ? `<span class="worked">= ${esc(r.math)}</span>` : ''}</div>` : ''}${checkedLine(r)}${sourceLine(r)}</td>
     <td>${esc(r.answer)}${r.why ? `<div class="why${r.rating === 'Red' ? ' red' : ''}">${r.rating === 'Red' ? '<b>Why Red:</b> ' : ''}${esc(r.why)}</div>` : ''}</td><td class="r">${pill(r.rating)}</td></tr>`).join('')}</table>`;
 }
 
@@ -254,9 +286,10 @@ function report(c) {
   const html = `
   <div class="verdict ${esc(c.decision)}"><div class="big">${esc(c.decision)}</div>
     <div style="flex:1;min-width:220px"><b>${esc(c.company)} (${esc(c.symbol)})</b> &middot; ${esc(c.sector)} &middot; $${esc(n.price)}<br>
-    <span>${esc(c.decision_why)}</span>${(c.decision_reasons || []).length ? `<ul class="reasons">${c.decision_reasons.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}${(c.changes || []).length ? `<div class="why">Since the last check: ${esc(c.changes.join(', '))}</div>` : ''}</div></div>
+    <span>${esc(c.decision_why)}</span>${(c.caution || []).length ? `<div class="caution">&#9888; Check before acting: ${esc(c.caution.join(' '))}</div>` : ''}${(c.decision_reasons || []).length ? `<ul class="reasons">${c.decision_reasons.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}${(c.changes || []).length ? `<div class="why">Since the last check: ${esc(c.changes.join(', '))}</div>` : ''}</div></div>
   <div class="tiles">${tiles}</div>
   ${c.ai_note ? `<div class="status">${esc(c.ai_note)}</div>` : ''}
+  ${secondCard(c)}
   <div class="card"><h2>Step 0: The basics</h2><table>
     <tr><td>Company and ticker</td><td>${esc(c.company)} (${esc(c.symbol)})</td></tr>
     <tr><td>Price and date</td><td>$${esc(n.price)} (${esc(n.as_of)})</td></tr>

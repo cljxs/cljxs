@@ -80,6 +80,12 @@ FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
 CONCEPT_URL = "https://data.sec.gov/api/xbrl/companyconcept/CIK{cik:010d}/us-gaap/{tag}.json"
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=1y&interval=1d&events=div"
 QUOTE_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=5d&interval=1d"
+# A second source: Nasdaq's own copy of the company's statements, from a
+# different data vendor than Warren's reading of the SEC's XBRL. Every wrong
+# figure so far (HIMS's debt, ASTS's revenue and operating income) was a
+# misread SEC tag; this page had the right figure each time.
+FIN_URL = "https://api.nasdaq.com/api/company/{sym}/financials?frequency=2"
+FILING_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{nodash}/{accn}-index.htm"
 SUMMARY_URL = "https://api.nasdaq.com/api/quote/{sym}/summary?assetclass=stocks"
 FORECAST_URL = "https://api.nasdaq.com/api/analyst/{sym}/earnings-forecast"
 
@@ -342,25 +348,55 @@ def series(facts, key):
 def ttm(facts, key):
     """(value, as_of_end): last fiscal year + this year to date - the same
     stretch a year before. A company with no quarter since its 10-K: the year."""
+    v, e, _ = ttm_parts(facts, key)
+    return v, e
+
+
+def ttm_parts(facts, key):
+    """ttm, and the period ends it was built from - so the page can link the
+    very filings behind the figure."""
     tag = pick_tag(facts, key)
     if not tag:
-        return None, None
+        return None, None, []
     a = annual(facts, tag)
     if not a:
-        return None, None
+        return None, None, []
     fy_end, fy = a[-1]
     rows = [r for r in ytd(facts, tag) if ddate(r[0]) > ddate(fy_end) and (ddate(r[0]) - ddate(fy_end)).days <= 10]
     if not rows:
-        return _clean(key, fy), fy_end
+        return _clean(key, fy), fy_end, [fy_end]
     s, e, cur = rows[-1]
     n = (ddate(e) - ddate(s)).days
-    prior = [v for s2, e2, v in ytd(facts, tag)
+    prior = [(e2, v) for s2, e2, v in ytd(facts, tag)
              if abs((ddate(e) - ddate(e2)).days - 365) <= 10 and abs((ddate(e2) - ddate(s2)).days - n) <= 10]
     if not prior:
-        return _clean(key, fy), fy_end
+        return _clean(key, fy), fy_end, [fy_end]
+    ends = [e, fy_end, prior[-1][0]]
     if key in OUTFLOWS or key == "interest":
-        return abs(fy) + abs(cur) - abs(prior[-1]), e
-    return fy + cur - prior[-1], e
+        return abs(fy) + abs(cur) - abs(prior[-1][1]), e, ends
+    return fy + cur - prior[-1][1], e, ends
+
+
+def filings(facts):
+    """{period end: the 10-K or 10-Q that first reported that period} - the
+    filing a figure for that date comes from."""
+    first = {}
+    for tax in ((facts or {}).get("facts") or {}).values():
+        for node in tax.values():
+            for rows in (node.get("units") or {}).values():
+                for r in rows:
+                    form = str(r.get("form", ""))
+                    if not form.startswith(("10-K", "10-Q")) or not r.get("accn"):
+                        continue
+                    e = r.get("end")
+                    if e and (e not in first or r.get("filed", "9") < first[e]["filed"]):
+                        first[e] = {"form": form, "filed": r.get("filed", ""), "accn": r["accn"], "end": e}
+    return first
+
+
+def filing_link(cik, f):
+    return {"label": f"{f['form']} for {f['end']}", "url": FILING_URL.format(
+        cik=int(cik), nodash=f["accn"].replace("-", ""), accn=f["accn"])}
 
 
 def debt_at(facts):
@@ -462,7 +498,7 @@ def forecast_facts(payload):
 
 # --------------------------------------------------------------- the numbers
 
-def numbers(symbol, get=None, tickers=None):
+def numbers(symbol, get=None, tickers=None, verify=False):
     """Every figure the checklist needs for one stock, computed here."""
     sym = symbol.upper()
     tickers = tickers if tickers is not None else sec_tickers(get)
@@ -482,11 +518,16 @@ def numbers(symbol, get=None, tickers=None):
 
     n = {"symbol": sym, "cik": cik, "company": pf["name"] or title, **pf, **sm, **fc,
          "data_filed": latest_filed(facts)}
+    by_end = filings(facts)
     for key in TAGS:
         s, tag = series(facts, key)
         n[key + "_years"] = [[e[:10], v] for e, v in s[-4:]]
         n[key + "_tag"] = tag
-        n[key + "_ttm"], n[key + "_ttm_end"] = ttm(facts, key) if key not in ("eps", "dps", "shares") else (None, None)
+        if key in ("eps", "dps", "shares"):
+            n[key + "_ttm"] = n[key + "_ttm_end"] = None
+            continue
+        n[key + "_ttm"], n[key + "_ttm_end"], ends = ttm_parts(facts, key)
+        n[key + "_src"] = [filing_link(cik, by_end[e]) for e in ends if e in by_end]
     stale_figures(n)
 
     debt = debt_at(facts)
@@ -500,10 +541,126 @@ def numbers(symbol, get=None, tickers=None):
     else:
         n["debt"] = n["debt_year_ago"] = None
         n["cash"] = cash[max(cash)] if cash else None
+    if n.get("debt_as_of") in by_end:
+        n["debt_src"] = n["cash_src"] = [filing_link(cik, by_end[n["debt_as_of"]])]
     if not n.get("market_cap"):
         sh = instants(facts, "EntityCommonStockSharesOutstanding")
         n["market_cap"] = sh[-1][1] * n["price"] if sh and n["price"] else None
-    return derive(n)
+    derive(n)
+    if verify:
+        try:
+            other = second_source(get_json(FIN_URL.format(sym=sym), get))
+        except Exception as e:
+            other = {"error": str(e)[:120]}
+        n["second_source"] = cross_check(n, other)
+        n["alarms"] = alarms(n)
+    return n
+
+
+def nasdaq_number(v):
+    """'$70,918' / '-$287,713' / '--': Nasdaq's tables are in thousands."""
+    v = str(v or "").replace("$", "").replace(",", "").strip()
+    if v in ("", "--", "NaN"):
+        return None
+    try:
+        return float(v) * 1000
+    except ValueError:
+        return None
+
+
+def second_source(payload):
+    """The last four quarters from Nasdaq's statements: flows summed into a
+    last-12-months figure, debt and cash at the latest quarter."""
+    d = payload["data"]
+    def row(table, name):
+        r = next((x for x in d[table]["rows"] if x["value1"] == name), None)
+        return [nasdaq_number(r.get(f"value{i}")) for i in range(2, 6)] if r else [None] * 4
+    def ttm4(table, name):
+        q = row(table, name)
+        return sum(q) if all(x is not None for x in q) else None
+    m, dd, y = d["incomeStatementTable"]["headers"]["value2"].split("/")
+    capex = ttm4("cashFlowTable", "Capital Expenditures")
+    ltd = row("balanceSheetTable", "Long-Term Debt")[0]
+    std = row("balanceSheetTable", "Short-Term Debt / Current Portion of Long-Term Debt")[0]
+    return {"period_end": f"{y}-{int(m):02d}-{int(dd):02d}",
+            "revenue_ttm": ttm4("incomeStatementTable", "Total Revenue"),
+            "net_income_ttm": ttm4("incomeStatementTable", "Net Income"),
+            "op_income_ttm": ttm4("incomeStatementTable", "Operating Income"),
+            "ebit_ttm": ttm4("incomeStatementTable", "Earnings Before Interest and Tax"),
+            "ocf_ttm": ttm4("cashFlowTable", "Net Cash Flow-Operating"),
+            "capex_ttm": abs(capex) if capex is not None else None,
+            "debt": (ltd or 0) + (std or 0) if ltd is not None or std is not None else None,
+            "cash": row("balanceSheetTable", "Cash and Cash Equivalents")[0]}
+
+
+CHECKED = [("revenue_ttm", "revenue (12 months)", 0.05), ("net_income_ttm", "net income (12 months)", 0.05),
+           ("op_income_ttm", "operating income (12 months)", 0.05), ("ocf_ttm", "operating cash flow (12 months)", 0.05),
+           ("capex_ttm", "capex (12 months)", 0.05), ("debt", "total debt", 0.10), ("cash", "cash", 0.10)]
+
+
+def cross_check(n, other):
+    """Each of Warren's key SEC figures against Nasdaq's. Agree within the
+    tolerance (5% for the year's flows, 10% for debt and cash, whose
+    definitions differ a little between sources) or $2M: a match.
+    Otherwise both are shown and the row says the sources disagree."""
+    if other.get("error"):
+        return {"status": "not checked", "why": f"Nasdaq's statements could not be read ({other['error']})", "figures": {}}
+    ours_end = n.get("ocf_ttm_end") or n.get("net_income_ttm_end")
+    if ours_end != other["period_end"]:
+        return {"status": "not checked", "figures": {},
+                "why": f"Nasdaq's latest quarter ends {other['period_end']}, Warren's {ours_end} - one has not caught up"}
+    out = {}
+    for key, label, tol in CHECKED:
+        ours = n.get(key)
+        theirs = other.get(key)
+        if key == "op_income_ttm" and n.get("op_income_from"):
+            theirs = other.get("ebit_ttm")          # Warren's figure is EBIT then; compare like with like
+        if theirs is None or (ours is None and abs(theirs) <= 2e6):
+            out[key] = {"label": label, "ours": ours, "theirs": theirs, "status": "not compared"}
+            continue
+        if ours is None:                         # Warren found nothing where Nasdaq has a figure: HIMS's debt
+            out[key] = {"label": label, "ours": ours, "theirs": theirs, "status": "disagree"}
+            continue
+        ok = abs(ours - theirs) <= max(tol * abs(theirs), 2e6)
+        out[key] = {"label": label, "ours": ours, "theirs": theirs, "status": "match" if ok else "disagree"}
+    bad = [v["label"] for v in out.values() if v["status"] == "disagree"]
+    done = [v for v in out.values() if v["status"] != "not compared"]
+    return {"status": "disagree" if bad else "match" if done else "not checked", "period_end": other["period_end"],
+            "figures": out, "disagree": bad, "matched": sum(v["status"] == "match" for v in out.values()),
+            "compared": len(done)}
+
+
+def alarms(n):
+    """Figures that cannot all be true together, or that are far outside what
+    any company reports: each one is a sign Warren misread something."""
+    out, g = [], n.get
+    names = {"op_income": "operating income", "eps": "earnings per share", "revenue": "revenue",
+             "net_income": "net income"}
+    for k in g("stale") or []:
+        if k in names:
+            out.append(f"It stopped reporting {names[k]} under the usual name; Warren left the old figure out"
+                       + (" and used pre-tax income plus interest" if k == "op_income" and g("op_income_from") else "")
+                       + (" and worked EPS out from net income over shares" if k == "eps" and g("eps_from") else "") + ".")
+    if g("margin_ttm") is not None and g("margin_ttm") < -1000:
+        out.append(f"A profit margin of {g('margin_ttm')}% means revenue is tiny next to the loss - check the revenue figure.")
+    ry = g("revenue_years") or []
+    if g("revenue_ttm") and ry and ry[-1][1]:
+        x = g("revenue_ttm") / ry[-1][1]
+        if x > 3 or x < 1 / 3:
+            out.append(f"Revenue over the last 12 months ({money(g('revenue_ttm'))}) is {x:.1f}x its last full year "
+                       f"({money(ry[-1][1])}) - a real jump, or a misread.")
+    fy = g("fy") or {}
+    if g("debt") is None and (fy.get("net_borrowing") or 0) > 0:
+        out.append(f"It borrowed {money(fy['net_borrowing'])} in its last year, but Warren found no debt on its balance sheet.")
+    if g("debt") is None and (g("interest_ttm") or 0) > 2e6:
+        out.append(f"It paid {money(g('interest_ttm'))} of interest, but Warren found no debt.")
+    eps = dict(g("eps_years") or [])
+    for e, v in g("net_income_years") or []:
+        if e in eps and v and eps[e] and (v > 0) != (eps[e] > 0):
+            out.append(f"Its {e[:4]} EPS and net income have opposite signs.")
+    if not g("market_cap"):
+        out.append("No market value was found, so the price ratios could not be worked out.")
+    return out
 
 
 STALE_DAYS = 200
@@ -640,11 +797,42 @@ def worked_math(n):
     return m
 
 
+# Which SEC figures each row is built from: for its filing links and for
+# the second-source check.
+ROW_FIGURES = [("Revenue", ["revenue_ttm"]), ("Profit margin", ["net_income_ttm", "revenue_ttm"]),
+               ("Free cash flow", ["ocf_ttm", "capex_ttm"]), ("FCF yield", ["ocf_ttm", "capex_ttm"]),
+               ("Dividend coverage", ["ocf_ttm", "capex_ttm"]), ("Payout ratio", ["net_income_ttm"]),
+               ("Leverage", ["debt", "cash", "op_income_ttm"]), ("Interest coverage", ["op_income_ttm"]),
+               ("Total debt", ["debt"]), ("Price/Sales", ["revenue_ttm"]), ("EV/EBITDA", ["debt", "cash", "op_income_ttm"])]
+
+
+def figure_sources(n, key):
+    base = key[:-4] if key.endswith("_ttm") else key
+    if base == "op_income" and n.get("op_income_from"):
+        return (n.get("pretax_src") or []) + (n.get("interest_src") or [])
+    return n.get(base + "_src") or []
+
+
 def explain(steps, n):
-    """Puts each row's equation, and its worked numbers, beside it."""
+    """Puts each row's equation and its worked numbers beside it, the SEC
+    filings its figures came from, and whether Nasdaq's copy agrees."""
     math = n.get("math") or {}
+    second = (n.get("second_source") or {}).get("figures") or {}
     for st in steps.values():
         for r in st.get("rows") or []:
+            keys = next((k for label, k in ROW_FIGURES if r["check"].startswith(label)), [])
+            links = []
+            for k in keys:
+                for l in figure_sources(n, k):
+                    if l not in links:
+                        links.append(l)
+            if links:
+                r["sources"] = links
+            got = [dict(second[k], key=k) for k in keys if k in second and second[k]["status"] != "not compared"]
+            if got:
+                r["checked"] = {"status": "disagree" if any(x["status"] == "disagree" for x in got) else "match",
+                                "items": [{"label": x["label"], "ours": money(x["ours"]), "theirs": money(x["theirs"]),
+                                           "status": x["status"]} for x in got]}
             for label, key, formula in FORMULAS:
                 if r["check"].startswith(label) or (label == "EPS" and r["check"].startswith("EPS")):
                     r["formula"] = formula
@@ -1174,7 +1362,7 @@ def holdings():
 def build(symbol, inputs, get=None, ask=None, peer_numbers=None):
     sym = symbol.upper()
     tickers = sec_tickers(get)
-    n = numbers(sym, get, tickers)
+    n = numbers(sym, get, tickers, verify=True)
     ai, ai_note = ai_part(n, inputs, tickers, ask)
     sector = (ai or {}).get("sector") or n.get("nasdaq_sector") or "Unknown"
     n["_capital_heavy"] = bool((ai or {}).get("capital_heavy"))
@@ -1189,12 +1377,15 @@ def build(symbol, inputs, get=None, ask=None, peer_numbers=None):
              "risk": rate_risk(ai, concentration(holdings(), sym, float(inputs["amount"]), sector), inputs, sector)}
     explain(steps, n)
     decision, why = decide(steps)
+    caution = [f"Nasdaq's figures disagree with Warren's on {', '.join(n['second_source']['disagree'])}"] \
+        if (n.get("second_source") or {}).get("disagree") else []
+    caution += n.get("alarms") or []
     now = datetime.now(timezone.utc)
     return {"symbol": sym, "company": n["company"], "sector": sector, "when_utc": now.isoformat(timespec="seconds"),
             "inputs": inputs, "numbers": {k: v for k, v in n.items() if not k.startswith("_")},
             "peers": [{k: p.get(k) for k in ("symbol", "company", "pe_forward", "peg", "ps", "ev_ebitda", "yield", "leverage",
                                              "margin_ttm", "change_1y")} for p in peers],
-            "ai": ai, "ai_note": ai_note, "steps": steps, "decision": decision, "decision_why": why, "decision_reasons": red_reasons(steps),
+            "ai": ai, "ai_note": ai_note, "steps": steps, "decision": decision, "decision_why": why, "decision_reasons": red_reasons(steps), "caution": caution,
             "position": position(next((h for h in holdings() if h.get("symbol") == sym), None), n.get("price"),
                                  float(inputs["amount"])),
             "data_filed": n.get("data_filed"),

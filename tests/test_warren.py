@@ -48,6 +48,8 @@ def get(url, ua=None, headers=None):
         return fx("warren-sec-companyfacts-hims.json")
     if "companyfacts/CIK0001780312" in url:
         return fx("warren-sec-companyfacts-asts.json")
+    if "/financials" in url:
+        return fx(f"warren-nasdaq-financials-quarterly-{url.split('/company/')[1].split('/')[0].lower()}.json")
     for sym in ("HIMS", "ASTS"):
         if sym in url.upper() and "sec.gov" not in url:
             kind = "yahoo-chart" if "/chart/" in url else "nasdaq-summary" if "/summary" in url else "nasdaq-forecast"
@@ -483,6 +485,76 @@ class EachAbbreviationShowsItsEquation(Base):
         cash = {r["check"]: r for r in k["steps"]["cash"]["rows"]}
         y = cash["Dividend yield"]
         self.assertTrue(y["math"].endswith(f"= {y['answer']}"), y)
+
+
+class ASecondSourceChecksTheFigures(Base):
+    """The owner asked (2026-11-19) for a checker. Warren's key SEC figures
+    are compared with Nasdaq's copy of the statements (a different data
+    vendor); each figure links to its filing; and figures that cannot all be
+    true raise an alarm. Built so each bug found so far would have shown."""
+
+    def asts(self):
+        return self.w.numbers("ASTS", get, verify=True)
+
+    def test_nasdaqs_four_quarters_are_read_in_thousands(self):
+        o = self.w.second_source(json.loads(fx("warren-nasdaq-financials-quarterly-asts.json")))
+        self.assertEqual(o["period_end"], "2026-09-30")
+        self.assertEqual(o["revenue_ttm"], (42320 + 31520 + 14735 + 54305) * 1000)
+        self.assertEqual(o["debt"], (4083709 + 8788) * 1000)
+        self.assertEqual(o["capex_ttm"], (294981 + 597616 + 261599 + 395696) * 1000)
+
+    def test_fixed_warren_and_nasdaq_agree_on_asts_and_kmi(self):
+        for sym in ("ASTS", "KMI"):
+            ss = self.w.numbers(sym, get, verify=True)["second_source"]
+            self.assertEqual((ss["status"], ss["matched"], ss["compared"]), ("match", 7, 7), sym)
+
+    def test_the_bugs_found_so_far_would_each_have_been_caught(self):
+        other = self.w.second_source(json.loads(fx("warren-nasdaq-financials-quarterly-asts.json")))
+        n = self.asts()
+        old = dict(n, revenue_ttm=4418000)                          # ASTS's revenue, read from the old tag
+        self.assertIn("revenue (12 months)", self.w.cross_check(old, other)["disagree"])
+        h = self.w.numbers("HIMS", get, verify=True)
+        hother = self.w.second_source(json.loads(fx("warren-nasdaq-financials-quarterly-hims.json")))
+        self.assertIn("total debt", self.w.cross_check(dict(h, debt=None), hother)["disagree"], "HIMS's notes read as no debt")
+        self.assertTrue(any("no debt" in a for a in self.w.alarms(dict(h, debt=None))))
+        self.assertTrue(any("-1000" in a.replace(",", "") or "tiny next to the loss" in a
+                            for a in self.w.alarms(dict(n, margin_ttm=-14278.8))))
+
+    def test_a_real_difference_is_shown_both_ways_not_hidden(self):
+        # HIMS: Warren counts capitalised software as capex; Nasdaq does not.
+        ss = self.w.numbers("HIMS", get, verify=True)["second_source"]
+        self.assertEqual(ss["disagree"], ["capex (12 months)"])
+        c = self.w.build("HIMS", {"amount": 100, "months": 12, "goal": "growth", "why": "", "hold_drop": "yes"},
+                         get, lambda q: (True, json.dumps(ANSWER)), lambda p, g, t: 1 / 0)
+        fcf = c["steps"]["cash"]["rows"][0]
+        self.assertEqual(fcf["checked"]["status"], "disagree")
+        self.assertIn("capex", c["caution"][0])
+
+    def test_a_quarter_nasdaq_has_not_caught_up_with_is_not_checked(self):
+        other = self.w.second_source(json.loads(fx("warren-nasdaq-financials-quarterly-asts.json")))
+        ss = self.w.cross_check(dict(self.asts(), ocf_ttm_end="2026-12-31"), dict(other))
+        self.assertEqual(ss["status"], "not checked")
+        self.assertEqual(self.w.cross_check(self.asts(), {"error": "403"})["status"], "not checked")
+
+    def test_each_figure_links_to_its_filing(self):
+        c = self.w.build("ASTS", {"amount": 100, "months": 12, "goal": "growth", "why": "", "hold_drop": "yes"},
+                         get, lambda q: (True, json.dumps(ANSWER)), lambda p, g, t: 1 / 0)
+        rev = c["steps"]["growth"]["rows"][0]
+        self.assertEqual([l["label"] for l in rev["sources"]], ["10-Q for 2026-09-30", "10-K for 2025-12-31", "10-Q for 2025-09-30"])
+        self.assertTrue(all(l["url"].startswith("https://www.sec.gov/Archives/edgar/data/1780312/") for l in rev["sources"]))
+        self.assertEqual(rev["checked"]["status"], "match")
+
+    def test_a_period_links_to_the_report_that_first_gave_it(self):
+        # A 10-Q repeats last December's balance sheet beside its own; the
+        # December figure's filing is still the 10-K.
+        facts = {"facts": {"us-gaap": {"X": {"units": {"USD": [
+            {"end": "2025-12-31", "val": 1, "accn": "K", "form": "10-K", "filed": "2026-02-20"},
+            {"end": "2025-12-31", "val": 1, "accn": "Q", "form": "10-Q", "filed": "2026-05-05"}]}},
+            "Y": {"units": {"USD": [{"end": "2025-12-31", "val": 2, "accn": "Q", "form": "10-Q", "filed": "2026-05-05"}]}}}}}
+        self.assertEqual(self.w.filings(facts)["2025-12-31"]["accn"], "K")
+
+    def test_peers_are_not_checked_twice(self):
+        self.assertNotIn("second_source", self.w.numbers("KMI", get))
 
 
 class TheSitesSayWhoRefused(Base):
