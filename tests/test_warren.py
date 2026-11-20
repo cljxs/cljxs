@@ -1014,6 +1014,56 @@ class TheSecretScanReadsTheFixtures(Base):
         self.assertEqual(len(cs.content_findings(f, cs.BROAD_SHAPES)), 1)
 
 
+class EachStepAgainstItsRivals(Base):
+    """The owner (2026-11-20): "I wanna see the comparison to main competitors
+    in each of the steps - the EPS, profit margins and so on." Each comparable
+    row carries the rivals' own figures, worked out from their own filings."""
+
+    def build(self, sym, peers=("HIMS", "KMI")):
+        return self.w.build(sym, {"amount": 100, "months": 12, "goal": "growth", "why": "", "hold_drop": "yes"}, get,
+                            lambda q: (True, json.dumps(dict(ANSWER, peers=list(peers)))),
+                            lambda p, g, t: self.w.numbers(p, get, t))
+
+    def rows(self, c):
+        return {r["check"]: r for st in c["steps"].values() for r in st["rows"]}
+
+    def test_every_comparable_row_in_steps_2_to_4_has_the_rivals(self):
+        rows = self.rows(self.build("ASTS"))
+        for check in ("Revenue, last 3 years", "EPS, last 3 years", "Profit margin", "Free cash flow (last 12 months)",
+                      "FCF yield (FCF / market cap)", "Leverage (net debt / EBITDA)", "Interest coverage",
+                      "Total debt vs. a year ago"):
+            self.assertEqual([c["symbol"] for c in rows[check]["vs"]["cols"]], ["ASTS", "HIMS", "KMI"], check)
+        self.assertNotIn("vs", rows["What is the debt paying for?"])
+
+    def test_the_rivals_figures_are_their_own(self):
+        rows = self.rows(self.build("ASTS"))
+        hims = self.w.numbers("HIMS", get)
+        cols = {c["symbol"]: c for c in rows["Profit margin"]["vs"]["cols"]}
+        self.assertEqual(cols["HIMS"]["value"], hims["margin_ttm"])
+        vs = rows["Profit margin"]["vs"]
+        self.assertEqual(vs["average"], f"{self.w.r1((hims['margin_ttm'] + cols['KMI']['value']) / 2):g}%")
+        self.assertIn("Of the 3, ASTS is the least profitable", vs["note"])
+
+    def test_cash_is_compared_as_a_share_of_sales_not_dollars(self):
+        rows = self.rows(self.build("ASTS"))
+        kmi = self.w.numbers("KMI", get)
+        cols = {c["symbol"]: c for c in rows["Free cash flow (last 12 months)"]["vs"]["cols"]}
+        self.assertEqual(cols["KMI"]["value"], self.w.r1(100 * kmi["fcf_ttm"] / kmi["revenue_ttm"]))
+
+    def test_eps_is_compared_by_direction(self):
+        vs = self.rows(self.build("ASTS"))["EPS, last 3 years"]["vs"]
+        self.assertIn("Rising: ASTS, KMI. Falling: HIMS.", vs["note"])
+        self.assertEqual(vs["cols"][0]["text"], "-$1.34 (2025), up")
+
+    def test_a_blank_says_why(self):
+        cols = self.rows(self.build("ASTS"))["Leverage (net debt / EBITDA)"]["vs"]["cols"]
+        self.assertEqual(cols[0]["text"], "n/a - losing money")
+        self.assertEqual(cols[2]["text"], f"{cols[2]['value']:g}x")
+
+    def test_no_rivals_no_line(self):
+        self.assertFalse([r for r in self.rows(self.build("ASTS", peers=())).values() if r.get("vs")])
+
+
 class TheFilingSaysWhoIsRight(Base):
     """The owner (2026-11-20), on Nasdaq's $161M of debt against Warren's
     none: "can we refer warren to this chat to do the search and figure who's

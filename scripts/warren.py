@@ -1192,6 +1192,127 @@ def table_notes(table):
     return out
 
 
+# ------------------------------------------------- next to its rivals
+# The owner (2026-11-20): "I wanna see the comparison to main competitors in
+# each of the steps - the EPS, profit margins and so on, for all the
+# comparable categories." Each row whose number can be set beside a rival's
+# gets a line of the rivals' own figures, worked out by the same code from
+# their own filings, the rivals' average and where this stock places.
+# Sizes in dollars are not comparable between companies of different size,
+# so cash is compared as a share of sales, and EPS by its direction.
+
+def _last_change(pairs):
+    """(latest, the one before, latest end) from [[end, value]], or Nones
+    when the two are not about a year apart."""
+    if len(pairs or []) < 2:
+        return (pairs[-1][1] if pairs else None), None, (pairs[-1][0] if pairs else None)
+    (e0, v0), (e1, v1) = pairs[-2], pairs[-1]
+    if v0 is None or v1 is None or not 330 <= (ddate(e1) - ddate(e0)).days <= 400:
+        return v1, None, e1
+    return v1, v0, e1
+
+
+def revenue_growth(n):
+    v1, v0, _ = _last_change(n.get("revenue_years"))
+    return r1(100 * (v1 - v0) / abs(v0)) if v0 else None
+
+
+def fcf_margin(n):
+    f, rev = n.get("fcf_ttm"), n.get("revenue_ttm")
+    return r1(100 * f / rev) if f is not None and rev and rev > 0 else None
+
+
+def debt_change(n):
+    d0, d1 = n.get("debt_year_ago"), n.get("debt")
+    return r1(100 * (d1 - d0) / d0) if d0 and d1 is not None else None
+
+
+_pc = lambda v: f"{v:+g}%"
+_p = lambda v: f"{v:g}%"
+_x = lambda v: f"{v:g}x"
+RIVAL_ROWS = [
+    # row starts with, what is compared, the figure, how it is written, better way, which way is better
+    ("Revenue", "Revenue growth, last full year", revenue_growth, _pc, "higher", "Higher is growing faster"),
+    ("EPS", "EPS, last full year", lambda n: _last_change(n.get("eps_years"))[0], lambda v: f"{'-' if v < 0 else ''}${abs(v):.2f}", None,
+     "EPS dollars depend on how many shares a company has, so compare which way each is heading, not the size"),
+    ("Profit margin", "Profit margin, last 12 months", lambda n: n.get("margin_ttm"), _p, "higher",
+     "Higher keeps more of each sale as profit"),
+    ("Free cash flow", "Free cash flow as % of sales", fcf_margin, _p, "higher",
+     "Higher turns more of each sale into spare cash; free cash flow in dollars only shows size"),
+    ("FCF yield", "FCF yield", lambda n: n.get("fcf_yield"), _p, "higher", "Higher means more spare cash for the price"),
+    ("Dividend coverage", "Dividend coverage", lambda n: n.get("coverage"), _x, "higher",
+     "Higher means the dividend is paid more times over"),
+    ("Payout ratio", "Payout ratio", lambda n: n.get("payout"), _p, "lower", "Lower leaves more room to keep paying"),
+    ("Dividend yield", "Dividend yield", lambda n: n.get("yield"), _p, "higher",
+     "Higher pays more - but over 8% is a warning"),
+    ("Leverage", "Leverage", lambda n: n.get("leverage"), _x, "lower",
+     "Lower is safer; below zero means more cash than debt"),
+    ("Interest coverage", "Interest coverage", lambda n: n.get("interest_cover"), _x, "higher",
+     "Higher means profits pay the interest more times over"),
+    ("Total debt vs", "Debt change over a year", debt_change, _pc, None,
+     "More debt is not bad by itself if it pays for growth; Step 4's last row says what it is for"),
+]
+BEST = {"Revenue": ("fastest-growing", "slowest-growing"), "Profit margin": ("most profitable", "least profitable"),
+        "Free cash flow": ("best at turning sales into cash", "worst at turning sales into cash"),
+        "FCF yield": ("most cash for its price", "least cash for its price"),
+        "Dividend coverage": ("best covered", "least covered"), "Payout ratio": ("safest payout", "stretchiest payout"),
+        "Dividend yield": ("highest-paying", "lowest-paying"), "Leverage": ("safest", "most in debt"),
+        "Interest coverage": ("best able to pay its interest", "least able to pay its interest")}
+
+
+def why_blank(start, c):
+    """Why a company has no figure on a row, in a few words."""
+    if start == "Leverage" and c.get("net_debt") is not None:
+        return "more cash than debt" if c["net_debt"] < 0 else "n/a - losing money"
+    if start == "Interest coverage":
+        return "no interest reported" if not c.get("interest_ttm") else "n/a"
+    if start in ("Dividend coverage", "Payout ratio", "Dividend yield"):
+        return "no dividend"
+    if start == "Total debt vs":
+        return "no debt" if not c.get("debt") else "n/a"
+    return "n/a"
+
+
+def vs_rivals(check, n, peers):
+    """{"label", "cols": [{"symbol", "text", "value", "mine"}], "average", "note"}
+    for a row whose figure the rivals also have, else None."""
+    spec = next((x for x in RIVAL_ROWS if check.startswith(x[0])), None)
+    if not spec or not peers:
+        return None
+    start, label, figure, fmt, way, hint = spec
+    cols = []
+    for c in [n] + list(peers):
+        v = figure(c)
+        cols.append({"symbol": c["symbol"], "value": v, "mine": c is n,
+                     "text": fmt(v) if v is not None else why_blank(start, c)})
+    if start == "EPS":
+        for c, col in zip([n] + list(peers), cols):
+            v1, v0, end = _last_change(c.get("eps_years"))
+            if v1 is not None:
+                col["text"] += f" ({str(end)[:4]})" + ("" if v0 is None else ", up" if v1 > v0 else ", down" if v1 < v0 else ", flat")
+        up = [c["symbol"] for c, x in zip(cols, [n] + list(peers))
+              if (lambda a: a[1] is not None and a[0] > a[1])(_last_change(x.get("eps_years")))]
+        down = [c["symbol"] for c, x in zip(cols, [n] + list(peers))
+                if (lambda a: a[1] is not None and a[0] < a[1])(_last_change(x.get("eps_years")))]
+        note = hint + "." + (f" Rising: {', '.join(up)}." if up else "") + (f" Falling: {', '.join(down)}." if down else "")
+        return {"label": label, "cols": cols, "average": None, "note": note}
+    rivals = [c["value"] for c in cols[1:] if c["value"] is not None]
+    avg = r1(sum(rivals) / len(rivals)) if rivals else None
+    note = hint + "."
+    vals = [(c["symbol"], c["value"]) for c in cols if c["value"] is not None]
+    mine = cols[0]["value"]
+    if way and mine is not None and len(vals) >= 2:
+        ranked = sorted(vals, key=lambda sv: sv[1], reverse=(way == "higher"))
+        place = [sym for sym, _ in ranked].index(n["symbol"]) + 1
+        best, worst = BEST[start]
+        note += (f" Of the {len(vals)}, {n['symbol']} is the {best}." if place == 1 else
+                 f" Of the {len(vals)}, {n['symbol']} is the {worst}." if place == len(vals) else
+                 f" {n['symbol']} is #{place} of {len(vals)}.")
+    elif mine is None:
+        note += f" {n['symbol']} has no figure here ({cols[0]['text']})."
+    return {"label": label, "cols": cols, "average": fmt(avg) if avg is not None else None, "note": note}
+
+
 def explain(steps, n, peers=(), sector=None):
     """Puts each row's equation and its worked numbers beside it, what the
     number means for this stock and the scale it is judged on, the SEC
@@ -1216,6 +1337,9 @@ def explain(steps, n, peers=(), sector=None):
                                 "items": [{"label": x["label"], "ours": money(x["ours"]), "theirs": money(x["theirs"]),
                                            "status": x["status"], "says": (x.get("settled") or {}).get("says")}
                                           for x in got]}
+            vs = vs_rivals(r["check"], n, peers)
+            if vs:
+                r["vs"] = vs
             for label, key, formula in FORMULAS:
                 if r["check"].startswith(label) or (label == "EPS" and r["check"].startswith("EPS")):
                     r["formula"] = formula
