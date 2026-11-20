@@ -58,6 +58,10 @@ RECHECKS = STATE / "rechecks.json"
 # check. Belfort's hourly headlines are used for the names he follows; the
 # rest are fetched with his fetcher.
 ALERTS = STATE / "alerts.json"
+# The owner's own notes on each stock (2026-11-20) - his words, kept as he
+# wrote them; Warren never reads them into a question.
+NOTES = STATE / "notes.json"
+NOTE_MAX = 4000
 NEWS_SEEN = STATE / "news-seen.json"
 BELFORT_NEWS = ROOT / "agents" / "belfort" / "data" / "news.json"
 BELFORT_NEWS_FRESH_H = 3          # older than this and Warren fetches the names himself
@@ -1794,6 +1798,45 @@ def cmd_news(a):
     return 0
 
 
+def notes_of(symbol=None):
+    d = read_json(NOTES, {}) or {}
+    return d.get(symbol.upper(), []) if symbol else d
+
+
+def cmd_notes(a):
+    """notes add SYM --text ... | edit SYM ID --text ... | remove SYM ID."""
+    import secrets
+    sym = a.symbol.upper()
+    if not re.fullmatch(r"[A-Z][A-Z.\-]{0,9}", sym):
+        raise SystemExit("a ticker is letters, like KMI")
+    d = read_json(NOTES, {}) or {}
+    mine = d.get(sym, [])
+    text = (a.text or "").strip()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if a.action in ("add", "edit"):
+        if not text:
+            raise SystemExit("the note is empty")
+        if len(text) > NOTE_MAX:
+            raise SystemExit(f"a note is at most {NOTE_MAX} characters")
+    if a.action == "add":
+        mine.append({"id": secrets.token_hex(4), "text": text, "when_utc": now})
+    else:
+        hit = next((n for n in mine if n["id"] == a.id), None)
+        if not hit:
+            raise SystemExit("no such note")
+        if a.action == "edit":
+            hit.update(text=text, edited_utc=now)
+        else:
+            mine.remove(hit)
+    if mine:
+        d[sym] = mine
+    else:
+        d.pop(sym, None)
+    write_json(NOTES, d)
+    print(json.dumps({"symbol": sym, "notes": mine}))
+    return 0
+
+
 def cmd_alerts(a):
     d = read_json(ALERTS, {}) or {}
     for x in d.get("alerts") or []:
@@ -1944,7 +1987,7 @@ def cmd_deck(a):
             c = (latest(h["symbol"]) or {}).get("numbers") or {}
             price, as_of = c.get("price"), c.get("as_of")
         held.append({**h, "position": position(h, price), "price_as_of": as_of, "live": bool(q)})
-    print(json.dumps({"checks": rows, "holdings": held, "runs_today": runs_today(), "news": news_board(),
+    print(json.dumps({"checks": rows, "holdings": held, "runs_today": runs_today(), "news": news_board(), "notes": notes_of(),
                       "runs_per_day": RUNS_PER_DAY, "sectors": SECTORS,
                       "rechecks": (read_json(RECHECKS, []) or [])[-20:]}))
     return 0
@@ -2077,6 +2120,12 @@ def main(argv=None):
     h.set_defaults(fn=cmd_holdings)
     sub.add_parser("recheck").set_defaults(fn=cmd_recheck)
     sub.add_parser("news").set_defaults(fn=cmd_news)
+    nt = sub.add_parser("notes")
+    nt.add_argument("action", choices=("add", "edit", "remove"))
+    nt.add_argument("symbol")
+    nt.add_argument("id", nargs="?")
+    nt.add_argument("--text")
+    nt.set_defaults(fn=cmd_notes)
     al = sub.add_parser("alerts")
     al.add_argument("action", choices=("seen",))
     al.add_argument("id")

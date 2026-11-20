@@ -691,6 +691,35 @@ class NewsOnWhatYouOwn(Base):
         self.assertEqual((a["n"], a["tone"]), (1, "todo"))
 
 
+class YourNotesOnAStock(Base):
+    """The owner asked (2026-11-20) for a notes section of his own on each
+    stock: dated notes he can add, edit and delete, kept as he wrote them."""
+
+    def run_cli(self, *args):
+        return subprocess.run([sys.executable, str(ROOT / "scripts" / "warren.py"), "notes", *args],
+                              capture_output=True, text=True, env={**os.environ, "ECOSYSTEM_ROOT": self.tmp.name}, timeout=60)
+
+    def test_add_edit_and_delete_keep_his_words(self):
+        text = "Bought for the peptides market.\nRe-check after Q4 - and if it drops below $14, think again."
+        r = self.run_cli("add", "hims", f"--text={text}")
+        note = json.loads(r.stdout)["notes"][0]
+        self.assertEqual((note["text"], len(note["id"])), (text, 8))
+        self.run_cli("add", "HIMS", "--text=second")
+        self.run_cli("edit", "HIMS", note["id"], "--text=first, changed")
+        got = self.w.notes_of("HIMS")
+        self.assertEqual([n["text"] for n in got], ["first, changed", "second"])
+        self.assertIn("edited_utc", got[0])
+        self.run_cli("remove", "HIMS", note["id"])
+        self.run_cli("remove", "HIMS", got[1]["id"])
+        self.assertEqual(self.w.notes_of(), {}, "a stock with no notes left is not kept")
+
+    def test_what_is_refused(self):
+        self.assertEqual(self.run_cli("add", "HIMS", "--text=   ").returncode, 1)
+        self.assertEqual(self.run_cli("add", "HIMS", "--text=" + "x" * 4001).returncode, 1)
+        self.assertEqual(self.run_cli("edit", "HIMS", "deadbeef", "--text=x").returncode, 1)
+        self.assertEqual(self.run_cli("add", "../etc", "--text=x").returncode, 1)
+
+
 class EachAlertSaysHowMuchItMatters(Base):
     """The owner asked (2026-11-20) to rate how important each piece of news
     is: 1 Minor to 5 Major, most important shown first."""
@@ -967,6 +996,10 @@ class ThePageAndTheApi(Base):
             "out.badavg=await go('POST','/api/warren/holdings',{action:'add',symbol:'KMI',amount:125,avg_price:-3});"
             "out.deck=await go('GET','/api/warren');"
             "out.badalert=await go('POST','/api/warren/alerts',{id:'../x'});"
+            "out.note=await go('POST','/api/warren/notes',{action:'add',symbol:'kmi',text:'--all \\n line two'});"
+            "out.badnote=await go('POST','/api/warren/notes',{action:'edit',symbol:'KMI',id:'x;rm',text:'y'});"
+            "out.emptynote=await go('POST','/api/warren/notes',{action:'add',symbol:'KMI',text:'  '});"
+            "out.deck2=await go('GET','/api/warren');"
             "out.allseen=await go('POST','/api/warren/alerts',{id:'all'});"
             "out.buybad=await go('POST','/api/warren/holdings',{action:'buy',symbol:'KMI',amount:55});"
             "out.buy=await go('POST','/api/warren/holdings',{action:'buy',symbol:'KMI',amount:55,price:27.5});"
@@ -989,6 +1022,10 @@ class ThePageAndTheApi(Base):
         self.assertEqual(out["badalert"][0], 400, "an alert id never reaches the command line unchecked")
         self.assertEqual(json.loads(out["allseen"][1]), {"unseen": 0})
         self.assertEqual(deck["news"]["unseen"], 0)
+        self.assertEqual(json.loads(out["note"][1])["notes"][0]["text"], "--all \n line two",
+                         "a note that looks like an option is still just text")
+        self.assertEqual((out["badnote"][0], out["emptynote"][0]), (400, 400))
+        self.assertEqual(json.loads(out["deck2"][1])["notes"]["KMI"][0]["text"], "--all \n line two")
         h = deck["holdings"][0]
         self.assertEqual({k: h[k] for k in ("symbol", "amount", "sector", "avg_price")},
                          {"symbol": "KMI", "amount": 125.0, "sector": "Energy", "avg_price": 27.5})

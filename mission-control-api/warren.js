@@ -81,6 +81,28 @@ function register(app) {
     res.status(202).json({ job });
   });
 
+  // The owner's notes on a stock: add, edit, remove (2026-11-20)
+  app.post('/api/warren/notes', async (req, res) => {
+    const b = req.body || {};
+    const s = sym(b.symbol);
+    const action = ['add', 'edit', 'remove'].includes(b.action) ? b.action : null;
+    if (!s || !action) return res.status(400).json({ error: 'which stock, and add, edit or remove?' });
+    const args = ['notes', action, s];
+    if (action !== 'add') {
+      if (!/^[0-9a-f]{8}$/.test(String(b.id || ''))) return res.status(400).json({ error: 'which note?' });
+      args.push(String(b.id));
+    }
+    if (action !== 'remove') {
+      const text = String(b.text || '').trim();
+      if (!text) return res.status(400).json({ error: 'the note is empty' });
+      if (text.length > 4000) return res.status(400).json({ error: 'a note is at most 4000 characters' });
+      args.push(`--text=${text}`);
+    }
+    const r = await python(args);
+    if (!r.ok) return res.status(409).json({ ok: false, error: said(r) });
+    try { res.json(JSON.parse(r.stdout)); } catch { res.json({ ok: true }); }
+  });
+
   app.post('/api/warren/alerts', async (req, res) => {
     const b = req.body || {};
     const id = b.id === 'all' ? 'all' : String(b.id || '');

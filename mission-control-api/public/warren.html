@@ -79,6 +79,8 @@
   .imp.i4{background:rgba(245,170,100,.2);color:#f5b26b}
   .imp.i3{background:rgba(245,194,107,.14);color:#f5c26b}
   .imp.i2,.imp.i1,.imp.i0{background:rgba(160,170,190,.12);color:var(--mute)}
+  .note{border-top:1px solid var(--line);padding:10px 0;margin-top:6px}
+  .note-text{white-space:pre-wrap;margin:4px 0;font-size:14px;line-height:1.5}
   .bell.watch{background:rgba(245,194,107,.18);color:#f5c26b}
   .amber{color:#f5c26b}
   .bell.buy{background:rgba(95,211,154,.18);color:#5fd39a}
@@ -432,6 +434,33 @@ function importance(a) {
   return `<span class="imp i${n}" title="How much this matters, 1 to 5${a.by === 'words' ? ' - your rules\' words only, not yet judged' : ''}">`
     + `${'&#9679;'.repeat(n)}${'&#9675;'.repeat(5 - n)} ${IMP[n]}</span>`;
 }
+// ---- your own notes on a stock (owner, 2026-11-20)
+let editingNote = null;
+const notesFor = sym => ((D.notes || {})[sym] || []).slice().reverse();     // newest first
+function notesBody(h) {
+  const list = notesFor(h.symbol).map(n => editingNote === n.id
+    ? `<div class="note"><textarea id="ne-${esc(n.id)}" rows="4">${esc(n.text)}</textarea>
+        <div class="acts"><button class="btn go sm" data-nsave="${esc(n.id)}">Save</button><button class="btn sm" data-ncancel="1">Cancel</button></div></div>`
+    : `<div class="note"><div class="muted" style="font-size:12px">${when(n.when_utc)}${n.edited_utc ? ' &middot; edited ' + when(n.edited_utc) : ''}</div>
+        <div class="note-text">${esc(n.text)}</div>
+        <div class="acts"><button class="btn sm" data-nedit="${esc(n.id)}">Edit</button><button class="btn sm del" data-ndel="${esc(n.id)}">Delete</button></div></div>`).join('');
+  return `<label>A note for yourself on ${esc(h.symbol)} - why you bought it, what you are waiting for, anything</label>
+    <textarea id="n-text" rows="4" maxlength="4000" placeholder="like: Bought for the peptides market. Re-check after Q4 earnings in February."></textarea>
+    <div class="acts"><button class="btn go sm" id="n-save">Save note</button></div>
+    ${list || '<div class="why" style="margin-top:10px">No notes yet. Only you see them - Warren does not read them.</div>'}`;
+}
+async function saveNote(body) {
+  if (body.action !== 'remove' && !String(body.text || '').trim()) return msg('<span class="err">The note is empty.</span>');
+  const r = await fetch('/api/warren/notes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const out = await r.json().catch(() => ({}));
+  if (!r.ok) return msg(`<span class="err">${esc(out.error || 'That did not save')}</span>`);
+  editingNote = null;
+  if (body.action === 'add') $('n-text').value = '';
+  await load();
+  drawStock();
+  msg(body.action === 'remove' ? 'Note deleted.' : 'Note saved.');
+}
+
 function newsBody(h) {
   const al = alertsFor(h.symbol);
   if (!al.length) return '<div class="why">No news alerts for this stock yet. Warren flags headlines that touch its sell rules or its buy-more test from the last check.</div>';
@@ -524,6 +553,16 @@ function drawStock() {
       if (!e.target.classList.contains('arm')) { e.target.classList.add('arm'); e.target.textContent = `Tap again to delete ${h.symbol}`; return; }
       holdings({ action: 'remove', symbol: h.symbol });
     };
+  } else if (holdTab === 'notes') {
+    $('n-save').onclick = () => saveNote({ action: 'add', symbol: h.symbol, text: $('n-text').value });
+    document.querySelectorAll('[data-nedit]').forEach(b => b.onclick = () => { editingNote = b.dataset.nedit; drawStock(); });
+    document.querySelectorAll('[data-ncancel]').forEach(b => b.onclick = () => { editingNote = null; drawStock(); });
+    document.querySelectorAll('[data-nsave]').forEach(b => b.onclick = () =>
+      saveNote({ action: 'edit', symbol: h.symbol, id: b.dataset.nsave, text: $('ne-' + b.dataset.nsave).value }));
+    document.querySelectorAll('[data-ndel]').forEach(b => b.onclick = () => {
+      if (!b.classList.contains('arm')) { b.classList.add('arm'); b.textContent = 'Tap again to delete'; return; }
+      saveNote({ action: 'remove', symbol: h.symbol, id: b.dataset.ndel });
+    });
   } else if (holdTab === 'news') {
     document.querySelectorAll('[data-seen]').forEach(b => b.onclick = async () => {
       await fetch('/api/warren/alerts', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -545,6 +584,8 @@ function editor(h) {
   let body;
   if (holdTab === 'news') {
     body = newsBody(h);
+  } else if (holdTab === 'notes') {
+    body = notesBody(h);
   } else if (holdTab === 'edit') {
     body = `<label>$ in it (what you paid in total)</label><input id="e-amt" type="number" min="0" step="0.01" value="${h.amount}">
       <label>Average price paid per share</label><input id="e-avg" type="number" min="0" step="0.01" value="${h.avg_price ?? ''}">
@@ -564,7 +605,8 @@ function editor(h) {
       <div class="why">Your breakeven stays the same; Warren shows what you made or lost on the shares sold.</div>`;
   }
   const un = alertsFor(h.symbol).filter(a => !a.seen).length;
-  return `<div class="ed"><div class="tabs">${tab('news', 'News' + (un ? ` (${un})` : ''))}${tab('edit', 'Edit')}${tab('buy', 'Bought more')}${tab('sell', 'Sold')}</div>${body}</div>`;
+  const nn = notesFor(h.symbol).length;
+  return `<div class="ed"><div class="tabs">${tab('news', 'News' + (un ? ` (${un})` : ''))}${tab('notes', 'Notes' + (nn ? ` (${nn})` : ''))}${tab('edit', 'Edit')}${tab('buy', 'Bought more')}${tab('sell', 'Sold')}</div>${body}</div>`;
 }
 
 async function holdings(body) {
