@@ -65,6 +65,9 @@
   .own:first-child{border-top:0}
   .own-row{display:block;width:100%;text-align:left;background:none;border:0;color:var(--ink);padding:9px 2px;cursor:pointer;font:14px var(--sans)}
   .own-row .top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+  .own-row .top .num{white-space:nowrap}
+  .warn{color:#ff5f5f;font-size:18px;font-weight:700;margin-right:6px;line-height:1}
+  .warn.big{font-size:26px;margin-right:8px}
   .own-row .chev{color:var(--mute);margin-left:6px}
   .own.open .own-row{color:var(--gold)}
   .ed{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:12px;margin:2px 0 10px}
@@ -402,6 +405,13 @@ function breakeven(h) {
 
 let openHold = null, holdTab = 'edit';
 const alertsFor = sym => ((D.news || {}).alerts || []).filter(a => a.symbol === sym);
+// A red warning on a stock with High or Major news not yet dismissed (owner, 2026-11-20)
+function warning(sym, big) {
+  const top = alertsFor(sym).filter(a => !a.seen && (a.importance || 0) >= 4);
+  if (!top.length) return '';
+  const major = top.some(a => a.importance === 5);
+  return `<span class="warn${big ? ' big' : ''}" title="${top.length} ${major ? 'Major' : 'High'}-importance headline${top.length === 1 ? '' : 's'} - open its News tab">&#9888;&#xFE0E;</span>`;
+}
 function bell(sym) {
   const un = alertsFor(sym).filter(a => !a.seen);
   if (!un.length) return '';
@@ -477,7 +487,7 @@ function drawHoldings() {
   const hs = D.holdings || [];
   drawNewsSummary();
   $('holdings').innerHTML = hs.map(h => `<div class="own">
-      <button class="own-row" data-own="${esc(h.symbol)}"><div class="top"><span><b>${esc(h.symbol)}</b> <span class="muted">${esc(h.sector)}</span></span>
+      <button class="own-row" data-own="${esc(h.symbol)}"><div class="top"><span>${warning(h.symbol)}<b>${esc(h.symbol)}</b> <span class="muted">${esc(h.sector)}</span></span>
         <span class="num">${bell(h.symbol)}${dollars(h.amount)}<span class="chev">&#9656;</span></span></div>
         <div class="why">${breakeven(h)}</div></button></div>`).join('')
     || '<div class="muted">Nothing yet. Add what you own so Step 6 can check how much is in one sector.</div>';
@@ -523,7 +533,7 @@ function drawStock() {
         <button class="btn sm go" id="s-run" style="margin-top:8px">Run the checklist on ${esc(h.symbol)}</button></div>`;
   $('stock').innerHTML = `
     <div class="stock-top"><button class="btn" id="s-back">&larr; Back to Warren</button>${bell(h.symbol)}</div>
-    <div class="stock-head"><div class="sym">${esc(h.symbol)}</div>
+    <div class="stock-head"><div class="sym">${warning(h.symbol, true)}${esc(h.symbol)}</div>
       <div><div><b>${esc((chk && chk.company) || h.symbol)}</b></div><div class="muted">${esc(h.sector)}</div></div></div>
     <div class="stats">
       ${stat('Value', p.value != null ? usd(p.value) : dollars(h.amount), p.price ? `${usd(p.price)} a share, ${now}` : '')}
