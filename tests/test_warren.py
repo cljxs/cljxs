@@ -523,13 +523,17 @@ class ASecondSourceChecksTheFigures(Base):
 
     def test_a_real_difference_is_shown_both_ways_not_hidden(self):
         # HIMS: Warren counts capitalised software as capex; Nasdaq does not.
+        # Since 2026-11-20 the filing settles it: Warren's figure is its line.
         ss = self.w.numbers("HIMS", get, verify=True)["second_source"]
-        self.assertEqual(ss["disagree"], ["capex (12 months)"])
+        capex = ss["figures"]["capex_ttm"]
+        self.assertEqual((capex["status"], capex["settled"]["verdict"]), ("explained", "warren"))
         c = self.w.build("HIMS", {"amount": 100, "months": 12, "goal": "growth", "why": "", "hold_drop": "yes"},
                          get, lambda q: (True, json.dumps(ANSWER)), lambda p, g, t: 1 / 0)
         fcf = c["steps"]["cash"]["rows"][0]
-        self.assertEqual(fcf["checked"]["status"], "disagree")
-        self.assertIn("capex", c["caution"][0])
+        self.assertEqual(fcf["checked"]["status"], "settled")
+        item = next(x for x in fcf["checked"]["items"] if x["label"].startswith("capex"))
+        self.assertEqual((item["ours"], item["theirs"]), ("$172M", "$148M"))     # both still shown
+        self.assertIn("Payments to Acquire Productive Assets", item["says"])
 
     def test_a_quarter_nasdaq_has_not_caught_up_with_is_not_checked(self):
         other = self.w.second_source(json.loads(fx("warren-nasdaq-financials-quarterly-asts.json")))
@@ -1008,6 +1012,114 @@ class TheSecretScanReadsTheFixtures(Base):
         self.assertEqual(cs.content_findings(f, cs.BROAD_SHAPES), [])
         f.write_text('{"k": "' + "q7Zr" * 11 + '"}\n')
         self.assertEqual(len(cs.content_findings(f, cs.BROAD_SHAPES)), 1)
+
+
+class TheFilingSaysWhoIsRight(Base):
+    """The owner (2026-11-20), on Nasdaq's $161M of debt against Warren's
+    none: "can we refer warren to this chat to do the search and figure who's
+    right?" The company's own filing is the referee; each case below is a
+    real disagreement Warren has had, put back."""
+
+    def put_back(self, sym, **wrong):
+        facts = json.loads(fx(f"warren-sec-companyfacts-{sym.lower()}.json"))
+        other = self.w.second_source(json.loads(fx(f"warren-nasdaq-financials-quarterly-{sym.lower()}.json")))
+        n = dict(self.w.numbers(sym, get, verify=True), **wrong)
+        n["second_source"] = self.w.cross_check(n, dict(other, **{k: v for k, v in wrong.items() if k.startswith("_")}))
+        self.w.settle(n, facts, n["second_source"], self.w.filings(facts))
+        return n
+
+    def test_hims_notes_read_as_no_debt_are_found_and_used(self):
+        n = self.put_back("HIMS", debt=None)
+        f = n["second_source"]["figures"]["debt"]
+        self.assertEqual((f["status"], f["settled"]["verdict"]), ("settled", "nasdaq"))
+        self.assertEqual(n["debt"], 1367393000)                    # the filing's own figure, used
+        self.assertIn("Convertible Debt", f["settled"]["says"])
+        self.assertIn("10-Q", f["settled"]["link"]["label"])
+        self.assertEqual(n["second_source"]["disagree"], [])
+
+    def test_once_the_debt_is_found_the_no_debt_alarm_goes(self):
+        n = self.put_back("HIMS", debt=None)
+        self.w.derive(n)
+        self.assertFalse([a for a in self.w.alarms(n) if "no debt" in a])
+
+    def test_asts_revenue_from_the_old_tag_is_corrected(self):
+        n = self.put_back("ASTS", revenue_ttm=4418000)
+        f = n["second_source"]["figures"]["revenue_ttm"]
+        self.assertEqual(f["settled"]["verdict"], "nasdaq")
+        self.assertEqual(n["revenue_ttm"], 142880000)
+
+    def test_the_closest_line_wins_current_plus_long_term(self):
+        n = self.put_back("ASTS", debt=777e6)
+        self.assertEqual(n["debt"], 4092497000)                      # both lines, not the long-term one alone
+
+    def test_when_the_filing_holds_warrens_figure_he_keeps_it(self):
+        n = self.put_back("HIMS")
+        f = n["second_source"]["figures"]["capex_ttm"]
+        self.assertEqual(f["settled"]["verdict"], "warren")
+        self.assertEqual(n["capex_ttm"], f["ours"])
+
+    def test_two_lines_of_the_filing_are_both_shown_and_warren_keeps_his(self):
+        # KMI's 10-Q has total revenue ($18.34B) and contract revenue ($16.75B).
+        facts = json.loads(fx("warren-sec-companyfacts-kmi.json"))
+        other = self.w.second_source(json.loads(fx("warren-nasdaq-financials-quarterly-kmi.json")))
+        n = self.w.numbers("KMI", get, verify=True)
+        n["second_source"] = self.w.cross_check(n, dict(other, revenue_ttm=16745e6))
+        self.w.settle(n, facts, n["second_source"], self.w.filings(facts))
+        f = n["second_source"]["figures"]["revenue_ttm"]
+        self.assertEqual((f["status"], f["settled"]["verdict"]), ("explained", "both"))
+        self.assertIn("Revenue from Contract with Customer", f["settled"]["says"])
+        self.assertEqual(n["revenue_ttm"], 18344e6)
+
+    def test_a_number_on_no_line_of_the_filing_is_left_open(self):
+        facts = json.loads(fx("warren-sec-companyfacts-asts.json"))
+        other = self.w.second_source(json.loads(fx("warren-nasdaq-financials-quarterly-asts.json")))
+        n = dict(self.w.numbers("ASTS", get, verify=True), debt=555e6)
+        n["second_source"] = self.w.cross_check(n, dict(other, debt=777e6))
+        self.w.settle(n, facts, n["second_source"], self.w.filings(facts))
+        self.assertEqual(n["second_source"]["disagree"], ["total debt"])
+        self.assertNotIn("settled", n["second_source"]["figures"]["debt"])
+        self.assertEqual(n["debt"], 555e6)                           # unchanged
+
+    def test_a_made_up_nasdaq_figure_loses_to_the_filing(self):
+        facts = json.loads(fx("warren-sec-companyfacts-asts.json"))
+        other = self.w.second_source(json.loads(fx("warren-nasdaq-financials-quarterly-asts.json")))
+        n = self.w.numbers("ASTS", get, verify=True)
+        n["second_source"] = self.w.cross_check(n, dict(other, debt=777e6))
+        self.w.settle(n, facts, n["second_source"], self.w.filings(facts))
+        self.assertEqual(n["second_source"]["figures"]["debt"]["settled"]["verdict"], "warren")
+        self.assertEqual(n["debt"], 4092497000)
+
+    def opened(self):
+        n = dict(self.w.numbers("ASTS", get, verify=True), debt=555e6)
+        other = self.w.second_source(json.loads(fx("warren-nasdaq-financials-quarterly-asts.json")))
+        n["second_source"] = self.w.cross_check(n, dict(other, debt=777e6))
+        return n
+
+    def test_opus_may_only_take_a_side_whose_figure_he_quotes(self):
+        n = self.opened()
+        ans = lambda **g: json.dumps({"figures": [dict({"key": "debt", "side": "nasdaq", "line": "Total debt",
+                                                        "value": 777e6, "source": "https://www.sec.gov/x",
+                                                        "why": "Nasdaq adds leases."}, **g)]})
+        ok, bad = self.w.read_settle_answer(ans(), n, {"debt"})
+        self.assertEqual((len(ok), bad), (1, []))
+        for wrong in ({"value": 4092497000}, {"side": "warren"}, {"why": "Nasdaq adds $40M of leases."}, {"source": "sec.gov"},
+                      {"key": "cash"}, {"side": "both"}):
+            ok, bad = self.w.read_settle_answer(ans(**wrong), n, {"debt"})
+            self.assertEqual(ok, [], wrong)
+            self.assertTrue(bad, wrong)
+
+    def test_opus_reading_is_shown_never_used(self):
+        n = self.opened()
+        reply = json.dumps({"figures": [{"key": "debt", "side": "nasdaq", "line": "Total debt", "value": 777e6,
+                                         "source": "https://investors.example.com/q3", "why": "Nasdaq adds leases."}]})
+        asked = []
+        note = self.w.settle_by_asking(n, lambda q: asked.append(q) or (True, reply))
+        f = n["second_source"]["figures"]["debt"]
+        self.assertEqual((note, f["status"], f["settled"]["by"]), ("", "disagree", "opus"))
+        self.assertIn("not proven by code", f["settled"]["says"])
+        self.assertEqual(n["debt"], 555e6)
+        self.assertIn("total debt", asked[0])
+        self.assertEqual(self.w.settle_by_asking(self.w.numbers("KMI", get, verify=True), lambda q: 1 / 0), "")
 
 
 class ThePageAndTheApi(Base):

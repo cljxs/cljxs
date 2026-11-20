@@ -390,21 +390,26 @@ def ttm_parts(facts, key):
     tag = pick_tag(facts, key)
     if not tag:
         return None, None, []
+    return ttm_of(facts, tag, key in OUTFLOWS or key == "interest")
+
+
+def ttm_of(facts, tag, outflow=False):
+    """ttm_parts for one named tag."""
     a = annual(facts, tag)
     if not a:
         return None, None, []
     fy_end, fy = a[-1]
     rows = [r for r in ytd(facts, tag) if ddate(r[0]) > ddate(fy_end) and (ddate(r[0]) - ddate(fy_end)).days <= 10]
     if not rows:
-        return _clean(key, fy), fy_end, [fy_end]
+        return (abs(fy) if outflow else fy), fy_end, [fy_end]
     s, e, cur = rows[-1]
     n = (ddate(e) - ddate(s)).days
     prior = [(e2, v) for s2, e2, v in ytd(facts, tag)
              if abs((ddate(e) - ddate(e2)).days - 365) <= 10 and abs((ddate(e2) - ddate(s2)).days - n) <= 10]
     if not prior:
-        return _clean(key, fy), fy_end, [fy_end]
+        return (abs(fy) if outflow else fy), fy_end, [fy_end]
     ends = [e, fy_end, prior[-1][0]]
-    if key in OUTFLOWS or key == "interest":
+    if outflow:
         return abs(fy) + abs(cur) - abs(prior[-1][1]), e, ends
     return fy + cur - prior[-1][1], e, ends
 
@@ -578,13 +583,15 @@ def numbers(symbol, get=None, tickers=None, verify=False):
     if not n.get("market_cap"):
         sh = instants(facts, "EntityCommonStockSharesOutstanding")
         n["market_cap"] = sh[-1][1] * n["price"] if sh and n["price"] else None
-    derive(n)
     if verify:
         try:
             other = second_source(get_json(FIN_URL.format(sym=sym), get))
         except Exception as e:
             other = {"error": str(e)[:120]}
         n["second_source"] = cross_check(n, other)
+        settle(n, facts, n["second_source"], by_end)
+    derive(n)
+    if verify:
         n["alarms"] = alarms(n)
     return n
 
@@ -693,6 +700,197 @@ def alarms(n):
     if not g("market_cap"):
         out.append("No market value was found, so the price ratios could not be worked out.")
     return out
+
+
+# ------------------------------------------------- who is right
+# The owner (2026-11-20), on a check where Nasdaq said $161M of debt and
+# Warren none, and their operating incomes differed: "can we refer warren to
+# this chat to do the search and figure who's right on their numbers?" What
+# that chat would do is open the company's own filing for the quarter. So
+# Warren does: every line the filing tags (not just the ones he usually
+# reads) is tried against both figures. The filing is the referee:
+#   a line holds Nasdaq's figure and none holds Warren's -> Nasdaq is right,
+#       and Warren uses the filing's figure from then on in the check;
+#   a line holds Warren's and none Nasdaq's -> Warren is right, he keeps his;
+#   both are lines of the filing -> they count different things, both shown;
+#   neither -> one question to Opus, who searches the company's own reports.
+# Opus's reading is shown as his reading - it never changes a number, since
+# a model asked about arithmetic will eventually claim it did it.
+
+SETTLE_TOL = 0.01          # the filing's own figure, not a near one: 1% or $1M
+SETTLE_LINES = {
+    "revenue_ttm": r"^(Revenues?|RevenueFromContractWithCustomer\w*|SalesRevenue\w*)$",
+    "net_income_ttm": r"^(NetIncomeLoss\w*|ProfitLoss)$",
+    "op_income_ttm": r"^(OperatingIncomeLoss|IncomeLossFromContinuingOperationsBefore\w*)$",
+    "ocf_ttm": r"^NetCashProvidedByUsedInOperatingActivities\w*$",
+    "capex_ttm": r"^(PaymentsToAcquire\w*(PropertyPlantAndEquipment|ProductiveAssets|Software)\w*|PaymentsForSoftware)$",
+    "debt": r"(Debt|Notes|Borrowings|LoansPayable|FinanceLeaseLiabilit)",
+    "cash": r"^Cash\w*$",
+}
+SETTLE_NOT = re.compile(r"Proceeds|Repayment|Issuance|Interest|Amortiz|FairValue|Unamortized|Discount|Premium|Covenant"
+                        r"|Percent|Rate|Increase|Decrease|Payments|Extinguishment|Gain|Loss|Securities|Investment"
+                        r"|Receivable|Restricted|Period|Duration|Number")
+SETTLE_OUTFLOW = {"capex_ttm"}
+
+
+def filing_lines(facts, key, end):
+    """[(label, value)]: every line of the filings that could be this figure
+    for the period ending `end`. Debt also tries each current + long-term pair,
+    since a balance sheet prints them on two lines."""
+    pat = re.compile(SETTLE_LINES[key])
+    out = []
+    for tag, node in ((facts or {}).get("facts") or {}).get("us-gaap", {}).items():
+        if not pat.search(tag) or (key in ("debt", "cash") and SETTLE_NOT.search(tag)):
+            continue
+        label = (node.get("label") or tag).strip()
+        if key in ("debt", "cash"):
+            v = dict(instants(facts, tag)).get(end)
+        else:
+            v, e, _ = ttm_of(facts, tag, key in SETTLE_OUTFLOW)
+            v = v if e == end else None
+        if v is not None:
+            out.append((tag, label, v))
+    if key == "debt":
+        long_ = [x for x in out if "Noncurrent" in x[0]]
+        short = [x for x in out if x[0].endswith("Current") and "Noncurrent" not in x[0]]
+        out += [(a[0] + "+" + b[0], f"{a[1]} + {b[1]}", a[2] + b[2]) for a in long_ for b in short]
+    return [(label, v) for _, label, v in out]
+
+
+def _same(a, b):
+    return a is not None and b is not None and abs(a - b) <= max(SETTLE_TOL * abs(b), 1e6)
+
+
+def settle(n, facts, ss, by_end=None):
+    """Each disagreement in `ss` (cross_check's result) put to the filing.
+    Changes n only where the filing shows Nasdaq right; says why every time."""
+    by_end = by_end or {}
+    if ss.get("status") != "disagree":
+        return ss
+    end = ss["period_end"]
+    for key, f in ss["figures"].items():
+        if f["status"] != "disagree" or key not in SETTLE_LINES:
+            continue
+        lines = filing_lines(facts, key, end)
+        near = lambda x: sorted((l for l in lines if _same(l[1], x)), key=lambda l: abs(l[1] - x))
+        ours = near(f["ours"]) if f["ours"] is not None else []
+        theirs = near(f["theirs"])
+        link = filing_link(n["cik"], by_end[end]) if end in by_end else None
+        doc = link["label"] if link else f"the filing for {end}"
+        q = lambda x: f'"{x}"'
+        if theirs and not ours:
+            label, v = theirs[0]
+            was = money(f["ours"]) if f["ours"] is not None else "nothing"
+            f["settled"] = {"by": "filing", "verdict": "nasdaq", "line": label, "value": v, "link": link,
+                            "says": f"Nasdaq is right. The {doc} reports {money(v)} as {q(label)}; Warren had read {was}. "
+                                    "Warren now uses the filing's figure in this check."}
+            f["status"] = "settled"
+            if key in ("debt", "cash"):
+                n[key] = v
+                if key == "debt":
+                    n["debt_as_of"] = end
+                    if link:
+                        n["debt_src"] = n["cash_src"] = [link]
+            else:
+                n[key] = v
+                n[key + "_end"] = end
+                if link:
+                    n[key[:-4] + "_src"] = [link]
+        elif ours and not theirs:
+            f["settled"] = {"by": "filing", "verdict": "warren", "line": ours[0][0], "value": ours[0][1], "link": link,
+                            "says": f"Warren is right. The {doc} reports {money(ours[0][1])} as {q(ours[0][0])}; "
+                                    f"Nasdaq's {money(f['theirs'])} is on no line of it, so Nasdaq counted it its own way."}
+            f["status"] = "explained"
+        elif ours and theirs:
+            f["settled"] = {"by": "filing", "verdict": "both", "line": ours[0][0], "value": ours[0][1], "link": link,
+                            "says": f"Both are in the {doc}: Warren's {money(ours[0][1])} is {q(ours[0][0])}, "
+                                    f"Nasdaq's {money(theirs[0][1])} is {q(theirs[0][0])}. They count different things; "
+                                    "Warren keeps the line the checklist uses."}
+            f["status"] = "explained"
+    ss["disagree"] = [f["label"] for f in ss["figures"].values() if f["status"] == "disagree"]
+    ss["settled"] = sum(f["status"] in ("settled", "explained") for f in ss["figures"].values())
+    if not ss["disagree"]:
+        ss["status"] = "settled"
+    return ss
+
+
+def settle_question(n, open_):
+    ss = n["second_source"]
+    lines = "\n".join(f'- {f["label"]} (key "{k}"): Warren {money(f["ours"]) if f["ours"] is not None else "found nothing"}, '
+                      f'Nasdaq {money(f["theirs"])}' for k, f in open_)
+    return (f"Two data sources disagree on figures for {n['company']} ({n['symbol']}), for the quarter ending "
+            f"{ss['period_end']} (12-month figures are the four quarters to that date):\n{lines}\n\n"
+            "Warren read his from the SEC's XBRL data; neither appears on any standard line of the filing. Search for "
+            "the company's own 10-Q or 10-K for that quarter, or its earnings release, and find which figure the "
+            "company itself reports - or what it reports instead.\n\nReply with only JSON:\n"
+            '{"figures": [{"key": "the key above", "side": "warren" or "nasdaq" or "neither", '
+            '"line": "the line\'s name as the company prints it", "value": the company\'s figure in dollars as a plain '
+            'number, "source": "the https address you read it on", "why": "one sentence, no numbers: why the two differ"}]}')
+
+
+def read_settle_answer(text, n, keys):
+    """(readings, problems). Opus may only take a side whose figure matches the
+    value he quotes; a value of his own is shown as his, never used."""
+    m = re.search(r"\{.*\}", text or "", re.S)
+    if not m:
+        return [], ["no JSON object in the reply"]
+    try:
+        figs = json.loads(m.group(0)).get("figures") or []
+    except (ValueError, AttributeError) as e:
+        return [], [f"the JSON did not parse: {e}"]
+    out, problems = [], []
+    known = n["second_source"]["figures"]
+    for g in figs if isinstance(figs, list) else []:
+        k = str((g or {}).get("key", ""))
+        if k not in keys:
+            problems.append(f"{k!r} was not asked about")
+            continue
+        side, f = g.get("side"), known[k]
+        try:
+            v = float(g.get("value"))
+        except (TypeError, ValueError):
+            v = None
+        src = str(g.get("source") or "")
+        line, why = str(g.get("line") or "")[:120].strip(), str(g.get("why") or "")[:300].strip()
+        if side not in ("warren", "nasdaq", "neither"):
+            problems.append(f"{k}: side must be warren, nasdaq or neither")
+        elif not src.startswith("https://"):
+            problems.append(f"{k}: no https source")
+        elif side != "neither" and not _same(v, f["ours" if side == "warren" else "theirs"]):
+            problems.append(f"{k}: the value quoted is not {side}'s figure")
+        elif STRAY.search(why) or STRAY.search(line):
+            problems.append(f"{k}: the line and why must carry no numbers")
+        else:
+            out.append({"key": k, "verdict": side, "line": line, "value": v, "source": src[:400], "why": why})
+    return out, problems
+
+
+def settle_by_asking(n, ask=None):
+    """The disagreements the filing could not settle, put to Opus in one
+    question, his web search on. ('' or a note why not.)"""
+    ss = n.get("second_source") or {}
+    open_ = [(k, f) for k, f in (ss.get("figures") or {}).items() if f["status"] == "disagree"]
+    if not open_:
+        return ""
+    if runs_today() >= RUNS_PER_DAY:
+        return "today's Opus runs are used, so the disagreement was not looked into"
+    runs_today(bump=True)
+    ask = ask or (lambda q: _load("wake_warren_settle", "wake.py").ask("warren", q, ASK_TIMEOUT,
+                                                                        tools=("WebSearch", "WebFetch")))
+    ok, text = ask(settle_question(n, open_))
+    if not ok:
+        return f"Opus could not look into the disagreement ({text[:120]})"
+    got, problems = read_settle_answer(text, n, {k for k, _ in open_})
+    for r in got:
+        f = ss["figures"][r["key"]]
+        host = r["source"].split("/")[2]
+        who = {"warren": "Warren's figure", "nasdaq": "Nasdaq's figure", "neither": "neither source's"}[r["verdict"]]
+        says = (f"Opus's reading, not proven by code: the company's own report ({host}) gives "
+                + (f"{money(r['value'])} " if r["value"] is not None else "")
+                + (f'as "{r["line"]}" ' if r["line"] else "") + f"- {who}." + (f" {r['why']}" if r["why"] else ""))
+        f["settled"] = {"by": "opus", "verdict": r["verdict"], "line": r["line"], "value": r["value"],
+                        "link": {"label": host, "url": r["source"]}, "says": says}
+    return ("Opus's reading of the disagreement had problems: " + "; ".join(problems)) if problems and not got else ""
 
 
 STALE_DAYS = 200
@@ -1012,9 +1210,12 @@ def explain(steps, n, peers=(), sector=None):
                 r["sources"] = links
             got = [dict(second[k], key=k) for k in keys if k in second and second[k]["status"] != "not compared"]
             if got:
-                r["checked"] = {"status": "disagree" if any(x["status"] == "disagree" for x in got) else "match",
+                sts = {x["status"] for x in got}
+                r["checked"] = {"status": "disagree" if "disagree" in sts else "settled" if {"settled", "explained"} & sts
+                                else "match",
                                 "items": [{"label": x["label"], "ours": money(x["ours"]), "theirs": money(x["theirs"]),
-                                           "status": x["status"]} for x in got]}
+                                           "status": x["status"], "says": (x.get("settled") or {}).get("says")}
+                                          for x in got]}
             for label, key, formula in FORMULAS:
                 if r["check"].startswith(label) or (label == "EPS" and r["check"].startswith("EPS")):
                     r["formula"] = formula
@@ -1550,6 +1751,9 @@ def build(symbol, inputs, get=None, ask=None, peer_numbers=None):
     tickers = sec_tickers(get)
     n = numbers(sym, get, tickers, verify=True)
     ai, ai_note = ai_part(n, inputs, tickers, ask)
+    settle_note = settle_by_asking(n, ask)
+    if settle_note:
+        ai_note = (ai_note + "; " if ai_note else "") + settle_note
     sector = (ai or {}).get("sector") or n.get("nasdaq_sector") or "Unknown"
     n["_capital_heavy"] = bool((ai or {}).get("capital_heavy"))
     peers = []
