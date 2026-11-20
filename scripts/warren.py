@@ -1056,6 +1056,8 @@ def _cmp(mine, avg, cheaper="cheaper", dearer="dearer"):
     d = pct(mine, avg)
     if abs(d) < 5:
         return f" Its rivals average {avg:g}, about the same."
+    if avg > 0 and mine / avg >= 3:
+        return f" Its rivals average {avg:g}, so it costs about {mine / avg:.0f} times as much as they do."
     return f" Its rivals average {avg:g}, so it is {abs(d):.0f}% {cheaper if d < 0 else dearer} than them."
 
 
@@ -1125,7 +1127,7 @@ def plain_words(key, n, peers=(), sector=None):
             return {"says": f"Its price is {g('peg'):g} times its expected yearly earnings growth - under 1 means you "
                             "pay little for the growth you get.",
                     "scale": "Cheap: under 1 · Fair: 1-2 · Expensive: over 2"}
-        if g("eps_ntm"):
+        if g("eps_ntm") and g("pe_forward") is not None:
             return {"says": "Analysts expect its earnings to shrink, so PEG cannot be used - judge the price on P/E "
                             "or P/S instead.", "scale": "Cheap: under 1 · Fair: 1-2 · Expensive: over 2"}
     if key == "ps" and g("ps") is not None:
@@ -1143,6 +1145,11 @@ def plain_words(key, n, peers=(), sector=None):
         ma = avg("margin_ttm")
         if ma is not None:
             says += f" Its rivals keep ${ma:.2f} on average."
+        op = g("op_income_ttm")
+        if m > 0 and op is not None and op < 0:
+            says += (f" But its business itself lost {money(-op)} (operating income), so this profit came from "
+                     "outside its day-to-day business - a one-off gain, interest or a revalued investment - and "
+                     "should not be counted on to repeat.")
         return {"says": says, "scale": "Thin: under 5% · OK: 5-15% · Strong: over 15% - insurers, grocers and "
                                        "retailers run thin by nature, so compare with rivals"}
     if key == "eps":
@@ -1161,6 +1168,76 @@ TABLE_WAY = {"Forward P/E": ("lower", "Lower is cheaper"), "PEG": ("lower", "Low
                                            "buying after the run")}
 
 
+TABLE_KEY = {"Forward P/E": "pe_forward", "PEG": "peg", "P/S": "ps", "EV/EBITDA": "ev_ebitda",
+             "Dividend yield": "yield", "Leverage": "leverage", "Profit margin": "margin"}
+
+
+def table_blank(label, n):
+    """Why this stock has no figure on a comparison row, in plain words."""
+    g = n.get
+    eps_ntm, eb, nd = g("eps_ntm"), g("ebitda_ttm"), g("net_debt")
+    if label == "Forward P/E":
+        if eps_ntm is not None and eps_ntm <= 0:
+            return ("Analysts expect it to lose money over the next 12 months, so there is no profit to price it "
+                    "on. That is why its price is judged on sales (P/S) instead.")
+        return "No analysts' forecast was found, so there is no forward P/E - its price is judged on the other rows."
+    if label == "PEG":
+        if g("pe_forward") is None:
+            return "PEG is built on the forward P/E, and it has none - so there is no PEG either."
+        return "Analysts expect its earnings to shrink, so there is no growth to measure the price against."
+    if label == "EV/EBITDA":
+        if eb is not None and eb <= 0:
+            return (f"Its EBITDA is {money(eb)} - it loses money even before interest, tax and depreciation - so "
+                    "there are no earnings to price it on and this ratio doesn't apply.")
+        return "Its EBITDA could not be worked out from its filings."
+    if label == "Leverage":
+        if nd is not None and nd <= 0:
+            return (f"It has {money(-nd)} more cash than debt, so it owes nothing on balance - but it loses money, "
+                    "so leverage can't be put as a number. Step 4 covers its debt.")
+        if nd is not None and eb is not None and eb <= 0:
+            return (f"It owes {money(nd)} more than it holds in cash and has no earnings (EBITDA) to pay it down. "
+                    "Step 4 covers its debt.")
+        return "No debt was found in its filings."
+    if label == "Profit margin":
+        return "Its revenue or profit was not reported, so there is no margin."
+    if label == "Dividend yield":
+        return "It pays no dividend."
+    return ""
+
+
+def table_means(table, n, peers=(), sector=None):
+    """One "what it means" line per comparison row, for this stock - the
+    same sentences as the steps' rows, and why a blank is blank."""
+    out = []
+    for row in table["rows"]:
+        label = row[0]
+        if label == "1-year price change":
+            ch = n.get("change_1y")
+            if ch is None:
+                out.append({"says": "No year of prices was found.", "scale": ""})
+                continue
+            rv = [p.get("change_1y") for p in peers if p.get("change_1y") is not None]
+            says = f"The price is {'up' if ch >= 0 else 'down'} {abs(ch):g}% over the last year."
+            if rv:
+                avg_ = sum(rv) / len(rv)
+                says += f" Its rivals moved {avg_:+.1f}% on average"
+                says += (", so it has fallen with its whole group - the market cooled on all of them, not just this one."
+                         if ch < 0 and avg_ < 0 else ", so it rose with its whole group." if ch >= 0 and avg_ >= 0
+                         else ", so it went the other way from its group - worth knowing why.")
+            if ch <= -40:
+                says += " A big fall can be a chance to buy cheaper, or a sign of trouble; Steps 2-4 tell which."
+            elif ch >= 50:
+                says += " You would be buying after a big run."
+            out.append({"says": says, "scale": "Not good or bad by itself"})
+            continue
+        if label == "Dividend yield" and not n.get("yield"):
+            out.append({"says": "It pays no dividend - you would earn only from the price going up.", "scale": ""})
+            continue
+        pw = plain_words(TABLE_KEY.get(label, ""), n, peers, sector)
+        out.append(pw if pw else {"says": table_blank(label, n), "scale": ""})
+    return out
+
+
 def table_notes(table):
     """One line per comparison row: which way is better and this stock's place."""
     out = []
@@ -1175,6 +1252,16 @@ def table_notes(table):
             except ValueError:
                 pass
         mine = next((v for c, v in vals if c == sym), None)
+        if label == "Dividend yield" and vals and not any(v for _, v in vals):
+            out.append(f"None of the {len(vals)} pays a dividend.")
+            continue
+        if label == "Dividend yield" and mine == 0:
+            payers = [c for c, v in vals if v]
+            out.append(f"{sym} pays no dividend; {', '.join(payers)} {'does' if len(payers) == 1 else 'do'}.")
+            continue
+        if way and len(vals) >= 2 and len({v for _, v in vals}) == 1:
+            out.append(f"{hint}. All {len(vals)} are the same.")
+            continue
         if way and mine is not None and len(vals) >= 2:
             ranked = sorted(vals, key=lambda cv: cv[1], reverse=(way == "higher"))
             place = [c for c, _ in ranked].index(sym) + 1
@@ -1348,11 +1435,14 @@ def explain(steps, n, peers=(), sector=None):
                     pw = plain_words(key, n, peers, sector)
                     if pw:
                         r["means"], r["scale"] = pw["says"], pw["scale"]
+                    elif label in ("Forward P/E", "PEG", "EV/EBITDA", "Leverage"):
+                        r["means"] = table_blank(label, n)     # a blank row says why, as in the table
                     break
         if "table" in st:
             st["table"]["formulas"] = [next((f for label, _, f in FORMULAS if row_[0].startswith(label)), "")
                                        for row_ in st["table"]["rows"]]
             st["table"]["notes"] = table_notes(st["table"])
+            st["table"]["means"] = table_means(st["table"], n, peers, sector)
     return steps
 
 
@@ -1590,7 +1680,8 @@ def rate_price(n, peers, sector, cyclical):
         elif mine <= avg * 1.25:
             r, why = YELLOW, f"up to a quarter dearer than its rivals' average of {avg}"
         else:
-            r, why = RED, f"{pct(mine, avg):.0f}% dearer than its rivals' average of {avg}"
+            r, why = RED, (f"about {mine / avg:.0f} times its rivals' average of {avg}" if avg > 0 and mine / avg >= 3
+                           else f"{pct(mine, avg):.0f}% dearer than its rivals' average of {avg}")
         return row(label, f"{mine} vs. peer average {avg}", r, why)
     if loss:
         ps = vs(n.get("ps"), peer_avg(peers, "ps"), "Price/Sales (P/S)")

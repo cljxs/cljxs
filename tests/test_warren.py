@@ -1064,6 +1064,60 @@ class EachStepAgainstItsRivals(Base):
         self.assertFalse([r for r in self.rows(self.build("ASTS", peers=())).values() if r.get("vs")])
 
 
+class Step5SaysWhatItMeansToo(Base):
+    """The owner (2026-11-20, an IONQ check): Step 5's comparison table had
+    no "what it means". Every row now has one - and a blank says why it is
+    blank, since a dash told him nothing."""
+
+    def table(self):
+        c = self.w.build("ASTS", {"amount": 100, "months": 12, "goal": "growth", "why": "", "hold_drop": "yes"}, get,
+                         lambda q: (True, json.dumps(dict(ANSWER, peers=["HIMS", "KMI"]))),
+                         lambda p, g, t: self.w.numbers(p, get, t))
+        t = c["steps"]["price"]["table"]
+        return {r[0]: (r, note, m) for r, note, m in zip(t["rows"], t["notes"], t["means"])}
+
+    def test_every_row_has_a_meaning(self):
+        t = self.table()
+        self.assertEqual(len(t), 8)
+        for label, (_, _, m) in t.items():
+            self.assertTrue(m["says"], label)
+
+    def test_a_blank_says_why(self):
+        t = self.table()
+        self.assertIn("lose money over the next 12 months", t["Forward P/E"][2]["says"])
+        self.assertIn("it has none", t["PEG"][2]["says"])                  # not "earnings shrink"
+        self.assertIn("EBITDA is -$650M", t["EV/EBITDA"][2]["says"])
+        self.assertIn("pays no dividend", t["Dividend yield"][2]["says"])
+
+    def test_a_doesnt_apply_row_below_the_table_says_why_too(self):
+        c = self.w.build("ASTS", {"amount": 100, "months": 12, "goal": "growth", "why": "", "hold_drop": "yes"}, get,
+                         lambda q: (True, json.dumps(dict(ANSWER, peers=["HIMS", "KMI"]))),
+                         lambda p, g, t: self.w.numbers(p, get, t))
+        rows = {r["check"].split(" ")[0]: r for r in c["steps"]["price"]["rows"]}
+        self.assertIn("it has none", rows["PEG"]["means"])
+        self.assertIn("EBITDA is -$650M", rows["EV/EBITDA"]["means"])
+
+    def test_no_dividend_is_not_ranked(self):
+        t = self.table()
+        self.assertEqual(t["Dividend yield"][1], "ASTS pays no dividend; KMI does.")
+        notes = self.w.table_notes({"columns": ["IONQ", "RGTI", "QBTS"], "rows": [["Dividend yield", "0.0%", "0.0%", "0.0%"]]})
+        self.assertEqual(notes, ["None of the 3 pays a dividend."])        # was "IONQ is the highest-paying"
+
+    def test_a_profit_from_outside_the_business_is_flagged(self):
+        n = {"margin_ttm": 67.1, "op_income_ttm": -350e6}
+        says = self.w.plain_words("margin", n)["says"]
+        self.assertIn("its business itself lost $350M", says)
+        self.assertNotIn("its business itself", self.w.plain_words("margin", {"margin_ttm": 10, "op_income_ttm": 5e6})["says"])
+
+    def test_a_price_many_times_the_rivals_says_times(self):
+        self.assertIn("about 28 times", self.w._cmp(73.33, 2.6))
+        self.assertIn("49% cheaper", self.w._cmp(9.4, 18.6))
+
+    def test_the_year_move_is_set_against_the_rivals(self):
+        says = self.table()["1-year price change"][2]["says"]
+        self.assertTrue(says.startswith("The price is down 54.9% over the last year. Its rivals moved -19.1% on average"))
+
+
 class TheFilingSaysWhoIsRight(Base):
     """The owner (2026-11-20), on Nasdaq's $161M of debt against Warren's
     none: "can we refer warren to this chat to do the search and figure who's
