@@ -169,10 +169,17 @@ def niches(d=None, now=None):
     Retired niches are not in it."""
     d = d or load()
     now = now or datetime.now(timezone.utc)
-    seeds = dict.fromkeys(in_season(now), "season")
+    season = in_season(now)
+    seeds = dict.fromkeys(season, "season")
     seeds.update(dict.fromkeys(STARTER, "starter"))
     seeds.update({k: v.get("source", "found") for k, v in d["niches"].items()})
-    out, seen = [], {same(r) for r in d.get("retired") or {}}
+    # A season's phrases are measured all season, retired or not. swap()
+    # retires the weakest by opening, and a Christmas phrase in November is
+    # a crowded market - so within ten days the whole Christmas push had
+    # been swapped out for good, and Scout's Christmas character ideas
+    # stopped (owner, 2026-11-20: "How do i get the Christmas character
+    # themed ideas back"). Bringing them back here also undoes that.
+    out, seen = [], {same(r) for r in d.get("retired") or {}} - {same(p) for p in season}
     for seed, source in seeds.items():
         # Plurals are one niche: 'cute cat stickers', 'cute cats sticker' and
         # 'cute cat sticker' were all added before same() existed. The first
@@ -267,7 +274,10 @@ def swap(d, now=None, keep=(), n=None):
     if not waiting:
         return []
     opening = _load("scout_ideas_open", "scout-ideas.py").opening      # loaded once
-    judged = [(s, strength(s, opening)) for s, _src, age in active if age is not None and s not in keep]
+    # Never an in-season phrase: the season is the owner's choice, not a
+    # weak niche - see niches().
+    judged = [(s, strength(s, opening)) for s, src, age in active
+              if age is not None and s not in keep and src != "season"]
     weakest = sorted([(s, v) for s, v in judged if v is not None], key=lambda sv: sv[1])[:len(waiting)]
     day = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d")
     for seed, _v in weakest:

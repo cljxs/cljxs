@@ -202,6 +202,39 @@ class TheScanAlwaysMeasuresSomething(unittest.TestCase):
         self.assertEqual(len(self.m.niches(d)), 3, "still within the limit")
         self.assertTrue(set(out) <= set(d["retired"]), "and never brought back")
 
+    def test_a_season_phrase_is_never_swapped_out_in_season(self):
+        # 2026-11-20, the owner: "How do i get the Christmas character themed
+        # ideas back". A Christmas phrase in November is a crowded market, so
+        # it scored weakest and swap() retired the whole push within days.
+        # Reintroduced bug: swap() judging season phrases like any other.
+        self.m.SEASONS = [("01-01", "12-31", ["christmas cat sweatshirt"])]
+        self.m.MAX_NICHES = 3
+        self.m.STARTER = ["frog sticker", "dog mom mug"]
+        self.tags = []
+        self.run_scan(n=3)
+        weak = self.m.SCANS / f"{self.m.slug('christmas cat sweatshirt')}.json"
+        doc = json.loads(weak.read_text())
+        doc["rows"][0].update(selling=1, reviews=1)        # sells, barely: the weakest
+        weak.write_text(json.dumps(doc))
+        (self.m.SCANS / "totes.json").write_text(json.dumps({"seed": "book tote", "rows": [
+            row("book tote", 900, 40, 8, tags=["library book tote"])]}))
+        self.run_scan(n=0)
+        out = [x["niche"] for x in json.loads(self.m.LAST.read_text())["swapped"]]
+        self.assertNotIn("christmas cat sweatshirt", out)
+        self.assertIn("christmas cat sweatshirt", [s for s, _src, _age in self.m.niches(self.m.load())])
+
+    def test_a_season_phrase_swapped_out_before_the_fix_comes_back(self):
+        # The droplet's niches.json already lists the Christmas phrases as
+        # retired. In season they are measured again; out of season not.
+        self.m.SEASONS = [("11-01", "12-15", ["christmas cat sweatshirt"])]
+        d = {"niches": {}, "retired": {"christmas cat sweatshirt": "2026-11-12", "dog mom mug": "2026-11-12"}}
+        nov = datetime(2026, 11, 20, tzinfo=timezone.utc)
+        listed = [s for s, _src, _age in self.m.niches(d, now=nov)]
+        self.assertIn("christmas cat sweatshirt", listed)
+        self.assertNotIn("dog mom mug", listed, "anything else retired stays retired")
+        jan = datetime(2027, 1, 9, tzinfo=timezone.utc)
+        self.assertNotIn("christmas cat sweatshirt", [s for s, _a, _b in self.m.niches(d, now=jan)])
+
     def test_no_swap_without_a_new_niche_waiting(self):
         self.m.MAX_NICHES = 2
         self.tags = []
