@@ -691,6 +691,47 @@ class NewsOnWhatYouOwn(Base):
         self.assertEqual((a["n"], a["tone"]), (1, "todo"))
 
 
+class EachAlertSaysHowMuchItMatters(Base):
+    """The owner asked (2026-11-20) to rate how important each piece of news
+    is: 1 Minor to 5 Major, most important shown first."""
+
+    def head(self, hid, title="AST SpaceMobile files to offer 10M shares"):
+        return {"symbol": "ASTS", "id": hid, "title": title, "publisher": "x", "published": "Thu, 19 Nov 2026 15:00:00 +0000"}
+
+    def test_the_rating_is_read_and_a_bad_one_is_medium(self):
+        by = {h["id"]: h for h in (self.head("a0000001"), self.head("a0000002"), self.head("a0000003"))}
+        ans = json.dumps({"alerts": [
+            {"id": "a0000001", "symbol": "ASTS", "signal": "sell", "rule": 0, "importance": 5, "why": "A share sale."},
+            {"id": "a0000002", "symbol": "ASTS", "signal": "watch", "rule": 0, "importance": 9, "why": "Off the scale."},
+            {"id": "a0000003", "symbol": "ASTS", "signal": "watch", "rule": 0, "why": "No rating given."}]})
+        got = self.w.read_news_answer(ans, by, {"ASTS": []})
+        self.assertEqual([x["importance"] for x in got], [5, 3, 3])
+
+    def test_the_question_explains_the_scale(self):
+        q = self.w.news_question([{"symbol": "ASTS", "company": "AST", "sell_rules": [], "buy_more": "",
+                                   "headlines": [self.head("a0000001")]}])
+        self.assertIn("5 Major", q)
+        self.assertIn('"importance": 1 to 5', q)
+        self.assertIn("same story, answer only the clearest one", q)
+
+    def test_most_important_first_and_the_badge_turns_red(self):
+        self.w.write_json(self.w.ALERTS, {"alerts": [
+            dict(self.head("a0000001"), signal="watch", why="w", importance=2, seen=False),
+            dict(self.head("a0000002"), signal="watch", why="w", importance=5, seen=False),
+            dict(self.head("a0000003"), signal="watch", why="w", seen=False),           # from before the rating
+            dict(self.head("a0000004"), signal="watch", why="w", importance=4, seen=True)]})
+        b = self.w.news_board()
+        self.assertEqual([x["id"] for x in b["alerts"]], ["a0000002", "a0000003", "a0000001", "a0000004"])
+        self.assertEqual(b["important"], 1, "a dismissed one does not count")
+        spec = importlib.util.spec_from_file_location("att_imp", ROOT / "scripts" / "attention.py")
+        att = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(att)
+        att._load = lambda name, file: self.w
+        a = att.warren()
+        self.assertEqual(a["tone"], "alert", "a Major headline is an alert even with no sell signal")
+        self.assertTrue(a["why"][0].startswith("1 headline rated High or Major"))
+
+
 class TheOwnersOwnWordsAreSearchedFor(Base):
     """The owner asked (2026-11-19): if the news talks about what his sell
     rules or buy-more test watch for, he wants to know - as part of the whole
@@ -771,6 +812,7 @@ class TheOwnersOwnWordsAreSearchedFor(Base):
         offer = next(x for x in b["alerts"] if "offer 10M shares" in x["title"])
         self.assertEqual((offer["signal"], offer["by"]), ("watch", "words"), "the model left it out; the words did not")
         self.assertEqual(offer["why"], "It mentions offering - words from your sell rule 3.")
+        self.assertEqual(offer["importance"], self.w.WORDS_IMPORTANCE, "not judged by the model: Low")
         self.assertTrue(offer["rule"].startswith("I would sell if the company loses or fails to secure the spectrum"))
 
     def test_the_page_shows_the_words(self):

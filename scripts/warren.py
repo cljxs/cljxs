@@ -73,6 +73,11 @@ NEWS_SEARCH_URL = "https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=
 SEARCH_PER_NAME = 15
 SEARCH_TERMS = 8                  # terms in one search, names first
 WATCH_ALERTS_PER_STOCK = 3        # code's own "worth a look" alerts, per stock per run
+# How much a headline matters, 1-5 (owner, 2026-11-20: "rate how important
+# each piece of news is"). The model rates what it answers; an alert code
+# raised on words alone, unjudged, is WORDS_IMPORTANCE.
+IMPORTANCE = {5: "Major", 4: "High", 3: "Medium", 2: "Low", 1: "Minor"}
+WORDS_IMPORTANCE = 2
 
 # Opus on the plan is the owner's to spend; a check is one question, a
 # re-check another. Ten a day is far more than one person buys.
@@ -1620,11 +1625,17 @@ def news_question(groups):
             "another company only counts if it plainly names this one. A headline marked 'mentions' uses words "
             "from one of the owner's own rules: look at it closely - if it really is about what that rule watches "
             "for but does not yet change the case, answer it as watch; if it only names the words in passing "
-            "(a price recap, a list of stocks), leave it out.\n\n"
+            "(a price recap, a list of stocks), leave it out. When several headlines tell the same story, answer "
+            "only the clearest one.\n\n"
+            "Rate how much each one matters to this owner, 1 to 5: 5 Major - could change the whole reason to own "
+            "it right now (fraud, a going-concern doubt, losing its main customer or partner, a big share sale, a "
+            "failed key launch or product, guidance cut hard); 4 High - real news that bears directly on one of the "
+            "owner's rules; 3 Medium - worth reading, may matter later; 2 Low - background or plans with no "
+            "near-term effect; 1 Minor - barely related.\n\n"
             + "\n\n".join(parts) +
             "\n\nAnswer with JSON only, no prose: {\"alerts\": [{\"id\": \"headline id\", \"symbol\": \"TICKER\", "
             "\"signal\": \"sell\", \"buy\" or \"watch\", \"rule\": the sell rule's number it touches, or 0, "
-            "\"why\": \"one plain sentence for a beginner\"}]}. An empty list is a fine answer. "
+            "\"importance\": 1 to 5, \"why\": \"one plain sentence for a beginner\"}]}. An empty list is a fine answer. "
             "Use no number in 'why' that is not in the headline.")
 
 
@@ -1656,7 +1667,12 @@ def read_news_answer(text, by_id, rules_of):
             continue
         if any(num not in h["title"] for num in re.findall(r"\d[\d.,]*", why)):
             continue
+        try:
+            imp = int(x.get("importance"))
+        except (TypeError, ValueError):
+            imp = None
         out.append({"id": h["id"], "symbol": h["symbol"], "signal": sig, "why": why,
+                    "importance": imp if imp in IMPORTANCE else 3,
                     "rule": (rules_of[h["symbol"]][rule - 1] if rule else None),
                     "matched": sorted({t for _, _, ts in h.get("hits") or [] for t in ts}),
                     "title": h["title"], "publisher": h.get("publisher"), "link": h.get("link"),
@@ -1746,7 +1762,7 @@ def watch_news(now=None, fetch=None, ask=None, search=None):
         flagged.sort(key=lambda x: headline_time(x) or now, reverse=True)
         for x in flagged[:WATCH_ALERTS_PER_STOCK]:
             kind, n, words = next(hit for hit in x["hits"] if strong(hit))
-            got.append({"id": x["id"], "symbol": sym, "signal": "watch", "by": "words",
+            got.append({"id": x["id"], "symbol": sym, "signal": "watch", "by": "words", "importance": WORDS_IMPORTANCE,
                         "why": f"It mentions {', '.join(words)} - words from your "
                                + (f"sell rule {n}." if kind == "sell" else "buy-more test."),
                         "rule": (rules_of[sym][n - 1] if kind == "sell" and n <= len(rules_of[sym]) else None),
@@ -1793,8 +1809,12 @@ def news_board():
     the last few dismissed, and how the last run went."""
     alerts = (read_json(ALERTS, {}) or {}).get("alerts") or []
     unseen = [x for x in alerts if not x.get("seen")]
-    return {"alerts": list(reversed(unseen)) + list(reversed([x for x in alerts if x.get("seen")]))[:20],
-            "unseen": len(unseen), "sell": sum(x["signal"] == "sell" for x in unseen),
+    # Most important first, newest first within it; alerts from before the
+    # rating have none and sort as Medium.
+    unseen = sorted(reversed(unseen), key=lambda x: -(x.get("importance") or 3))
+    return {"alerts": unseen + list(reversed([x for x in alerts if x.get("seen")]))[:20],
+            "unseen": len(unseen), "important": sum((x.get("importance") or 0) >= 4 for x in unseen),
+            "sell": sum(x["signal"] == "sell" for x in unseen),
             "buy": sum(x["signal"] == "buy" for x in unseen), "watch": sum(x["signal"] == "watch" for x in unseen),
             "last": (read_json(NEWS_SEEN, {}) or {}).get("last")}
 

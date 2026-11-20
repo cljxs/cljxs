@@ -74,6 +74,11 @@
   .ed .acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
   .bell{font-size:12px;font-weight:700;padding:1px 6px;border-radius:7px;margin-right:6px}
   .bell.sell{background:rgba(240,163,163,.18);color:#f0a3a3}
+  .imp{display:inline-block;font-size:12px;font-weight:700;letter-spacing:.5px;margin-right:8px;padding:2px 7px;border-radius:7px}
+  .imp.i5{background:rgba(240,120,120,.22);color:#ff9b9b}
+  .imp.i4{background:rgba(245,170,100,.2);color:#f5b26b}
+  .imp.i3{background:rgba(245,194,107,.14);color:#f5c26b}
+  .imp.i2,.imp.i1,.imp.i0{background:rgba(160,170,190,.12);color:var(--mute)}
   .bell.watch{background:rgba(245,194,107,.18);color:#f5c26b}
   .amber{color:#f5c26b}
   .bell.buy{background:rgba(95,211,154,.18);color:#5fd39a}
@@ -405,6 +410,7 @@ function drawNewsSummary() {
   const n = D.news || {}, last = n.last || {};
   const parts = [];
   if (n.unseen) parts.push(`<b>${n.unseen} news alert${n.unseen === 1 ? '' : 's'}</b>`
+    + (n.important ? ` &middot; <span class="down"><b>${n.important} rated High or Major</b></span>` : '')
     + (n.sell ? ` &middot; <span class="down">${n.sell} to consider selling</span>` : '')
     + (n.buy ? ` &middot; <span class="up">${n.buy} to consider buying more</span>` : '')
     + (n.watch ? ` &middot; <span class="amber">${n.watch} about your rules</span>` : '') + ' - tap the stock with the bell');
@@ -419,11 +425,18 @@ function drawNewsSummary() {
     load();
   };
 }
+const IMP = { 5: 'Major', 4: 'High', 3: 'Medium', 2: 'Low', 1: 'Minor' };
+function importance(a) {
+  const n = a.importance;
+  if (!n) return '<span class="imp i0" title="This alert came before Warren rated news">Not rated</span>';
+  return `<span class="imp i${n}" title="How much this matters, 1 to 5${a.by === 'words' ? ' - your rules\' words only, not yet judged' : ''}">`
+    + `${'&#9679;'.repeat(n)}${'&#9675;'.repeat(5 - n)} ${IMP[n]}</span>`;
+}
 function newsBody(h) {
   const al = alertsFor(h.symbol);
   if (!al.length) return '<div class="why">No news alerts for this stock yet. Warren flags headlines that touch its sell rules or its buy-more test from the last check.</div>';
   return al.map(a => `<div class="alert ${a.signal}${a.seen ? ' seen' : ''}">
-      <div><span class="pill ${a.signal === 'sell' ? 'R' : a.signal === 'buy' ? 'G' : 'Y'}">${a.signal === 'sell' ? 'Consider selling' : a.signal === 'buy' ? 'Consider buying more' : 'Worth a look'}</span>
+      <div>${importance(a)}<span class="pill ${a.signal === 'sell' ? 'R' : a.signal === 'buy' ? 'G' : 'Y'}">${a.signal === 'sell' ? 'Consider selling' : a.signal === 'buy' ? 'Consider buying more' : 'Worth a look'}</span>
         <span class="muted">${esc(a.publisher || '')}${a.published ? ' &middot; ' + esc(a.published.replace(/ [+-]\d{4}$/, '').replace(/:\d\d$/, '')) : ''}</span></div>
       <div style="margin:4px 0">${/^https:\/\/[^\s"'<>]+$/.test(a.link || '') ? `<a href="${esc(a.link)}" target="_blank" rel="noopener">${esc(a.title)}</a>` : esc(a.title)}</div>
       <div>${esc(a.why)}</div>

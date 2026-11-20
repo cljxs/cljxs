@@ -110,7 +110,9 @@ def warren():
         why.append(plural(b["buy"], "headline") + " that may be a reason to buy more")
     if b.get("watch"):
         why.append(plural(b["watch"], "headline") + " about what your sell or buy-more rules watch for")
-    return {"n": b["unseen"], "tone": "alert" if b["sell"] else "todo", "why": why}
+    if b.get("important"):
+        why.insert(0, plural(b["important"], "headline") + " rated High or Major")
+    return {"n": b["unseen"], "tone": "alert" if b["sell"] or b.get("important") else "todo", "why": why}
 
 
 SOURCES = {"shop": shop, "stan": stan, "agentroom": agentroom, "bolt": bolt, "warren": warren}
