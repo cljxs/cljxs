@@ -1,0 +1,27 @@
+[Unit]
+Description=Agent Room runner - works the runs the owner starts on /agentroom, one at a time
+Documentation=https://github.com/cljxs/cljxs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WorkingDirectory=/root/ecosystem
+# A run lives in agentroom/state/room.db, not in this process: every step
+# can be redone, so a restart (or the droplet rebooting) resumes a run where
+# it was without paying for a reply twice. Stopping this service stops work
+# on a run; the run itself stays, and carries on when it starts again.
+# Money is checked by agentroom.py before every AI call, against
+# agentroom_daily_ai and agentroom_run_max in tasks/limits.json and the
+# Agent Room's own OpenRouter key.
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/agentroom.py runner
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

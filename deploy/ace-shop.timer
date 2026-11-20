@@ -1,0 +1,15 @@
+[Unit]
+Description=Line Shopper: four price checks a day, Eastern
+
+[Timer]
+# One credit per sport with an unbet game in the next 12 hours (ace-shop.py
+# LOOK_AHEAD_H): 10:30 the noon and 1pm kick-offs, 13:30 the afternoon,
+# 16:30 the evening NBA and night games, 18:45 the late games.
+OnCalendar=*-*-* 10:30 America/New_York
+OnCalendar=*-*-* 13:30 America/New_York
+OnCalendar=*-*-* 16:30 America/New_York
+OnCalendar=*-*-* 18:45 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,17 @@
+[Unit]
+Description=Ace Props: NBA points milestones by plain code - settle, refresh box scores, bet up to 2 a day (no AI, costs nothing)
+Documentation=https://github.com/cljxs/cljxs
+
+[Service]
+# Added 2026-10-26 (owner). Bets go into Ace's bets.jsonl as book "props":
+# his bankroll, none of his measures. The first run fills the box-score store
+# from last season (about 1,300 games), hence the long timeout; later runs
+# read a day or two.
+Type=oneshot
+User=root
+Environment=HOME=/root
+WorkingDirectory=/root/ecosystem
+ExecStart=/usr/bin/flock /run/ace-props.lock /usr/bin/python3 /root/ecosystem/scripts/ace-props.py run
+TimeoutStartSec=1800
+StandardOutput=journal
+StandardError=journal

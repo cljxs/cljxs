@@ -1,0 +1,7 @@
+Stan is not an OpenClaw agent: scripts/stan-fetch.py (no AI) and
+scripts/stan.py on stan-fetch.timer and stan-cycle.timer. stan.py makes ONE
+direct OpenRouter call a day, on the shared key, with its own cap
+(stan_daily_ai in tasks/limits.json) - so there is no AGENTS.md to build and
+no OpenClaw registration to check. preflight.py and deploy.sh read this file.
+The model is watchlist.json's "model", checked against OpenRouter before
+every call.

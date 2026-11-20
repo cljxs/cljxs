@@ -1,0 +1,15 @@
+[Unit]
+Description=Once a day, a ready-to-post TikTok kit for the Etsy shop
+
+# Named tiktok-*, not emily-*: Emily is woken by the task dispatcher and has
+# no timer of her own (deploy.sh says so, and tests hold it). This wakes no
+# model - install it with:  scripts/deploy.sh tiktok
+
+[Timer]
+# After Fury's 9:30 Eastern briefing (08:30 Chicago), whose run fetches
+# the day's store snapshot, so the kit is chosen from today's listings.
+OnCalendar=*-*-* 09:48 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

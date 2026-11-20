@@ -1,0 +1,1 @@
+Config path is valid but unset: agents.defaults.timeoutSeconds. The runtime default applies until you set an authored value with openclaw config set agents.defaults.timeoutSeconds <value>.

@@ -1,0 +1,29 @@
+{
+  "_about": [
+    "Stan's watchlist: the pain phrases the fetcher searches Hacker News for.",
+    "Each phrase is searched as an exact phrase. weight is how often a match",
+    "is a real software pain (1.0 nearly always, 0.5 about half the time) - a",
+    "starting guess, to be tuned from what the owner approves and rejects.",
+    "Volumes are the last 30 days on 2026-10-14, measured, not guessed.",
+    "The settings below the list are read by stan.py; change them here."
+  ],
+  "phrases": [
+    {"phrase": "would pay for",     "weight": 1.0, "per_month": 28},
+    {"phrase": "I'd pay for",       "weight": 1.0, "per_month": 6},
+    {"phrase": "happily pay",       "weight": 0.9, "per_month": 23},
+    {"phrase": "take my money",     "weight": 0.7, "per_month": 6},
+    {"phrase": "why isn't there",   "weight": 0.8, "per_month": 8},
+    {"phrase": "why is there no",   "weight": 0.7, "per_month": 13},
+    {"phrase": "is there an app",   "weight": 0.7, "per_month": 3},
+    {"phrase": "looking for a tool","weight": 0.7, "per_month": 3},
+    {"phrase": "I wish there was",  "weight": 0.5, "per_month": 38},
+    {"phrase": "I wish there were", "weight": 0.5, "per_month": 25}
+  ],
+  "fetch_days_first_run": 14,
+  "keep_backlog_days": 21,
+  "model": "google/gemini-2.5-flash-lite",
+  "max_tokens": 4000,
+  "posts_per_cycle": 40,
+  "min_score": 6.0,
+  "max_surfaced": 5
+}

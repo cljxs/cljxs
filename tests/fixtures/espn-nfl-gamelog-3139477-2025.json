@@ -1,0 +1,586 @@
+{
+ "names": [
+  "completions",
+  "passingAttempts",
+  "passingYards",
+  "completionPct",
+  "yardsPerPassAttempt",
+  "passingTouchdowns",
+  "interceptions",
+  "longPassing",
+  "sacks",
+  "QBRating",
+  "adjQBR",
+  "rushingAttempts",
+  "rushingYards",
+  "yardsPerRushAttempt",
+  "rushingTouchdowns",
+  "longRushing"
+ ],
+ "events": {
+  "401772798": {
+   "id": "401772798",
+   "week": 15,
+   "atVs": "vs",
+   "gameDate": "2025-12-14T18:00:00.000+00:00",
+   "score": "16-13",
+   "homeTeamId": "12",
+   "awayTeamId": "24",
+   "gameResult": "L",
+   "opponent": {
+    "id": "24",
+    "displayName": "Los Angeles Chargers",
+    "abbreviation": "LAC"
+   }
+  },
+  "401772932": {
+   "id": "401772932",
+   "week": 14,
+   "atVs": "vs",
+   "gameDate": "2025-12-08T01:20:00.000+00:00",
+   "score": "20-10",
+   "homeTeamId": "12",
+   "awayTeamId": "34",
+   "gameResult": "L",
+   "opponent": {
+    "id": "34",
+    "displayName": "Houston Texans",
+    "abbreviation": "HOU"
+   }
+  },
+  "401772694": {
+   "id": "401772694",
+   "week": 13,
+   "atVs": "@",
+   "gameDate": "2025-11-27T21:30:00.000+00:00",
+   "score": "31-28",
+   "homeTeamId": "6",
+   "awayTeamId": "12",
+   "gameResult": "L",
+   "opponent": {
+    "id": "6",
+    "displayName": "Dallas Cowboys",
+    "abbreviation": "DAL"
+   }
+  },
+  "401772779": {
+   "id": "401772779",
+   "week": 12,
+   "atVs": "vs",
+   "gameDate": "2025-11-23T18:00:00.000+00:00",
+   "score": "23-20 OT",
+   "homeTeamId": "12",
+   "awayTeamId": "11",
+   "gameResult": "W",
+   "opponent": {
+    "id": "11",
+    "displayName": "Indianapolis Colts",
+    "abbreviation": "IND"
+   }
+  },
+  "401772778": {
+   "id": "401772778",
+   "week": 11,
+   "atVs": "@",
+   "gameDate": "2025-11-16T21:25:00.000+00:00",
+   "score": "22-19",
+   "homeTeamId": "7",
+   "awayTeamId": "12",
+   "gameResult": "L",
+   "opponent": {
+    "id": "7",
+    "displayName": "Denver Broncos",
+    "abbreviation": "DEN"
+   }
+  },
+  "401772768": {
+   "id": "401772768",
+   "week": 9,
+   "atVs": "@",
+   "gameDate": "2025-11-02T21:25:00.000+00:00",
+   "score": "28-21",
+   "homeTeamId": "2",
+   "awayTeamId": "12",
+   "gameResult": "L",
+   "opponent": {
+    "id": "2",
+    "displayName": "Buffalo Bills",
+    "abbreviation": "BUF"
+   }
+  },
+  "401772817": {
+   "id": "401772817",
+   "week": 8,
+   "atVs": "vs",
+   "gameDate": "2025-10-28T00:15:00.000+00:00",
+   "score": "28-7",
+   "homeTeamId": "12",
+   "awayTeamId": "28",
+   "gameResult": "W",
+   "opponent": {
+    "id": "28",
+    "displayName": "Washington Commanders",
+    "abbreviation": "WSH"
+   }
+  },
+  "401772753": {
+   "id": "401772753",
+   "week": 7,
+   "atVs": "vs",
+   "gameDate": "2025-10-19T17:00:00.000+00:00",
+   "score": "31-0",
+   "homeTeamId": "12",
+   "awayTeamId": "13",
+   "gameResult": "W",
+   "opponent": {
+    "id": "13",
+    "displayName": "Las Vegas Raiders",
+    "abbreviation": "LV"
+   }
+  },
+  "401772923": {
+   "id": "401772923",
+   "week": 6,
+   "atVs": "vs",
+   "gameDate": "2025-10-13T00:20:00.000+00:00",
+   "score": "30-17",
+   "homeTeamId": "12",
+   "awayTeamId": "8",
+   "gameResult": "W",
+   "opponent": {
+    "id": "8",
+    "displayName": "Detroit Lions",
+    "abbreviation": "DET"
+   }
+  },
+  "401772814": {
+   "id": "401772814",
+   "week": 5,
+   "atVs": "@",
+   "gameDate": "2025-10-07T00:15:00.000+00:00",
+   "score": "31-28",
+   "homeTeamId": "30",
+   "awayTeamId": "12",
+   "gameResult": "L",
+   "opponent": {
+    "id": "30",
+    "displayName": "Jacksonville Jaguars",
+    "abbreviation": "JAX"
+   }
+  },
+  "401772741": {
+   "id": "401772741",
+   "week": 4,
+   "atVs": "vs",
+   "gameDate": "2025-09-28T20:25:00.000+00:00",
+   "score": "37-20",
+   "homeTeamId": "12",
+   "awayTeamId": "33",
+   "gameResult": "W",
+   "opponent": {
+    "id": "33",
+    "displayName": "Baltimore Ravens",
+    "abbreviation": "BAL"
+   }
+  },
+  "401772920": {
+   "id": "401772920",
+   "week": 3,
+   "atVs": "@",
+   "gameDate": "2025-09-22T00:20:00.000+00:00",
+   "score": "22-9",
+   "homeTeamId": "19",
+   "awayTeamId": "12",
+   "gameResult": "W",
+   "opponent": {
+    "id": "19",
+    "displayName": "New York Giants",
+    "abbreviation": "NYG"
+   }
+  },
+  "401772837": {
+   "id": "401772837",
+   "week": 2,
+   "atVs": "vs",
+   "gameDate": "2025-09-14T20:25:00.000+00:00",
+   "score": "20-17",
+   "homeTeamId": "12",
+   "awayTeamId": "21",
+   "gameResult": "L",
+   "opponent": {
+    "id": "21",
+    "displayName": "Philadelphia Eagles",
+    "abbreviation": "PHI"
+   }
+  },
+  "401772714": {
+   "id": "401772714",
+   "week": 1,
+   "atVs": "vs",
+   "gameDate": "2025-09-06T00:00:00.000+00:00",
+   "score": "27-21",
+   "homeTeamId": "24",
+   "awayTeamId": "12",
+   "gameResult": "L",
+   "opponent": {
+    "id": "24",
+    "displayName": "Los Angeles Chargers",
+    "abbreviation": "LAC"
+   }
+  }
+ },
+ "seasonTypes": [
+  {
+   "displayName": "2025 Regular Season",
+   "displayTeam": "KC",
+   "categories": [
+    {
+     "displayName": "Regular Season Stats",
+     "type": "event",
+     "splitType": "2",
+     "events": [
+      {
+       "eventId": "401772798",
+       "stats": [
+        "16",
+        "28",
+        "189",
+        "57.1",
+        "6.8",
+        "0",
+        "1",
+        "26",
+        "5",
+        "62.9",
+        "56.1",
+        "2",
+        "15",
+        "7.5",
+        "1",
+        "12"
+       ]
+      },
+      {
+       "eventId": "401772932",
+       "stats": [
+        "14",
+        "33",
+        "160",
+        "42.4",
+        "4.8",
+        "0",
+        "3",
+        "35",
+        "2",
+        "19.8",
+        "20.5",
+        "7",
+        "59",
+        "8.4",
+        "0",
+        "15"
+       ]
+      },
+      {
+       "eventId": "401772694",
+       "stats": [
+        "23",
+        "34",
+        "261",
+        "67.7",
+        "7.7",
+        "4",
+        "0",
+        "42",
+        "3",
+        "129.7",
+        "83.7",
+        "3",
+        "30",
+        "10.0",
+        "0",
+        "16"
+       ]
+      },
+      {
+       "eventId": "401772779",
+       "stats": [
+        "29",
+        "46",
+        "352",
+        "63.0",
+        "7.7",
+        "0",
+        "1",
+        "47",
+        "4",
+        "77.4",
+        "62.6",
+        "4",
+        "30",
+        "7.5",
+        "0",
+        "13"
+       ]
+      },
+      {
+       "eventId": "401772778",
+       "stats": [
+        "29",
+        "45",
+        "276",
+        "64.4",
+        "6.1",
+        "1",
+        "1",
+        "61",
+        "3",
+        "79.5",
+        "53.4",
+        "1",
+        "3",
+        "3.0",
+        "0",
+        "3"
+       ]
+      },
+      {
+       "eventId": "401772768",
+       "stats": [
+        "15",
+        "34",
+        "250",
+        "44.1",
+        "7.4",
+        "0",
+        "1",
+        "40",
+        "3",
+        "57.2",
+        "55.0",
+        "1",
+        "5",
+        "5.0",
+        "0",
+        "5"
+       ]
+      },
+      {
+       "eventId": "401772817",
+       "stats": [
+        "25",
+        "34",
+        "299",
+        "73.5",
+        "8.8",
+        "3",
+        "2",
+        "38",
+        "3",
+        "104.9",
+        "56.4",
+        "4",
+        "30",
+        "7.5",
+        "0",
+        "15"
+       ]
+      },
+      {
+       "eventId": "401772753",
+       "stats": [
+        "26",
+        "35",
+        "286",
+        "74.3",
+        "8.2",
+        "3",
+        "0",
+        "44",
+        "1",
+        "126.6",
+        "89.5",
+        "4",
+        "28",
+        "7.0",
+        "0",
+        "10"
+       ]
+      },
+      {
+       "eventId": "401772923",
+       "stats": [
+        "22",
+        "30",
+        "257",
+        "73.3",
+        "8.6",
+        "3",
+        "0",
+        "30",
+        "3",
+        "132.2",
+        "78.3",
+        "10",
+        "32",
+        "3.2",
+        "1",
+        "11"
+       ]
+      },
+      {
+       "eventId": "401772814",
+       "stats": [
+        "29",
+        "41",
+        "318",
+        "70.7",
+        "7.8",
+        "1",
+        "1",
+        "34",
+        "0",
+        "91.3",
+        "81.2",
+        "6",
+        "60",
+        "10.0",
+        "1",
+        "15"
+       ]
+      },
+      {
+       "eventId": "401772741",
+       "stats": [
+        "25",
+        "37",
+        "270",
+        "67.6",
+        "7.3",
+        "4",
+        "0",
+        "37",
+        "1",
+        "124.8",
+        "73.8",
+        "4",
+        "5",
+        "1.3",
+        "0",
+        "4"
+       ]
+      },
+      {
+       "eventId": "401772920",
+       "stats": [
+        "22",
+        "37",
+        "224",
+        "59.5",
+        "6.1",
+        "1",
+        "0",
+        "33",
+        "2",
+        "85.9",
+        "50.8",
+        "5",
+        "2",
+        "0.4",
+        "0",
+        "4"
+       ]
+      },
+      {
+       "eventId": "401772837",
+       "stats": [
+        "16",
+        "29",
+        "187",
+        "55.2",
+        "6.4",
+        "1",
+        "1",
+        "49",
+        "2",
+        "72.1",
+        "82.9",
+        "7",
+        "66",
+        "9.4",
+        "1",
+        "22"
+       ]
+      },
+      {
+       "eventId": "401772714",
+       "stats": [
+        "24",
+        "39",
+        "258",
+        "61.5",
+        "6.6",
+        "1",
+        "0",
+        "49",
+        "2",
+        "89.5",
+        "86.1",
+        "6",
+        "57",
+        "9.5",
+        "1",
+        "15"
+       ]
+      }
+     ],
+     "totals": [
+      "315",
+      "502",
+      "3,587",
+      "62.7",
+      "7.1",
+      "22",
+      "11",
+      "61",
+      "34",
+      "89.6",
+      "68.5",
+      "64",
+      "422",
+      "6.6",
+      "5",
+      "22"
+     ]
+    }
+   ],
+   "summary": {
+    "displayName": "Regular Season Stats",
+    "stats": [
+     {
+      "displayName": "Totals",
+      "stats": [
+       "315",
+       "502",
+       "3,587",
+       "62.7",
+       "7.1",
+       "22",
+       "11",
+       "61",
+       "34",
+       "89.6",
+       "68.5",
+       "64",
+       "422",
+       "6.6",
+       "5",
+       "22"
+      ],
+      "type": "total"
+     }
+    ]
+   }
+  }
+ ]
+}

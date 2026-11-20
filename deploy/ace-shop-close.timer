@@ -1,0 +1,11 @@
+[Unit]
+Description=Line Shopper: closes and settling, every 5 minutes 09:00-23:55 Eastern
+
+[Timer]
+# With no bet starting within 20 minutes a run reads local files only. A
+# close is one credit per sport, at most every 15 minutes.
+OnCalendar=*-*-* 09..23:00/5 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

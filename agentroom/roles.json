@@ -1,0 +1,88 @@
+{
+  "_about": [
+    "Which AI plays which part in the Agent Room. Change a model here, then",
+    "run `python3 scripts/agentroom.py check` - it says whether each model",
+    "exists on OpenRouter and what a planning run can cost at most. A wrong",
+    "name is refused before a run starts, never discovered halfway through.",
+    "max_tokens is the most one reply may write; it is also what the money",
+    "check assumes a reply WILL write, so a bigger number reserves more of",
+    "the day's allowance per call. The money caps are not here: they are",
+    "agentroom_daily_ai and agentroom_run_max in tasks/limits.json, beside",
+    "the ecosystem's other caps.",
+    "Reasoning models (all three here) think before they answer, and the",
+    "thinking is billed as output and counts against max_tokens: on",
+    "2026-10-15 DeepSeek thought through all of 6000 and answered nothing.",
+    "Hence room to spare. Every call also goes to the cheapest host at",
+    "most 1.5x the listed price (or_chat.py PRICE_HEADROOM).",
+    "",
+    "builder (owner, 2026-10-15): Claude Code on its OWN Claude login",
+    "(AGENTROOM_BUILDER_TOKEN), as the agentbuilder account in a sandbox, only",
+    "inside window, at most phases_per_night phases and sessions_per_night",
+    "sessions a night, and at most night_cap_usd of plan use a night as Claude",
+    "itself counts it at list prices. attempts: sessions a phase gets to pass.",
+    "bug_checker reads each phase's changes; watchdog (a different AI) reads",
+    "every session and HOLDS the build when anything looks wrong. Both are",
+    "paid, under agentroom_build_max in tasks/limits.json.",
+    "judge (owner, 2026-10-16): the second opinion. When the watchdog holds",
+    "for more than low concerns, it reads the same evidence; the build",
+    "waits for the owner only if it agrees, or its reply cannot be read.",
+    "Low-only concerns carry on, listed in the Room. Paid like the others.",
+    "app_ai (owner, 2026-10-19): the AI helper the built apps may ask, through",
+    "the sites server (POST <app>/_ai). Fast and cheap, as a person waits on",
+    "it. Capped by apps_daily_ai in tasks/limits.json, inside the key's",
+    "agentroom_daily_ai. The key never reaches the browser."
+  ],
+  "planner": {
+    "name": "Kimi",
+    "model": "moonshotai/kimi-k2.6",
+    "max_tokens": 16000
+  },
+  "reviewers": [
+    {
+      "name": "DeepSeek",
+      "model": "deepseek/deepseek-v4-pro",
+      "max_tokens": 16000
+    },
+    {
+      "name": "Codex",
+      "model": "openai/gpt-5.3-codex",
+      "max_tokens": 12000
+    }
+  ],
+  "review_rounds": 1,
+  "max_calls_per_run": 12,
+  "bug_checker": {
+    "name": "DeepSeek",
+    "model": "deepseek/deepseek-v4-pro",
+    "max_tokens": 16000
+  },
+  "watchdog": {
+    "name": "GPT",
+    "model": "openai/gpt-5.4-mini",
+    "max_tokens": 8000
+  },
+  "judge": {
+    "name": "DeepSeek",
+    "model": "deepseek/deepseek-v4-pro",
+    "max_tokens": 16000
+  },
+  "app_ai": {
+    "name": "DeepSeek Flash",
+    "model": "deepseek/deepseek-v4-flash",
+    "max_tokens": 4000
+  },
+  "builder": {
+    "model": "sonnet",
+    "max_turns": 80,
+    "timeout_min": 40,
+    "attempts": 3,
+    "window": {
+      "tz": "America/Chicago",
+      "start": "01:00",
+      "end": "03:00"
+    },
+    "phases_per_night": 3,
+    "sessions_per_night": 9,
+    "night_cap_usd": 5.0
+  }
+}

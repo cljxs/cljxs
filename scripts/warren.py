@@ -1,0 +1,2719 @@
+#!/usr/bin/env python3
+"""Warren - the stock analyst. The owner's Before-You-Buy Checklist, filled in.
+
+Owner, 2026-11-19: "I fill in the stuff like the stock symbol, how much I
+wanna invest and the time line. All the data Claude does the research for.
+Use the same steps and process as the worked example."
+
+The six steps and their green / yellow / red rules are the checklist's own
+(the Before-You-Buy Stock Checklist and its worked Kinder Morgan example).
+Every number here is computed by this script from public data; one question
+on Opus (the owner's Claude plan, wake.py ask, never a bill) writes only the
+parts that need judgment - what the company does, its rivals, its risks, sell
+rules - and code checks that answer before it is used (`read_answer`).
+
+    warren.py check KMI --amount 125 --months 12 --goal both --why "..." --hold-drop yes
+    warren.py show KMI          the latest check, as JSON
+    warren.py deck              what the page shows
+    warren.py holdings add KMI 125 [--sector Energy] | holdings remove KMI
+    warren.py recheck           re-run every saved stock that filed a new report
+
+Data (all free, no keys):
+    SEC EDGAR companyfacts      revenue, EPS, cash flow, dividends, debt, interest
+    Yahoo chart (as Belfort)    price, 52-week range, 200-day average, dividends paid
+    Nasdaq                      sector, market cap, analysts' EPS forecasts
+"""
+
+import argparse
+import hashlib
+import html
+import importlib.util
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.parse
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+
+SCRIPTS = Path(__file__).resolve().parent
+ROOT = Path(os.environ.get("ECOSYSTEM_ROOT", SCRIPTS.parent))
+sys.path.insert(0, str(SCRIPTS))
+import et_time  # noqa: E402
+
+AGENT = ROOT / "agents" / "warren"
+STATE = AGENT / "state"
+CHECKS = STATE / "checks"
+CACHE = STATE / "cache"
+HOLDINGS = STATE / "holdings.json"
+PRICES = STATE / "prices.json"      # the holdings' latest prices, at most PRICE_FRESH_MIN old
+SALES = STATE / "sales.json"        # every sale you record, with its gain or loss
+PRICE_FRESH_MIN = 15
+RUNS = STATE / "runs.json"
+RECHECKS = STATE / "rechecks.json"
+# News on what you own (owner, 2026-11-19): new headlines on each holding,
+# judged against that stock's sell rules and buy-more test from its last
+# check. Belfort's hourly headlines are used for the names he follows; the
+# rest are fetched with his fetcher.
+ALERTS = STATE / "alerts.json"
+# The owner's own notes on each stock (2026-11-20) - his words, kept as he
+# wrote them; Warren never reads them into a question.
+NOTES = STATE / "notes.json"
+NOTE_MAX = 4000
+NEWS_SEEN = STATE / "news-seen.json"
+BELFORT_NEWS = ROOT / "agents" / "belfort" / "data" / "news.json"
+BELFORT_NEWS_FRESH_H = 3          # older than this and Warren fetches the names himself
+NEWS_MAX_AGE_DAYS = 4             # a headline older than this is old news, not an alert
+NEWS_ASKS_PER_DAY = 8             # Sonnet questions a day, at most
+NEWS_ASK_TIMEOUT = 300
+ALERTS_KEPT = 300
+# The owner's own words as search terms (2026-11-19: "if something is talked
+# about from his what would make him sell and buy i want to know ... part of
+# the overall search, not the only part"): each holding's rules give a
+# Google News search, and every headline is matched against them.
+NEWS_SEARCH_URL = "https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en"
+SEARCH_PER_NAME = 15
+SEARCH_TERMS = 8                  # terms in one search, names first
+WATCH_ALERTS_PER_STOCK = 3        # code's own "worth a look" alerts, per stock per run
+# How much a headline matters, 1-5 (owner, 2026-11-20: "rate how important
+# each piece of news is"). The model rates what it answers; an alert code
+# raised on words alone, unjudged, is WORDS_IMPORTANCE.
+IMPORTANCE = {5: "Major", 4: "High", 3: "Medium", 2: "Low", 1: "Minor"}
+WORDS_IMPORTANCE = 2
+
+# Opus on the plan is the owner's to spend; a check is one question, a
+# re-check another. Ten a day is far more than one person buys.
+RUNS_PER_DAY = 10
+ASK_TIMEOUT = 600
+
+# The SEC refuses (403) any request whose User-Agent lacks a name and a
+# contact email - its fair-access rule. The first live check (HIMS,
+# 2026-11-19) was refused for exactly that. The owner's contact is his to
+# set, never in the code: WARREN_SEC_UA, or one line in this file.
+SEC_CONTACT = STATE / "sec-contact"
+SEC_HELP = ("the SEC needs a contact email before it will answer. Set it once on the droplet: "
+            "echo you@example.com > agents/warren/state/sec-contact")
+
+
+def sec_ua():
+    if os.environ.get("WARREN_SEC_UA"):
+        return os.environ["WARREN_SEC_UA"]
+    try:
+        contact = SEC_CONTACT.read_text().strip()
+    except OSError:
+        contact = ""
+    if "@" not in contact or " " in contact:
+        raise FetchError(SEC_HELP)
+    return f"cljxs-ecosystem warren {contact}"
+TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
+CONCEPT_URL = "https://data.sec.gov/api/xbrl/companyconcept/CIK{cik:010d}/us-gaap/{tag}.json"
+CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=1y&interval=1d&events=div"
+QUOTE_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=5d&interval=1d"
+# A second source: Nasdaq's own copy of the company's statements, from a
+# different data vendor than Warren's reading of the SEC's XBRL. Every wrong
+# figure so far (HIMS's debt, ASTS's revenue and operating income) was a
+# misread SEC tag; this page had the right figure each time.
+FIN_URL = "https://api.nasdaq.com/api/company/{sym}/financials?frequency=2"
+FILING_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{nodash}/{accn}-index.htm"
+SUMMARY_URL = "https://api.nasdaq.com/api/quote/{sym}/summary?assetclass=stocks"
+FORECAST_URL = "https://api.nasdaq.com/api/analyst/{sym}/earnings-forecast"
+
+SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+GREEN, YELLOW, RED = "Green", "Yellow", "Red"
+
+SECTORS = ["Technology", "Communication Services", "Consumer Discretionary", "Consumer Staples",
+           "Health Care", "Financials", "Industrials", "Energy", "Utilities", "Materials", "Real Estate"]
+# The checklist's rough normal forward P/E by sector (Step 5).
+PE_TYPICAL = {"Technology": (22, 30), "Consumer Discretionary": (22, 30), "Consumer Staples": (18, 23),
+              "Industrials": (18, 23), "Health Care": (15, 20), "Utilities": (15, 20), "Materials": (15, 20),
+              "Communication Services": (16, 22), "Financials": (11, 15), "Energy": (9, 14)}
+# Pipelines, utilities, REITs and towers normally carry 3.5-5.5x (Step 4).
+CAPITAL_HEAVY_OK = {"Energy", "Utilities", "Real Estate", "Communication Services"}
+
+# Which SEC tag answers each question, in order of preference. Companies
+# change tags over the years (Kinder Morgan's interest went from
+# InterestExpense to InterestIncomeExpenseNonoperatingNet), so `pick_tag`
+# takes the one with the newest annual figure, then this order.
+TAGS = {
+    # ASTS (2026-11-19) moved to the IncludingAssessedTax tag in 2025 and
+    # read as $4M of revenue - its 2024 figure - instead of $71M.
+    "revenue": ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet",
+                "RevenueFromContractWithCustomerIncludingAssessedTax"),
+    "eps": ("EarningsPerShareDiluted",),
+    "net_income": ("NetIncomeLoss",),
+    "ocf": ("NetCashProvidedByUsedInOperatingActivities",),
+    "capex": ("PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"),
+    "dividends": ("PaymentsOfDividendsCommonStock", "PaymentsOfDividends", "DividendsCommonStockCash"),
+    "buybacks": ("PaymentsForRepurchaseOfCommonStock",),
+    "op_income": ("OperatingIncomeLoss",),
+    # When a company stops reporting operating income (ASTS, since 2024),
+    # EBIT is pre-tax income plus interest.
+    "pretax": ("IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+               "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"),
+    # For EPS by hand when the EPS tag stopped (ASTS, since 2022)
+    "shares": ("WeightedAverageNumberOfDilutedSharesOutstanding", "WeightedAverageNumberOfSharesOutstandingBasic"),
+    "dna": ("DepreciationDepletionAndAmortization", "DepreciationAndAmortization",
+            "DepreciationAmortizationAndAccretionNet"),
+    "interest": ("InterestExpense", "InterestExpenseNonoperating", "InterestExpenseDebt",
+                 "InterestIncomeExpenseNonoperatingNet", "InterestPaidNet"),
+    "debt_issued": ("ProceedsFromIssuanceOfLongTermDebt", "ProceedsFromIssuanceOfDebt",
+                    "ProceedsFromIssuanceOfSeniorLongTermDebt", "ProceedsFromConvertibleDebt"),
+    "debt_repaid": ("RepaymentsOfLongTermDebt", "RepaymentsOfDebt"),
+    "dps": ("CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid"),
+}
+OUTFLOWS = {"capex", "dividends", "buybacks", "debt_repaid"}
+DEBT_TAGS = ("LongTermDebtNoncurrent", "DebtCurrent", "LongTermDebtCurrent", "LongTermDebt",
+             "CommercialPaper", "ShortTermBorrowings",
+             # A company whose only debt is convertible notes tags nothing
+             # above: HIMS's $1.37B (2026-11-19) read as "no debt".
+             "ConvertibleDebtNoncurrent", "ConvertibleDebtCurrent", "ConvertibleNotesPayable")
+
+
+# --------------------------------------------------------------- plumbing
+
+SITES = {"sec.gov": "the SEC", "yahoo.com": "Yahoo", "nasdaq.com": "Nasdaq"}
+
+
+class FetchError(Exception):
+    """A data site refused or failed - said in one line, naming the site."""
+
+
+def site_of(url):
+    return next((name for host, name in SITES.items() if host in url), url.split("/")[2])
+
+
+def _load(name, file):
+    spec = importlib.util.spec_from_file_location(name, SCRIPTS / file)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def http_get(url, ua=None, headers=None):
+    """Belfort's fetcher - its retries and rate-limit wait - not a second one."""
+    return _load("belfort_fetch_for_warren", "belfort-fetch.py").http_get(url, ua=ua, headers=headers)
+
+
+# Nasdaq's API turns away a request that does not look like its own web page
+# asking: the droplet's first `warren.py sources` (2026-11-19) failed both
+# Nasdaq lines with Belfort's plain User-Agent. These are the headers
+# nasdaq.com's own pages send. No Accept-Encoding: urllib does not unzip.
+NASDAQ_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Origin": "https://www.nasdaq.com",
+    "Referer": "https://www.nasdaq.com/",
+}
+
+
+def get_json(url, get=None):
+    sec = "sec.gov" in url
+    ua = sec_ua() if sec and get is None else None
+    headers = NASDAQ_HEADERS if "nasdaq.com" in url else None
+    try:
+        raw = (get or http_get)(url, ua=ua, headers=headers)
+    except urllib.error.HTTPError as e:
+        why = {403: "refused the request", 404: "has no such page", 429: "said too many requests"}
+        raise FetchError(f"{site_of(url)} {why.get(e.code, 'answered an error')} (HTTP {e.code})") from e
+    except OSError as e:
+        raise FetchError(f"could not reach {site_of(url)} ({e})") from e
+    if sec:
+        time.sleep(0.15)   # SEC asks for under 10 requests a second
+    return json.loads(raw)
+
+
+def write_json(path, obj):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=1))
+    tmp.replace(path)
+
+
+def read_json(path, default=None):
+    try:
+        return json.loads(Path(path).read_text())
+    except Exception:
+        return default
+
+
+def r1(x):
+    return None if x is None else round(float(x), 1)
+
+
+def r2(x):
+    return None if x is None else round(float(x), 2)
+
+
+def pct(a, b):
+    return None if a is None or not b else (a / b - 1) * 100
+
+
+def money(x):
+    if x is None:
+        return "n/a"
+    a = abs(x)
+    s = f"${a / 1e9:.2f}B" if a >= 1e9 else f"${a / 1e6:.0f}M" if a >= 1e6 else f"${a:,.0f}"
+    return "-" + s if x < 0 else s
+
+
+def ddate(s):
+    return date.fromisoformat(s[:10])
+
+
+# --------------------------------------------------------------- SEC
+
+def cik_for(symbol, tickers):
+    sym = symbol.upper()
+    for row in (tickers or {}).values():
+        if str(row.get("ticker", "")).upper() == sym:
+            return int(row["cik_str"]), row.get("title") or sym
+    return None, None
+
+
+def sec_tickers(get=None, now=None):
+    path = CACHE / "sec-tickers.json"
+    d = read_json(path)
+    if d and time.time() - path.stat().st_mtime < 7 * 86400 and get is None:
+        return d
+    d = get_json(TICKERS_URL, get)
+    write_json(path, d)
+    return d
+
+
+def sec_facts(cik, get=None):
+    path = CACHE / f"facts-{cik}.json"
+    d = read_json(path)
+    if d and time.time() - path.stat().st_mtime < 6 * 3600 and get is None:
+        return d
+    d = get_json(FACTS_URL.format(cik=cik), get)
+    write_json(path, d)
+    return d
+
+
+def _rows(facts, tag):
+    for tax in ("us-gaap", "dei"):
+        node = ((facts or {}).get("facts") or {}).get(tax, {}).get(tag)
+        if node:
+            units = node.get("units") or {}
+            for u in ("USD", "USD/shares", "shares"):
+                if u in units:
+                    return units[u]
+            return next(iter(units.values()), [])
+    return []
+
+
+def _days(r):
+    return (ddate(r["end"]) - ddate(r["start"])).days if r.get("start") else None
+
+
+def annual(facts, tag):
+    """[(end, value)] oldest first: each fiscal year once, from 10-Ks, a
+    year long (a 10-K also carries quarter rows), the latest filing winning."""
+    best = {}
+    for r in _rows(facts, tag):
+        if not str(r.get("form", "")).startswith("10-K") or r.get("fp") != "FY":
+            continue
+        n = _days(r)
+        if n is None or not 350 <= n <= 380:
+            continue
+        if r["end"] not in best or r.get("filed", "") > best[r["end"]].get("filed", ""):
+            best[r["end"]] = r
+    return [(e, best[e]["val"]) for e in sorted(best)]
+
+
+def ytd(facts, tag):
+    """[(start, end, value)]: year-to-date rows from 10-Qs."""
+    best = {}
+    for r in _rows(facts, tag):
+        if not str(r.get("form", "")).startswith("10-Q"):
+            continue
+        n = _days(r)
+        if n is None or not 80 <= n <= 290:
+            continue
+        k = (r["start"], r["end"])
+        if k not in best or r.get("filed", "") > best[k].get("filed", ""):
+            best[k] = r
+    return [(s, e, best[(s, e)]["val"]) for s, e in sorted(best, key=lambda k: k[1])]
+
+
+def instants(facts, tag):
+    """[(end, value)] oldest first for a balance-sheet figure."""
+    best = {}
+    for r in _rows(facts, tag):
+        if r.get("start") or not r.get("end"):
+            continue
+        if r["end"] not in best or r.get("filed", "") > best[r["end"]].get("filed", ""):
+            best[r["end"]] = r
+    return [(e, best[e]["val"]) for e in sorted(best)]
+
+
+def pick_tag(facts, key):
+    best, best_end = None, ""
+    for tag in TAGS[key]:
+        a = annual(facts, tag)
+        if key == "interest" and tag == "InterestIncomeExpenseNonoperatingNet":
+            a = [(e, v) for e, v in a if v < 0]     # net interest INCOME is not an expense
+        if a and a[-1][0] > best_end:
+            best, best_end = tag, a[-1][0]
+    return best
+
+
+def _clean(key, v):
+    return abs(v) if (key in OUTFLOWS or key == "interest") and v is not None else v
+
+
+def series(facts, key):
+    tag = pick_tag(facts, key)
+    if not tag:
+        return [], None
+    a = annual(facts, tag)
+    if key == "interest" and tag == "InterestIncomeExpenseNonoperatingNet":
+        a = [(e, v) for e, v in a if v < 0]
+    return [(e, _clean(key, v)) for e, v in a], tag
+
+
+def ttm(facts, key):
+    """(value, as_of_end): last fiscal year + this year to date - the same
+    stretch a year before. A company with no quarter since its 10-K: the year."""
+    v, e, _ = ttm_parts(facts, key)
+    return v, e
+
+
+def ttm_parts(facts, key):
+    """ttm, and the period ends it was built from - so the page can link the
+    very filings behind the figure."""
+    tag = pick_tag(facts, key)
+    if not tag:
+        return None, None, []
+    return ttm_of(facts, tag, key in OUTFLOWS or key == "interest")
+
+
+def ttm_of(facts, tag, outflow=False):
+    """ttm_parts for one named tag."""
+    a = annual(facts, tag)
+    if not a:
+        return None, None, []
+    fy_end, fy = a[-1]
+    rows = [r for r in ytd(facts, tag) if ddate(r[0]) > ddate(fy_end) and (ddate(r[0]) - ddate(fy_end)).days <= 10]
+    if not rows:
+        return (abs(fy) if outflow else fy), fy_end, [fy_end]
+    s, e, cur = rows[-1]
+    n = (ddate(e) - ddate(s)).days
+    prior = [(e2, v) for s2, e2, v in ytd(facts, tag)
+             if abs((ddate(e) - ddate(e2)).days - 365) <= 10 and abs((ddate(e2) - ddate(s2)).days - n) <= 10]
+    if not prior:
+        return (abs(fy) if outflow else fy), fy_end, [fy_end]
+    ends = [e, fy_end, prior[-1][0]]
+    if outflow:
+        return abs(fy) + abs(cur) - abs(prior[-1][1]), e, ends
+    return fy + cur - prior[-1][1], e, ends
+
+
+def filings(facts):
+    """{period end: the 10-K or 10-Q that first reported that period} - the
+    filing a figure for that date comes from."""
+    first = {}
+    for tax in ((facts or {}).get("facts") or {}).values():
+        for node in tax.values():
+            for rows in (node.get("units") or {}).values():
+                for r in rows:
+                    form = str(r.get("form", ""))
+                    if not form.startswith(("10-K", "10-Q")) or not r.get("accn"):
+                        continue
+                    e = r.get("end")
+                    if e and (e not in first or r.get("filed", "9") < first[e]["filed"]):
+                        first[e] = {"form": form, "filed": r.get("filed", ""), "accn": r["accn"], "end": e}
+    return first
+
+
+def filing_link(cik, f):
+    return {"label": f"{f['form']} for {f['end']}", "url": FILING_URL.format(
+        cik=int(cik), nodash=f["accn"].replace("-", ""), accn=f["accn"])}
+
+
+def debt_at(facts):
+    """{end: total debt} - current plus long-term, without counting a
+    current portion twice when a company reports both totals."""
+    by = {t: dict(instants(facts, t)) for t in DEBT_TAGS}
+    out = {}
+    for end in set().union(*[set(v) for v in by.values()]):
+        g = lambda t: by[t].get(end)
+        if g("LongTermDebtNoncurrent") is not None:
+            cur = g("DebtCurrent")
+            if cur is None:
+                cur = (g("LongTermDebtCurrent") or 0) + (g("CommercialPaper") or 0) + (g("ShortTermBorrowings") or 0)
+            out[end] = g("LongTermDebtNoncurrent") + cur
+        elif g("LongTermDebt") is not None:
+            out[end] = g("LongTermDebt") + (g("CommercialPaper") or 0) + (g("ShortTermBorrowings") or 0)
+        elif g("ConvertibleDebtNoncurrent") is not None or g("ConvertibleDebtCurrent") is not None:
+            out[end] = (g("ConvertibleDebtNoncurrent") or 0) + (g("ConvertibleDebtCurrent") or 0) + (g("ShortTermBorrowings") or 0)
+        elif g("ConvertibleNotesPayable") is not None:
+            out[end] = g("ConvertibleNotesPayable") + (g("ShortTermBorrowings") or 0)
+    return dict(sorted(out.items()))
+
+
+def latest_filed(facts):
+    best = ""
+    for tax in (facts or {}).get("facts", {}).values():
+        for node in tax.values():
+            for rows in (node.get("units") or {}).values():
+                for r in rows:
+                    if str(r.get("form", "")).startswith(("10-K", "10-Q")) and r.get("filed", "") > best:
+                        best = r["filed"]
+    return best or None
+
+
+# --------------------------------------------------------------- price, Nasdaq
+
+def price_facts(payload, now=None):
+    """Price, the 52-week range, the 200-day average, the month's and year's
+    move, and dividends paid in the last 365 days, from one Yahoo chart."""
+    res = payload["chart"]["result"][0]
+    meta = res.get("meta") or {}
+    q = (res.get("indicators") or {}).get("quote", [{}])[0]
+    stamps = res.get("timestamp") or []
+    closes = [(t, float(c)) for t, c in zip(stamps, q.get("close") or []) if c is not None]
+    if not closes:
+        raise ValueError("no closes in the chart")
+    price = float(meta.get("regularMarketPrice") or closes[-1][1])
+    last_t = stamps[-1] if stamps else int(time.time())
+    vals = [c for _, c in closes]
+    month_ago = [c for t, c in closes if t <= last_t - 30 * 86400]
+    divs = ((res.get("events") or {}).get("dividends") or {}).values()
+    paid = sum(float(d["amount"]) for d in divs if last_t - int(d["date"]) <= 365 * 86400)
+    return {
+        "name": meta.get("longName") or meta.get("shortName"),
+        "price": r2(price),
+        "high_52w": r2(meta.get("fiftyTwoWeekHigh") or max(vals)),
+        "low_52w": r2(meta.get("fiftyTwoWeekLow") or min(vals)),
+        "sma200": r2(sum(vals[-200:]) / 200) if len(vals) >= 200 else None,
+        "change_1m": r1(pct(price, month_ago[-1])) if month_ago else None,
+        "change_1y": r1(pct(price, vals[0])) if len(vals) > 1 else None,
+        "div_per_share_ttm": r2(paid) if paid else 0.0,
+        "as_of": datetime.fromtimestamp(last_t, timezone.utc).strftime("%Y-%m-%d"),
+    }
+
+
+def _num(s):
+    s = str(s or "").replace("$", "").replace(",", "").strip()
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def summary_facts(payload):
+    d = ((payload or {}).get("data") or {}).get("summaryData") or {}
+    v = lambda k: (d.get(k) or {}).get("value")
+    sector = v("Sector")
+    return {"nasdaq_sector": sector if sector and sector != "N/A" else None,
+            "nasdaq_industry": v("Industry") if v("Industry") not in (None, "N/A") else None,
+            "market_cap": _num(v("MarketCap"))}
+
+
+def forecast_facts(payload):
+    """Next twelve months' EPS (the next four quarters' consensus) and the
+    growth a PEG divides by: this fiscal year to two years on, a year."""
+    d = (payload or {}).get("data") or {}
+    qs = ((d.get("quarterlyForecast") or {}).get("rows") or [])[:4]
+    ys = [r for r in ((d.get("yearlyForecast") or {}).get("rows") or []) if (r.get("noOfEstimates") or 0) >= 3]
+    ntm = round(sum(float(r["consensusEPSForecast"]) for r in qs), 2) if len(qs) == 4 and all(
+        r.get("consensusEPSForecast") is not None for r in qs) else None
+    growth = None
+    if len(ys) >= 3:
+        a, b = float(ys[0]["consensusEPSForecast"]), float(ys[2]["consensusEPSForecast"])
+        if a > 0 and b > 0:
+            growth = ((b / a) ** 0.5 - 1) * 100
+    return {"eps_ntm": ntm, "eps_growth": r1(growth),
+            "eps_years": [[r["fiscalEnd"], r["consensusEPSForecast"]] for r in ys[:3]]}
+
+
+# --------------------------------------------------------------- the numbers
+
+def numbers(symbol, get=None, tickers=None, verify=False):
+    """Every figure the checklist needs for one stock, computed here."""
+    sym = symbol.upper()
+    tickers = tickers if tickers is not None else sec_tickers(get)
+    cik, title = cik_for(sym, tickers)
+    if not cik:
+        raise LookupError(f"{sym} is not in the SEC's list of US-listed companies")
+    facts = sec_facts(cik, get)
+    pf = price_facts(get_json(CHART_URL.format(sym=sym), get))
+    try:
+        sm = summary_facts(get_json(SUMMARY_URL.format(sym=sym), get))
+    except Exception:
+        sm = {"nasdaq_sector": None, "nasdaq_industry": None, "market_cap": None}
+    try:
+        fc = forecast_facts(get_json(FORECAST_URL.format(sym=sym), get))
+    except Exception:
+        fc = {"eps_ntm": None, "eps_growth": None, "eps_years": []}
+
+    n = {"symbol": sym, "cik": cik, "company": pf["name"] or title, **pf, **sm, **fc,
+         "data_filed": latest_filed(facts)}
+    by_end = filings(facts)
+    for key in TAGS:
+        s, tag = series(facts, key)
+        n[key + "_years"] = [[e[:10], v] for e, v in s[-4:]]
+        n[key + "_tag"] = tag
+        if key in ("eps", "dps", "shares"):
+            n[key + "_ttm"] = n[key + "_ttm_end"] = None
+            continue
+        n[key + "_ttm"], n[key + "_ttm_end"], ends = ttm_parts(facts, key)
+        n[key + "_src"] = [filing_link(cik, by_end[e]) for e in ends if e in by_end]
+    stale_figures(n)
+
+    debt = debt_at(facts)
+    cash = dict(instants(facts, "CashAndCashEquivalentsAtCarryingValue"))
+    if debt:
+        end = max(debt)
+        n["debt"], n["debt_as_of"] = debt[end], end
+        year_ago = [e for e in debt if abs((ddate(end) - ddate(e)).days - 365) <= 20]
+        n["debt_year_ago"] = debt[year_ago[-1]] if year_ago else None
+        n["cash"] = cash.get(end, cash[max(cash)] if cash else 0)
+    else:
+        n["debt"] = n["debt_year_ago"] = None
+        n["cash"] = cash[max(cash)] if cash else None
+    if n.get("debt_as_of") in by_end:
+        n["debt_src"] = n["cash_src"] = [filing_link(cik, by_end[n["debt_as_of"]])]
+    if not n.get("market_cap"):
+        sh = instants(facts, "EntityCommonStockSharesOutstanding")
+        n["market_cap"] = sh[-1][1] * n["price"] if sh and n["price"] else None
+    if verify:
+        try:
+            other = second_source(get_json(FIN_URL.format(sym=sym), get))
+        except Exception as e:
+            other = {"error": str(e)[:120]}
+        n["second_source"] = cross_check(n, other)
+        settle(n, facts, n["second_source"], by_end)
+    derive(n)
+    if verify:
+        n["alarms"] = alarms(n)
+    return n
+
+
+def nasdaq_number(v):
+    """'$70,918' / '-$287,713' / '--': Nasdaq's tables are in thousands."""
+    v = str(v or "").replace("$", "").replace(",", "").strip()
+    if v in ("", "--", "NaN"):
+        return None
+    try:
+        return float(v) * 1000
+    except ValueError:
+        return None
+
+
+def second_source(payload):
+    """The last four quarters from Nasdaq's statements: flows summed into a
+    last-12-months figure, debt and cash at the latest quarter."""
+    d = payload["data"]
+    def row(table, name):
+        r = next((x for x in d[table]["rows"] if x["value1"] == name), None)
+        return [nasdaq_number(r.get(f"value{i}")) for i in range(2, 6)] if r else [None] * 4
+    def ttm4(table, name):
+        q = row(table, name)
+        return sum(q) if all(x is not None for x in q) else None
+    m, dd, y = d["incomeStatementTable"]["headers"]["value2"].split("/")
+    capex = ttm4("cashFlowTable", "Capital Expenditures")
+    ltd = row("balanceSheetTable", "Long-Term Debt")[0]
+    std = row("balanceSheetTable", "Short-Term Debt / Current Portion of Long-Term Debt")[0]
+    return {"period_end": f"{y}-{int(m):02d}-{int(dd):02d}",
+            "revenue_ttm": ttm4("incomeStatementTable", "Total Revenue"),
+            "net_income_ttm": ttm4("incomeStatementTable", "Net Income"),
+            "op_income_ttm": ttm4("incomeStatementTable", "Operating Income"),
+            "ebit_ttm": ttm4("incomeStatementTable", "Earnings Before Interest and Tax"),
+            "ocf_ttm": ttm4("cashFlowTable", "Net Cash Flow-Operating"),
+            "capex_ttm": abs(capex) if capex is not None else None,
+            "debt": (ltd or 0) + (std or 0) if ltd is not None or std is not None else None,
+            "cash": row("balanceSheetTable", "Cash and Cash Equivalents")[0]}
+
+
+CHECKED = [("revenue_ttm", "revenue (12 months)", 0.05), ("net_income_ttm", "net income (12 months)", 0.05),
+           ("op_income_ttm", "operating income (12 months)", 0.05), ("ocf_ttm", "operating cash flow (12 months)", 0.05),
+           ("capex_ttm", "capex (12 months)", 0.05), ("debt", "total debt", 0.10), ("cash", "cash", 0.10)]
+
+
+def cross_check(n, other):
+    """Each of Warren's key SEC figures against Nasdaq's. Agree within the
+    tolerance (5% for the year's flows, 10% for debt and cash, whose
+    definitions differ a little between sources) or $2M: a match.
+    Otherwise both are shown and the row says the sources disagree."""
+    if other.get("error"):
+        return {"status": "not checked", "why": f"Nasdaq's statements could not be read ({other['error']})", "figures": {}}
+    ours_end = n.get("ocf_ttm_end") or n.get("net_income_ttm_end")
+    if ours_end != other["period_end"]:
+        return {"status": "not checked", "figures": {},
+                "why": f"Nasdaq's latest quarter ends {other['period_end']}, Warren's {ours_end} - one has not caught up"}
+    out = {}
+    for key, label, tol in CHECKED:
+        ours = n.get(key)
+        theirs = other.get(key)
+        if key == "op_income_ttm" and n.get("op_income_from"):
+            theirs = other.get("ebit_ttm")          # Warren's figure is EBIT then; compare like with like
+        if theirs is None or (ours is None and abs(theirs) <= 2e6):
+            out[key] = {"label": label, "ours": ours, "theirs": theirs, "status": "not compared"}
+            continue
+        if ours is None:                         # Warren found nothing where Nasdaq has a figure: HIMS's debt
+            out[key] = {"label": label, "ours": ours, "theirs": theirs, "status": "disagree"}
+            continue
+        ok = abs(ours - theirs) <= max(tol * abs(theirs), 2e6)
+        out[key] = {"label": label, "ours": ours, "theirs": theirs, "status": "match" if ok else "disagree"}
+    bad = [v["label"] for v in out.values() if v["status"] == "disagree"]
+    done = [v for v in out.values() if v["status"] != "not compared"]
+    return {"status": "disagree" if bad else "match" if done else "not checked", "period_end": other["period_end"],
+            "figures": out, "disagree": bad, "matched": sum(v["status"] == "match" for v in out.values()),
+            "compared": len(done)}
+
+
+def alarms(n):
+    """Figures that cannot all be true together, or that are far outside what
+    any company reports: each one is a sign Warren misread something."""
+    out, g = [], n.get
+    names = {"op_income": "operating income", "eps": "earnings per share", "revenue": "revenue",
+             "net_income": "net income"}
+    for k in g("stale") or []:
+        if k in names:
+            out.append(f"It stopped reporting {names[k]} under the usual name; Warren left the old figure out"
+                       + (" and used pre-tax income plus interest" if k == "op_income" and g("op_income_from") else "")
+                       + (" and worked EPS out from net income over shares" if k == "eps" and g("eps_from") else "") + ".")
+    if g("margin_ttm") is not None and g("margin_ttm") < -1000:
+        out.append(f"A profit margin of {g('margin_ttm')}% means revenue is tiny next to the loss - check the revenue figure.")
+    ry = g("revenue_years") or []
+    if g("revenue_ttm") and ry and ry[-1][1]:
+        x = g("revenue_ttm") / ry[-1][1]
+        if x > 3 or x < 1 / 3:
+            out.append(f"Revenue over the last 12 months ({money(g('revenue_ttm'))}) is {x:.1f}x its last full year "
+                       f"({money(ry[-1][1])}) - a real jump, or a misread.")
+    fy = g("fy") or {}
+    if g("debt") is None and (fy.get("net_borrowing") or 0) > 0:
+        out.append(f"It borrowed {money(fy['net_borrowing'])} in its last year, but Warren found no debt on its balance sheet.")
+    if g("debt") is None and (g("interest_ttm") or 0) > 2e6:
+        out.append(f"It paid {money(g('interest_ttm'))} of interest, but Warren found no debt.")
+    eps = dict(g("eps_years") or [])
+    for e, v in g("net_income_years") or []:
+        if e in eps and v and eps[e] and (v > 0) != (eps[e] > 0):
+            out.append(f"Its {e[:4]} EPS and net income have opposite signs.")
+    if not g("market_cap"):
+        out.append("No market value was found, so the price ratios could not be worked out.")
+    return out
+
+
+# ------------------------------------------------- who is right
+# The owner (2026-11-20), on a check where Nasdaq said $161M of debt and
+# Warren none, and their operating incomes differed: "can we refer warren to
+# this chat to do the search and figure who's right on their numbers?" What
+# that chat would do is open the company's own filing for the quarter. So
+# Warren does: every line the filing tags (not just the ones he usually
+# reads) is tried against both figures. The filing is the referee:
+#   a line holds Nasdaq's figure and none holds Warren's -> Nasdaq is right,
+#       and Warren uses the filing's figure from then on in the check;
+#   a line holds Warren's and none Nasdaq's -> Warren is right, he keeps his;
+#   both are lines of the filing -> they count different things, both shown;
+#   neither -> one question to Opus, who searches the company's own reports.
+# Opus's reading is shown as his reading - it never changes a number, since
+# a model asked about arithmetic will eventually claim it did it.
+
+SETTLE_TOL = 0.01          # the filing's own figure, not a near one: 1% or $1M
+SETTLE_LINES = {
+    "revenue_ttm": r"^(Revenues?|RevenueFromContractWithCustomer\w*|SalesRevenue\w*)$",
+    "net_income_ttm": r"^(NetIncomeLoss\w*|ProfitLoss)$",
+    "op_income_ttm": r"^(OperatingIncomeLoss|IncomeLossFromContinuingOperationsBefore\w*)$",
+    "ocf_ttm": r"^NetCashProvidedByUsedInOperatingActivities\w*$",
+    "capex_ttm": r"^(PaymentsToAcquire\w*(PropertyPlantAndEquipment|ProductiveAssets|Software)\w*|PaymentsForSoftware)$",
+    "debt": r"(Debt|Notes|Borrowings|LoansPayable|FinanceLeaseLiabilit)",
+    "cash": r"^Cash\w*$",
+}
+SETTLE_NOT = re.compile(r"Proceeds|Repayment|Issuance|Interest|Amortiz|FairValue|Unamortized|Discount|Premium|Covenant"
+                        r"|Percent|Rate|Increase|Decrease|Payments|Extinguishment|Gain|Loss|Securities|Investment"
+                        r"|Receivable|Restricted|Period|Duration|Number")
+SETTLE_OUTFLOW = {"capex_ttm"}
+
+
+def filing_lines(facts, key, end):
+    """[(label, value)]: every line of the filings that could be this figure
+    for the period ending `end`. Debt also tries each current + long-term pair,
+    since a balance sheet prints them on two lines."""
+    pat = re.compile(SETTLE_LINES[key])
+    out = []
+    for tag, node in ((facts or {}).get("facts") or {}).get("us-gaap", {}).items():
+        if not pat.search(tag) or (key in ("debt", "cash") and SETTLE_NOT.search(tag)):
+            continue
+        label = (node.get("label") or tag).strip()
+        if key in ("debt", "cash"):
+            v = dict(instants(facts, tag)).get(end)
+        else:
+            v, e, _ = ttm_of(facts, tag, key in SETTLE_OUTFLOW)
+            v = v if e == end else None
+        if v is not None:
+            out.append((tag, label, v))
+    if key == "debt":
+        long_ = [x for x in out if "Noncurrent" in x[0]]
+        short = [x for x in out if x[0].endswith("Current") and "Noncurrent" not in x[0]]
+        out += [(a[0] + "+" + b[0], f"{a[1]} + {b[1]}", a[2] + b[2]) for a in long_ for b in short]
+    return [(label, v) for _, label, v in out]
+
+
+def _same(a, b):
+    return a is not None and b is not None and abs(a - b) <= max(SETTLE_TOL * abs(b), 1e6)
+
+
+def settle(n, facts, ss, by_end=None):
+    """Each disagreement in `ss` (cross_check's result) put to the filing.
+    Changes n only where the filing shows Nasdaq right; says why every time."""
+    by_end = by_end or {}
+    if ss.get("status") != "disagree":
+        return ss
+    end = ss["period_end"]
+    for key, f in ss["figures"].items():
+        if f["status"] != "disagree" or key not in SETTLE_LINES:
+            continue
+        lines = filing_lines(facts, key, end)
+        near = lambda x: sorted((l for l in lines if _same(l[1], x)), key=lambda l: abs(l[1] - x))
+        ours = near(f["ours"]) if f["ours"] is not None else []
+        theirs = near(f["theirs"])
+        link = filing_link(n["cik"], by_end[end]) if end in by_end else None
+        doc = link["label"] if link else f"the filing for {end}"
+        q = lambda x: f'"{x}"'
+        if theirs and not ours:
+            label, v = theirs[0]
+            was = money(f["ours"]) if f["ours"] is not None else "nothing"
+            f["settled"] = {"by": "filing", "verdict": "nasdaq", "line": label, "value": v, "link": link,
+                            "says": f"Nasdaq is right. The {doc} reports {money(v)} as {q(label)}; Warren had read {was}. "
+                                    "Warren now uses the filing's figure in this check."}
+            f["status"] = "settled"
+            if key in ("debt", "cash"):
+                n[key] = v
+                if key == "debt":
+                    n["debt_as_of"] = end
+                    if link:
+                        n["debt_src"] = n["cash_src"] = [link]
+            else:
+                n[key] = v
+                n[key + "_end"] = end
+                if link:
+                    n[key[:-4] + "_src"] = [link]
+        elif ours and not theirs:
+            f["settled"] = {"by": "filing", "verdict": "warren", "line": ours[0][0], "value": ours[0][1], "link": link,
+                            "says": f"Warren is right. The {doc} reports {money(ours[0][1])} as {q(ours[0][0])}; "
+                                    f"Nasdaq's {money(f['theirs'])} is on no line of it, so Nasdaq counted it its own way."}
+            f["status"] = "explained"
+        elif ours and theirs:
+            f["settled"] = {"by": "filing", "verdict": "both", "line": ours[0][0], "value": ours[0][1], "link": link,
+                            "says": f"Both are in the {doc}: Warren's {money(ours[0][1])} is {q(ours[0][0])}, "
+                                    f"Nasdaq's {money(theirs[0][1])} is {q(theirs[0][0])}. They count different things; "
+                                    "Warren keeps the line the checklist uses."}
+            f["status"] = "explained"
+    ss["disagree"] = [f["label"] for f in ss["figures"].values() if f["status"] == "disagree"]
+    ss["settled"] = sum(f["status"] in ("settled", "explained") for f in ss["figures"].values())
+    if not ss["disagree"]:
+        ss["status"] = "settled"
+    return ss
+
+
+def settle_question(n, open_):
+    ss = n["second_source"]
+    lines = "\n".join(f'- {f["label"]} (key "{k}"): Warren {money(f["ours"]) if f["ours"] is not None else "found nothing"}, '
+                      f'Nasdaq {money(f["theirs"])}' for k, f in open_)
+    return (f"Two data sources disagree on figures for {n['company']} ({n['symbol']}), for the quarter ending "
+            f"{ss['period_end']} (12-month figures are the four quarters to that date):\n{lines}\n\n"
+            "Warren read his from the SEC's XBRL data; neither appears on any standard line of the filing. Search for "
+            "the company's own 10-Q or 10-K for that quarter, or its earnings release, and find which figure the "
+            "company itself reports - or what it reports instead.\n\nReply with only JSON:\n"
+            '{"figures": [{"key": "the key above", "side": "warren" or "nasdaq" or "neither", '
+            '"line": "the line\'s name as the company prints it", "value": the company\'s figure in dollars as a plain '
+            'number, "source": "the https address you read it on", "why": "one sentence, no numbers: why the two differ"}]}')
+
+
+def read_settle_answer(text, n, keys):
+    """(readings, problems). Opus may only take a side whose figure matches the
+    value he quotes; a value of his own is shown as his, never used."""
+    m = re.search(r"\{.*\}", text or "", re.S)
+    if not m:
+        return [], ["no JSON object in the reply"]
+    try:
+        figs = json.loads(m.group(0)).get("figures") or []
+    except (ValueError, AttributeError) as e:
+        return [], [f"the JSON did not parse: {e}"]
+    out, problems = [], []
+    known = n["second_source"]["figures"]
+    for g in figs if isinstance(figs, list) else []:
+        k = str((g or {}).get("key", ""))
+        if k not in keys:
+            problems.append(f"{k!r} was not asked about")
+            continue
+        side, f = g.get("side"), known[k]
+        try:
+            v = float(g.get("value"))
+        except (TypeError, ValueError):
+            v = None
+        src = str(g.get("source") or "")
+        line, why = str(g.get("line") or "")[:120].strip(), str(g.get("why") or "")[:300].strip()
+        if side not in ("warren", "nasdaq", "neither"):
+            problems.append(f"{k}: side must be warren, nasdaq or neither")
+        elif not src.startswith("https://"):
+            problems.append(f"{k}: no https source")
+        elif side != "neither" and not _same(v, f["ours" if side == "warren" else "theirs"]):
+            problems.append(f"{k}: the value quoted is not {side}'s figure")
+        elif STRAY.search(why) or STRAY.search(line):
+            problems.append(f"{k}: the line and why must carry no numbers")
+        else:
+            out.append({"key": k, "verdict": side, "line": line, "value": v, "source": src[:400], "why": why})
+    return out, problems
+
+
+def settle_by_asking(n, ask=None):
+    """The disagreements the filing could not settle, put to Opus in one
+    question, his web search on. ('' or a note why not.)"""
+    ss = n.get("second_source") or {}
+    open_ = [(k, f) for k, f in (ss.get("figures") or {}).items() if f["status"] == "disagree"]
+    if not open_:
+        return ""
+    if runs_today() >= RUNS_PER_DAY:
+        return "today's Opus runs are used, so the disagreement was not looked into"
+    runs_today(bump=True)
+    ask = ask or (lambda q: _load("wake_warren_settle", "wake.py").ask("warren", q, ASK_TIMEOUT,
+                                                                        tools=("WebSearch", "WebFetch")))
+    ok, text = ask(settle_question(n, open_))
+    if not ok:
+        return f"Opus could not look into the disagreement ({text[:120]})"
+    got, problems = read_settle_answer(text, n, {k for k, _ in open_})
+    for r in got:
+        f = ss["figures"][r["key"]]
+        host = r["source"].split("/")[2]
+        who = {"warren": "Warren's figure", "nasdaq": "Nasdaq's figure", "neither": "neither source's"}[r["verdict"]]
+        says = (f"Opus's reading, not proven by code: the company's own report ({host}) gives "
+                + (f"{money(r['value'])} " if r["value"] is not None else "")
+                + (f'as "{r["line"]}" ' if r["line"] else "") + f"- {who}." + (f" {r['why']}" if r["why"] else ""))
+        f["settled"] = {"by": "opus", "verdict": r["verdict"], "line": r["line"], "value": r["value"],
+                        "link": {"label": host, "url": r["source"]}, "says": says}
+    return ("Opus's reading of the disagreement had problems: " + "; ".join(problems)) if problems and not got else ""
+
+
+STALE_DAYS = 200
+
+
+def stale_figures(n):
+    """A tag a company stopped using still holds its old figures. ASTS's
+    last operating income was 2024: read as this year's, it made EBITDA its
+    depreciation alone and leverage 16.9x for a company losing $700M a year.
+    A figure ending STALE_DAYS before the company's latest report is
+    dropped, and the gaps are filled by arithmetic on figures that are
+    current: EBIT from pre-tax income plus interest, EPS from net income
+    over shares."""
+    latest = max((n.get(k + "_ttm_end") or "" for k in ("ocf", "net_income")), default="")
+    if not latest:
+        return
+    n["stale"] = []
+    for key in TAGS:
+        end = n.get(key + "_ttm_end")
+        if end and (ddate(latest) - ddate(end)).days > STALE_DAYS:
+            n[key + "_ttm"] = n[key + "_ttm_end"] = None
+            n["stale"].append(key)
+        yrs_ = n.get(key + "_years") or []
+        if yrs_ and (ddate(latest) - ddate(yrs_[-1][0])).days > STALE_DAYS + 365:
+            n[key + "_years"] = []
+            if key not in n["stale"]:
+                n["stale"].append(key)
+    if n.get("op_income_ttm") is None and n.get("pretax_ttm") is not None:
+        n["op_income_ttm"] = n["pretax_ttm"] + (n.get("interest_ttm") or 0)
+        n["op_income_from"] = "pre-tax income plus interest"
+    if not n.get("eps_years"):
+        sh = {e: v for e, v in n.get("shares_years") or []}
+        n["eps_years"] = [[e, round(v / sh[e], 2)] for e, v in n.get("net_income_years") or [] if sh.get(e)]
+        if n["eps_years"]:
+            n["eps_from"] = "net income over shares"
+
+
+def derive(n):
+    """The checklist's arithmetic on the raw figures. Pure: tests feed it."""
+    g = n.get
+    rev = g("revenue_ttm")
+    ni, ocf, capex = g("net_income_ttm"), g("ocf_ttm"), g("capex_ttm")
+    n["fcf_ttm"] = ocf - capex if ocf is not None and capex is not None else None
+    years = {e: v for e, v in g("ocf_years") or []}
+    cap = {e: v for e, v in g("capex_years") or []}
+    n["fcf_years"] = [[e, years[e] - cap[e]] for e in years if e in cap]
+    rv = {e: v for e, v in g("revenue_years") or []}
+    n["margin_years"] = [[e, r1(100 * v / rv[e])] for e, v in g("net_income_years") or [] if rv.get(e)]
+    n["margin_ttm"] = r1(100 * ni / rev) if ni is not None and rev else None
+    div = g("dividends_ttm") or 0
+    n["coverage"] = r2(n["fcf_ttm"] / div) if div and n["fcf_ttm"] is not None else None
+    n["payout"] = r1(100 * div / ni) if div and ni and ni > 0 else None
+    n["yield"] = r2(100 * g("div_per_share_ttm") / g("price")) if g("price") and g("div_per_share_ttm") else 0.0
+    n["fcf_yield"] = r1(100 * n["fcf_ttm"] / g("market_cap")) if g("market_cap") and n["fcf_ttm"] is not None else None
+    op, dna = g("op_income_ttm"), g("dna_ttm")
+    n["ebitda_ttm"] = op + dna if op is not None and dna is not None else None
+    n["net_debt"] = g("debt") - (g("cash") or 0) if g("debt") is not None else None
+    n["leverage"] = (r1(n["net_debt"] / n["ebitda_ttm"]) if n["net_debt"] is not None and n["ebitda_ttm"]
+                     and n["ebitda_ttm"] > 0 else None)
+    it = g("interest_ttm")
+    n["interest_cover"] = r1(op / it) if op is not None and it else None
+    n["ev"] = g("market_cap") + n["net_debt"] if g("market_cap") and n["net_debt"] is not None else g("market_cap")
+    n["ev_ebitda"] = r1(n["ev"] / n["ebitda_ttm"]) if n["ev"] and n["ebitda_ttm"] and n["ebitda_ttm"] > 0 else None
+    rev_ok = rev is not None and rev > 0
+    n["ps"] = r2(g("market_cap") / rev) if g("market_cap") and rev_ok else None
+    eps_ntm = g("eps_ntm")
+    # Losing money now, or expected to over the next year: P/E means nothing,
+    # and Step 5 prices it on sales.
+    n["unprofitable"] = (ni is not None and ni <= 0) or (eps_ntm is not None and eps_ntm <= 0)
+    n["pe_forward"] = r1(g("price") / eps_ntm) if eps_ntm and eps_ntm > 0 and g("price") else None
+    gr = g("eps_growth")
+    n["peg"] = r2(n["pe_forward"] / gr) if n["pe_forward"] and gr and gr > 0 else None
+    n["math"] = worked_math(n)
+    # Part B of Step 4: the latest full year's cash, line by line.
+    last = lambda k: (g(k + "_years") or [[None, None]])[-1][1]
+    n["fy"] = {"year_end": (g("ocf_years") or [[None]])[-1][0], "ocf": last("ocf"), "capex": last("capex"),
+               "dividends": last("dividends") or 0, "buybacks": last("buybacks") or 0,
+               "net_borrowing": (last("debt_issued") or 0) - (last("debt_repaid") or 0)}
+    return n
+
+
+# Every abbreviation the page uses, as its equation (owner, 2026-11-19: "add
+# the math equations next to the abbreviations"). Matched on a row's label.
+FORMULAS = [
+    ("Free cash flow", "fcf", "FCF (free cash flow) = operating cash flow − capex (spending on buildings and equipment)"),
+    ("Dividend coverage", "coverage", "Coverage = FCF ÷ dividends paid"),
+    ("Payout ratio", "payout", "Payout = dividends paid ÷ net income × 100"),
+    ("Dividend yield", "yield", "Yield = dividends per share (last 12 months) ÷ price × 100"),
+    ("FCF yield", "fcf_yield", "FCF yield = FCF ÷ market cap × 100"),
+    ("Leverage", "leverage", "Leverage = net debt ÷ EBITDA · net debt = total debt − cash · "
+                              "EBITDA (earnings before interest, tax, depreciation and amortization) = "
+                              "operating income + depreciation and amortization"),
+    ("Interest coverage", "interest_cover", "Interest coverage = EBIT (operating income) ÷ interest expense"),
+    ("Total debt vs", "debt_change", "Change = (debt now − debt a year ago) ÷ debt a year ago × 100"),
+    ("Forward P/E", "pe_forward", "Forward P/E (price-to-earnings) = price ÷ expected EPS over the next 12 months"),
+    ("EV/EBITDA", "ev_ebitda", "EV/EBITDA = enterprise value ÷ EBITDA · EV = market cap + net debt"),
+    ("PEG", "peg", "PEG (P/E-to-growth) = forward P/E ÷ expected yearly EPS growth (%)"),
+    ("Price/Sales", "ps", "P/S (price-to-sales) = market cap ÷ revenue (last 12 months)"),
+    ("P/S", "ps", "P/S (price-to-sales) = market cap ÷ revenue (last 12 months)"),
+    ("EPS", "eps", "EPS (earnings per share) = net income ÷ shares"),
+    ("Profit margin", "margin", "Profit margin = net income ÷ revenue × 100"),
+]
+
+
+def worked_math(n):
+    """The same equations with this stock's numbers in them, so every ratio
+    on the page can be checked by hand. Built from the figures derive used."""
+    g, m = n.get, {}
+    def put(key, text, *needed):
+        if all(x is not None for x in needed):
+            m[key] = text
+    put("fcf", f"{money(g('ocf_ttm'))} − {money(g('capex_ttm'))} = {money(g('fcf_ttm'))}", g("ocf_ttm"), g("capex_ttm"))
+    put("coverage", f"{money(g('fcf_ttm'))} ÷ {money(g('dividends_ttm'))} = {g('coverage')}x", g("coverage"))
+    put("payout", f"{money(g('dividends_ttm'))} ÷ {money(g('net_income_ttm'))} × 100 = {g('payout')}%", g("payout"))
+    put("yield", f"${g('div_per_share_ttm')} ÷ ${g('price')} × 100 = {g('yield')}%", g("div_per_share_ttm"), g("price"))
+    put("fcf_yield", f"{money(g('fcf_ttm'))} ÷ {money(g('market_cap'))} × 100 = {g('fcf_yield')}%", g("fcf_yield"))
+    ebitda = (f"EBITDA = {money(g('op_income_ttm'))} + {money(g('dna_ttm'))} = {money(g('ebitda_ttm'))}"
+              if g("ebitda_ttm") is not None else None)
+    nd = (f"net debt = {money(g('debt'))} − {money(g('cash') or 0)} = {money(g('net_debt'))}"
+          if g("net_debt") is not None else None)
+    put("leverage", " · ".join(x for x in (nd, ebitda, f"{money(g('net_debt'))} ÷ {money(g('ebitda_ttm'))} = {g('leverage')}x"
+                                            if g("leverage") is not None else None) if x), nd or ebitda)
+    put("interest_cover", f"{money(g('op_income_ttm'))} ÷ {money(g('interest_ttm'))} = {g('interest_cover')}x", g("interest_cover"))
+    if g("debt") is not None and g("debt_year_ago"):
+        m["debt_change"] = (f"({money(g('debt'))} − {money(g('debt_year_ago'))}) ÷ {money(g('debt_year_ago'))} × 100 = "
+                            f"{pct(g('debt'), g('debt_year_ago')):+.0f}%")
+    put("pe_forward", f"${g('price')} ÷ ${g('eps_ntm')} = {g('pe_forward')}", g("pe_forward"))
+    put("ev_ebitda", f"EV = {money(g('market_cap'))} + {money(g('net_debt'))} = {money(g('ev'))} · "
+                     f"{money(g('ev'))} ÷ {money(g('ebitda_ttm'))} = {g('ev_ebitda')}", g("ev_ebitda"))
+    put("peg", f"{g('pe_forward')} ÷ {g('eps_growth')} = {g('peg')}", g("peg"))
+    put("ps", f"{money(g('market_cap'))} ÷ {money(g('revenue_ttm'))} = {g('ps')}", g("ps"))
+    put("margin", f"{money(g('net_income_ttm'))} ÷ {money(g('revenue_ttm'))} × 100 = {g('margin_ttm')}% (last 12 months)",
+        g("margin_ttm"))
+    return m
+
+
+# Which SEC figures each row is built from: for its filing links and for
+# the second-source check.
+ROW_FIGURES = [("Revenue", ["revenue_ttm"]), ("Profit margin", ["net_income_ttm", "revenue_ttm"]),
+               ("Free cash flow", ["ocf_ttm", "capex_ttm"]), ("FCF yield", ["ocf_ttm", "capex_ttm"]),
+               ("Dividend coverage", ["ocf_ttm", "capex_ttm"]), ("Payout ratio", ["net_income_ttm"]),
+               ("Leverage", ["debt", "cash", "op_income_ttm"]), ("Interest coverage", ["op_income_ttm"]),
+               ("Total debt", ["debt"]), ("Price/Sales", ["revenue_ttm"]), ("EV/EBITDA", ["debt", "cash", "op_income_ttm"])]
+
+
+def figure_sources(n, key):
+    base = key[:-4] if key.endswith("_ttm") else key
+    if base == "op_income" and n.get("op_income_from"):
+        return (n.get("pretax_src") or []) + (n.get("interest_src") or [])
+    return n.get(base + "_src") or []
+
+
+# ------------------------------------------------- what the numbers mean
+# The owner (2026-11-20): "the math equations help understand how to get
+# the numbers but I need help understanding what the numbers mean, whether
+# they are good, bad". Each ratio gets one plain sentence about this stock,
+# built by code from its own numbers (never a model), and the scale it is
+# judged on - the same lines the ratings above use.
+
+def _cmp(mine, avg, cheaper="cheaper", dearer="dearer"):
+    if mine is None or not avg:
+        return ""
+    d = pct(mine, avg)
+    if abs(d) < 5:
+        return f" Its rivals average {avg:g}, about the same."
+    if avg > 0 and mine / avg >= 3:
+        return f" Its rivals average {avg:g}, so it costs about {mine / avg:.0f} times as much as they do."
+    return f" Its rivals average {avg:g}, so it is {abs(d):.0f}% {cheaper if d < 0 else dearer} than them."
+
+
+def plain_words(key, n, peers=(), sector=None):
+    """{"says": one sentence on this stock's number, "scale": good/ok/bad}."""
+    g = n.get
+    avg = lambda k: peer_avg(list(peers), k)
+    heavy = n.get("_capital_heavy")
+    if key == "fcf" and g("fcf_ttm") is not None:
+        v = g("fcf_ttm")
+        says = (f"After paying to run and grow the business, it had {money(v)} of cash left over in the last 12 "
+                "months - money for dividends, paying down debt, buybacks or growth." if v >= 0 else
+                f"It spent {money(-v)} more cash than it brought in over the last 12 months, so it had to use "
+                "savings or borrow to cover the gap.")
+        return {"says": says, "scale": "Good: positive and growing · Watch: positive but shrinking · Bad: negative year after year"}
+    if key == "coverage" and g("coverage") is not None:
+        return {"says": f"For every $1 it paid in dividends, it made ${g('coverage'):.2f} of free cash.",
+                "scale": "Safe: 1.5 or more · OK: 1.0-1.5 · Bad: under 1.0 - the dividend is not paid for by its own cash"}
+    if key == "payout" and g("payout") is not None:
+        p = g("payout")
+        says = (f"It paid out {p:g}% of its profit as dividends and kept {100 - p:g}% to reinvest." if p <= 100 else
+                f"It paid out {p:g}% of its profit - more than it earned.")
+        return {"says": says, "scale": "Good: under 60% · OK: 60-90% · Risky: over 90%"
+                + (" (pipelines, utilities and REITs normally run higher - trust coverage)" if heavy else "")}
+    if key == "yield" and g("yield") is not None:
+        return {"says": f"Every $100 you invest pays about ${g('yield'):.2f} a year in dividends.",
+                "scale": "Low: under 2% · Healthy: 2-5% · High: 5-8% · Warning: over 8% - often a cut is coming"}
+    if key == "fcf_yield" and g("fcf_yield") is not None:
+        fy = g("fcf_yield")
+        says = (f"For every $100 of the company you buy, it makes about ${fy:.2f} of free cash a year." if fy >= 0 else
+                f"For every $100 of the company you buy, it burns about ${-fy:.2f} of cash a year.")
+        return {"says": says, "scale": "Cheap: 5% or more · Fair: 2-5% · Pricey: under 2% · Negative: it burns cash"}
+    if key == "leverage":
+        nd, eb, lev = g("net_debt"), g("ebitda_ttm"), g("leverage")
+        lo, hi = (4.5, 5.5) if heavy else (2, 3.5)
+        scale = (f"Best: below zero (more cash than debt) · Safe: under {lo:g}x · OK: {lo:g}-{hi:g}x · Risky: over {hi:g}x"
+                 + (" - its industry normally carries more debt" if heavy else ""))
+        if nd is not None and nd <= 0:
+            return {"says": f"It has {money(-nd)} more cash than debt - it could pay off every loan today. A "
+                            "negative leverage number is the good kind: the safest balance sheet there is.", "scale": scale}
+        if nd is not None and eb is not None and eb <= 0:
+            return {"says": f"It owes {money(nd)} more than it holds in cash, and its earnings (EBITDA) are negative, "
+                            "so nothing it earns is paying that down yet.", "scale": scale}
+        if lev is not None:
+            return {"says": f"It would take about {lev:g} years of its earnings (EBITDA) to pay off its debt.", "scale": scale}
+    if key == "interest_cover" and g("interest_cover") is not None:
+        ic, op = g("interest_cover"), g("op_income_ttm")
+        says = ("Its operating profit is negative, so it is not earning its interest bill." if op is not None and op < 0
+                else f"Its operating profit could pay its yearly interest bill {ic:g} times over.")
+        return {"says": says, "scale": "Safe: over 8x · OK: 3-8x · Risky: under 3x"}
+    if key == "debt_change" and g("debt") is not None and g("debt_year_ago"):
+        ch = pct(g("debt"), g("debt_year_ago"))
+        return {"says": f"Its total debt {'rose' if ch > 0 else 'fell'} {abs(ch):.0f}% in a year "
+                        f"({money(g('debt_year_ago'))} to {money(g('debt'))}).",
+                "scale": "Fine: flat or down · Watch: up 5-25% · Ask why: up over 25% (Part B shows where it went)"}
+    if key == "pe_forward" and g("pe_forward") is not None:
+        pe = g("pe_forward")
+        says = f"You pay ${pe:g} for every $1 of profit analysts expect it to make over the next 12 months." \
+            + _cmp(pe, avg("pe_forward"))
+        if pe < 10:
+            says += " A very low P/E can be a bargain - or a sign the market expects profits to fall; Step 2 tells which."
+        lo, hi = PE_TYPICAL.get(sector, (15, 25))
+        return {"says": says, "scale": f"Cheap: under {lo} · Normal{' for ' + sector if sector in PE_TYPICAL else ''}: "
+                                       f"{lo}-{hi} · Expensive: over {hi} · Lower is cheaper"}
+    if key == "peg":
+        if g("peg") is not None:
+            return {"says": f"Its price is {g('peg'):g} times its expected yearly earnings growth - under 1 means you "
+                            "pay little for the growth you get.",
+                    "scale": "Cheap: under 1 · Fair: 1-2 · Expensive: over 2"}
+        if g("eps_ntm") and g("pe_forward") is not None:
+            return {"says": "Analysts expect its earnings to shrink, so PEG cannot be used - judge the price on P/E "
+                            "or P/S instead.", "scale": "Cheap: under 1 · Fair: 1-2 · Expensive: over 2"}
+    if key == "ps" and g("ps") is not None:
+        return {"says": f"You pay ${g('ps'):g} for every $1 of sales it made in the last 12 months." + _cmp(g("ps"), avg("ps")),
+                "scale": "Depends on how much of each sale it keeps: thin-margin businesses (insurers, grocers) under 1 "
+                         "is normal, software 5-10 · Compare with rivals · Lower is cheaper"}
+    if key == "ev_ebitda" and g("ev_ebitda") is not None:
+        return {"says": f"Buying the whole company - its debt included, its cash subtracted - would cost about "
+                        f"{g('ev_ebitda'):g} years of its yearly earnings (EBITDA)." + _cmp(g("ev_ebitda"), avg("ev_ebitda")),
+                "scale": "Cheap: under 10 · Fair: 10-15 · Expensive: over 15 · Lower is cheaper"}
+    if key == "margin" and g("margin_ttm") is not None:
+        m = g("margin_ttm")
+        says = (f"Out of every $100 of sales, it kept ${m:.2f} as profit over the last 12 months." if m >= 0 else
+                f"Out of every $100 of sales, it lost ${-m:.2f} over the last 12 months.")
+        ma = avg("margin_ttm")
+        if ma is not None:
+            says += f" Its rivals keep ${ma:.2f} on average."
+        op = g("op_income_ttm")
+        if m > 0 and op is not None and op < 0:
+            says += (f" But its business itself lost {money(-op)} (operating income), so this profit came from "
+                     "outside its day-to-day business - a one-off gain, interest or a revalued investment - and "
+                     "should not be counted on to repeat.")
+        return {"says": says, "scale": "Thin: under 5% · OK: 5-15% · Strong: over 15% - insurers, grocers and "
+                                       "retailers run thin by nature, so compare with rivals"}
+    if key == "eps":
+        return {"says": "Earnings per share is the company's profit split across its shares - what each share you "
+                        "own earned in the year.", "scale": "Good: rising each year · Watch: flat or up and down · Bad: falling or negative"}
+    return None
+
+
+# For the comparison table: which way is better, and where this stock sits.
+TABLE_WAY = {"Forward P/E": ("lower", "Lower is cheaper"), "PEG": ("lower", "Lower is cheaper for its growth"),
+             "P/S": ("lower", "Lower is cheaper"), "EV/EBITDA": ("lower", "Lower is cheaper"),
+             "Dividend yield": ("higher", "Higher pays more - but over 8% is a warning"),
+             "Leverage": ("lower", "Lower is safer; below zero means more cash than debt"),
+             "Profit margin": ("higher", "Higher keeps more of each sale"),
+             "1-year price change": (None, "How far the price moved - not good or bad by itself; a big rise means "
+                                           "buying after the run")}
+
+
+TABLE_KEY = {"Forward P/E": "pe_forward", "PEG": "peg", "P/S": "ps", "EV/EBITDA": "ev_ebitda",
+             "Dividend yield": "yield", "Leverage": "leverage", "Profit margin": "margin"}
+
+
+def table_blank(label, n):
+    """Why this stock has no figure on a comparison row, in plain words."""
+    g = n.get
+    eps_ntm, eb, nd = g("eps_ntm"), g("ebitda_ttm"), g("net_debt")
+    if label == "Forward P/E":
+        if eps_ntm is not None and eps_ntm <= 0:
+            return ("Analysts expect it to lose money over the next 12 months, so there is no profit to price it "
+                    "on. That is why its price is judged on sales (P/S) instead.")
+        return "No analysts' forecast was found, so there is no forward P/E - its price is judged on the other rows."
+    if label == "PEG":
+        if g("pe_forward") is None:
+            return "PEG is built on the forward P/E, and it has none - so there is no PEG either."
+        return "Analysts expect its earnings to shrink, so there is no growth to measure the price against."
+    if label == "EV/EBITDA":
+        if eb is not None and eb <= 0:
+            return (f"Its EBITDA is {money(eb)} - it loses money even before interest, tax and depreciation - so "
+                    "there are no earnings to price it on and this ratio doesn't apply.")
+        return "Its EBITDA could not be worked out from its filings."
+    if label == "Leverage":
+        if nd is not None and nd <= 0:
+            return (f"It has {money(-nd)} more cash than debt, so it owes nothing on balance - but it loses money, "
+                    "so leverage can't be put as a number. Step 4 covers its debt.")
+        if nd is not None and eb is not None and eb <= 0:
+            return (f"It owes {money(nd)} more than it holds in cash and has no earnings (EBITDA) to pay it down. "
+                    "Step 4 covers its debt.")
+        return "No debt was found in its filings."
+    if label == "Profit margin":
+        return "Its revenue or profit was not reported, so there is no margin."
+    if label == "Dividend yield":
+        return "It pays no dividend."
+    return ""
+
+
+def table_means(table, n, peers=(), sector=None):
+    """One "what it means" line per comparison row, for this stock - the
+    same sentences as the steps' rows, and why a blank is blank."""
+    out = []
+    for row in table["rows"]:
+        label = row[0]
+        if label == "1-year price change":
+            ch = n.get("change_1y")
+            if ch is None:
+                out.append({"says": "No year of prices was found.", "scale": ""})
+                continue
+            rv = [p.get("change_1y") for p in peers if p.get("change_1y") is not None]
+            says = f"The price is {'up' if ch >= 0 else 'down'} {abs(ch):g}% over the last year."
+            if rv:
+                avg_ = sum(rv) / len(rv)
+                says += f" Its rivals moved {avg_:+.1f}% on average"
+                says += (", so it has fallen with its whole group - the market cooled on all of them, not just this one."
+                         if ch < 0 and avg_ < 0 else ", so it rose with its whole group." if ch >= 0 and avg_ >= 0
+                         else ", so it went the other way from its group - worth knowing why.")
+            if ch <= -40:
+                says += " A big fall can be a chance to buy cheaper, or a sign of trouble; Steps 2-4 tell which."
+            elif ch >= 50:
+                says += " You would be buying after a big run."
+            out.append({"says": says, "scale": "Not good or bad by itself"})
+            continue
+        if label == "Dividend yield" and not n.get("yield"):
+            out.append({"says": "It pays no dividend - you would earn only from the price going up.", "scale": ""})
+            continue
+        pw = plain_words(TABLE_KEY.get(label, ""), n, peers, sector)
+        out.append(pw if pw else {"says": table_blank(label, n), "scale": ""})
+    return out
+
+
+def table_notes(table):
+    """One line per comparison row: which way is better and this stock's place."""
+    out = []
+    sym = table["columns"][0]
+    for row in table["rows"]:
+        label = row[0]
+        way, hint = TABLE_WAY.get(label, (None, ""))
+        vals = []
+        for col, v in zip(table["columns"], row[1:]):
+            try:
+                vals.append((col, float(str(v).rstrip("%x"))))
+            except ValueError:
+                pass
+        mine = next((v for c, v in vals if c == sym), None)
+        if label == "Dividend yield" and vals and not any(v for _, v in vals):
+            out.append(f"None of the {len(vals)} pays a dividend.")
+            continue
+        if label == "Dividend yield" and mine == 0:
+            payers = [c for c, v in vals if v]
+            out.append(f"{sym} pays no dividend; {', '.join(payers)} {'does' if len(payers) == 1 else 'do'}.")
+            continue
+        if way and len(vals) >= 2 and len({v for _, v in vals}) == 1:
+            out.append(f"{hint}. All {len(vals)} are the same.")
+            continue
+        if way and mine is not None and len(vals) >= 2:
+            ranked = sorted(vals, key=lambda cv: cv[1], reverse=(way == "higher"))
+            place = [c for c, _ in ranked].index(sym) + 1
+            best, worst = {"Forward P/E": ("cheapest", "most expensive"), "PEG": ("cheapest", "most expensive"),
+                           "P/S": ("cheapest", "most expensive"), "EV/EBITDA": ("cheapest", "most expensive"),
+                           "Dividend yield": ("highest-paying", "lowest-paying"),
+                           "Leverage": ("safest", "most in debt"),
+                           "Profit margin": ("most profitable", "least profitable")}[label]
+            where = (f"{sym} is the {best} of the {len(vals)}." if place == 1 else
+                     f"{sym} is the {worst} of the {len(vals)}." if place == len(vals) else
+                     f"{sym} is #{place} of {len(vals)}.")
+            out.append(f"{hint}. {where}")
+        else:
+            out.append(hint + ("." if hint else ""))
+    return out
+
+
+# ------------------------------------------------- next to its rivals
+# The owner (2026-11-20): "I wanna see the comparison to main competitors in
+# each of the steps - the EPS, profit margins and so on, for all the
+# comparable categories." Each row whose number can be set beside a rival's
+# gets a line of the rivals' own figures, worked out by the same code from
+# their own filings, the rivals' average and where this stock places.
+# Sizes in dollars are not comparable between companies of different size,
+# so cash is compared as a share of sales, and EPS by its direction.
+
+def _last_change(pairs):
+    """(latest, the one before, latest end) from [[end, value]], or Nones
+    when the two are not about a year apart."""
+    if len(pairs or []) < 2:
+        return (pairs[-1][1] if pairs else None), None, (pairs[-1][0] if pairs else None)
+    (e0, v0), (e1, v1) = pairs[-2], pairs[-1]
+    if v0 is None or v1 is None or not 330 <= (ddate(e1) - ddate(e0)).days <= 400:
+        return v1, None, e1
+    return v1, v0, e1
+
+
+def revenue_growth(n):
+    v1, v0, _ = _last_change(n.get("revenue_years"))
+    return r1(100 * (v1 - v0) / abs(v0)) if v0 else None
+
+
+def fcf_margin(n):
+    f, rev = n.get("fcf_ttm"), n.get("revenue_ttm")
+    return r1(100 * f / rev) if f is not None and rev and rev > 0 else None
+
+
+def debt_change(n):
+    d0, d1 = n.get("debt_year_ago"), n.get("debt")
+    return r1(100 * (d1 - d0) / d0) if d0 and d1 is not None else None
+
+
+_pc = lambda v: f"{v:+g}%"
+_p = lambda v: f"{v:g}%"
+_x = lambda v: f"{v:g}x"
+RIVAL_ROWS = [
+    # row starts with, what is compared, the figure, how it is written, better way, which way is better
+    ("Revenue", "Revenue growth, last full year", revenue_growth, _pc, "higher", "Higher is growing faster"),
+    ("EPS", "EPS, last full year", lambda n: _last_change(n.get("eps_years"))[0], lambda v: f"{'-' if v < 0 else ''}${abs(v):.2f}", None,
+     "EPS dollars depend on how many shares a company has, so compare which way each is heading, not the size"),
+    ("Profit margin", "Profit margin, last 12 months", lambda n: n.get("margin_ttm"), _p, "higher",
+     "Higher keeps more of each sale as profit"),
+    ("Free cash flow", "Free cash flow as % of sales", fcf_margin, _p, "higher",
+     "Higher turns more of each sale into spare cash; free cash flow in dollars only shows size"),
+    ("FCF yield", "FCF yield", lambda n: n.get("fcf_yield"), _p, "higher", "Higher means more spare cash for the price"),
+    ("Dividend coverage", "Dividend coverage", lambda n: n.get("coverage"), _x, "higher",
+     "Higher means the dividend is paid more times over"),
+    ("Payout ratio", "Payout ratio", lambda n: n.get("payout"), _p, "lower", "Lower leaves more room to keep paying"),
+    ("Dividend yield", "Dividend yield", lambda n: n.get("yield"), _p, "higher",
+     "Higher pays more - but over 8% is a warning"),
+    ("Leverage", "Leverage", lambda n: n.get("leverage"), _x, "lower",
+     "Lower is safer; below zero means more cash than debt"),
+    ("Interest coverage", "Interest coverage", lambda n: n.get("interest_cover"), _x, "higher",
+     "Higher means profits pay the interest more times over"),
+    ("Total debt vs", "Debt change over a year", debt_change, _pc, None,
+     "More debt is not bad by itself if it pays for growth; Step 4's last row says what it is for"),
+]
+BEST = {"Revenue": ("fastest-growing", "slowest-growing"), "Profit margin": ("most profitable", "least profitable"),
+        "Free cash flow": ("best at turning sales into cash", "worst at turning sales into cash"),
+        "FCF yield": ("most cash for its price", "least cash for its price"),
+        "Dividend coverage": ("best covered", "least covered"), "Payout ratio": ("safest payout", "stretchiest payout"),
+        "Dividend yield": ("highest-paying", "lowest-paying"), "Leverage": ("safest", "most in debt"),
+        "Interest coverage": ("best able to pay its interest", "least able to pay its interest")}
+
+
+def why_blank(start, c):
+    """Why a company has no figure on a row, in a few words."""
+    if start == "Leverage" and c.get("net_debt") is not None:
+        return "more cash than debt" if c["net_debt"] < 0 else "n/a - losing money"
+    if start == "Interest coverage":
+        return "no interest reported" if not c.get("interest_ttm") else "n/a"
+    if start in ("Dividend coverage", "Payout ratio", "Dividend yield"):
+        return "no dividend"
+    if start == "Total debt vs":
+        return "no debt" if not c.get("debt") else "n/a"
+    return "n/a"
+
+
+def vs_rivals(check, n, peers):
+    """{"label", "cols": [{"symbol", "text", "value", "mine"}], "average", "note"}
+    for a row whose figure the rivals also have, else None."""
+    spec = next((x for x in RIVAL_ROWS if check.startswith(x[0])), None)
+    if not spec or not peers:
+        return None
+    start, label, figure, fmt, way, hint = spec
+    cols = []
+    for c in [n] + list(peers):
+        v = figure(c)
+        cols.append({"symbol": c["symbol"], "value": v, "mine": c is n,
+                     "text": fmt(v) if v is not None else why_blank(start, c)})
+    if start == "EPS":
+        for c, col in zip([n] + list(peers), cols):
+            v1, v0, end = _last_change(c.get("eps_years"))
+            if v1 is not None:
+                col["text"] += f" ({str(end)[:4]})" + ("" if v0 is None else ", up" if v1 > v0 else ", down" if v1 < v0 else ", flat")
+        up = [c["symbol"] for c, x in zip(cols, [n] + list(peers))
+              if (lambda a: a[1] is not None and a[0] > a[1])(_last_change(x.get("eps_years")))]
+        down = [c["symbol"] for c, x in zip(cols, [n] + list(peers))
+                if (lambda a: a[1] is not None and a[0] < a[1])(_last_change(x.get("eps_years")))]
+        note = hint + "." + (f" Rising: {', '.join(up)}." if up else "") + (f" Falling: {', '.join(down)}." if down else "")
+        return {"label": label, "cols": cols, "average": None, "note": note}
+    rivals = [c["value"] for c in cols[1:] if c["value"] is not None]
+    avg = r1(sum(rivals) / len(rivals)) if rivals else None
+    note = hint + "."
+    vals = [(c["symbol"], c["value"]) for c in cols if c["value"] is not None]
+    mine = cols[0]["value"]
+    if way and mine is not None and len(vals) >= 2:
+        ranked = sorted(vals, key=lambda sv: sv[1], reverse=(way == "higher"))
+        place = [sym for sym, _ in ranked].index(n["symbol"]) + 1
+        best, worst = BEST[start]
+        note += (f" Of the {len(vals)}, {n['symbol']} is the {best}." if place == 1 else
+                 f" Of the {len(vals)}, {n['symbol']} is the {worst}." if place == len(vals) else
+                 f" {n['symbol']} is #{place} of {len(vals)}.")
+    elif mine is None:
+        note += f" {n['symbol']} has no figure here ({cols[0]['text']})."
+    return {"label": label, "cols": cols, "average": fmt(avg) if avg is not None else None, "note": note}
+
+
+def explain(steps, n, peers=(), sector=None):
+    """Puts each row's equation and its worked numbers beside it, what the
+    number means for this stock and the scale it is judged on, the SEC
+    filings its figures came from, and whether Nasdaq's copy agrees."""
+    math = n.get("math") or {}
+    second = (n.get("second_source") or {}).get("figures") or {}
+    for st in steps.values():
+        for r in st.get("rows") or []:
+            keys = next((k for label, k in ROW_FIGURES if r["check"].startswith(label)), [])
+            links = []
+            for k in keys:
+                for l in figure_sources(n, k):
+                    if l not in links:
+                        links.append(l)
+            if links:
+                r["sources"] = links
+            got = [dict(second[k], key=k) for k in keys if k in second and second[k]["status"] != "not compared"]
+            if got:
+                sts = {x["status"] for x in got}
+                r["checked"] = {"status": "disagree" if "disagree" in sts else "settled" if {"settled", "explained"} & sts
+                                else "match",
+                                "items": [{"label": x["label"], "ours": money(x["ours"]), "theirs": money(x["theirs"]),
+                                           "status": x["status"], "says": (x.get("settled") or {}).get("says")}
+                                          for x in got]}
+            vs = vs_rivals(r["check"], n, peers)
+            if vs:
+                r["vs"] = vs
+            for label, key, formula in FORMULAS:
+                if r["check"].startswith(label) or (label == "EPS" and r["check"].startswith("EPS")):
+                    r["formula"] = formula
+                    if key in math:
+                        r["math"] = math[key]
+                    pw = plain_words(key, n, peers, sector)
+                    if pw:
+                        r["means"], r["scale"] = pw["says"], pw["scale"]
+                    elif label in ("Forward P/E", "PEG", "EV/EBITDA", "Leverage"):
+                        r["means"] = table_blank(label, n)     # a blank row says why, as in the table
+                    break
+        if "table" in st:
+            st["table"]["formulas"] = [next((f for label, _, f in FORMULAS if row_[0].startswith(label)), "")
+                                       for row_ in st["table"]["rows"]]
+            st["table"]["notes"] = table_notes(st["table"])
+            st["table"]["means"] = table_means(st["table"], n, peers, sector)
+    return steps
+
+
+# --------------------------------------------------------------- the ratings
+
+def row(check, answer, rating, why=""):
+    return {"check": check, "answer": answer, "rating": rating, "why": why}
+
+
+def overall(rows):
+    """A step's rating: Red if any row is Red, Yellow if half or more are
+    Yellow, Green otherwise - so one soft row does not sink a step."""
+    rs = [r["rating"] for r in rows if r["rating"] in (GREEN, YELLOW, RED)]
+    if RED in rs:
+        return RED
+    if rs and rs.count(YELLOW) * 2 >= len(rs):
+        return YELLOW
+    return GREEN if rs else YELLOW
+
+
+def trend(values):
+    """'up' in most years, 'down' two or more in a row at the end, else 'flat'."""
+    v = [x for x in values if x is not None]
+    if len(v) < 2:
+        return None
+    steps = [b > a for a, b in zip(v, v[1:])]
+    if len(steps) >= 2 and not steps[-1] and not steps[-2]:
+        return "down"
+    return "up" if sum(steps) * 2 > len(steps) else "flat"
+
+
+def yrs(pairs, f=money):
+    return " -> ".join(f"{f(v)} ({e[:4]})" for e, v in pairs)
+
+
+def rate_business(ai):
+    if not ai:
+        return {"rating": YELLOW, "rows": [row("How does it make money?", "Warren's write-up was not available - answer this yourself", YELLOW)]}
+    rows = [row("How does it make money?", ai["business"], GREEN),
+            row("What does it sell, and who buys it?", ai["customers"], GREEN),
+            row("Sector", ai["sector"], GREEN),
+            row("Cyclical or steady?", ("Cyclical: " if ai["cyclical"] else "Mostly steady: ") + ai["cyclical_why"][:1].lower() + ai["cyclical_why"][1:], GREEN),
+            row("2 main competitors", ", ".join(ai["peers"]) or "none found",
+                GREEN if len(ai["peers"]) == 2 else YELLOW,
+                "" if len(ai["peers"]) == 2 else "Warren could not confirm two listed rivals")]
+    return {"rating": overall(rows), "rows": rows}
+
+
+def rate_growth(n, ai):
+    """The last three fiscal years (and the last twelve months), as the
+    checklist asks - not every year the filings happen to carry. Every row
+    that is not Green says why, in words (owner, 2026-11-19)."""
+    ry, ey, my = (n.get(k) or [] for k in ("revenue_years", "eps_years", "margin_years"))
+    ry, ey, my = ry[-3:], ey[-3:], my[-3:]
+    rev = [v for _, v in ry] + ([n["revenue_ttm"]] if n.get("revenue_ttm") else [])
+    eps = [v for _, v in ey]
+    mar = [v for _, v in my] + ([n["margin_ttm"]] if n.get("margin_ttm") is not None else [])
+    def r(t):
+        return {"up": GREEN, "down": RED}.get(t, YELLOW)
+    def why(t, what):
+        return {None: f"not enough years of {what} reported to see a trend",
+                "down": f"{what} fell two periods in a row",
+                "flat": f"{what} went up and down - no clear trend"}.get(t, "")
+    rev_t, eps_t, mar_t = trend(rev), trend(eps), trend(mar)
+    eps_why = why(eps_t, "earnings per share")
+    if eps and eps[-1] is not None and eps[-1] < 0:
+        eps_t, eps_why = "down", "the latest year lost money"
+    mar_why = why(mar_t, "profit margin")
+    if mar and mar[-1] is not None and mar[-1] < 0:
+        mar_t = "down"
+        mar_why = "it lost money over the last 12 months" + (" - " + mar_why if mar_why and trend(mar) == "down" else "")
+    rows = [row("Revenue, last 3 years", "; ".join(x for x in (yrs(ry), f"{money(n['revenue_ttm'])} last 12 months"
+                                                             if n.get("revenue_ttm") else "") if x) or "not reported",
+                r(rev_t), why(rev_t, "revenue")),
+            row("EPS, last 3 years", yrs(ey, lambda v: f"${v:.2f}") or "not reported", r(eps_t),
+                eps_why + ("; worked out as net income over shares - the company stopped reporting EPS" if n.get("eps_from") else "")),
+            row("Profit margin", "; ".join(x for x in (yrs(my, lambda v: f"{v}%"),
+                                                       f"{n['margin_ttm']}% last 12 months" if n.get("margin_ttm") is not None else "") if x),
+                r(mar_t), mar_why)]
+    if ai:
+        rows.append(row("Did profits jump mainly because of high commodity prices?", ai["commodity_why"],
+                        {"no": GREEN, "partly": YELLOW, "yes": RED}[ai["commodity_boost"]],
+                        {"no": "", "partly": "some of the profit rode on high commodity prices, which can fall back",
+                         "yes": "the profit mostly rode on high commodity prices - when they fall, so will it"}[ai["commodity_boost"]]))
+    return {"rating": overall(rows), "rows": rows}
+
+
+def rate_cash(n):
+    rows = []
+    fcf, ocf = n.get("fcf_ttm"), n.get("ocf_ttm")
+    if fcf is None:
+        rows.append(row("Free cash flow (last 12 months)", "not reported", YELLOW, "its filings did not give the cash figures"))
+    elif fcf >= 0:
+        rows.append(row("Free cash flow (last 12 months)", money(fcf), GREEN))
+    else:
+        weak = ocf is None or ocf <= 0 or (n.get("dividends_ttm") or 0) > ocf
+        rows.append(row("Free cash flow (last 12 months)", money(fcf), RED if weak else YELLOW,
+                        "it spent more cash than it brought in, and its day-to-day business is not making enough"
+                        if weak else "negative from heavy building - Step 4 says whether that is healthy"))
+    paid = n.get("dividends_ttm") or 0
+    if paid:
+        cov = n.get("coverage")
+        rows.append(row("Dividend coverage (FCF / dividends paid)", f"{cov}x" if cov is not None else "n/a",
+                        YELLOW if cov is None else GREEN if cov >= 1.5 else RED if cov < 1.0 else YELLOW,
+                        "could not be worked out" if cov is None else "" if cov >= 1.5 else
+                        "free cash flow does not cover the dividend - the gap comes from savings or loans" if cov < 1.0 else
+                        "covered, but with little room to spare (1.5x or more is comfortable)"))
+        po = n.get("payout")
+        heavy = n.get("_capital_heavy")
+        po_rating = YELLOW if po is None else GREEN if po < 60 else (YELLOW if heavy else RED) if po > 90 else YELLOW
+        po_why = ("normal for pipelines, utilities and REITs - trust coverage" if heavy and po and po >= 60 else
+                  "no profit to pay it from" if po is None else "" if po < 60 else
+                  "it pays out over 90% of its profit - little is left if profits dip" if po > 90 else
+                  "it pays out 60-90% of its profit - fine if profits are steady, tight if not")
+        rows.append(row("Payout ratio", f"{po}% of earnings" if po is not None else "n/a", po_rating, po_why))
+        y = n.get("yield") or 0
+        rows.append(row("Dividend yield", f"{y}%", RED if y > 8 else GREEN if 2 <= y <= 5 else YELLOW,
+                        "a yield above 8% often means the market expects a cut" if y > 8 else "" if 2 <= y <= 5 else
+                        "under 2% - a small income" if y < 2 else "high - make sure the coverage above holds"))
+        dps = [v for _, v in n.get("dps_years") or []]
+        if len(dps) >= 2:
+            cut = any(b < a - 1e-9 for a, b in zip(dps, dps[1:]))
+            rows.append(row("Dividend history", yrs(n.get("dps_years") or [], lambda v: f"${v:.2f}"), RED if cut else GREEN,
+                            "cut at least once" if cut else "held or raised every year shown"))
+    else:
+        rows.append(row("Dividend", "pays no dividend", YELLOW, "nothing to cover - judge it on growth"))
+    fy = n.get("fcf_yield")
+    rows.append(row("FCF yield (FCF / market cap)", f"{fy}%" if fy is not None else "n/a",
+                    YELLOW if fy is None else GREEN if fy >= 5 else RED if fy < 2 else YELLOW,
+                    "could not be worked out" if fy is None else "" if fy >= 5 else
+                    f"for every $100 of the company you buy, it burns about ${-fy:.2f} of cash a year - it spends "
+                    "more than it brings in, so you are paying for a future it has not reached yet" if fy < 0 else
+                    f"for every $100 of the company you buy, it makes about ${fy:.2f} of free cash a year - "
+                    "the price is high next to the cash it makes (5% or more is good)" if fy < 2 else
+                    "a fair amount of cash for the price, not a bargain (5% or more is good)"))
+    return {"rating": overall(rows), "rows": rows}
+
+
+def debt_purpose(n):
+    """Part B of Step 4: what the debt is paying for, from the year's cash."""
+    fy = n.get("fy") or {}
+    ocf, capex, div = fy.get("ocf"), fy.get("capex") or 0, fy.get("dividends") or 0
+    borrow, buy = fy.get("net_borrowing") or 0, fy.get("buybacks") or 0
+    if ocf is None:
+        return "unknown", YELLOW, "the cash flow statement was not reported"
+    if div and ocf < div:
+        return "dividend on a loan", RED, "operating cash is less than the dividends paid"
+    if borrow <= 0 and ocf >= div + capex:
+        return "own cash", GREEN, "operating cash covered the dividend and the spending, and debt did not grow"
+    if borrow > 0 and ocf < 0:
+        return "borrowing to cover losses and building", YELLOW, (
+            f"its business used {money(-ocf)} of cash, so the new borrowing ({money(borrow)}) paid for the losses "
+            "as well as the building - it works only if what it builds starts paying")
+    if borrow > 0 and buy > 0 and buy > 0.5 * ocf:
+        return "borrowing for buybacks", YELLOW, "debt rose while it spent heavily buying back stock"
+    if borrow > 0 and ocf >= div + capex:
+        return "borrowing to grow", GREEN, (
+            f"its own cash already covered {'the dividend and ' if div else ''}its spending, so the new borrowing "
+            f"({money(borrow)}) went to growth, deals or savings - Warren's note on its debt says which")
+    if borrow > 0:
+        return "borrowing to grow", GREEN, (("operating cash covered the dividend; " if div else "")
+                                            + "new borrowing paid for the building its own cash could not")
+    return "own cash", GREEN, "operating cash and its own savings paid for everything"
+
+
+def rate_debt(n):
+    heavy = n.get("_capital_heavy")
+    rows = []
+    lev, nd, eb = n.get("leverage"), n.get("net_debt"), n.get("ebitda_ttm")
+    if nd is not None and nd <= 0:
+        rows.append(row("Leverage (net debt / EBITDA)", "more cash than debt", GREEN))
+    elif nd is not None and eb is not None and eb <= 0:
+        rows.append(row("Leverage (net debt / EBITDA)", f"{money(nd)} net debt, EBITDA {money(eb)}", RED,
+                        "it owes more than it holds in cash, and its earnings (EBITDA) are negative - nothing is paying the debt down"))
+    elif lev is None:
+        rows.append(row("Leverage (net debt / EBITDA)", "n/a", YELLOW,
+                        "no debt was found in its filings" if n.get("debt") is None else "its earnings were not reported"))
+    else:
+        g, r = (4.5, 5.5) if heavy else (2.0, 3.5)
+        rows.append(row("Leverage (net debt / EBITDA)", f"{lev}x", GREEN if lev < g else RED if lev > r else YELLOW,
+                        ("normal for its industry is 3.5-5.5x; " if heavy else "") +
+                        ("" if lev < g else f"it would take about {lev:.0f} years of earnings to repay its debt"
+                         f" (under {g:g}x is comfortable, over {r:g}x is risky)")))
+    ic, op = n.get("interest_cover"), n.get("op_income_ttm")
+    rows.append(row("Interest coverage", f"{ic}x" if ic is not None else "n/a",
+                    YELLOW if ic is None else GREEN if ic > 8 else RED if ic < 3 else YELLOW,
+                    "no interest expense was reported" if ic is None else "" if ic > 8 else
+                    "its operating profit is negative, so earnings are not covering the interest" if op is not None and op < 0 else
+                    "operating profit covers its interest bill less than 3 times" if ic < 3 else
+                    "operating profit covers its interest 3-8 times - fine, not roomy (over 8x is comfortable)"))
+    d0, d1 = n.get("debt"), n.get("debt_year_ago")
+    if d0 is not None and d1:
+        ch = pct(d0, d1)
+        rows.append(row("Total debt vs. a year ago", f"{money(d0)} vs. {money(d1)}", GREEN if ch <= 5 else YELLOW if ch <= 25 else RED,
+                        "" if ch <= 5 else f"up {ch:.0f}% in a year" + (" - Part B says why" if ch > 25 else "")))
+    what, rating, why = debt_purpose(n)
+    fy = n.get("fy") or {}
+    part_b = [["Operating cash flow", money(fy.get("ocf"))], ["Capital expenditure", money(fy.get("capex"))],
+              ["Dividends paid", money(fy.get("dividends"))], ["Stock buybacks", money(fy.get("buybacks"))],
+              ["Net new borrowing", money(fy.get("net_borrowing"))]]
+    quick = fy.get("ocf") - fy.get("dividends") if fy.get("ocf") is not None else None
+    rows.append(row("What is the debt paying for?", what, rating, why))
+    return {"rating": overall(rows), "rows": rows, "part_b": part_b, "year_end": fy.get("year_end"),
+            "note": ("This company stopped reporting operating income, so EBITDA here is pre-tax income plus interest "
+                     "plus depreciation, from the SEC filings." if n.get("op_income_from") else
+                     "Leverage here is operating income plus depreciation from the SEC filings; a company's own "
+                     "'adjusted EBITDA' usually adds more and shows a lower figure."),
+            "quick_test": money(quick), "quick_test_ok": quick is not None and quick >= 0,
+            "pays_dividend": bool(fy.get("dividends"))}
+
+
+def peer_avg(peers, key):
+    v = [p[key] for p in peers if p.get(key) is not None]
+    return r1(sum(v) / len(v)) if v else None
+
+
+def rate_price(n, peers, sector, cyclical):
+    """A company losing money has no P/E worth the name, so it is priced on
+    sales instead - P/S against its rivals' P/S - and PEG, built on P/E, does
+    not apply (owner, 2026-11-19, after HIMS)."""
+    rows = []
+    loss = n.get("unprofitable")
+    pe, ev, peg = n.get("pe_forward"), n.get("ev_ebitda"), n.get("peg")
+    def vs(mine, avg, label, typical=None):
+        if mine is None:
+            return row(label, "n/a", YELLOW, "could not be worked out from the data")
+        if avg is None:
+            if typical:
+                r = GREEN if mine <= typical[1] else YELLOW if mine <= typical[1] * 1.25 else RED
+                return row(label, f"{mine} (sector normal {typical[0]}-{typical[1]})", r,
+                           "" if r == GREEN else f"above the {typical[0]}-{typical[1]} that is normal for its sector")
+            return row(label, f"{mine} (no peers to compare)", YELLOW, "no rival's figure to compare it with")
+        if mine <= avg or (not loss and peg is not None and peg < 1.5):
+            r, why = GREEN, ""
+        elif mine <= avg * 1.25:
+            r, why = YELLOW, f"up to a quarter dearer than its rivals' average of {avg}"
+        else:
+            r, why = RED, (f"about {mine / avg:.0f} times its rivals' average of {avg}" if avg > 0 and mine / avg >= 3
+                           else f"{pct(mine, avg):.0f}% dearer than its rivals' average of {avg}")
+        return row(label, f"{mine} vs. peer average {avg}", r, why)
+    if loss:
+        ps = vs(n.get("ps"), peer_avg(peers, "ps"), "Price/Sales (P/S)")
+        ps["why"] = ("it is not making a profit, so it is priced on sales instead of earnings"
+                     + ("; " + ps["why"] if ps["why"] else ""))
+        rows.append(ps)
+    else:
+        rows.append(vs(pe, peer_avg(peers, "pe_forward"), "Forward P/E", PE_TYPICAL.get(sector)))
+    if n.get("ebitda_ttm") is not None and n["ebitda_ttm"] <= 0:
+        rows.append(row("EV/EBITDA", "doesn't apply", "n/a", "its EBITDA is negative, so there is nothing to divide by"))
+    else:
+        rows.append(vs(ev, peer_avg(peers, "ev_ebitda"), "EV/EBITDA"))
+    if loss:
+        rows.append(row("PEG", "doesn't apply", "n/a", "PEG is built on P/E, which needs a profit"))
+    else:
+        rows.append(row("PEG", f"{peg}" if peg is not None else "earnings not expected to grow" if n.get("eps_ntm") else "n/a",
+                        GREEN if peg is not None and peg < 1.5 else RED if peg is not None and peg > 2.5 else YELLOW,
+                        "" if peg is not None and peg < 1.5 else
+                        "analysts expect earnings to shrink, so there is no growth to pay for" if peg is None and n.get("eps_ntm") else
+                        "no analyst growth forecast" if peg is None else
+                        "you would pay a lot for its expected growth (under 1.5 is good)" if peg > 2.5 else
+                        "a fair price for its growth, not cheap (under 1.5 is good)"))
+    eps = [v for _, v in n.get("eps_years") or []]
+    if cyclical and pe is not None and pe < 10 and eps and eps[-1] == max(eps):
+        rows.append(row("Cyclical trap?", "a very low P/E at record profits", RED,
+                        "for a cyclical company that 'cheap' price can be a trap"))
+    chart = [["Where in its 52-week range?", f"${n['low_52w']}-${n['high_52w']}, now ${n['price']} ({where(n)})"],
+             ["Above or below its 200-day average?", "n/a" if not n.get("sma200") else
+              f"{'above' if n['price'] >= n['sma200'] else 'below'} (${n['sma200']})"],
+             ["Jumped 20%+ in the last month?", "n/a" if n.get("change_1m") is None else
+              f"{'yes' if n['change_1m'] >= 20 else 'no'} ({n['change_1m']:+}%)"]]
+    chase = n.get("change_1m") is not None and n["change_1m"] >= 20
+    return {"rating": overall(rows), "rows": rows, "chart": chart,
+            "chart_note": "It just jumped 20%+ - don't chase it; buy in steps." if chase else "No sign of a buying frenzy.",
+            "table": comparison(n, peers)}
+
+
+def where(n):
+    lo, hi, p = n.get("low_52w"), n.get("high_52w"), n.get("price")
+    if not (lo and hi and p) or hi <= lo:
+        return "n/a"
+    f = (p - lo) / (hi - lo)
+    return "near the low" if f < 0.25 else "near the high" if f > 0.75 else "middle"
+
+
+def comparison(n, peers):
+    cols = [n] + list(peers)
+    keys = [("Forward P/E", "pe_forward", ""), ("PEG", "peg", ""), ("P/S", "ps", ""), ("EV/EBITDA", "ev_ebitda", ""),
+            ("Dividend yield", "yield", "%"), ("Leverage", "leverage", "x"), ("Profit margin", "margin_ttm", "%"),
+            ("1-year price change", "change_1y", "%")]
+    return {"columns": [c["symbol"] for c in cols],
+            "rows": [[label] + [("" if c.get(k) is None else f"{c[k]:+}{unit}" if k == "change_1y" else f"{c[k]}{unit}")
+                                for c in cols] for label, k, unit in keys]}
+
+
+def position(holding, price, amount=0):
+    """What you already own of this stock, from the holdings list: your
+    average price paid is your breakeven (before any trading fees), and
+    buying `amount` more at `price` moves it. Code's arithmetic, not a
+    model's (owner, 2026-11-19)."""
+    if not holding:
+        return None
+    paid = float(holding.get("amount") or 0)
+    avg = holding.get("avg_price")
+    out = {"amount": r2(paid), "avg_price": avg, "breakeven": avg}
+    if not avg or avg <= 0:
+        return out
+    shares = paid / avg
+    out["shares"] = round(shares, 4)
+    if price:
+        out["price"] = price
+        out["value"] = r2(shares * price)
+        out["gain"] = r2(shares * price - paid)
+        out["gain_pct"] = r1(100 * (price / avg - 1))
+        if amount:
+            more = amount / price
+            out["after"] = {"shares": round(shares + more, 4), "paid": r2(paid + amount),
+                            "breakeven": r2((paid + amount) / (shares + more))}
+    return out
+
+
+def concentration(holdings, symbol, amount, sector):
+    """This stock's and this sector's share of everything after the buy. With
+    no other holdings recorded there is nothing to measure against."""
+    others = [h for h in (holdings or []) if h.get("symbol") != symbol]
+    if not others:
+        return None
+    mine = amount + sum(float(h.get("amount") or 0) for h in (holdings or []) if h.get("symbol") == symbol)
+    total = sum(float(h.get("amount") or 0) for h in others) + mine
+    same = sum(float(h.get("amount") or 0) for h in others if h.get("sector") == sector) + mine
+    return {"stock_pct": r1(100 * mine / total), "sector_pct": r1(100 * same / total), "total": r2(total)}
+
+
+def rate_risk(ai, conc, inputs, sector):
+    rows = []
+    rules = (ai or {}).get("sell_rules") or []
+    rows.append(row("3 things that would make me sell", "listed below" if rules else "write your own three",
+                    GREEN if len(rules) == 3 else YELLOW, "" if len(rules) == 3 else "Warren could not write three"))
+    if conc is None:
+        rows.append(row("How much of my money is in this sector?", "add your holdings to check this", YELLOW,
+                        "with no holdings listed, Warren cannot tell how concentrated you would be"))
+    else:
+        rows.append(row("How much of my money is in this stock?", f"{conc['stock_pct']}% of ${conc['total']:,.0f}",
+                        GREEN if conc["stock_pct"] <= 30 else YELLOW,
+                        "" if conc["stock_pct"] <= 30 else "more than 30% of your money in one stock"))
+        rows.append(row("How much is in this sector?", f"{conc['sector_pct']}% in {sector}",
+                        RED if conc["sector_pct"] > 50 else GREEN,
+                        "more than half your money would be in one sector - one bad year for it hits everything" if conc["sector_pct"] > 50 else ""))
+    if inputs.get("hold_drop") == "no":
+        rows.append(row("Could I hold through a 30% drop?", "no - invest less or pick a steadier stock", YELLOW,
+                        "you said a 30% drop would make you sell - stocks like this one can drop that much"))
+    return {"rating": overall(rows), "rows": rows, "risks": (ai or {}).get("risks") or [],
+            "buy_more": (ai or {}).get("buy_more"), "debt_note": (ai or {}).get("debt_note")}
+
+
+STEP_NAMES = {"business": "Step 1 (the business)", "growth": "Step 2 (growth)", "cash": "Step 3 (cash)",
+              "debt": "Step 4 (debt)", "price": "Step 5 (price)", "risk": "Step 6 (risk)"}
+
+
+def red_reasons(steps):
+    """Each Red step, with the row that turned it Red and why - the decision
+    names its reasons instead of quoting the rule (owner, 2026-11-19)."""
+    out = []
+    for k, name in STEP_NAMES.items():
+        st = steps.get(k) or {}
+        if st.get("rating") != RED:
+            continue
+        bad = [r for r in st.get("rows") or [] if r.get("rating") == RED]
+        out += [f"{name} - {r['check']}: {r['why'] or r['answer']}" for r in bad] or [name]
+    return out
+
+
+def decide(steps):
+    """The checklist's decision rule, word for word, then the reasons."""
+    r = {k: v["rating"] for k, v in steps.items()}
+    if r["cash"] == RED or r["debt"] == RED:
+        return "Skip", "Step 3 or Step 4 is Red - weak cash or risky debt is the hardest problem to fix."
+    reds = [k for k, v in r.items() if v == RED]
+    yellows = [k for k, v in r.items() if v == YELLOW]
+    if reds or len(yellows) >= 3:
+        why = "a step is Red" if reds else f"{len(yellows)} steps are Yellow (" + ", ".join(STEP_NAMES[k] for k in yellows) + ")"
+        if reds == ["risk"]:
+            why = "the only Red is your portfolio, not the stock: keep this sector to about half your money or less, then it becomes a Buy"
+        return "Wait", f"{why[0].upper() + why[1:]}. Re-check after the next earnings report or a lower price."
+    return "Buy", "Everything is Green with at most 2 Yellows. Buy in 2-3 steps a few weeks apart, with limit orders."
+
+
+# --------------------------------------------------------------- the one question
+
+def facts_for_ai(n):
+    lines = [f"Price ${n['price']}; forward P/E {n.get('pe_forward')}; price/sales {n.get('ps')}; profit margin {n.get('margin_ttm')}%",
+             f"Revenue by year: {yrs(n.get('revenue_years') or [])}",
+             f"Free cash flow, last 12 months: {money(n.get('fcf_ttm'))}; dividends paid {money(n.get('dividends_ttm'))}",
+             f"Net debt {money(n.get('net_debt'))}; leverage {n.get('leverage')}x; interest coverage {n.get('interest_cover')}x",
+             f"Last full year: borrowed {money((n.get('fy') or {}).get('net_borrowing'))} net, "
+             f"capital spending {money((n.get('fy') or {}).get('capex'))}"]
+    return "\n".join(lines)
+
+
+def question(n, inputs):
+    return (
+        "You are Warren, a careful stock analyst writing for a beginner investor. Fill in the parts of a "
+        "before-you-buy checklist that need judgment. Code has already computed every number, so never "
+        "write a number, a percentage or a dollar amount yourself.\n\n"
+        f"Company: {n['company']} ({n['symbol']}). Nasdaq lists it as sector \"{n.get('nasdaq_sector')}\", "
+        f"industry \"{n.get('nasdaq_industry')}\" - that label can be wrong; judge for yourself.\n"
+        f"What the code found:\n{facts_for_ai(n)}\n\n"
+        f"The buyer is investing for about {inputs['months']} months, goal: {inputs['goal']}. "
+        f"Their reason: \"{inputs.get('why') or 'not given'}\".\n\n"
+        "You may search the web for the company's latest news and filings first.\n"
+        "Reply with ONLY one JSON object and nothing else, with these keys:\n"
+        '{"business": "two plain sentences: how it makes money",\n'
+        ' "customers": "one sentence: what it sells and who buys it",\n'
+        f' "sector": "exactly one of {SECTORS}",\n'
+        ' "capital_heavy": true only for pipelines, utilities, REITs or telecom towers, which normally carry more debt,\n'
+        ' "cyclical": true or false, "cyclical_why": "one sentence",\n'
+        ' "peers": ["TICKER", "TICKER"] - its two closest US-listed public rivals,\n'
+        ' "commodity_boost": "yes" or "partly" or "no", "commodity_why": "one sentence: did recent profits jump mainly on high commodity prices?",\n'
+        ' "risks": ["three short risks from its latest news or filings"],\n'
+        ' "sell_rules": ["three rules, each finishing the sentence I would sell if ..., about the business, not the price"],\n'
+        ' "buy_more": "one sentence: what would justify buying more",\n'
+        ' "debt_note": "one sentence: what its debt is mostly paying for, if known"}'
+    )
+
+
+PROSE = ("business", "customers", "cyclical_why", "commodity_why", "buy_more", "debt_note")
+STRAY = re.compile(r"\$|%|\d+\.\d+|\d{3,}|\d{1,2},\d{3}")
+
+
+def read_answer(text, symbol, tickers):
+    """(answer or None, problems). Code checks Opus before anything is used:
+    the shape, the sector, the rivals against the SEC's own list, and that
+    no field quotes a number this script did not compute."""
+    m = re.search(r"\{.*\}", text or "", re.S)
+    if not m:
+        return None, ["no JSON object in the reply"]
+    try:
+        a = json.loads(m.group(0))
+    except ValueError as e:
+        return None, [f"the JSON did not parse: {e}"]
+    problems = []
+    out = {}
+    for k in PROSE:
+        v = str(a.get(k) or "").strip()[:400]
+        if k in ("business", "customers", "cyclical_why", "commodity_why") and not v:
+            problems.append(f"{k} is empty")
+        if STRAY.search(v):
+            problems.append(f"{k} quotes a number: {v[:80]}")
+            v = ""
+        out[k] = v
+    sector = str(a.get("sector") or "").strip()
+    if sector not in SECTORS:
+        problems.append(f"sector {sector!r} is not one of the eleven")
+    out["sector"] = sector if sector in SECTORS else None
+    out["cyclical"] = bool(a.get("cyclical"))
+    out["capital_heavy"] = bool(a.get("capital_heavy")) and sector in CAPITAL_HEAVY_OK
+    cb = str(a.get("commodity_boost") or "").strip().lower()
+    out["commodity_boost"] = cb if cb in ("yes", "partly", "no") else "partly"
+    peers = []
+    for p in a.get("peers") or []:
+        p = str(p).strip().upper()
+        if p != symbol and SYMBOL_RE.match(p) and cik_for(p, tickers)[0] and p not in peers:
+            peers.append(p)
+    if len(peers) < 2:
+        problems.append("fewer than two rivals found in the SEC's list")
+    out["peers"] = peers[:2]
+    for k in ("risks", "sell_rules"):
+        items = [str(x).strip()[:200] for x in (a.get(k) or []) if str(x).strip()]
+        bad = [x for x in items if STRAY.search(x)]
+        if bad:
+            problems.append(f"{k} quotes a number: {bad[0][:80]}")
+        out[k] = [x for x in items if not STRAY.search(x)][:3]
+        if len(out[k]) < 3:
+            problems.append(f"{k} has fewer than three")
+    ok = out["sector"] and out["business"] and out["customers"]
+    return (out if ok else None), problems
+
+
+def _ask(q):
+    w = _load("wake_warren", "wake.py")
+    return w.ask("warren", q, ASK_TIMEOUT, tools=("WebSearch",))
+
+
+def runs_today(now=None, bump=False):
+    day = et_time.day(now)
+    d = read_json(RUNS, {}) or {}
+    n = int(d.get("n") or 0) if d.get("day") == day else 0
+    if bump:
+        n += 1
+        write_json(RUNS, {"day": day, "n": n})
+    return n
+
+
+def ai_part(n, inputs, tickers, ask=None):
+    """One question, one retry with the problems named. (answer, note)."""
+    if runs_today() >= RUNS_PER_DAY:
+        return None, f"today's {RUNS_PER_DAY} checks on Opus are used - the numbers are below, the write-up is not"
+    runs_today(bump=True)
+    ask = ask or _ask
+    q = question(n, inputs)
+    ok, text = ask(q)
+    if not ok:
+        return None, f"Opus could not answer ({text[:150]})"
+    ans, problems = read_answer(text, n["symbol"], tickers)
+    if problems:
+        ok2, text2 = ask(q + "\n\nYour last reply had these problems - fix them:\n- " + "\n- ".join(problems))
+        if ok2:
+            ans2, problems2 = read_answer(text2, n["symbol"], tickers)
+            if ans2 and len(problems2) < len(problems):
+                ans, problems = ans2, problems2
+    return ans, ("; ".join(problems) if problems else "")
+
+
+# --------------------------------------------------------------- a check
+
+def holdings():
+    return (read_json(HOLDINGS, {}) or {}).get("holdings") or []
+
+
+def build(symbol, inputs, get=None, ask=None, peer_numbers=None):
+    sym = symbol.upper()
+    tickers = sec_tickers(get)
+    n = numbers(sym, get, tickers, verify=True)
+    ai, ai_note = ai_part(n, inputs, tickers, ask)
+    settle_note = settle_by_asking(n, ask)
+    if settle_note:
+        ai_note = (ai_note + "; " if ai_note else "") + settle_note
+    sector = (ai or {}).get("sector") or n.get("nasdaq_sector") or "Unknown"
+    n["_capital_heavy"] = bool((ai or {}).get("capital_heavy"))
+    peers = []
+    for p in (ai or {}).get("peers") or []:
+        try:
+            peers.append((peer_numbers or numbers)(p, get, tickers))
+        except Exception as e:
+            ai_note = (ai_note + "; " if ai_note else "") + f"{p}'s numbers could not be read ({str(e)[:80]})"
+    steps = {"business": rate_business(ai), "growth": rate_growth(n, ai), "cash": rate_cash(n),
+             "debt": rate_debt(n), "price": rate_price(n, peers, sector, (ai or {}).get("cyclical")),
+             "risk": rate_risk(ai, concentration(holdings(), sym, float(inputs["amount"]), sector), inputs, sector)}
+    explain(steps, n, peers, sector)
+    decision, why = decide(steps)
+    caution = [f"Nasdaq's figures disagree with Warren's on {', '.join(n['second_source']['disagree'])}"] \
+        if (n.get("second_source") or {}).get("disagree") else []
+    caution += n.get("alarms") or []
+    now = datetime.now(timezone.utc)
+    return {"symbol": sym, "company": n["company"], "sector": sector, "when_utc": now.isoformat(timespec="seconds"),
+            "inputs": inputs, "numbers": {k: v for k, v in n.items() if not k.startswith("_")},
+            "peers": [{k: p.get(k) for k in ("symbol", "company", "pe_forward", "peg", "ps", "ev_ebitda", "yield", "leverage",
+                                             "margin_ttm", "change_1y")} for p in peers],
+            "ai": ai, "ai_note": ai_note, "steps": steps, "decision": decision, "decision_why": why, "decision_reasons": red_reasons(steps), "caution": caution,
+            "position": position(next((h for h in holdings() if h.get("symbol") == sym), None), n.get("price"),
+                                 float(inputs["amount"])),
+            "data_filed": n.get("data_filed"),
+            "sources": {"sec": FACTS_URL.format(cik=n["cik"]), "price": CHART_URL.format(sym=sym),
+                        "nasdaq": SUMMARY_URL.format(sym=sym), "forecast": FORECAST_URL.format(sym=sym)}}
+
+
+def save(check):
+    stamp = check["when_utc"][:16].replace(":", "").replace("T", "-")
+    path = CHECKS / check["symbol"] / f"{stamp}.json"
+    write_json(path, check)
+    return path
+
+
+# ------------------------------------------------------------ news watcher
+
+def headline_time(h):
+    from email.utils import parsedate_to_datetime
+    try:
+        return parsedate_to_datetime(h.get("published") or "")
+    except (TypeError, ValueError):
+        return None
+
+
+def holding_headlines(symbols, now=None, fetch=None):
+    """Headlines on each holding: Belfort's, for the names he already
+    follows and when his file is fresh; the rest fetched with Belfort's own
+    fetch_news - one request a name, his pace. Each tagged with its symbol."""
+    now = now or datetime.now(timezone.utc)
+    doc = read_json(BELFORT_NEWS, {}) or {}
+    try:
+        asof = datetime.strptime(doc.get("asof_utc", ""), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        fresh = now - asof < timedelta(hours=BELFORT_NEWS_FRESH_H)
+    except ValueError:
+        fresh = False
+    covered = set(doc.get("symbols") or []) if fresh else set()
+    got = [h for h in doc.get("headlines") or [] if fresh and h.get("symbol") in symbols]
+    rest = [s for s in symbols if s not in covered]
+    if rest:
+        fetch = fetch or (lambda syms: _load("belfort_fetch_for_warren", "belfort-fetch.py").fetch_news(syms))
+        got += fetch(rest)
+    old = now - timedelta(days=NEWS_MAX_AGE_DAYS)
+    return [h for h in got if (headline_time(h) or now) >= old], {"from_belfort": sorted(set(symbols) & covered),
+                                                                    "fetched": rest}
+
+
+WATCH_STOP = set("""
+would sell sells selling buying more make makes sense company companies business keeps keep fails fail
+needed needs need major rather than starts start growing steadily continuous steady every their there where which
+while about after before again against being below between could during further other others those through under
+until very will with without into onto from that this these them they then when what because also only some such
+just even much many most less like over above along among since next last year years quarter quarters month months
+week weeks time times today number numbers level levels price prices stock stocks share investor investors market
+markets new big small high low good bad well able made enough already still really paying pays paid pay terms
+term badly instead flowing flows one-off someone something service services customers customer
+""".split())
+# Words a rule uses for an idea, and the words headlines use for it.
+WATCH_SYNONYMS = {
+    "dilut": ["offering", "dilution", "offer"], "raise money": ["offering", "raises", "offer"],
+    "issuing new shares": ["offering", "offer"], "borrow": ["debt", "notes", "convertible", "loan"],
+    "lawsuit": ["lawsuit", "sues", "class action"], "regulator": ["FDA", "FCC", "SEC", "regulator", "probe"],
+    "partner": ["partner", "partnership"], "subscriber": ["subscribers"], "guidance": ["guidance", "outlook"],
+    "profit": ["profit", "profitable"], "spectrum": ["spectrum", "FCC"],
+}
+
+
+def stem(w):
+    w = w.lower().strip("'’")
+    for suf in ("ing", "ed", "es", "s"):
+        if len(w) > len(suf) + 4 and w.endswith(suf):
+            return w[: -len(suf)]
+    return w
+
+
+def watch_terms(text, company=""):
+    """The words in one rule worth watching the news for: names (BlueBird,
+    Verizon, AT&T, Starlink), the rule's own nouns (launches, spectrum,
+    coverage), and the words headlines use for its idea (dilute -> offering).
+    Code, not a model: the same rule always gives the same words."""
+    own = {stem(w) for w in re.findall(r"[A-Za-z&]+", company or "")}
+    out, seen = [], set()
+
+    def add(t):
+        k = stem(t)
+        if k not in seen and k not in own:
+            seen.add(k)
+            out.append(t)
+    words = [re.sub(r"['’]s$", "", w) for w in re.findall(r"[A-Za-z][A-Za-z&'’\-]*[A-Za-z]", text or "")]
+    for i, w in enumerate(words):
+        proper = (w[0].isupper() and i > 0) or "&" in w or (w.isupper() and len(w) >= 2)
+        if proper and (len(w) >= 3 or "&" in w) and w.lower() not in WATCH_STOP:
+            add(w)
+    low = (text or "").lower()
+    for key, syn in WATCH_SYNONYMS.items():
+        if key in low:
+            for t in syn:
+                add(t)
+    for w in words:
+        if len(w) >= 6 and not w[0].isupper() and w.lower() not in WATCH_STOP:
+            add(w.lower())
+    return out
+
+
+def rule_terms(check):
+    """{"sell": [the words of rule 1, 2, 3], "buy": the buy-more test's words}."""
+    c = check or {}
+    company = c.get("company") or ""
+    rules = (c.get("ai") or {}).get("sell_rules") or []
+    buy = ((c.get("steps") or {}).get("risk") or {}).get("buy_more") or (c.get("ai") or {}).get("buy_more") or ""
+    return {"sell": [watch_terms(re.sub(r"^\s*I would sell if\s*", "", r, flags=re.I), company) for r in rules],
+            "buy": watch_terms(re.sub(r"^\s*Buying more would make sense if\s*", "", buy, flags=re.I), company)}
+
+
+def term_hits(title, terms):
+    """The terms a headline uses: a whole word starting with the term's stem
+    (launch: launches, launched), or the exact name (AT&T)."""
+    low = html.unescape(title or "").lower()
+    toks = re.findall(r"[a-z0-9&'’\-]+", low)
+    hits = []
+    for t in terms:
+        k = stem(t)
+        if (" " in t and t.lower() in low) or any(x == k or x.startswith(k) for x in toks):
+            hits.append(t)
+    return hits
+
+
+def rule_hits(title, rt):
+    """[(kind, rule number or 0, [terms])] for each rule the headline touches."""
+    out = []
+    for i, terms in enumerate(rt.get("sell") or [], 1):
+        h = term_hits(title, terms)
+        if h:
+            out.append(("sell", i, h))
+    h = term_hits(title, rt.get("buy") or [])
+    if h:
+        out.append(("buy", 0, h))
+    return out
+
+
+CURATED = {t for syn in WATCH_SYNONYMS.values() for t in syn}
+
+
+def strong(hit):
+    """Two of one rule's words, one of its names, or a word headlines use for
+    its idea (offering, for "dilute"): enough that code flags the headline
+    itself if the model leaves it out."""
+    return len(hit[2]) >= 2 or any(t[0].isupper() or t in CURATED for t in hit[2])
+
+
+def short_name(company):
+    n = re.sub(r",?\s+(Inc\.?|Incorporated|Corporation|Corp\.?|Holdings?|Co\.?|Ltd\.?|plc|N\.V\.|S\.A\.)$", "",
+               company or "", flags=re.I)
+    n = re.sub(r"\s+(Health|Group|Technologies|Platforms)$", "", n).strip()
+    return n or company
+
+
+def search_query(company, rt):
+    """'"AST SpaceMobile" (BlueBird OR Verizon OR ...) when:7d' - names
+    first, then each rule's own words, at most SEARCH_TERMS of them."""
+    every = [t for terms in (rt.get("sell") or []) + [rt.get("buy") or []] for t in terms]
+    ranked = sorted(dict.fromkeys(every), key=lambda t: (not t[0].isupper(), every.index(t)))[:SEARCH_TERMS]
+    if not ranked or not company:
+        return None
+    q = " OR ".join(f'"{t}"' if " " in t or "&" in t else t for t in ranked)
+    return f'"{short_name(company)}" ({q}) when:7d'
+
+
+def search_headlines(symbol, company, rt, get=None):
+    """Google News for the stock's name with its rules' words - one request
+    a stock. Titles there end ' - Publisher', which becomes the publisher."""
+    q = search_query(company, rt)
+    if not q:
+        return []
+    url = NEWS_SEARCH_URL.format(q=urllib.parse.quote_plus(q))
+    bf = _load("belfort_fetch_for_warren", "belfort-fetch.py")
+    raw = (get or (lambda u: bf.http_get(u, ua=NASDAQ_HEADERS["User-Agent"])))(url)
+    raw = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+    out = []
+    for it in bf.parse_rss(raw, SEARCH_PER_NAME):
+        title, pub = html.unescape(it["title"]), it.get("publisher")
+        if " - " in title:
+            title, pub = title.rsplit(" - ", 1)
+        out.append({"symbol": symbol, "title": title[:180], "publisher": pub, "published": it.get("published"),
+                    "link": it.get("link"), "id": hashlib.sha1(title.encode()).hexdigest()[:8], "via": "search"})
+    return out
+
+
+def news_question(groups):
+    """One question for every holding with new headlines. The model judges
+    words against the owner's own rules; it is told to state no numbers but
+    those in the headline."""
+    parts = []
+    for g in groups:
+        rules = "\n".join(f"   {i}. {r}" for i, r in enumerate(g["sell_rules"], 1)) \
+            or "   (no saved checklist - judge whether it changes the case for owning it at all)"
+        def mark(h):
+            return "".join(f"\n      <- mentions {'sell rule ' + str(n) if k == 'sell' else 'the buy-more test'}: "
+                           f"{', '.join(t)}" for k, n, t in h.get("hits") or [])
+        heads = "\n".join(f"   [{h['id']}] {h['title']} ({h.get('publisher') or '?'}, {h.get('published') or '?'}){mark(h)}"
+                          for h in g["headlines"])
+        parts.append(f"{g['symbol']} - {g['company']}\n  Sell rules:\n{rules}\n  Buy more if: {g['buy_more'] or '(none saved)'}\n"
+                     f"  New headlines:\n{heads}")
+    return ("You watch a small investor's stocks. For each stock below are the owner's own rules for selling and for "
+            "buying more, and today's new headlines. Pick only the headlines that are real news about the company "
+            "itself and would make a careful owner consider selling or buying more - because they touch one of the "
+            "rules, or are big on their own: earnings or guidance, a lawsuit or investigation, new shares or debt, "
+            "a merger, a major contract won or lost, a regulator's decision, a key partner or leader leaving. Leave "
+            "out routine coverage, price-move recaps, lists of stocks to buy, and opinion pieces. A headline about "
+            "another company only counts if it plainly names this one. A headline marked 'mentions' uses words "
+            "from one of the owner's own rules: look at it closely - if it really is about what that rule watches "
+            "for but does not yet change the case, answer it as watch; if it only names the words in passing "
+            "(a price recap, a list of stocks), leave it out. When several headlines tell the same story, answer "
+            "only the clearest one.\n\n"
+            "Rate how much each one matters to this owner, 1 to 5: 5 Major - could change the whole reason to own "
+            "it right now (fraud, a going-concern doubt, losing its main customer or partner, a big share sale, a "
+            "failed key launch or product, guidance cut hard); 4 High - real news that bears directly on one of the "
+            "owner's rules; 3 Medium - worth reading, may matter later; 2 Low - background or plans with no "
+            "near-term effect; 1 Minor - barely related.\n\n"
+            + "\n\n".join(parts) +
+            "\n\nAnswer with JSON only, no prose: {\"alerts\": [{\"id\": \"headline id\", \"symbol\": \"TICKER\", "
+            "\"signal\": \"sell\", \"buy\" or \"watch\", \"rule\": the sell rule's number it touches, or 0, "
+            "\"importance\": 1 to 5, \"why\": \"one plain sentence for a beginner\"}]}. An empty list is a fine answer. "
+            "Use no number in 'why' that is not in the headline.")
+
+
+def read_news_answer(text, by_id, rules_of):
+    """The alerts code can stand behind: a real headline on the stock it
+    names, a signal of sell or buy, a rule that exists, a short reason with
+    no number the headline does not have. Anything else is dropped."""
+    t = (text or "").strip()
+    if t.startswith("```"):
+        t = t.strip("`").split("\n", 1)[-1]
+    a, b = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[a:b + 1])
+    except (ValueError, TypeError):
+        return None
+    out = []
+    for x in d.get("alerts") or []:
+        if not isinstance(x, dict):
+            continue
+        h = by_id.get(str(x.get("id")))
+        sig, why = x.get("signal"), str(x.get("why") or "").strip()
+        try:
+            rule = int(x.get("rule") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not h or h["symbol"] != str(x.get("symbol", "")).upper() or sig not in ("sell", "buy", "watch"):
+            continue
+        if not why or len(why) > 300 or not 0 <= rule <= len(rules_of.get(h["symbol"]) or []):
+            continue
+        if any(num not in h["title"] for num in re.findall(r"\d[\d.,]*", why)):
+            continue
+        try:
+            imp = int(x.get("importance"))
+        except (TypeError, ValueError):
+            imp = None
+        out.append({"id": h["id"], "symbol": h["symbol"], "signal": sig, "why": why,
+                    "importance": imp if imp in IMPORTANCE else 3,
+                    "rule": (rules_of[h["symbol"]][rule - 1] if rule else None),
+                    "matched": sorted({t for _, _, ts in h.get("hits") or [] for t in ts}),
+                    "title": h["title"], "publisher": h.get("publisher"), "link": h.get("link"),
+                    "published": h.get("published")})
+    return out
+
+
+def news_asks_today(now=None, bump=False):
+    d = read_json(NEWS_SEEN, {}) or {}
+    day = et_time.day(now)
+    n = int(d.get("asks") or 0) if d.get("ask_day") == day else 0
+    if bump:
+        d.update(ask_day=day, asks=n + 1)
+        write_json(NEWS_SEEN, d)
+    return n + (1 if bump else 0)
+
+
+def watch_news(now=None, fetch=None, ask=None, search=None):
+    """One run: new headlines on what you own -> at most one question ->
+    alerts. A headline is marked seen only once it has been judged, so a
+    failed question is asked again next run, never silently skipped."""
+    now = now or datetime.now(timezone.utc)
+    hs = holdings()
+    status = {"run_utc": now.isoformat(timespec="minutes"), "holdings": len(hs), "new": 0, "alerts": 0, "note": ""}
+    seen_doc = read_json(NEWS_SEEN, {}) or {}
+    seen = set(seen_doc.get("ids") or [])
+    if not hs:
+        status["note"] = "nothing in What I own"
+        return _news_done(seen_doc, seen, status)
+    heads, where = holding_headlines([h["symbol"] for h in hs], now, fetch)
+    status.update(where)
+    # The second half of the search: each stock's own rules as search words
+    # (Google News), and every headline, from either half, matched to them.
+    terms, status["searched"], status["search_failed"] = {}, [], []
+    old = now - timedelta(days=NEWS_MAX_AGE_DAYS)
+    for h in hs:
+        c = latest(h["symbol"])
+        if not c:
+            continue
+        rt = terms[h["symbol"]] = rule_terms(c)
+        try:
+            found = (search or search_headlines)(h["symbol"], c.get("company") or "", rt)
+            status["searched"].append(h["symbol"])
+        except Exception as e:
+            status["search_failed"].append(f"{h['symbol']}: {str(e)[:60]}")
+            continue
+        heads += [x for x in found if (headline_time(x) or now) >= old]
+    uniq = {}
+    for x in heads:
+        uniq.setdefault(x["id"], x)
+    heads = list(uniq.values())
+    for x in heads:
+        x["hits"] = rule_hits(x["title"], terms[x["symbol"]]) if x["symbol"] in terms else []
+    new = [h for h in heads if h["id"] not in seen]
+    status["new"] = len(new)
+    if not new:
+        status["note"] = "no new headlines"
+        return _news_done(seen_doc, seen, status)
+    if news_asks_today(now) >= NEWS_ASKS_PER_DAY:
+        status["note"] = f"{NEWS_ASKS_PER_DAY} news questions already today - the rest wait for tomorrow"
+        return _news_done(seen_doc, seen, status)
+    groups, rules_of = [], {}
+    for h in hs:
+        mine = [x for x in new if x["symbol"] == h["symbol"]]
+        if not mine:
+            continue
+        c = latest(h["symbol"]) or {}
+        risk = (c.get("steps") or {}).get("risk") or {}
+        rules = list((c.get("ai") or {}).get("sell_rules") or [])
+        rules_of[h["symbol"]] = rules
+        groups.append({"symbol": h["symbol"], "company": c.get("company") or h["symbol"], "sell_rules": rules,
+                       "buy_more": risk.get("buy_more") or (c.get("ai") or {}).get("buy_more"), "headlines": mine})
+    ask = ask or (lambda q: _load("wake_warren_news", "wake.py").ask("warren-news", q, NEWS_ASK_TIMEOUT))
+    news_asks_today(now, bump=True)
+    ok, text = ask(news_question(groups))
+    got = read_news_answer(text, {h["id"]: h for h in new}, rules_of) if ok else None
+    if got is None:
+        status["note"] = "the news question was not answered - the same headlines are asked again next run" \
+            if not ok else "the answer was not readable JSON - asked again next run"
+        return _news_done(seen_doc, seen, status)
+    # A headline that strongly uses one rule's words - two of them, or one of
+    # its names - is always shown, even when the model left it out.
+    answered = {x["id"] for x in got}
+    for sym in rules_of:
+        flagged = [x for x in new if x["symbol"] == sym and x["id"] not in answered
+                   and any(strong(hit) for hit in x["hits"])]
+        flagged.sort(key=lambda x: headline_time(x) or now, reverse=True)
+        for x in flagged[:WATCH_ALERTS_PER_STOCK]:
+            kind, n, words = next(hit for hit in x["hits"] if strong(hit))
+            got.append({"id": x["id"], "symbol": sym, "signal": "watch", "by": "words", "importance": WORDS_IMPORTANCE,
+                        "why": f"It mentions {', '.join(words)} - words from your "
+                               + (f"sell rule {n}." if kind == "sell" else "buy-more test."),
+                        "rule": (rules_of[sym][n - 1] if kind == "sell" and n <= len(rules_of[sym]) else None),
+                        "matched": words, "title": x["title"], "publisher": x.get("publisher"),
+                        "link": x.get("link"), "published": x.get("published")})
+    found = now.isoformat(timespec="seconds")
+    alerts = (read_json(ALERTS, {}) or {}).get("alerts") or []
+    have = {(a["id"], a["symbol"]) for a in alerts}
+    added = 0
+    for x in got:
+        if (x["id"], x["symbol"]) not in have:
+            have.add((x["id"], x["symbol"]))
+            alerts.append(dict(x, found_utc=found, seen=False))
+            added += 1
+    write_json(ALERTS, {"alerts": alerts[-ALERTS_KEPT:]})
+    seen |= {h["id"] for h in new}
+    status["alerts"] = added
+    return _news_done(seen_doc, seen, status)
+
+
+def _news_done(seen_doc, seen, status):
+    seen_doc = dict(read_json(NEWS_SEEN, {}) or {}, ids=sorted(seen)[-3000:], last=status)
+    write_json(NEWS_SEEN, seen_doc)
+    return status
+
+
+def cmd_news(a):
+    print(json.dumps(watch_news()))
+    return 0
+
+
+def notes_of(symbol=None):
+    d = read_json(NOTES, {}) or {}
+    return d.get(symbol.upper(), []) if symbol else d
+
+
+def cmd_notes(a):
+    """notes add SYM --text ... | edit SYM ID --text ... | remove SYM ID."""
+    import secrets
+    sym = a.symbol.upper()
+    if not re.fullmatch(r"[A-Z][A-Z.\-]{0,9}", sym):
+        raise SystemExit("a ticker is letters, like KMI")
+    d = read_json(NOTES, {}) or {}
+    mine = d.get(sym, [])
+    text = (a.text or "").strip()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if a.action in ("add", "edit"):
+        if not text:
+            raise SystemExit("the note is empty")
+        if len(text) > NOTE_MAX:
+            raise SystemExit(f"a note is at most {NOTE_MAX} characters")
+    if a.action == "add":
+        mine.append({"id": secrets.token_hex(4), "text": text, "when_utc": now})
+    else:
+        hit = next((n for n in mine if n["id"] == a.id), None)
+        if not hit:
+            raise SystemExit("no such note")
+        if a.action == "edit":
+            hit.update(text=text, edited_utc=now)
+        else:
+            mine.remove(hit)
+    if mine:
+        d[sym] = mine
+    else:
+        d.pop(sym, None)
+    write_json(NOTES, d)
+    print(json.dumps({"symbol": sym, "notes": mine}))
+    return 0
+
+
+def cmd_alerts(a):
+    d = read_json(ALERTS, {}) or {}
+    for x in d.get("alerts") or []:
+        if a.id == "all" or (x["id"] == a.id and (not a.symbol or x["symbol"] == a.symbol.upper())):
+            x["seen"] = True
+    write_json(ALERTS, d)
+    print(json.dumps({"unseen": sum(not x.get("seen") for x in d.get("alerts") or [])}))
+    return 0
+
+
+def news_board():
+    """What the page and the village badge show: unseen alerts first, then
+    the last few dismissed, and how the last run went."""
+    alerts = (read_json(ALERTS, {}) or {}).get("alerts") or []
+    unseen = [x for x in alerts if not x.get("seen")]
+    # Most important first, newest first within it; alerts from before the
+    # rating have none and sort as Medium.
+    unseen = sorted(reversed(unseen), key=lambda x: -(x.get("importance") or 3))
+    return {"alerts": unseen + list(reversed([x for x in alerts if x.get("seen")]))[:20],
+            "unseen": len(unseen), "important": sum((x.get("importance") or 0) >= 4 for x in unseen),
+            "sell": sum(x["signal"] == "sell" for x in unseen),
+            "buy": sum(x["signal"] == "buy" for x in unseen), "watch": sum(x["signal"] == "watch" for x in unseen),
+            "last": (read_json(NEWS_SEEN, {}) or {}).get("last")}
+
+
+def latest(symbol):
+    d = CHECKS / symbol.upper()
+    files = sorted(d.glob("*.json")) if d.is_dir() else []
+    return read_json(files[-1]) if files else None
+
+
+def ratings(check):
+    return {k: v["rating"] for k, v in (check.get("steps") or {}).items()}
+
+
+def changes(old, new):
+    out = []
+    a, b = ratings(old or {}), ratings(new)
+    for k in b:
+        if a.get(k) and a[k] != b[k]:
+            out.append(f"{k}: {a[k]} -> {b[k]}")
+    if old and old.get("decision") != new.get("decision"):
+        out.append(f"decision: {old.get('decision')} -> {new['decision']}")
+    return out
+
+
+# --------------------------------------------------------------- commands
+
+def inputs_from(a):
+    if not SYMBOL_RE.match(a.symbol.upper()):
+        raise SystemExit("a ticker is letters, like KMI")
+    if a.amount <= 0 or a.months <= 0:
+        raise SystemExit("amount and months must be more than zero")
+    return {"amount": float(a.amount), "months": int(a.months), "goal": a.goal,
+            "why": (a.why or "").replace("\n", " ").strip()[:300], "hold_drop": a.hold_drop}
+
+
+def cmd_check(a):
+    check = build(a.symbol, inputs_from(a))
+    check["changes"] = changes(latest(a.symbol), check)
+    save(check)
+    print(json.dumps(check))
+    return 0
+
+
+def cmd_show(a):
+    c = latest(a.symbol)
+    if not c:
+        print(f"no check of {a.symbol.upper()} yet", file=sys.stderr)
+        return 1
+    c["watch_terms"] = rule_terms(c)
+    print(json.dumps(c))
+    return 0
+
+
+def prices(symbols, get=None, now=None):
+    """Each holding's price now: kept in PRICES, fetched again when older
+    than PRICE_FRESH_MIN minutes - all at once, so the page does not wait on
+    fourteen requests one after another. A symbol Yahoo will not answer is
+    left out; the caller falls back to that stock's last check."""
+    from concurrent.futures import ThreadPoolExecutor
+    now = now or time.time()
+    cache = read_json(PRICES, {}) or {}
+    stale = [s for s in symbols if now - (cache.get(s) or {}).get("t", 0) > PRICE_FRESH_MIN * 60]
+
+    def one(sym):
+        try:
+            return sym, price_facts(get_json(QUOTE_URL.format(sym=sym), get))["price"]
+        except Exception:
+            return sym, None
+    if stale:
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for sym, price in pool.map(one, stale):
+                if price:
+                    cache[sym] = {"price": round(price, 2), "t": now,
+                                  "as_of_utc": datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="minutes")}
+        write_json(PRICES, cache)
+    return {s: cache[s] for s in symbols if s in cache}
+
+
+def bought(h, spent, price):
+    """Buying more: the new average is everything paid over every share."""
+    old_amt, avg = float(h.get("amount") or 0), h.get("avg_price")
+    if old_amt and not avg:
+        raise SystemExit("add your average price paid first, so Warren can work out the new one")
+    shares = (old_amt / avg if avg else 0) + spent / price
+    amount = old_amt + spent
+    return {**h, "amount": r2(amount), "avg_price": round(amount / shares, 4)}
+
+
+def sold(h, shares, price):
+    """Selling: the average price paid does not move; what is left is the
+    remaining shares at that price. The gain or loss on the shares sold is
+    what you made (before fees)."""
+    avg = h.get("avg_price")
+    if not avg:
+        raise SystemExit("add your average price paid first, so Warren can work out the gain")
+    held = float(h["amount"]) / avg
+    if shares is None:
+        shares = held
+    if shares <= 0 or shares > held + 1e-6:
+        raise SystemExit(f"you hold {held:.4f} shares of {h['symbol']}")
+    left = max(held - shares, 0)
+    rest = None if left < 1e-6 else {**h, "amount": r2(left * avg)}
+    return rest, {"symbol": h["symbol"], "shares": round(shares, 4), "price": price, "avg_price": avg,
+                  "proceeds": r2(shares * price), "gain": r2(shares * (price - avg)),
+                  "gain_pct": r1(100 * (price / avg - 1))}
+
+
+def cmd_deck(a):
+    rows = []
+    if CHECKS.is_dir():
+        for d in sorted(p for p in CHECKS.iterdir() if p.is_dir()):
+            c = latest(d.name)
+            if c:
+                rows.append({"symbol": c["symbol"], "company": c.get("company"), "sector": c.get("sector"),
+                             "when_utc": c["when_utc"], "decision": c["decision"], "ratings": ratings(c),
+                             "amount": (c.get("inputs") or {}).get("amount"), "changes": c.get("changes") or []})
+    rows.sort(key=lambda r: r["when_utc"], reverse=True)
+    hs = holdings()
+    live = prices([h["symbol"] for h in hs])
+    held = []
+    for h in hs:
+        q = live.get(h["symbol"])
+        if q:
+            price, as_of = q["price"], q["as_of_utc"]
+        else:                                   # Yahoo did not answer: the last check's price, dated
+            c = (latest(h["symbol"]) or {}).get("numbers") or {}
+            price, as_of = c.get("price"), c.get("as_of")
+        held.append({**h, "position": position(h, price), "price_as_of": as_of, "live": bool(q)})
+    print(json.dumps({"checks": rows, "holdings": held, "runs_today": runs_today(), "news": news_board(), "notes": notes_of(),
+                      "runs_per_day": RUNS_PER_DAY, "sectors": SECTORS,
+                      "rechecks": (read_json(RECHECKS, []) or [])[-20:]}))
+    return 0
+
+
+def cmd_holdings(a):
+    hs = holdings()
+    sym = a.symbol.upper()
+    if not SYMBOL_RE.match(sym):
+        raise SystemExit("a ticker is letters, like KMI")
+    old = next((h for h in hs if h["symbol"] == sym), {})
+    hs = [h for h in hs if h["symbol"] != sym]
+    sale = None
+    if a.action in ("buy", "sell"):
+        if a.price is None or not 0 < a.price < 1e6:
+            raise SystemExit("the price per share, like 27.50")
+    if a.action == "buy":
+        if not a.amount or a.amount <= 0:
+            raise SystemExit("how many dollars did you spend?")
+        if not old:
+            raise SystemExit(f"{sym} is not in your list - add it first")
+        hs.append(bought(old, float(a.amount), float(a.price)))
+    elif a.action == "sell":
+        if not old:
+            raise SystemExit(f"{sym} is not in your list")
+        rest, sale = sold(old, None if a.all else a.shares, float(a.price))
+        if rest:
+            hs.append(rest)
+        sale["when_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        write_json(SALES, (read_json(SALES, []) or []) + [sale])
+    elif a.action == "add":
+        sector = a.sector or old.get("sector") or ((latest(sym) or {}).get("sector"))
+        if sector not in SECTORS:
+            raise SystemExit(f"which sector is {sym}? one of: {', '.join(SECTORS)}")
+        h = {"symbol": sym, "amount": round(float(a.amount or 0), 2), "sector": sector}
+        avg = a.avg_price if a.avg_price is not None else old.get("avg_price")   # an update keeps the price it had
+        if avg is not None:
+            if not 0 < avg < 1e6:
+                raise SystemExit("the average price paid is a dollar amount per share, like 27.50")
+            h["avg_price"] = round(float(avg), 4)
+        hs.append(h)
+    write_json(HOLDINGS, {"holdings": sorted(hs, key=lambda h: h["symbol"])})
+    print(json.dumps({"holdings": sorted(hs, key=lambda h: h["symbol"]), "sale": sale}))
+    return 0
+
+
+def new_report(check, get=None):
+    """Has the company filed a 10-Q or 10-K since this check's data? One
+    small SEC request, not the whole companyfacts file."""
+    cik = (check.get("numbers") or {}).get("cik")
+    if not cik:
+        return False
+    d = get_json(CONCEPT_URL.format(cik=int(cik), tag="NetCashProvidedByUsedInOperatingActivities"), get)
+    filed = max((r.get("filed", "") for rows in (d.get("units") or {}).values() for r in rows), default="")
+    return bool(filed and filed > (check.get("data_filed") or ""))
+
+
+def cmd_recheck(a):
+    log = read_json(RECHECKS, []) or []
+    done = 0
+    for d in sorted(p for p in CHECKS.iterdir() if p.is_dir()) if CHECKS.is_dir() else []:
+        old = latest(d.name)
+        if not old:
+            continue
+        try:
+            if not new_report(old):
+                continue
+            new = build(old["symbol"], old["inputs"])
+        except Exception as e:
+            print(f"{d.name}: {e}", file=sys.stderr)
+            continue
+        new["changes"] = changes(old, new)
+        new["recheck"] = True
+        save(new)
+        done += 1
+        log.append({"symbol": new["symbol"], "when_utc": new["when_utc"], "changes": new["changes"],
+                    "decision": new["decision"]})
+        print(f"{new['symbol']}: {', '.join(new['changes']) or 'no rating changed'}")
+    write_json(RECHECKS, log[-200:])
+    print(f"re-checked {done}")
+    return 0
+
+
+def cmd_sources(a, get=None):
+    """Can this machine read each of Warren's sites? One line each - free,
+    no model woken. The question a 403 on the page leaves open."""
+    sym = a.symbol.upper()
+    tries = [("SEC company list", TICKERS_URL), ("Yahoo price chart", CHART_URL.format(sym=sym)),
+             ("Nasdaq summary (optional)", SUMMARY_URL.format(sym=sym)),
+             ("Nasdaq forecasts (optional)", FORECAST_URL.format(sym=sym))]
+    bad = 0
+    for i, (what, url) in enumerate(tries):
+        try:
+            d = get_json(url, get)
+            if i == 0:
+                cik, _ = cik_for(sym, d)
+                if cik:
+                    tries.insert(1, ("SEC filings", FACTS_URL.format(cik=cik)))
+            print(f"OK    {what}")
+        except Exception as e:
+            bad += 0 if "optional" in what else 1
+            print(f"FAIL  {what}: {e}")
+    return 1 if bad else 0
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    c = sub.add_parser("check")
+    c.add_argument("symbol")
+    c.add_argument("--amount", type=float, required=True)
+    c.add_argument("--months", type=int, required=True)
+    c.add_argument("--goal", choices=("growth", "dividends", "both"), default="both")
+    c.add_argument("--why", default="")
+    c.add_argument("--hold-drop", choices=("yes", "no", "unsure"), default="unsure")
+    c.set_defaults(fn=cmd_check)
+    s = sub.add_parser("show")
+    s.add_argument("symbol")
+    s.set_defaults(fn=cmd_show)
+    sub.add_parser("deck").set_defaults(fn=cmd_deck)
+    h = sub.add_parser("holdings")
+    h.add_argument("action", choices=("add", "remove", "buy", "sell"))
+    h.add_argument("symbol")
+    h.add_argument("amount", nargs="?", type=float)
+    h.add_argument("--sector")
+    h.add_argument("--avg-price", type=float, help="average price paid per share: your breakeven")
+    h.add_argument("--price", type=float, help="buy/sell: the price per share")
+    h.add_argument("--shares", type=float, help="sell: how many shares")
+    h.add_argument("--all", action="store_true", help="sell: every share")
+    h.set_defaults(fn=cmd_holdings)
+    sub.add_parser("recheck").set_defaults(fn=cmd_recheck)
+    sub.add_parser("news").set_defaults(fn=cmd_news)
+    nt = sub.add_parser("notes")
+    nt.add_argument("action", choices=("add", "edit", "remove"))
+    nt.add_argument("symbol")
+    nt.add_argument("id", nargs="?")
+    nt.add_argument("--text")
+    nt.set_defaults(fn=cmd_notes)
+    al = sub.add_parser("alerts")
+    al.add_argument("action", choices=("seen",))
+    al.add_argument("id")
+    al.add_argument("--symbol")
+    al.set_defaults(fn=cmd_alerts)
+    so = sub.add_parser("sources")
+    so.add_argument("symbol", nargs="?", default="KMI")
+    so.set_defaults(fn=cmd_sources)
+    a = p.parse_args(argv)
+    try:
+        return a.fn(a)
+    except (FetchError, LookupError) as e:
+        print(f"{e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,12 @@
+[Unit]
+Description=Scout's niche scan, every morning before Scout wakes
+
+[Timer]
+# 06:30 Central, ninety minutes before scout-cycle.timer (08:00), so the
+# measurements Scout reads are this morning's. Plain code, no model.
+OnCalendar=*-*-* 06:30 America/Chicago
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

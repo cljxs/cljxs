@@ -1,0 +1,28 @@
+{
+ "_note": "Shaped from Google's Places API (New) documentation (Text Search response; photos[] with name, widthPx, heightPx, authorAttributions[displayName, uri, photoUri]), 2026-10-15 - NOT a capture. Google's terms forbid storing Places content, so no real response is committed; the droplet run of `paul.py places <id>` is the check that this shape is right.",
+ "places": [
+  {
+   "id": "ChIJ-test-not-a-real-place-1",
+   "displayName": {"text": "Rosa's Tailoring & Alterations", "languageCode": "en"},
+   "nationalPhoneNumber": "(512) 444-0199",
+   "businessStatus": "OPERATIONAL",
+   "photos": [
+    {"name": "places/ChIJ-test-not-a-real-place-1/photos/A1", "widthPx": 4032, "heightPx": 3024,
+     "authorAttributions": [{"displayName": "Rosa's Tailoring & Alterations", "uri": "https://maps.google.com/maps/contrib/1", "photoUri": "https://lh3.googleusercontent.com/a/1"}]},
+    {"name": "places/ChIJ-test-not-a-real-place-1/photos/A2", "widthPx": 3024, "heightPx": 4032,
+     "authorAttributions": [{"displayName": "Rosa's Tailoring & Alterations", "uri": "https://maps.google.com/maps/contrib/1", "photoUri": "https://lh3.googleusercontent.com/a/1"}]},
+    {"name": "places/ChIJ-test-not-a-real-place-1/photos/A3", "widthPx": 1200, "heightPx": 900,
+     "authorAttributions": [{"displayName": "Jamie Customer", "uri": "https://maps.google.com/maps/contrib/2", "photoUri": "https://lh3.googleusercontent.com/a/2"}]},
+    {"name": "places/ChIJ-test-not-a-real-place-1/photos/A4", "widthPx": 1200, "heightPx": 900,
+     "authorAttributions": []}
+   ]
+  },
+  {
+   "id": "ChIJ-test-not-a-real-place-2",
+   "displayName": {"text": "Rosati's Pizza", "languageCode": "en"},
+   "nationalPhoneNumber": "(512) 555-2222",
+   "businessStatus": "OPERATIONAL",
+   "photos": []
+  }
+ ]
+}

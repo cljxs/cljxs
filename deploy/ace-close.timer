@@ -1,0 +1,12 @@
+[Unit]
+Description=Ace's closing line, every 5 minutes while games start
+
+[Timer]
+# 10:00-23:55 ET, daily: the first college kick-offs are at noon and the last
+# West-coast NBA tip-offs around 22:30, and only games within two hours of
+# their start are fetched, so most runs make no call at all.
+OnCalendar=*-*-* 10..23:00/5 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

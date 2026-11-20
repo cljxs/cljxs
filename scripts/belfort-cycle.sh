@@ -1,0 +1,125 @@
+#!/bin/bash
+# Belfort's scheduled cycle: snapshot, wake, verify.
+#
+# This lives in a script rather than inline in the unit file because the
+# ExecStart= it replaces needed nested single quotes, escaped double quotes
+# and systemd's own %% escaping all in one line. That is three quoting rules
+# stacked on top of each other, and the failure mode is silent: the shell gets
+# a mangled command, the snapshot reads empty, and the verifier compares
+# against 0 and passes everything.
+set -u
+ROOT="${ECOSYSTEM_ROOT:-/root/ecosystem}"
+AGENT="$ROOT/agents/belfort"
+
+# Instruction changes only reach the agent when AGENTS.md is rebuilt from the
+# header, which happens in deploy.sh. Pull without it and the agent keeps
+# running last week's rules while the repo says otherwise - which is exactly
+# how belfort spent a cycle hand-writing a file its instructions had already
+# told it to stop writing. So: if the header is newer, rebuild it here.
+# Only when AGENTS.md already carries the markers, so no seam has to be
+# guessed unattended.
+HEADER="$AGENT/_belfort-agents-header.md"
+if [ -f "$HEADER" ] && [ "$HEADER" -nt "$AGENT/AGENTS.md" ]; then
+  if grep -q "BEGIN belfort-header" "$AGENT/AGENTS.md" 2>/dev/null; then
+    echo "belfort-cycle: instructions changed, rebuilding AGENTS.md"
+    "$ROOT/scripts/merge-header.sh" belfort || echo "  !! rebuild failed - the agent is running stale instructions"
+  else
+    echo "  !! $HEADER is newer than AGENTS.md and AGENTS.md has no markers."
+    echo "     The agent is running stale instructions. Run once, by hand:"
+    echo "       $ROOT/scripts/merge-header.sh belfort"
+  fi
+fi
+
+MEM_BEFORE=$(stat -c %s "$AGENT/MEMORY.md" 2>/dev/null || echo 0)
+CYCLES_BEFORE=$(python3 - "$AGENT/state/portfolio.json" <<'PY' 2>/dev/null || echo -1
+import json, sys
+try:
+    print(int(json.load(open(sys.argv[1])).get("cycle_count") or 0))
+except Exception:
+    print(-1)
+PY
+)
+STARTED=$(date +%s)
+# signoff.py reads this so it applies the same "written by THIS run" rule
+# the verifier does. Without it the two disagreed, and the agent believed
+# the one that told it there was nothing left to do.
+mkdir -p "$AGENT/state" && printf '%s\n' "$STARTED" > "$AGENT/state/.cycle-started"
+# And the cycle count at wake. The verifier gets this on argv; signoff had
+# no way to know it, so it checked that cycle_count EXISTS while the
+# verifier checked that it ADVANCED. Ace did all its work, was told "All
+# deliverables present", and was failed for never running mark.
+printf '%s\n' "$CYCLES_BEFORE" > "$AGENT/state/.cycle-before"
+
+LOG="$(mktemp)"
+trap 'rm -f "$LOG"' EXIT
+# The report's exact name goes in the wake message. On 2026-09-25 the close
+# run was handed "2026-09-25-close.md" in _meta.json, edited the morning's
+# open report instead, and was failed for it - its trades were fine. The name
+# comes from et_time.py, the same function the verifier checks against.
+REPORT="$(python3 "$ROOT/scripts/et_time.py" report-name belfort)"
+# The sell rules run here, in code, before Belfort wakes - stop loss, take
+# profit, protect a gain, dead money. They were instructions only until
+# 2026-10-01, and "+8%: protect it" could not be followed at all. He is
+# told what was sold and judges only whether a thesis broke.
+EXITS="$(python3 "$ROOT/scripts/belfort-trade.py" exits --apply 2>&1)" || EXITS="exits FAILED, check by hand: $EXITS"
+echo "$EXITS"
+# The no-AI book takes its turn on the same data: same rules and exits, the
+# top candidate instead of a judgement. Belfort is not told about it.
+# Its refusals while it tries candidates are routine, so stderr is dropped.
+SHADOW_LINE="$(python3 "$ROOT/scripts/belfort-trade.py" shadow 2>/dev/null)" || SHADOW_LINE="  !! the shadow book failed - run belfort-trade.py shadow by hand to see why"
+echo "$SHADOW_LINE"
+
+# The candidates as they stand now are the ones he owes a call on: the
+# fetcher rewrites candidates.json every 10 minutes, and a name that screened
+# in after he wrote his calls must not fail a cycle that did its job.
+cp "$AGENT/data/candidates.json" "$AGENT/state/.candidates-at-wake.json" 2>/dev/null \
+  || rm -f "$AGENT/state/.candidates-at-wake.json"
+OWED="$(python3 "$ROOT/scripts/belfort-trade.py" calls --owed 2>/dev/null)" || OWED="(run belfort-trade.py calls --owed)"
+# His record, worked out by belfort-learn.py: closed trades by catalyst and
+# score, and what the names he passed on did next. Code's numbers, not his
+# memory of them. Running it also measures any pass that has come due.
+RECORD="$(python3 "$ROOT/scripts/belfort-learn.py" record 2>/dev/null)" || RECORD="(your record could not be worked out this wake)"
+# Reddit chatter on the names he is weighing, read through web search - one
+# question a day on the plan (reddit_search.py), the first wake asks and the
+# rest reuse it. Background only: a buy still cites a news.json headline,
+# checked by code. Nothing found and the line is left out.
+REDDIT="$(python3 "$ROOT/scripts/reddit_search.py" belfort)" || REDDIT=""
+# What the owner has accepted for this agent's department (knowledge.py) -
+# empty, and left out, when there is nothing accepted.
+LESSONS="$(python3 "$ROOT/scripts/knowledge.py" brief --agent belfort 2>/dev/null)" || LESSONS=""
+# The wake message names every deliverable, the last one included. On
+# 2026-10-12 the close cycle wrote the report and the calls - the two things
+# this message named - and stopped: no memory line, no signoff, and the
+# verifier failed a cycle that had otherwise done its job. Ace's message has
+# always ended on signoff.py; Belfort's did not.
+python3 "$ROOT/scripts/wake.py" --agent belfort \
+  --message "Scheduled cycle. This wake's report is a NEW file: reports/$REPORT - write it there. Do not edit an earlier report, even one from today.
+
+The exit rules were already applied by code before you woke:
+$EXITS
+Report these sales as they are; do not sell for those rules again. You judge only a broken thesis.
+Candidates owed a call this wake (one line each in state/calls.txt, then belfort-trade.py calls): $OWED
+$RECORD
+$REDDIT
+$LESSONS
+
+Before you stop: record one line with python3 ../../scripts/remember.py belfort \"<one short line>\" and finish by running python3 ../../scripts/signoff.py belfort - it lists anything MISSING, and the cycle is not done until it lists nothing." \
+  --session-id "wake-belfort-$STARTED" \
+  --timeout 600 --json 2>&1 | tee "$LOG"
+# The agent's own exit code is deliberately not checked here. It exits 0 for
+# "I said some words", which is exactly the thing that cannot be trusted.
+# The verifier is the judge.
+
+# A billing or auth failure means no model ran at all. Say so and stop:
+# the verifier would otherwise report missing files, which are a
+# consequence of that and send the next hour down the wrong path.
+if ! python3 "$ROOT/scripts/check-provider-error.py" "$LOG"; then
+  exit 1
+fi
+
+# The case against each buy he made this wake, on record for the Coach -
+# one question each on his own model, asked after he has finished, so it
+# cannot sway him and he is never told. It never fails the cycle.
+python3 "$ROOT/scripts/belfort-trade.py" bear 2>&1 || echo "  !! bear: the case against this wake's buys could not be asked"
+
+exec python3 "$ROOT/scripts/belfort-verify.py" "$MEM_BEFORE" "$CYCLES_BEFORE" "$STARTED"

@@ -1,0 +1,21 @@
+[Unit]
+Description=Warren's after-earnings re-check - every saved stock that filed a new 10-Q or 10-K is run through the checklist again
+Documentation=https://github.com/cljxs/cljxs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=ECOSYSTEM_ROOT=/root/ecosystem
+WorkingDirectory=/root/ecosystem
+# One small SEC request per saved stock to see whether a new report was
+# filed; only those that did are checked again (one Opus question each, on
+# the plan, inside warren.py's RUNS_PER_DAY). What changed is written to
+# agents/warren/state/rechecks.json and shown on Warren's page.
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/warren.py recheck
+TimeoutStartSec=3600
+StandardOutput=journal
+StandardError=journal

@@ -1,0 +1,13 @@
+[Unit]
+Description=Belfort's monthly review: his record and suggestions for the owner, worked out in code (no AI)
+Documentation=https://github.com/cljxs/cljxs
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+WorkingDirectory=/root/ecosystem
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/belfort-learn.py review --write
+TimeoutStartSec=120
+StandardOutput=journal
+StandardError=journal

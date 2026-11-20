@@ -1,0 +1,13 @@
+[Unit]
+Description=Ace Props: settle finished bets and keep each open bet's latest price, its close (no AI, costs nothing)
+Documentation=https://github.com/cljxs/cljxs
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+WorkingDirectory=/root/ecosystem
+ExecStart=/usr/bin/flock /run/ace-props.lock /usr/bin/python3 /root/ecosystem/scripts/ace-props.py close
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal

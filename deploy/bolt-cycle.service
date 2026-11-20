@@ -1,0 +1,22 @@
+[Unit]
+Description=Bolt crypto paper trader (plain code - costs nothing)
+Documentation=https://github.com/cljxs/cljxs
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=ECOSYSTEM_ROOT=/root/ecosystem
+WorkingDirectory=/root/ecosystem
+# No model wake. Every rule Bolt trades by is a formula, so the script is the
+# trader: one CoinGecko call, the exits at this tick's prices, and every
+# hour and a half (00:00, 01:30 ... UTC) at most one new position. It checks
+# its own book before saving and exits 1 if it does not balance, which is
+# what makes a failure here mean something.
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/bolt.py tick
+# 300 since 2026-10-16: the news book may read four feeds and wait for one
+# answer from the plan (bolt.py FEED_TIMEOUT, ASK_TIMEOUT) on a buy tick.
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal
