@@ -845,8 +845,158 @@ def figure_sources(n, key):
     return n.get(base + "_src") or []
 
 
-def explain(steps, n):
-    """Puts each row's equation and its worked numbers beside it, the SEC
+# ------------------------------------------------- what the numbers mean
+# The owner (2026-11-20): "the math equations help understand how to get
+# the numbers but I need help understanding what the numbers mean, whether
+# they are good, bad". Each ratio gets one plain sentence about this stock,
+# built by code from its own numbers (never a model), and the scale it is
+# judged on - the same lines the ratings above use.
+
+def _cmp(mine, avg, cheaper="cheaper", dearer="dearer"):
+    if mine is None or not avg:
+        return ""
+    d = pct(mine, avg)
+    if abs(d) < 5:
+        return f" Its rivals average {avg:g}, about the same."
+    return f" Its rivals average {avg:g}, so it is {abs(d):.0f}% {cheaper if d < 0 else dearer} than them."
+
+
+def plain_words(key, n, peers=(), sector=None):
+    """{"says": one sentence on this stock's number, "scale": good/ok/bad}."""
+    g = n.get
+    avg = lambda k: peer_avg(list(peers), k)
+    heavy = n.get("_capital_heavy")
+    if key == "fcf" and g("fcf_ttm") is not None:
+        v = g("fcf_ttm")
+        says = (f"After paying to run and grow the business, it had {money(v)} of cash left over in the last 12 "
+                "months - money for dividends, paying down debt, buybacks or growth." if v >= 0 else
+                f"It spent {money(-v)} more cash than it brought in over the last 12 months, so it had to use "
+                "savings or borrow to cover the gap.")
+        return {"says": says, "scale": "Good: positive and growing · Watch: positive but shrinking · Bad: negative year after year"}
+    if key == "coverage" and g("coverage") is not None:
+        return {"says": f"For every $1 it paid in dividends, it made ${g('coverage'):.2f} of free cash.",
+                "scale": "Safe: 1.5 or more · OK: 1.0-1.5 · Bad: under 1.0 - the dividend is not paid for by its own cash"}
+    if key == "payout" and g("payout") is not None:
+        p = g("payout")
+        says = (f"It paid out {p:g}% of its profit as dividends and kept {100 - p:g}% to reinvest." if p <= 100 else
+                f"It paid out {p:g}% of its profit - more than it earned.")
+        return {"says": says, "scale": "Good: under 60% · OK: 60-90% · Risky: over 90%"
+                + (" (pipelines, utilities and REITs normally run higher - trust coverage)" if heavy else "")}
+    if key == "yield" and g("yield") is not None:
+        return {"says": f"Every $100 you invest pays about ${g('yield'):.2f} a year in dividends.",
+                "scale": "Low: under 2% · Healthy: 2-5% · High: 5-8% · Warning: over 8% - often a cut is coming"}
+    if key == "fcf_yield" and g("fcf_yield") is not None:
+        fy = g("fcf_yield")
+        says = (f"For every $100 of the company you buy, it makes about ${fy:.2f} of free cash a year." if fy >= 0 else
+                f"For every $100 of the company you buy, it burns about ${-fy:.2f} of cash a year.")
+        return {"says": says, "scale": "Cheap: 5% or more · Fair: 2-5% · Pricey: under 2% · Negative: it burns cash"}
+    if key == "leverage":
+        nd, eb, lev = g("net_debt"), g("ebitda_ttm"), g("leverage")
+        lo, hi = (4.5, 5.5) if heavy else (2, 3.5)
+        scale = (f"Best: below zero (more cash than debt) · Safe: under {lo:g}x · OK: {lo:g}-{hi:g}x · Risky: over {hi:g}x"
+                 + (" - its industry normally carries more debt" if heavy else ""))
+        if nd is not None and nd <= 0:
+            return {"says": f"It has {money(-nd)} more cash than debt - it could pay off every loan today. A "
+                            "negative leverage number is the good kind: the safest balance sheet there is.", "scale": scale}
+        if nd is not None and eb is not None and eb <= 0:
+            return {"says": f"It owes {money(nd)} more than it holds in cash, and its earnings (EBITDA) are negative, "
+                            "so nothing it earns is paying that down yet.", "scale": scale}
+        if lev is not None:
+            return {"says": f"It would take about {lev:g} years of its earnings (EBITDA) to pay off its debt.", "scale": scale}
+    if key == "interest_cover" and g("interest_cover") is not None:
+        ic, op = g("interest_cover"), g("op_income_ttm")
+        says = ("Its operating profit is negative, so it is not earning its interest bill." if op is not None and op < 0
+                else f"Its operating profit could pay its yearly interest bill {ic:g} times over.")
+        return {"says": says, "scale": "Safe: over 8x · OK: 3-8x · Risky: under 3x"}
+    if key == "debt_change" and g("debt") is not None and g("debt_year_ago"):
+        ch = pct(g("debt"), g("debt_year_ago"))
+        return {"says": f"Its total debt {'rose' if ch > 0 else 'fell'} {abs(ch):.0f}% in a year "
+                        f"({money(g('debt_year_ago'))} to {money(g('debt'))}).",
+                "scale": "Fine: flat or down · Watch: up 5-25% · Ask why: up over 25% (Part B shows where it went)"}
+    if key == "pe_forward" and g("pe_forward") is not None:
+        pe = g("pe_forward")
+        says = f"You pay ${pe:g} for every $1 of profit analysts expect it to make over the next 12 months." \
+            + _cmp(pe, avg("pe_forward"))
+        if pe < 10:
+            says += " A very low P/E can be a bargain - or a sign the market expects profits to fall; Step 2 tells which."
+        lo, hi = PE_TYPICAL.get(sector, (15, 25))
+        return {"says": says, "scale": f"Cheap: under {lo} · Normal{' for ' + sector if sector in PE_TYPICAL else ''}: "
+                                       f"{lo}-{hi} · Expensive: over {hi} · Lower is cheaper"}
+    if key == "peg":
+        if g("peg") is not None:
+            return {"says": f"Its price is {g('peg'):g} times its expected yearly earnings growth - under 1 means you "
+                            "pay little for the growth you get.",
+                    "scale": "Cheap: under 1 · Fair: 1-2 · Expensive: over 2"}
+        if g("eps_ntm"):
+            return {"says": "Analysts expect its earnings to shrink, so PEG cannot be used - judge the price on P/E "
+                            "or P/S instead.", "scale": "Cheap: under 1 · Fair: 1-2 · Expensive: over 2"}
+    if key == "ps" and g("ps") is not None:
+        return {"says": f"You pay ${g('ps'):g} for every $1 of sales it made in the last 12 months." + _cmp(g("ps"), avg("ps")),
+                "scale": "Depends on how much of each sale it keeps: thin-margin businesses (insurers, grocers) under 1 "
+                         "is normal, software 5-10 · Compare with rivals · Lower is cheaper"}
+    if key == "ev_ebitda" and g("ev_ebitda") is not None:
+        return {"says": f"Buying the whole company - its debt included, its cash subtracted - would cost about "
+                        f"{g('ev_ebitda'):g} years of its yearly earnings (EBITDA)." + _cmp(g("ev_ebitda"), avg("ev_ebitda")),
+                "scale": "Cheap: under 10 · Fair: 10-15 · Expensive: over 15 · Lower is cheaper"}
+    if key == "margin" and g("margin_ttm") is not None:
+        m = g("margin_ttm")
+        says = (f"Out of every $100 of sales, it kept ${m:.2f} as profit over the last 12 months." if m >= 0 else
+                f"Out of every $100 of sales, it lost ${-m:.2f} over the last 12 months.")
+        ma = avg("margin_ttm")
+        if ma is not None:
+            says += f" Its rivals keep ${ma:.2f} on average."
+        return {"says": says, "scale": "Thin: under 5% · OK: 5-15% · Strong: over 15% - insurers, grocers and "
+                                       "retailers run thin by nature, so compare with rivals"}
+    if key == "eps":
+        return {"says": "Earnings per share is the company's profit split across its shares - what each share you "
+                        "own earned in the year.", "scale": "Good: rising each year · Watch: flat or up and down · Bad: falling or negative"}
+    return None
+
+
+# For the comparison table: which way is better, and where this stock sits.
+TABLE_WAY = {"Forward P/E": ("lower", "Lower is cheaper"), "PEG": ("lower", "Lower is cheaper for its growth"),
+             "P/S": ("lower", "Lower is cheaper"), "EV/EBITDA": ("lower", "Lower is cheaper"),
+             "Dividend yield": ("higher", "Higher pays more - but over 8% is a warning"),
+             "Leverage": ("lower", "Lower is safer; below zero means more cash than debt"),
+             "Profit margin": ("higher", "Higher keeps more of each sale"),
+             "1-year price change": (None, "How far the price moved - not good or bad by itself; a big rise means "
+                                           "buying after the run")}
+
+
+def table_notes(table):
+    """One line per comparison row: which way is better and this stock's place."""
+    out = []
+    sym = table["columns"][0]
+    for row in table["rows"]:
+        label = row[0]
+        way, hint = TABLE_WAY.get(label, (None, ""))
+        vals = []
+        for col, v in zip(table["columns"], row[1:]):
+            try:
+                vals.append((col, float(str(v).rstrip("%x"))))
+            except ValueError:
+                pass
+        mine = next((v for c, v in vals if c == sym), None)
+        if way and mine is not None and len(vals) >= 2:
+            ranked = sorted(vals, key=lambda cv: cv[1], reverse=(way == "higher"))
+            place = [c for c, _ in ranked].index(sym) + 1
+            best, worst = {"Forward P/E": ("cheapest", "most expensive"), "PEG": ("cheapest", "most expensive"),
+                           "P/S": ("cheapest", "most expensive"), "EV/EBITDA": ("cheapest", "most expensive"),
+                           "Dividend yield": ("highest-paying", "lowest-paying"),
+                           "Leverage": ("safest", "most in debt"),
+                           "Profit margin": ("most profitable", "least profitable")}[label]
+            where = (f"{sym} is the {best} of the {len(vals)}." if place == 1 else
+                     f"{sym} is the {worst} of the {len(vals)}." if place == len(vals) else
+                     f"{sym} is #{place} of {len(vals)}.")
+            out.append(f"{hint}. {where}")
+        else:
+            out.append(hint + ("." if hint else ""))
+    return out
+
+
+def explain(steps, n, peers=(), sector=None):
+    """Puts each row's equation and its worked numbers beside it, what the
+    number means for this stock and the scale it is judged on, the SEC
     filings its figures came from, and whether Nasdaq's copy agrees."""
     math = n.get("math") or {}
     second = (n.get("second_source") or {}).get("figures") or {}
@@ -870,10 +1020,14 @@ def explain(steps, n):
                     r["formula"] = formula
                     if key in math:
                         r["math"] = math[key]
+                    pw = plain_words(key, n, peers, sector)
+                    if pw:
+                        r["means"], r["scale"] = pw["says"], pw["scale"]
                     break
         if "table" in st:
             st["table"]["formulas"] = [next((f for label, _, f in FORMULAS if row_[0].startswith(label)), "")
                                        for row_ in st["table"]["rows"]]
+            st["table"]["notes"] = table_notes(st["table"])
     return steps
 
 
@@ -1407,7 +1561,7 @@ def build(symbol, inputs, get=None, ask=None, peer_numbers=None):
     steps = {"business": rate_business(ai), "growth": rate_growth(n, ai), "cash": rate_cash(n),
              "debt": rate_debt(n), "price": rate_price(n, peers, sector, (ai or {}).get("cyclical")),
              "risk": rate_risk(ai, concentration(holdings(), sym, float(inputs["amount"]), sector), inputs, sector)}
-    explain(steps, n)
+    explain(steps, n, peers, sector)
     decision, why = decide(steps)
     caution = [f"Nasdaq's figures disagree with Warren's on {', '.join(n['second_source']['disagree'])}"] \
         if (n.get("second_source") or {}).get("disagree") else []

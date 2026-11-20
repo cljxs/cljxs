@@ -691,6 +691,57 @@ class NewsOnWhatYouOwn(Base):
         self.assertEqual((a["n"], a["tone"]), (1, "todo"))
 
 
+class WhatEachNumberMeans(Base):
+    """The owner asked (2026-11-20): the equations show how a number is made,
+    but what does it mean - is it good or bad, for this stock? Each ratio
+    gets a plain sentence built from the stock's own numbers, and the scale
+    it is judged on; each comparison line says which way is better and where
+    this stock sits."""
+
+    def build(self, sym):
+        return self.w.build(sym, {"amount": 100, "months": 12, "goal": "both", "why": "", "hold_drop": "yes"},
+                            get, lambda q: (True, json.dumps(ANSWER)), lambda p, g, t: 1 / 0)
+
+    def test_every_ratio_row_with_a_value_says_what_it_means(self):
+        c = self.build("KMI")
+        n = c["numbers"]
+        rows = {r["check"]: r for st in c["steps"].values() for r in st["rows"]}
+        self.assertEqual(rows["Dividend yield"]["means"],
+                         f"Every $100 you invest pays about ${n['yield']:.2f} a year in dividends.")
+        self.assertIn("Healthy: 2-5%", rows["Dividend yield"]["scale"])
+        self.assertTrue(rows["Forward P/E"]["means"].startswith(f"You pay ${n['pe_forward']:g} for every $1 of profit"))
+        self.assertIn("Normal for Energy: 9-14", rows["Forward P/E"]["scale"])
+        for r in rows.values():
+            if r.get("formula") and r["answer"] not in ("n/a", "not reported", "doesn't apply"):
+                self.assertTrue(r.get("means"), f"{r['check']} has an equation but no meaning")
+
+    def test_more_cash_than_debt_is_explained_as_the_good_kind(self):
+        n = {"net_debt": -4.03e9, "ebitda_ttm": 9.64e8, "leverage": -4.2}
+        says = self.w.plain_words("leverage", n)["says"]
+        self.assertTrue(says.startswith("It has $4.03B more cash than debt"))
+        self.assertIn("negative leverage number is the good kind", says)
+
+    def test_a_low_pe_is_compared_with_rivals_and_warned_about(self):
+        n = {"pe_forward": 9.4}
+        says = self.w.plain_words("pe_forward", n, [{"pe_forward": 13.0}, {"pe_forward": 24.1}], "Health Care")["says"]
+        self.assertIn("Its rivals average 18.6, so it is 49% cheaper than them.", says)   # OSCR, 2026-11-20
+        self.assertIn("A very low P/E can be a bargain", says)
+
+    def test_the_table_says_which_way_is_better_and_where_it_sits(self):
+        t = {"columns": ["OSCR", "CNC", "MOH"],
+             "rows": [["Forward P/E", "9.4", "13.0", "24.1"], ["PEG", "", "0.96", "0.41"],
+                      ["Leverage", "-4.2x", "-2.3x", "-2.1x"], ["Profit margin", "4.9%", "0.7%", "-0.1%"],
+                      ["1-year price change", "+94.6%", "+86.2%", "+50.7%"]]}
+        notes = self.w.table_notes(t)
+        self.assertEqual(notes[0], "Lower is cheaper. OSCR is the cheapest of the 3.")
+        self.assertEqual(notes[1], "Lower is cheaper for its growth.", "OSCR has no PEG: no place to give")
+        self.assertEqual(notes[2], "Lower is safer; below zero means more cash than debt. OSCR is the safest of the 3.")
+        self.assertEqual(notes[3], "Higher keeps more of each sale. OSCR is the most profitable of the 3.")
+        self.assertTrue(notes[4].startswith("How far the price moved - not good or bad by itself"))
+        t["rows"][0] = ["Forward P/E", "30", "13.0", "24.1"]
+        self.assertEqual(self.w.table_notes(t)[0], "Lower is cheaper. OSCR is the most expensive of the 3.")
+
+
 class YourNotesOnAStock(Base):
     """The owner asked (2026-11-20) for a notes section of his own on each
     stock: dated notes he can add, edit and delete, kept as he wrote them."""
