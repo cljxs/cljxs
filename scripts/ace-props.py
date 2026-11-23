@@ -732,7 +732,12 @@ def board_json(now=None):
                                             "p_used", "novig_pct", "edge_pts", "why", "utc", "result",
                                             "profit", "detail", "settled_utc")}, clv_pct=clv, close_price=close_price)
     graded = [row(x) for x in settled]
-    with_close = [x for x in graded if x["clv_pct"] is not None and x["result"] in ("won", "lost")]
+    # The closing-line value counts the bets since STOP_FROM only, as the
+    # "since" profit does (owner, 2026-11-23, option A): two old-rule
+    # Mathurin bets at +43.6% and +87.3% made the whole-history +1.6%.
+    since_ids = {x.get("id") for x in counted(settled)}
+    with_close = [x for x in graded if x["clv_pct"] is not None and x["result"] in ("won", "lost")
+                  and x["id"] in since_ids]
     real = [x for x in settled if x.get("result") in ("won", "lost")]
     day = et_time.day()
     return {
@@ -765,7 +770,7 @@ def show_lines():
     out = [f"Ace Props: {s['won']} won, {s['lost']} lost, {s['void']} void, ${s['profit']:+,.2f}; "
            f"{s['open']} open; {s['today']}/{s['cap']} placed today; shared bankroll ${s['bankroll']:,.2f}"]
     if s["avg_clv_pct"] is not None:
-        out.append(f"closing-line value {s['avg_clv_pct']:+.2f}% a bet over {s['with_close']}, "
+        out.append(f"closing-line value since {STOP_FROM} {s['avg_clv_pct']:+.2f}% a bet over {s['with_close']}, "
                    f"beat the close on {s['beat_close']}")
     if s["stopped"]:
         out.append("STOPPED: " + s["stopped"])

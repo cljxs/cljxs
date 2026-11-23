@@ -130,7 +130,7 @@ function draw() {
     ...(s.stop_from ? [[`Since ${esc(s.stop_from)}`, `<span class="v num ${cls(s.since_profit)}">${signed(s.since_profit)}</span>`]] : []),
     ['W-L', `<span class="v num">${s.won || 0}-${s.lost || 0}${s.void ? ` · ${s.void} void` : ''}</span>`],
     ['Today', `<span class="v num">${s.today || 0}/${s.cap || 2}</span>`],
-    ['Beat the close', `<span class="v num">${has(s.avg_clv_pct) ? `${pp(s.avg_clv_pct)}%` : '—'}</span>`],
+    [s.stop_from ? `Beat the close · since ${esc(s.stop_from.slice(5))}` : 'Beat the close', `<span class="v num">${has(s.avg_clv_pct) ? `${pp(s.avg_clv_pct)}%` : '—'}</span>`],
   ].map(([l, v]) => `<div><div class="l">${l}</div>${v}</div>`).join('');
   $('rule').innerHTML = `The opponent must be bottom ${r.bottom} at defending the player's position (G, F or C, this
     season's games). His hit rate against those defences this season - however many games that is - is pulled
@@ -190,7 +190,7 @@ const resultOf = x => x.result === 'won' || x.result === 'lost' ? x.result : 'vo
 function results() {
   const s = D.settled || [], m = D.summary || {};
   if (!s.length) return '<div class="muted">No props bet has settled yet.</div>';
-  const clv = has(m.avg_clv_pct) ? `Closing-line value ${pp(m.avg_clv_pct)}% a bet over ${m.with_close}, beat the close on ${m.beat_close}. ` : '';
+  const clv = has(m.avg_clv_pct) ? `Closing-line value since ${esc(m.stop_from || '')}: ${pp(m.avg_clv_pct)}% a bet over ${m.with_close}, beat the close on ${m.beat_close}. ` : '';
   const of = k => k === 'all' ? s : s.filter(x => resultOf(x) === k);
   const sum = xs => xs.reduce((t, x) => t + (Number(x.profit) || 0), 0);
   const chips = RESULT_KINDS.filter(([k]) => k === 'all' || of(k).length).map(([k, label]) =>

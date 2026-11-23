@@ -445,6 +445,20 @@ class WhatIsWinning(PropsCase):
         self.assertEqual((bd["all"]["bets"], bd["all"]["won"], bd["since"]), (2, 2, self.p.STOP_FROM))
         self.assertEqual(bd["judge_at"], 100)
 
+    def test_beat_the_close_counts_only_bets_since_the_rule_change(self):
+        # Owner, 2026-11-23, option A: two old-rule Mathurin bets (+372 closing
+        # +152, +236 closing +134) carried the whole-history average to +1.6%.
+        self.settle_many([(372, False, 22)], placed=datetime(2026, 10, 29, 21, tzinfo=timezone.utc))
+        self.settle_many([(150, False, 2)], first=10)
+        f = self.b.fold(self.b.events())
+        ids = {x["selection"]: x["id"] for x in f["settled"]}
+        self.p._write(self.p.CLOSES, {ids["P0 20+ pts"]: {"price": 152, "at": "x"},
+                                      ids["P10 20+ pts"]: {"price": 160, "at": "x"}})
+        s = self.p.board_json()["summary"]
+        clv = load("ace_clv_since", "ace-clv.py")
+        self.assertEqual((s["with_close"], s["avg_clv_pct"]), (1, clv.clv_at(150, self.p.implied(160))))
+        self.assertLess(s["avg_clv_pct"], 5, "not the old bet's +87%")
+
     def test_the_page_draws_it(self):
         page = (ROOT / "mission-control-api" / "public" / "ace-props.html").read_text()
         for bit in ("${winning(D.breakdown)}", "What's winning", "No group is outside luck yet"):
