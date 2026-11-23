@@ -138,6 +138,7 @@
 .vsk{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#9aa6c4;margin-bottom:4px}
 .cells{display:flex;flex-wrap:wrap;gap:6px 18px}.cell{font-size:14px;max-width:170px}.cell .sym{font-size:12px;color:#9aa6c4;font-weight:600}
 .cell.mine{font-weight:700;color:#fff}.cell.mine .sym{color:#f3d36b}.cell.avg{color:#c9d2ea;border-left:1px solid #2a3350;padding-left:12px}.vsnote{font-size:13px;color:#c9d2ea;margin-top:4px;line-height:1.45}
+.story{margin:6px 0 0;padding-left:18px}.story li{margin:6px 0;line-height:1.45}
 .settle{margin:8px 0 0;padding-left:18px}.settle li{margin:6px 0}.who{display:inline-block;font-size:12px;padding:1px 7px;border-radius:9px;margin-left:4px}
 .who.nasdaq,.who.warren{background:#1f4d36;color:#bdf0d0}.who.both{background:#3a3f5c;color:#d5d9f5}.who.opus{background:#4d421f;color:#f3e2a8}.who.open{background:#5c2626;color:#f5c5c5}
 .means{font-size:13.5px;line-height:1.5;margin-top:6px;color:#dfe6f3}
@@ -389,8 +390,12 @@ function report(c) {
   ${sec('cash', 3, 'Does it make cash, and is the dividend safe?', rowsTable(s.cash.rows))}
   ${sec('debt', 4, 'Debt &mdash; how much, and what is it paying for?', `
     <div class="k">Part A: how much</div>${rowsTable(d.rows)}
-    <div class="k" style="margin-top:14px">Part B: the ${esc((d.year_end || '').slice(0, 4))} cash flow, line by line</div>
+    <div class="k" style="margin-top:14px">${esc(d.part_b_title || `Part B: the ${(d.year_end || '').slice(0, 4)} cash flow, line by line`)}</div>
     <table>${(d.part_b || []).map(([l, v]) => `<tr><td>${esc(l)}</td><td class="num">${esc(v)}</td></tr>`).join('')}</table>
+    ${d.part_b_src ? `<div class="src">Source: ${d.part_b_src.map(x => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>`).join(' · ')}</div>` : ''}
+    ${(d.story || []).length ? `<div class="k" style="margin-top:14px">Why the debt rose - what the filing and news say</div>
+      <ul class="story">${d.story.map(x => `<li>${x.amount ? `<b>${esc(x.line)}, ${esc(x.amount)}:</b> ` : `<b>${esc(x.line)}:</b> `}${esc(x.what)} <a href="${esc(x.source.url)}" target="_blank" rel="noopener">${esc(x.source.label)}</a></li>`).join('')}</ul>
+      <div class="foot">The words are Opus's reading of the filing and news; each dollar figure is the cash flow statement's own.</div>` : ''}
     <p><b>Quick test:</b> ${d.pays_dividend === false ? 'it paid no dividend that year, so no dividend can be paid on a loan.' : `operating cash &minus; dividends paid = <b>${esc(d.quick_test)}</b>. ${d.quick_test_ok ? 'Positive, so the dividend is <b>not</b> paid on a loan.' : '<span class="err">Negative: the dividend is being paid on a loan.</span>'}`}</p>
     ${rk.debt_note ? `<p class="muted">Warren: ${esc(rk.debt_note)}</p>` : ''}<div class="foot">${esc(d.note || '')}</div>`)}
   ${sec('price', 5, 'Is the price fair? Compare with its sector', `

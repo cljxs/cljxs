@@ -159,7 +159,7 @@ TAGS = {
             "DepreciationAmortizationAndAccretionNet"),
     "interest": ("InterestExpense", "InterestExpenseNonoperating", "InterestExpenseDebt",
                  "InterestIncomeExpenseNonoperatingNet", "InterestPaidNet"),
-    "debt_issued": ("ProceedsFromIssuanceOfLongTermDebt", "ProceedsFromIssuanceOfDebt",
+    "debt_issued": ("ProceedsFromIssuanceOfLongTermDebt", "ProceedsFromIssuanceOfDebt", "ProceedsFromDebtNetOfIssuanceCosts",
                     "ProceedsFromIssuanceOfSeniorLongTermDebt", "ProceedsFromConvertibleDebt"),
     "debt_repaid": ("RepaymentsOfLongTermDebt", "RepaymentsOfDebt"),
     "dps": ("CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid"),
@@ -535,6 +535,128 @@ def forecast_facts(payload):
 
 # --------------------------------------------------------------- the numbers
 
+# ------------------------------------------------- where the cash went
+# The owner (2026-11-23), on NVIDIA's debt going from $8.47B to $33.37B while
+# Part B said "net new borrowing $0" and "debt did not grow": "I want to know
+# what caused this, did they buy buildings, companies etc?" Part B was the
+# last full fiscal year (to January 2026) and the borrowing came after it, in
+# a line ("Proceeds from debt, net of issuance costs") Warren did not read.
+# Now Part B is the same twelve months as the debt row, and every way cash
+# went in or out - companies bought, stakes in other companies, bonds bought
+# as savings - is a line of its own, straight from the cash flow statement.
+
+CASH_LINES = [
+    # key, label, the first of these the filing uses, or else the sum of these, in (+) or out (-)
+    ("ocf", "Cash from running the business", ("NetCashProvidedByUsedInOperatingActivities",
+                                               "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"), (), +1),
+    ("borrowed", "New borrowing", ("ProceedsFromIssuanceOfDebt", "ProceedsFromDebtNetOfIssuanceCosts",
+                                   "ProceedsFromIssuanceOfLongTermDebt"),
+     ("ProceedsFromIssuanceOfSeniorLongTermDebt", "ProceedsFromConvertibleDebt", "ProceedsFromIssuanceOfCommercialPaper",
+      "ProceedsFromLinesOfCredit", "ProceedsFromLongTermLinesOfCredit", "ProceedsFromBankDebt",
+      "ProceedsFromIssuanceOfUnsecuredDebt", "ProceedsFromIssuanceOfSecuredDebt", "ProceedsFromShortTermDebt"), +1),
+    ("repaid", "Debt paid back", ("RepaymentsOfDebt", "RepaymentsOfLongTermDebt"),
+     ("RepaymentsOfConvertibleDebt", "RepaymentsOfSeniorDebt", "RepaymentsOfCommercialPaper", "RepaymentsOfLinesOfCredit",
+      "RepaymentsOfLongTermLinesOfCredit", "RepaymentsOfBankDebt", "RepaymentsOfUnsecuredDebt", "RepaymentsOfSecuredDebt",
+      "RepaymentsOfShortTermDebt"), -1),
+    ("buildings", "Buildings and equipment", TAGS["capex"], (), -1),
+    ("companies", "Companies bought", (), ("PaymentsToAcquireBusinessesNetOfCashAcquired",
+                                           "PaymentsToAcquireBusinessOneNetOfCashAcquired",
+                                           "PaymentsToAcquireBusinessTwoNetOfCashAcquired",
+                                           "PaymentsToAcquireBusinessThreeNetOfCashAcquired"), -1),
+    ("stakes", "Stakes in other companies", (), ("PaymentsToAcquireEquitySecuritiesFvNi", "PaymentsToAcquireEquityMethodInvestments",
+                                                 "PaymentsToAcquireOtherInvestments", "PaymentsToAcquireCostMethodInvestments",
+                                                 "PaymentsToAcquireInterestInSubsidiariesAndAffiliates",
+                                                 "PaymentsToAcquirePrivateEquityInvestments"), -1),
+    ("savings_in", "Bonds and Treasuries bought as savings", (),
+     ("PaymentsToAcquireAvailableForSaleSecuritiesDebt", "PaymentsToAcquireAvailableForSaleSecurities",
+      "PaymentsToAcquireMarketableSecurities", "PaymentsToAcquireShortTermInvestments",
+      "PaymentsToAcquireHeldToMaturitySecurities"), -1),
+    ("savings_out", "Bonds and Treasuries sold or matured", (),
+     ("ProceedsFromSaleAndMaturityOfAvailableForSaleSecurities", "ProceedsFromSaleOfAvailableForSaleSecuritiesDebt",
+      "ProceedsFromMaturitiesPrepaymentsAndCallsOfAvailableForSaleSecurities",
+      "ProceedsFromSaleAndMaturityOfMarketableSecurities", "ProceedsFromSaleMaturityAndCollectionsOfInvestments",
+      "ProceedsFromSaleOfShortTermInvestments", "ProceedsFromMaturitiesPrepaymentsAndCallsOfHeldToMaturitySecurities"), +1),
+    ("dividends", "Dividends", TAGS["dividends"], (), -1),
+    ("buybacks", "Buying back its own stock", TAGS["buybacks"] + ("PaymentsForRepurchaseOfEquity",), (), -1),
+]
+SPENDING = ("buybacks", "dividends", "buildings", "companies", "stakes")
+
+
+def _durations(facts, tag):
+    """{(start, end): value}, the latest filing winning."""
+    best = {}
+    for r in _rows(facts, tag):
+        if r.get("start") and r.get("end"):
+            k = (r["start"], r["end"])
+            if k not in best or r.get("filed", "") > best[k].get("filed", ""):
+                best[k] = r
+    return {k: r["val"] for k, r in best.items()}
+
+
+def cash_periods(facts, end):
+    """The pieces that make the twelve months to `end`: the fiscal year, or
+    the last full year + this year so far - the same part of last year.
+    [(start, end, +1 or -1)] or None."""
+    ocf = {}
+    for t in CASH_LINES[0][2]:
+        ocf = _durations(facts, t) or ocf
+        if ocf:
+            break
+    days = lambda s, e: (ddate(e) - ddate(s)).days
+    full = [k for k in ocf if k[1] == end and 350 <= days(*k) <= 380]
+    if full:
+        return [(full[0][0], end, 1)]
+    now = sorted((k for k in ocf if k[1] == end and 80 <= days(*k) <= 290), key=lambda k: days(*k))
+    if not now:
+        return None
+    s = now[-1][0]
+    year = [k for k in ocf if 350 <= days(*k) <= 380 and 0 < days(k[1], s) <= 7]
+    if not year:
+        return None
+    s0, e0 = year[0]
+    before = [k for k in ocf if k[0] == s0 and abs(days(*k) - days(s, end)) <= 7 and k[1] < e0]
+    if not before:
+        return None
+    return [(s, end, 1), (s0, e0, 1), (s0, before[0][1], -1)]
+
+
+def cash_lines(facts, end):
+    """{"start", "end", key: dollars} for the twelve months to `end`, each
+    line the cash flow statement's own - or None when it cannot be pieced
+    together. A line the company did not report in a piece counts as none."""
+    periods = cash_periods(facts, end)
+    if not periods:
+        return None
+    out = {"end": end, "start": str(ddate(end) - __import__("datetime").timedelta(days=364))}
+    for key, _, first, total, _ in CASH_LINES:
+        found, v = False, 0.0
+        for s, e, sign in periods:
+            piece = None
+            for t in first:
+                d = _durations(facts, t).get((s, e))
+                if d is not None:
+                    piece = d
+                    break
+            if piece is None:
+                got = [_durations(facts, t).get((s, e)) for t in total]
+                got = [x for x in got if x is not None]
+                piece = sum(got) if got else None
+            if piece is not None:
+                found, v = True, v + sign * piece
+        out[key] = v if found else (0.0 if key != "ocf" else None)
+    return out if out["ocf"] is not None else None
+
+
+def where_cash_went(c):
+    """[(label, dollars)] of what the twelve months' cash was spent on, the
+    largest first - bonds bought as savings counted net of those sold."""
+    uses = [(lbl, c.get(k) or 0) for k, lbl, *_ in CASH_LINES if k in SPENDING]
+    saved = (c.get("savings_in") or 0) - (c.get("savings_out") or 0)
+    if saved > 0:
+        uses.append(("Bonds and Treasuries added to its savings", saved))
+    return sorted([u for u in uses if u[1] > 0], key=lambda u: -u[1])
+
+
 def numbers(symbol, get=None, tickers=None, verify=False):
     """Every figure the checklist needs for one stock, computed here."""
     sym = symbol.upper()
@@ -590,6 +712,10 @@ def numbers(symbol, get=None, tickers=None, verify=False):
             other = {"error": str(e)[:120]}
         n["second_source"] = cross_check(n, other)
         settle(n, facts, n["second_source"], by_end)
+    end = n.get("ocf_ttm_end")
+    n["cash12"] = cash_lines(facts, end) if end else None
+    if n["cash12"] and end in by_end:
+        n["cash12"]["src"] = [filing_link(cik, by_end[end])]
     derive(n)
     if verify:
         n["alarms"] = alarms(n)
@@ -1582,30 +1708,62 @@ def rate_cash(n):
 
 
 def debt_purpose(n):
-    """Part B of Step 4: what the debt is paying for, from the year's cash."""
-    fy = n.get("fy") or {}
-    ocf, capex, div = fy.get("ocf"), fy.get("capex") or 0, fy.get("dividends") or 0
-    borrow, buy = fy.get("net_borrowing") or 0, fy.get("buybacks") or 0
+    """Part B of Step 4: what the debt is paying for - (short answer, rating,
+    the specifics). From the same twelve months as the debt row when the
+    filings allow it, else the last full year."""
+    c = n.get("cash12")
+    if c:
+        ocf, borrowed, repaid = c["ocf"], c.get("borrowed") or 0, c.get("repaid") or 0
+        div, capex, buy = c.get("dividends") or 0, c.get("buildings") or 0, c.get("buybacks") or 0
+        uses = where_cash_went(c)
+    else:
+        fy = n.get("fy") or {}
+        ocf, div, capex, buy = fy.get("ocf"), fy.get("dividends") or 0, fy.get("capex") or 0, fy.get("buybacks") or 0
+        borrowed, repaid = max(fy.get("net_borrowing") or 0, 0), max(-(fy.get("net_borrowing") or 0), 0)
+        uses = sorted([u for u in (("Buying back its own stock", buy), ("Dividends", div),
+                                   ("Buildings and equipment", capex)) if u[1] > 0], key=lambda u: -u[1])
     if ocf is None:
         return "unknown", YELLOW, "the cash flow statement was not reported"
+    borrow = borrowed - repaid
+    spent = sum(v for _, v in uses)
+    low = lambda t: t[0].lower() + t[1:]
+    top = "; ".join(f"{low(lbl)} {money(v)}" for lbl, v in uses[:4])
+    left = borrow + ocf - spent          # what the year added to its cash pile
+    when = f"In the 12 months to {c['end']}" if c else f"In the year to {(n.get('fy') or {}).get('year_end')}"
+    d0, d1 = n.get("debt"), n.get("debt_year_ago")
+    rose = d0 is not None and d1 and d0 - d1 > max(0.25 * d1, 1e8)
+    told = (f"{when} it borrowed {money(borrowed)}" + (f" and paid back {money(repaid)}" if repaid else "") + ". "
+            if borrowed else f"{when} it took on no new loans" + (f" and paid back {money(repaid)}" if repaid else "") + ". ")
+    if borrowed and repaid >= 0.6 * borrowed:
+        told += (f"Most of the new borrowing went to pay off older debt - refinancing - so it added only "
+                 f"{money(borrow)} on balance. " if borrow > 0 else "It paid off more than it borrowed. ")
+    told += f"Where its cash went: {top}." if uses else "It spent almost nothing beyond running the business."
+    if rose and borrowed < 0.5 * (d0 - d1):
+        told += (f" Its debt still rose {money(d0 - d1)}, more than it borrowed in cash - the rest came another way: "
+                 "a company it bought bringing its debt, new leases, or interest added to what it owes.")
     if div and ocf < div:
-        return "dividend on a loan", RED, "operating cash is less than the dividends paid"
-    if borrow <= 0 and ocf >= div + capex:
-        return "own cash", GREEN, "operating cash covered the dividend and the spending, and debt did not grow"
+        return "dividend on a loan", RED, told + f" Its own cash ({money(ocf)}) did not cover the dividends."
+    if borrow <= 0 and ocf >= spent:
+        return "own cash", GREEN, told + f" Its own cash from the business ({money(ocf)}) paid for all of it."
     if borrow > 0 and ocf < 0:
-        return "borrowing to cover losses and building", YELLOW, (
-            f"its business used {money(-ocf)} of cash, so the new borrowing ({money(borrow)}) paid for the losses "
-            "as well as the building - it works only if what it builds starts paying")
+        return "borrowing to cover losses and building", YELLOW, told + (
+            f" Its business used {money(-ocf)} of cash, so the borrowing paid for the losses as well as the "
+            "building - it works only if what it builds starts paying."
+            + (f" About {money(left)} of what it borrowed is still held as cash for later." if left > 0.2 * borrow else ""))
     if borrow > 0 and buy > 0 and buy > 0.5 * ocf:
-        return "borrowing for buybacks", YELLOW, "debt rose while it spent heavily buying back stock"
-    if borrow > 0 and ocf >= div + capex:
-        return "borrowing to grow", GREEN, (
-            f"its own cash already covered {'the dividend and ' if div else ''}its spending, so the new borrowing "
-            f"({money(borrow)}) went to growth, deals or savings - Warren's note on its debt says which")
+        return "borrowing for buybacks", YELLOW, told + (
+            f" Buybacks ({money(buy)}) took more than half its own cash ({money(ocf)}) while it borrowed - "
+            "borrowing to buy back stock lifts the share count's value now and leaves the debt for later.")
+    if borrow > 0 and ocf >= spent:
+        return "borrowing kept as cash", GREEN, told + (
+            f" Its own cash from the business ({money(ocf)}) already paid for all of that, so the {money(borrow)} "
+            "it added in debt went into its cash and savings - money held for later, not yet spent. The notes "
+            "below say what it was raised for.")
     if borrow > 0:
-        return "borrowing to grow", GREEN, (("operating cash covered the dividend; " if div else "")
-                                            + "new borrowing paid for the building its own cash could not")
-    return "own cash", GREEN, "operating cash and its own savings paid for everything"
+        return "borrowing to spend", GREEN if uses and uses[0][0] in ("Buildings and equipment", "Companies bought") else YELLOW, told + (
+            f" Its own cash ({money(ocf)}) fell {money(spent - ocf)} short of that, so the borrowing helped pay for "
+            f"it - its biggest use was {low(uses[0][0])}." if uses else "")
+    return "own cash", GREEN, told + " Its own cash and savings paid for everything."
 
 
 def rate_debt(n):
@@ -1639,19 +1797,30 @@ def rate_debt(n):
         rows.append(row("Total debt vs. a year ago", f"{money(d0)} vs. {money(d1)}", GREEN if ch <= 5 else YELLOW if ch <= 25 else RED,
                         "" if ch <= 5 else f"up {ch:.0f}% in a year" + (" - Part B says why" if ch > 25 else "")))
     what, rating, why = debt_purpose(n)
-    fy = n.get("fy") or {}
-    part_b = [["Operating cash flow", money(fy.get("ocf"))], ["Capital expenditure", money(fy.get("capex"))],
-              ["Dividends paid", money(fy.get("dividends"))], ["Stock buybacks", money(fy.get("buybacks"))],
-              ["Net new borrowing", money(fy.get("net_borrowing"))]]
-    quick = fy.get("ocf") - fy.get("dividends") if fy.get("ocf") is not None else None
+    fy, c = n.get("fy") or {}, n.get("cash12")
+    if c:
+        sign = {k: sg for k, *_, sg in CASH_LINES}
+        part_b = [[lbl, ("+" if sign[k] > 0 else "-") + money(c[k]).lstrip("-") if c.get(k) else "none"]
+                  for k, lbl, *_ in CASH_LINES if k in ("ocf", "borrowed", "dividends", "buybacks", "buildings") or c.get(k)]
+        if c["ocf"] is not None and c["ocf"] < 0:
+            part_b[0][1] = money(c["ocf"])
+        quick = c["ocf"] - (c.get("dividends") or 0)
+        title = f"Part B: where the cash went, 12 months to {c['end']}"
+    else:
+        part_b = [["Operating cash flow", money(fy.get("ocf"))], ["Capital expenditure", money(fy.get("capex"))],
+                  ["Dividends paid", money(fy.get("dividends"))], ["Stock buybacks", money(fy.get("buybacks"))],
+                  ["Net new borrowing", money(fy.get("net_borrowing"))]]
+        quick = fy.get("ocf") - fy.get("dividends") if fy.get("ocf") is not None else None
+        title = f"Part B: the {str(fy.get('year_end') or '')[:4]} cash flow, line by line"
     rows.append(row("What is the debt paying for?", what, rating, why))
-    return {"rating": overall(rows), "rows": rows, "part_b": part_b, "year_end": fy.get("year_end"),
+    return {"rating": overall(rows), "rows": rows, "part_b": part_b, "year_end": fy.get("year_end"), "part_b_title": title,
+            "part_b_src": (c or {}).get("src"),
             "note": ("This company stopped reporting operating income, so EBITDA here is pre-tax income plus interest "
                      "plus depreciation, from the SEC filings." if n.get("op_income_from") else
                      "Leverage here is operating income plus depreciation from the SEC filings; a company's own "
                      "'adjusted EBITDA' usually adds more and shows a lower figure."),
             "quick_test": money(quick), "quick_test_ok": quick is not None and quick >= 0,
-            "pays_dividend": bool(fy.get("dividends"))}
+            "pays_dividend": bool((c or fy).get("dividends"))}
 
 
 def peer_avg(peers, key):
@@ -1838,7 +2007,22 @@ def facts_for_ai(n):
              f"Net debt {money(n.get('net_debt'))}; leverage {n.get('leverage')}x; interest coverage {n.get('interest_cover')}x",
              f"Last full year: borrowed {money((n.get('fy') or {}).get('net_borrowing'))} net, "
              f"capital spending {money((n.get('fy') or {}).get('capex'))}"]
+    c = n.get("cash12")
+    if c:
+        lines.append(f"Cash flow, 12 months to {c['end']}: " + "; ".join(
+            f"{lbl.lower()} {money(c.get(k))}" for k, lbl, *_ in CASH_LINES if c.get(k)))
+    if debt_jumped(n):
+        lines.append(f"Total debt rose from {money(n['debt_year_ago'])} to {money(n['debt'])} in a year.")
     return "\n".join(lines)
+
+
+def debt_jumped(n):
+    """Debt up more than 25% in a year - when Opus is asked to find out why."""
+    d0, d1 = n.get("debt"), n.get("debt_year_ago")
+    return bool(d0 is not None and d1 and d0 - d1 > 0.25 * d1)
+
+
+STORY_LINES = ("borrowed", "repaid", "companies", "stakes", "buildings", "buybacks", "dividends", "savings_in")
 
 
 def question(n, inputs):
@@ -1863,7 +2047,12 @@ def question(n, inputs):
         ' "risks": ["three short risks from its latest news or filings"],\n'
         ' "sell_rules": ["three rules, each finishing the sentence I would sell if ..., about the business, not the price"],\n'
         ' "buy_more": "one sentence: what would justify buying more",\n'
-        ' "debt_note": "one sentence: what its debt is mostly paying for, if known"}'
+        ' "debt_note": "one sentence: what its debt is mostly paying for, if known"'
+        + (',\n "debt_story": [up to four items about why its debt rose, from its 10-Q/10-K debt note, its press '
+           'releases and news - each {"line": the cash flow line it belongs to, one of ' + json.dumps(list(STORY_LINES))
+           + ', "what": "name the bonds, the deal, the company bought or the stake - no numbers or dates", '
+           '"source": "the https address you read it on"} - [] if you find nothing]' if debt_jumped(n) else "")
+        + "}"
     )
 
 
@@ -1916,8 +2105,35 @@ def read_answer(text, symbol, tickers):
         out[k] = [x for x in items if not STRAY.search(x)][:3]
         if len(out[k]) < 3:
             problems.append(f"{k} has fewer than three")
+    story = []
+    for item in (a.get("debt_story") or [])[:4] if isinstance(a.get("debt_story"), list) else []:
+        line = str((item or {}).get("line") or "")
+        what = str((item or {}).get("what") or "").strip()[:240]
+        src = str((item or {}).get("source") or "").strip()[:400]
+        if line not in STORY_LINES:
+            problems.append(f"debt_story line {line!r} is not one of {STORY_LINES}")
+        elif not what or STRAY.search(what):
+            problems.append(f"debt_story quotes a number or says nothing: {what[:80]}")
+        elif not src.startswith("https://"):
+            problems.append("debt_story item without an https source")
+        else:
+            story.append({"line": line, "what": what, "source": src})
+    out["debt_story"] = story
     ok = out["sector"] and out["business"] and out["customers"]
     return (out if ok else None), problems
+
+
+def debt_story(n, ai):
+    """Opus's items, each with the filing's own dollar figure for its line -
+    the words are his reading, the number is the cash flow statement's."""
+    c = n.get("cash12") or {}
+    label = {k: lbl for k, lbl, *_ in CASH_LINES}
+    out = []
+    for it in (ai or {}).get("debt_story") or []:
+        v = c.get(it["line"])
+        out.append({"line": label[it["line"]], "amount": money(v) if v else None, "what": it["what"],
+                    "source": {"label": it["source"].split("/")[2], "url": it["source"]}})
+    return out
 
 
 def _ask(q):
@@ -1978,7 +2194,7 @@ def build(symbol, inputs, get=None, ask=None, peer_numbers=None):
         except Exception as e:
             ai_note = (ai_note + "; " if ai_note else "") + f"{p}'s numbers could not be read ({str(e)[:80]})"
     steps = {"business": rate_business(ai), "growth": rate_growth(n, ai), "cash": rate_cash(n),
-             "debt": rate_debt(n), "price": rate_price(n, peers, sector, (ai or {}).get("cyclical")),
+             "debt": dict(rate_debt(n), story=debt_story(n, ai)), "price": rate_price(n, peers, sector, (ai or {}).get("cyclical")),
              "risk": rate_risk(ai, concentration(holdings(), sym, float(inputs["amount"]), sector), inputs, sector)}
     explain(steps, n, peers, sector)
     decision, why = decide(steps)

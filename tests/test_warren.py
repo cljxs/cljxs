@@ -234,7 +234,8 @@ class AWholeCheck(Base):
                          get, lambda q: (True, json.dumps(ANSWER)), peer)
         self.assertEqual(set(c["steps"]), {"business", "growth", "cash", "debt", "price", "risk"})
         self.assertIn(c["decision"], ("Buy", "Wait", "Skip"))
-        self.assertEqual(c["steps"]["debt"]["quick_test"], "$3.31B")
+        # Since 2026-11-23 Part B is the 12 months to the latest filing, not the last full year.
+        self.assertEqual(c["steps"]["debt"]["quick_test"], "$4.09B")
         self.w.save(c)
         self.assertEqual(self.w.latest("kmi")["symbol"], "KMI")
 
@@ -1012,6 +1013,75 @@ class TheSecretScanReadsTheFixtures(Base):
         self.assertEqual(cs.content_findings(f, cs.BROAD_SHAPES), [])
         f.write_text('{"k": "' + "q7Zr" * 11 + '"}\n')
         self.assertEqual(len(cs.content_findings(f, cs.BROAD_SHAPES)), 1)
+
+
+class WhatTheDebtIsPayingFor(Base):
+    """The owner (2026-11-23), on NVIDIA's debt going from $8.47B to $33.37B
+    while Part B said "net new borrowing $0" and "debt did not grow": "I want
+    to know what caused this, did they buy buildings, companies etc?" Part B
+    was the year before the borrowing, and NVIDIA's borrowing line was one
+    Warren did not read. These run on NVIDIA's real filing."""
+
+    def nvda(self, end="2026-07-26"):
+        return self.w.cash_lines(json.loads(fx("warren-sec-companyfacts-nvda.json")), end)
+
+    def test_the_twelve_months_are_the_debt_rows_months(self):
+        c = self.nvda()
+        self.assertEqual((c["start"], c["end"]), ("2025-07-27", "2026-07-26"))
+        self.assertEqual(c["ocf"], 102718e6 + 74421e6 - 42779e6)   # the year + this half - last year's half
+
+    def test_nvidias_bonds_are_found(self):
+        self.assertEqual(self.nvda()["borrowed"], 24896e6)            # "Proceeds from debt, net of issuance costs"
+        self.assertEqual(self.nvda("2026-01-25")["borrowed"], 0)      # the year before: none - the old Part B
+
+    def test_companies_and_stakes_are_lines_of_their_own(self):
+        c = self.nvda("2026-01-25")
+        self.assertEqual(c["companies"], 1535e6 + 13000e6)            # both acquisition lines it reported
+        self.assertEqual(c["stakes"], 17502e6)
+
+    def test_the_answer_names_where_the_cash_went(self):
+        what, rating, why = self.w.debt_purpose({"cash12": self.nvda(), "debt": 33.37e9, "debt_year_ago": 8.47e9})
+        self.assertEqual((what, rating), ("borrowing kept as cash", "Green"))
+        self.assertIn("it borrowed $24.90B", why)
+        self.assertIn("buying back its own stock $55.31B; stakes in other companies $16.51B; companies bought $14.16B", why)
+        self.assertNotIn("debt did not grow", why)
+
+    def test_refinancing_is_called_refinancing(self):
+        why = self.w.debt_purpose(self.w.numbers("KMI", get))[2]
+        self.assertIn("refinancing - so it added only $775M", why)
+
+    def test_debt_that_rose_without_cash_borrowing_says_so(self):
+        c = dict(self.nvda("2026-01-25"))
+        why = self.w.debt_purpose({"cash12": c, "debt": 20e9, "debt_year_ago": 8.47e9})[2]
+        self.assertIn("more than it borrowed in cash", why)
+
+    def test_part_b_is_the_same_months_and_signed(self):
+        d = self.w.rate_debt(self.w.numbers("ASTS", get))
+        self.assertEqual(d["part_b_title"], "Part B: where the cash went, 12 months to 2026-09-30")
+        self.assertIn(["New borrowing", "+$3.76B"], d["part_b"])
+        self.assertIn(["Cash from running the business", "-$250M"], d["part_b"])
+
+    def test_opus_names_the_deals_and_code_brings_the_figure(self):
+        story = [{"line": "borrowed", "what": "Senior notes sold to fund general corporate purposes.",
+                  "source": "https://www.sec.gov/x"},
+                 {"line": "stakes", "what": "Stakes in AI model makers.", "source": "https://news.example.com/a"}]
+        out = self.w.debt_story({"cash12": self.nvda()}, {"debt_story": story})
+        self.assertEqual([(x["line"], x["amount"]) for x in out],
+                         [("New borrowing", "$24.90B"), ("Stakes in other companies", "$16.51B")])
+
+    def test_opus_may_not_write_his_own_numbers_or_lines(self):
+        base = dict(ANSWER)
+        for bad in ({"line": "borrowed", "what": "It sold $25B of notes.", "source": "https://a.b/c"},
+                    {"line": "rent", "what": "Rent.", "source": "https://a.b/c"},
+                    {"line": "stakes", "what": "A stake.", "source": "a.b/c"}):
+            a, problems = self.w.read_answer(json.dumps(dict(base, debt_story=[bad])), "KMI", self.tickers)
+            self.assertEqual(a["debt_story"], [], bad)
+            self.assertTrue(problems, bad)
+
+    def test_opus_is_asked_only_when_debt_jumped(self):
+        n = self.w.numbers("ASTS", get)
+        self.assertIn("debt_story", self.w.question(n, {"months": 12, "goal": "growth"}))
+        self.assertNotIn("debt_story", self.w.question(dict(n, debt_year_ago=n["debt"]), {"months": 12, "goal": "growth"}))
 
 
 class EachStepAgainstItsRivals(Base):
