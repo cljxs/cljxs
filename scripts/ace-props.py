@@ -54,6 +54,7 @@ import argparse
 import importlib.util
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -651,6 +652,72 @@ def _resume_from():
     return last.strftime("%Y-%m-%d")
 
 
+# ------------------------------------------------------------------ what is winning
+#
+# Owner, 2026-11-23, after reading the 48 results: "Do a, b and c" - keep it
+# running and judge it at JUDGE_AT bets by the close (a); a box on the
+# Results tab that groups the bets since the rule change and says which
+# groups are more than luck (b). With a few dozen bets nearly every group is
+# luck, and the box says so rather than inviting a rule change per split.
+
+JUDGE_AT = 100                 # bets since STOP_FROM before its closing-line value is read as a verdict
+LUCK_DRAWS = 2000
+LUCK_SEED = 20261123
+
+BREAKDOWN = (
+    ("Price", (("favourites (minus)", lambda b: b["price"] < 0), ("+100 to +199", lambda b: 100 <= b["price"] < 200),
+               ("+200 to +299", lambda b: 200 <= b["price"] < 300), ("+300 and longer", lambda b: b["price"] >= 300))),
+    ("Games behind his hit rate", (("1 game", lambda b: b["games"] == 1), ("2 games", lambda b: b["games"] == 2),
+                                   ("3 or more", lambda b: b["games"] >= 3))),
+    ("Edge the rule claimed", (("under 20 pts", lambda b: b["edge"] < 20), ("20 to 27.9", lambda b: 20 <= b["edge"] < 28),
+                               ("28 and over", lambda b: b["edge"] >= 28))),
+    ("Position", (("guards", lambda b: b["pos"] == "G"), ("forwards", lambda b: b["pos"] == "F"),
+                  ("centres", lambda b: b["pos"] == "C"))),
+    ("Opponent's rank (1 = allows the most)", (("1 to 3", lambda b: b["rank"] <= 3), ("4 to 7", lambda b: 4 <= b["rank"] <= 7),
+                                               ("8 to 10", lambda b: b["rank"] >= 8))),
+    ("Beat the close?", (("yes", lambda b: b["clv"] is not None and b["clv"] > 0),
+                         ("no", lambda b: b["clv"] is not None and b["clv"] <= 0))),
+)
+
+
+def group_stats(rows, seed=LUCK_SEED, draws=LUCK_DRAWS):
+    """Bets, wins, the win rate the prices implied, profit, and the profit's
+    luck range: the same number of bets re-drawn at random from these, 95%
+    of the time. `real` when the range does not reach zero."""
+    n = len(rows)
+    if not n:
+        return None
+    profit = sum(b["profit"] for b in rows)
+    rng = random.Random(seed)
+    sums = sorted(sum(rows[rng.randrange(n)]["profit"] for _ in range(n)) for _ in range(draws))
+    lo, hi = round(sums[int(0.025 * (draws - 1))], 2), round(sums[int(0.975 * (draws - 1))], 2)
+    clv = [b["clv"] for b in rows if b["clv"] is not None]
+    return {"bets": n, "won": sum(1 for b in rows if b["won"]),
+            "win_pct": round(100 * sum(1 for b in rows if b["won"]) / n, 1),
+            "price_pct": round(sum(b["implied"] for b in rows) / n, 1), "profit": round(profit, 2),
+            "luck": [lo, hi], "real": not (lo <= 0 <= hi),
+            "clv_pct": round(sum(clv) / len(clv), 2) if clv else None}
+
+
+def breakdown(settled, closes, clv_mod=None):
+    """The settled won-or-lost bets since STOP_FROM, grouped every way the
+    owner asked about, each group with its luck range."""
+    clv_mod = clv_mod or _load("ace_clv_props", "ace-clv.py")
+    rows = []
+    for x in counted(settled):
+        if x.get("result") not in ("won", "lost"):
+            continue
+        clv, _close = clv_of(x, closes, clv_mod)
+        rows.append({"won": x["result"] == "won", "price": int(x.get("price") or 0), "implied": implied(x.get("price")) or 0,
+                     "profit": float(x.get("profit") or 0), "games": int(x.get("games") or 0),
+                     "edge": float(x.get("edge_pts") or 0), "pos": x.get("pos"), "rank": int(x.get("opp_rank") or 99),
+                     "clv": clv})
+    return {"since": STOP_FROM, "judge_at": JUDGE_AT, "all": group_stats(rows),
+            "groups": [{"title": title, "rows": [dict(group_stats([b for b in rows if f(b)]) or {"bets": 0}, label=label)
+                                                 for label, f in parts]}
+                       for title, parts in BREAKDOWN]}
+
+
 def board_json(now=None):
     """Everything the page shows, worked out here."""
     b = book()
@@ -665,13 +732,20 @@ def board_json(now=None):
                                             "p_used", "novig_pct", "edge_pts", "why", "utc", "result",
                                             "profit", "detail", "settled_utc")}, clv_pct=clv, close_price=close_price)
     graded = [row(x) for x in settled]
-    with_close = [x for x in graded if x["clv_pct"] is not None and x["result"] in ("won", "lost")]
+    # The closing-line value counts the bets since STOP_FROM only, as the
+    # "since" profit does (owner, 2026-11-23, option A): two old-rule
+    # Mathurin bets at +43.6% and +87.3% made the whole-history +1.6%.
+    since_ids = {x.get("id") for x in counted(settled)}
+    with_close = [x for x in graded if x["clv_pct"] is not None and x["result"] in ("won", "lost")
+                  and x["id"] in since_ids]
     real = [x for x in settled if x.get("result") in ("won", "lost")]
     day = et_time.day()
     return {
         "board": _read(BOARD, {}),
         "open": [row(x) for x in open_bets],
-        "settled": list(reversed(graded[-40:])),
+        # Every settled bet, newest first - the page filters them by result
+        # (owner, 2026-11-23), and the latest 40 left older wins out of "Won".
+        "settled": list(reversed(graded)),
         "summary": {"profit": round(sum(float(x.get("profit") or 0) for x in settled), 2),
                     "won": sum(1 for x in real if x["result"] == "won"),
                     "lost": sum(1 for x in real if x["result"] == "lost"),
@@ -683,6 +757,7 @@ def board_json(now=None):
                     "stopped": stop_reason(settled), "bankroll": f["bankroll"],
                     "stop_from": STOP_FROM,
                     "since_profit": round(sum(float(x.get("profit") or 0) for x in counted(settled)), 2)},
+        "breakdown": breakdown(settled, closes, clv_mod),
         "rules": {"cap": DAILY_CAP, "stake": b.flat_stake(), "stop_usd": STOP_USD, "shrink": SHRINK,
                   "gap_min_pts": GAP_MIN_PTS, "max_favourite": MAX_FAVOURITE,
                   "max_longshot": MAX_LONGSHOT, "bottom": BOTTOM, "season_from": season_start(day)},
@@ -695,7 +770,7 @@ def show_lines():
     out = [f"Ace Props: {s['won']} won, {s['lost']} lost, {s['void']} void, ${s['profit']:+,.2f}; "
            f"{s['open']} open; {s['today']}/{s['cap']} placed today; shared bankroll ${s['bankroll']:,.2f}"]
     if s["avg_clv_pct"] is not None:
-        out.append(f"closing-line value {s['avg_clv_pct']:+.2f}% a bet over {s['with_close']}, "
+        out.append(f"closing-line value since {STOP_FROM} {s['avg_clv_pct']:+.2f}% a bet over {s['with_close']}, "
                    f"beat the close on {s['beat_close']}")
     if s["stopped"]:
         out.append("STOPPED: " + s["stopped"])

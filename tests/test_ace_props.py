@@ -381,6 +381,90 @@ class AcesOwnBookIgnoresIt(PropsCase):
         self.assertIn('b.get("side") in ("home", "away")', src, "a props bet's side is 'over'")
 
 
+class TheResultsCanBeFiltered(PropsCase):
+    """Owner, 2026-11-23: "Can we sort the results with wins and loses". The
+    page filters by result, so it needs every settled bet: the latest 40
+    left older wins out of "Won"."""
+
+    def test_every_settled_bet_reaches_the_page_newest_first(self):
+        now = datetime(2026, 11, 20, 12, tzinfo=timezone.utc)
+        for i in range(45):
+            e = self.b.place({"book": "props", "sport": "nba", "event_id": str(i), "match": "A @ B",
+                              "selection": f"P{i} 20+ pts", "price": 100, "starts_utc": "2026-11-20T23:00Z"},
+                             now=now + timedelta(minutes=i))
+            self.b.append({"kind": "settle", "id": e["id"], "utc": "2026-11-21 05:00:00",
+                           "result": "won" if i % 3 == 0 else "lost", "profit": 100.0 if i % 3 == 0 else -100.0,
+                           "detail": "x"})
+        settled = self.p.board_json()["settled"]
+        self.assertEqual(len(settled), 45)
+        self.assertEqual(settled[0]["selection"], "P44 20+ pts", "newest first")
+        self.assertEqual(sum(1 for x in settled if x["result"] == "won"), 15)
+
+    def test_the_page_has_the_filter(self):
+        page = (ROOT / "mission-control-api" / "public" / "ace-props.html").read_text()
+        for bit in ("data-rf=", "['won', 'Won']", "['lost', 'Lost']", "rf = f.dataset.rf"):
+            self.assertIn(bit, page)
+
+
+class WhatIsWinning(PropsCase):
+    """Owner, 2026-11-23, "Do a, b and c": the bets since the rule change,
+    grouped by price, games behind the hit rate, claimed edge, position,
+    opponent's rank and the close - each group's profit with a luck range,
+    and a group called real only when the range does not reach zero."""
+
+    def settle_many(self, specs, placed=datetime(2026, 11, 10, 16, tzinfo=timezone.utc), first=0):
+        for i, (price, won, games) in enumerate(specs, start=first):
+            e = self.b.place({"book": "props", "sport": "nba", "event_id": str(i), "match": "A @ B",
+                              "selection": f"P{i} 20+ pts", "price": price, "starts_utc": "2026-11-10T23:00Z",
+                              "games": games, "edge_pts": 25.0, "pos": "G", "opp_rank": 2},
+                             now=placed + timedelta(minutes=i))
+            profit = round(100 * (self.b.decimal_odds(price) - 1), 2) if won else -100.0
+            self.b.append({"kind": "settle", "id": e["id"], "utc": "2026-11-11 05:00:00",
+                           "result": "won" if won else "lost", "profit": profit, "detail": "x"})
+
+    def test_a_steady_winner_is_more_than_luck_and_a_coin_flip_is_not(self):
+        self.settle_many([(100, True, 3)] * 30 + [(250, i % 2 == 0, 1) for i in range(10)] + [(350, False, 2)] * 2)
+        bd = self.p.board_json()["breakdown"]
+        price = {r["label"]: r for r in bd["groups"][0]["rows"]}
+        self.assertEqual((price["+100 to +199"]["bets"], price["+100 to +199"]["won"]), (30, 30))
+        self.assertTrue(price["+100 to +199"]["real"], "30 wins from 30 at evens")
+        self.assertFalse(price["+200 to +299"]["real"], "5 of 10 at +250 is inside luck")
+        self.assertEqual(price["favourites (minus)"]["bets"], 0)
+        games = {r["label"]: r["bets"] for r in bd["groups"][1]["rows"]}
+        self.assertEqual((games["1 game"], games["2 games"], games["3 or more"]), (10, 2, 30))
+        self.assertEqual(bd["all"]["profit"], 30 * 100.0 + 5 * 250.0 - 5 * 100.0 - 2 * 100.0)
+        self.assertEqual(price["+300 and longer"]["bets"], 2)
+        # Every bet is in exactly one group under each heading (the close needs a close, so not that one).
+        for g in bd["groups"][:5]:
+            self.assertEqual(sum(r["bets"] for r in g["rows"]), bd["all"]["bets"], g["title"])
+
+    def test_only_bets_since_the_rule_change(self):
+        self.settle_many([(100, False, 30)] * 4, placed=datetime(2026, 10, 30, 16, tzinfo=timezone.utc))
+        self.settle_many([(100, True, 2)] * 2, first=10)
+        bd = self.p.board_json()["breakdown"]
+        self.assertEqual((bd["all"]["bets"], bd["all"]["won"], bd["since"]), (2, 2, self.p.STOP_FROM))
+        self.assertEqual(bd["judge_at"], 100)
+
+    def test_beat_the_close_counts_only_bets_since_the_rule_change(self):
+        # Owner, 2026-11-23, option A: two old-rule Mathurin bets (+372 closing
+        # +152, +236 closing +134) carried the whole-history average to +1.6%.
+        self.settle_many([(372, False, 22)], placed=datetime(2026, 10, 29, 21, tzinfo=timezone.utc))
+        self.settle_many([(150, False, 2)], first=10)
+        f = self.b.fold(self.b.events())
+        ids = {x["selection"]: x["id"] for x in f["settled"]}
+        self.p._write(self.p.CLOSES, {ids["P0 20+ pts"]: {"price": 152, "at": "x"},
+                                      ids["P10 20+ pts"]: {"price": 160, "at": "x"}})
+        s = self.p.board_json()["summary"]
+        clv = load("ace_clv_since", "ace-clv.py")
+        self.assertEqual((s["with_close"], s["avg_clv_pct"]), (1, clv.clv_at(150, self.p.implied(160))))
+        self.assertLess(s["avg_clv_pct"], 5, "not the old bet's +87%")
+
+    def test_the_page_draws_it(self):
+        page = (ROOT / "mission-control-api" / "public" / "ace-props.html").read_text()
+        for bit in ("${winning(D.breakdown)}", "What's winning", "No group is outside luck yet"):
+            self.assertIn(bit, page)
+
+
 class WhereItShowsAndWhenItRuns(unittest.TestCase):
 
     def test_a_page_in_aces_house(self):
