@@ -55,6 +55,12 @@
   .tag{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;padding:2px 7px;border-radius:5px;border:1px solid var(--line2);white-space:nowrap}
   .tag.bet{color:var(--acc2);border-color:var(--acc)} .tag.won{color:var(--up);border-color:rgba(47,211,155,.5)}
   .tag.lost{color:var(--down);border-color:rgba(240,100,111,.5)}
+  .win summary{cursor:pointer;font-size:13px} .win summary b{letter-spacing:.06em}
+  .wgrid{display:grid;grid-template-columns:1fr;gap:14px}
+  .wtab{width:100%;border-collapse:collapse;font-size:12px}
+  .wtab th{font-weight:400;color:var(--mute);text-align:right;padding:3px 6px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase}
+  .wtab th:first-child,.wtab td:first-child{text-align:left}
+  .wtab td{padding:4px 6px;border-top:1px solid var(--line);text-align:right;white-space:nowrap}
   .rfs{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 10px}
   .rf{font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;background:transparent;border:1px solid var(--line2);
     border-radius:14px;padding:6px 12px;cursor:pointer;color:var(--mute)}
@@ -191,9 +197,37 @@ function results() {
     `<button class="rf${rf === k ? ' on' : ''} rf-${k}" data-rf="${k}">${label} <span class="n">${of(k).length}</span></button>`).join('');
   const shown = of(rf);
   return `<div class="muted" style="margin-bottom:10px">${clv}Wins on a few bets say little; the close says more, sooner.</div>
+    ${winning(D.breakdown)}
     <div class="rfs">${chips}<span class="rfsum">${shown.length} bet${shown.length === 1 ? '' : 's'} ·
       <b class="${cls(sum(shown))}">${signed(sum(shown))}</b></span></div>
     ${shown.length ? `<div class="card">${shown.map(x => betRow(x, true)).join('')}</div>` : '<div class="muted">None.</div>'}`;
+}
+
+// What's winning (owner, 2026-11-23, "Do a, b and c"): the bets since the
+// rule change, grouped every way he asked, each group's profit with its luck
+// range - ace-props.py works out every number; this lays them out. A group
+// is coloured only when its profit is outside luck.
+function winning(b) {
+  if (!b || !b.all) return '';
+  const a = b.all;
+  const whole = v => (v < 0 ? '-$' : '+$') + Math.round(Math.abs(v)).toLocaleString('en-US');
+  const profitOf = (r) => r.real ? `<b class="${cls(r.profit)}">${signed(r.profit)}</b>` : `<span>${signed(r.profit)}</span>`;
+  const line = r => !r.bets ? `<tr><td>${esc(r.label)}</td><td class="num" colspan="4" style="color:var(--dim)">no bets</td></tr>`
+    : `<tr><td>${esc(r.label)}</td><td class="num">${r.won} of ${r.bets}</td>
+        <td class="num">${pc(r.win_pct)} <span class="muted">vs ${pc(r.price_pct)}</span></td>
+        <td class="num">${profitOf(r)}</td><td class="num muted">${whole(r.luck[0])} to ${whole(r.luck[1])}</td></tr>`;
+  const real = b.groups.flatMap(g => g.rows).filter(r => r.real);
+  const verdict = real.length
+    ? `${real.length} group${real.length === 1 ? ' is' : 's are'} outside luck - coloured below.`
+    : 'No group is outside luck yet: every split below could be chance.';
+  return `<details class="card win" open><summary><b>What's winning</b> <span class="muted">since ${esc(b.since)} ·
+      ${a.bets} bets · ${profitOf(a)} · luck ${whole(a.luck[0])} to ${whole(a.luck[1])}</span></summary>
+    <div class="why" style="margin:6px 0 10px">${verdict} Closing-line value since ${esc(b.since)}:
+      <b class="${cls(a.clv_pct)}">${has(a.clv_pct) ? pp(a.clv_pct) + '%' : '—'}</b> - it is judged on that at ${esc(b.judge_at)} bets
+      (${a.bets} of ${esc(b.judge_at)} so far). "vs" is the win rate the prices implied.</div>
+    <div class="wgrid">${b.groups.map(g => `<div><div class="k" style="margin-bottom:4px">${esc(g.title)}</div>
+      <table class="wtab"><tr><th></th><th>Won</th><th>Win rate</th><th>Profit</th><th>Luck</th></tr>${g.rows.map(line).join('')}</table></div>`).join('')}</div>
+  </details>`;
 }
 
 function defences() {
