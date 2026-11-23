@@ -55,6 +55,13 @@
   .tag{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;padding:2px 7px;border-radius:5px;border:1px solid var(--line2);white-space:nowrap}
   .tag.bet{color:var(--acc2);border-color:var(--acc)} .tag.won{color:var(--up);border-color:rgba(47,211,155,.5)}
   .tag.lost{color:var(--down);border-color:rgba(240,100,111,.5)}
+  .rfs{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 10px}
+  .rf{font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;background:transparent;border:1px solid var(--line2);
+    border-radius:14px;padding:6px 12px;cursor:pointer;color:var(--mute)}
+  .rf .n{margin-left:4px;color:var(--ink)}
+  .rf.on{color:var(--acc2);border-color:var(--acc)} .rf.on.rf-won{color:var(--up);border-color:rgba(47,211,155,.6)}
+  .rf.on.rf-lost{color:var(--down);border-color:rgba(240,100,111,.6)}
+  .rfsum{margin-left:auto;color:var(--mute);font-size:12px}
   .why{color:var(--mute);font-size:12px}
   details{margin-top:6px} summary{cursor:pointer;color:var(--mute);font-size:12px}
   ul{margin:6px 0;padding-left:18px} li{margin:2px 0}
@@ -101,7 +108,7 @@ if (EMBED) {
   addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
 }
 
-let D = null, tab = 'board';
+let D = null, tab = 'board', rf = 'all';     // rf: the Results filter
 
 async function load() {
   try { D = await (await fetch('/api/ace-props', { cache: 'no-store' })).json(); }
@@ -169,12 +176,24 @@ function openBets() {
   return o.length ? `<div class="card">${o.map(x => betRow(x, false)).join('')}</div>` : '<div class="muted">No props bet open.</div>';
 }
 
+// Owner, 2026-11-23: "Can we sort the results with wins and loses" - a
+// filter over every settled bet, each with its count and its money.
+const RESULT_KINDS = [['all', 'All'], ['won', 'Won'], ['lost', 'Lost'], ['void', 'Void']];
+const resultOf = x => x.result === 'won' || x.result === 'lost' ? x.result : 'void';
+
 function results() {
   const s = D.settled || [], m = D.summary || {};
   if (!s.length) return '<div class="muted">No props bet has settled yet.</div>';
   const clv = has(m.avg_clv_pct) ? `Closing-line value ${pp(m.avg_clv_pct)}% a bet over ${m.with_close}, beat the close on ${m.beat_close}. ` : '';
+  const of = k => k === 'all' ? s : s.filter(x => resultOf(x) === k);
+  const sum = xs => xs.reduce((t, x) => t + (Number(x.profit) || 0), 0);
+  const chips = RESULT_KINDS.filter(([k]) => k === 'all' || of(k).length).map(([k, label]) =>
+    `<button class="rf${rf === k ? ' on' : ''} rf-${k}" data-rf="${k}">${label} <span class="n">${of(k).length}</span></button>`).join('');
+  const shown = of(rf);
   return `<div class="muted" style="margin-bottom:10px">${clv}Wins on a few bets say little; the close says more, sooner.</div>
-    <div class="card">${s.map(x => betRow(x, true)).join('')}</div>`;
+    <div class="rfs">${chips}<span class="rfsum">${shown.length} bet${shown.length === 1 ? '' : 's'} ·
+      <b class="${cls(sum(shown))}">${signed(sum(shown))}</b></span></div>
+    ${shown.length ? `<div class="card">${shown.map(x => betRow(x, true)).join('')}</div>` : '<div class="muted">None.</div>'}`;
 }
 
 function defences() {
@@ -187,6 +206,8 @@ function defences() {
 }
 
 document.addEventListener('click', e => {
+  const f = e.target.closest('[data-rf]');
+  if (f) { rf = f.dataset.rf; return draw(); }
   const t = e.target.closest('[data-t]');
   if (!t) return;
   tab = t.dataset.t;

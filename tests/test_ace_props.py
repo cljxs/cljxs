@@ -381,6 +381,31 @@ class AcesOwnBookIgnoresIt(PropsCase):
         self.assertIn('b.get("side") in ("home", "away")', src, "a props bet's side is 'over'")
 
 
+class TheResultsCanBeFiltered(PropsCase):
+    """Owner, 2026-11-23: "Can we sort the results with wins and loses". The
+    page filters by result, so it needs every settled bet: the latest 40
+    left older wins out of "Won"."""
+
+    def test_every_settled_bet_reaches_the_page_newest_first(self):
+        now = datetime(2026, 11, 20, 12, tzinfo=timezone.utc)
+        for i in range(45):
+            e = self.b.place({"book": "props", "sport": "nba", "event_id": str(i), "match": "A @ B",
+                              "selection": f"P{i} 20+ pts", "price": 100, "starts_utc": "2026-11-20T23:00Z"},
+                             now=now + timedelta(minutes=i))
+            self.b.append({"kind": "settle", "id": e["id"], "utc": "2026-11-21 05:00:00",
+                           "result": "won" if i % 3 == 0 else "lost", "profit": 100.0 if i % 3 == 0 else -100.0,
+                           "detail": "x"})
+        settled = self.p.board_json()["settled"]
+        self.assertEqual(len(settled), 45)
+        self.assertEqual(settled[0]["selection"], "P44 20+ pts", "newest first")
+        self.assertEqual(sum(1 for x in settled if x["result"] == "won"), 15)
+
+    def test_the_page_has_the_filter(self):
+        page = (ROOT / "mission-control-api" / "public" / "ace-props.html").read_text()
+        for bit in ("data-rf=", "['won', 'Won']", "['lost', 'Lost']", "rf = f.dataset.rf"):
+            self.assertIn(bit, page)
+
+
 class WhereItShowsAndWhenItRuns(unittest.TestCase):
 
     def test_a_page_in_aces_house(self):

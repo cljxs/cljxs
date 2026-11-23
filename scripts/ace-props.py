@@ -671,7 +671,9 @@ def board_json(now=None):
     return {
         "board": _read(BOARD, {}),
         "open": [row(x) for x in open_bets],
-        "settled": list(reversed(graded[-40:])),
+        # Every settled bet, newest first - the page filters them by result
+        # (owner, 2026-11-23), and the latest 40 left older wins out of "Won".
+        "settled": list(reversed(graded)),
         "summary": {"profit": round(sum(float(x.get("profit") or 0) for x in settled), 2),
                     "won": sum(1 for x in real if x["result"] == "won"),
                     "lost": sum(1 for x in real if x["result"] == "lost"),
