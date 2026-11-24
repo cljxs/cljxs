@@ -210,6 +210,21 @@ class WarrensChecklistComesFirst(Base):
         d = self.decisions()[-1]
         self.assertEqual(d["lines"]["sell"][0], "It cuts the dividend.")
 
+    def test_the_panel_and_the_search_know_shares_can_be_partial(self):
+        # The owner (2026-11-24): "They don't have to buy a whole share."
+        self.check()
+        self.alert()
+        ask = votes(bull="hold", bear="hold", risk="hold")
+        self.tick(ask)
+        self.assertTrue(all("Fractional shares are allowed" in q for q in ask.asked))
+        self.assertIn("Fractional shares are allowed", self.b.ideas_question(self.b.load_book()))
+        book = self.b.load_book()
+        book["marks"]["LLY"], book["cash"] = 1360.0, 100.0
+        spend = self.b.size_buy(book, "LLY")[0]
+        self.assertEqual(spend, 38.5)                                    # 10% of a $385 book - of a $1,360 share
+        t = self.b.buy(book, "LLY", spend, 1360.0, "2026-11-24T15:00:00+00:00", "x", "test")
+        self.assertEqual((t["shares"], book["cash"]), (round(38.5 / 1360, 6), 61.5))
+
     def test_a_saved_recent_check_is_used(self):
         self.check(when=NOW - timedelta(days=3))
         self.alert()

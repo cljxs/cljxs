@@ -110,6 +110,12 @@ ROLES = {
              "whether the news is real enough to act on. You prefer doing nothing to acting on noise."),
 }
 VOTES = ("buy", "hold", "sell")
+# The owner (2026-11-24): "make sure they know they can buy partial stocks.
+# They don't have to buy a whole share." Code buys dollar amounts already;
+# this tells the panel and the idea search, so neither passes on a stock
+# because one share costs more than the book.
+FRACTIONAL = ("Fractional shares are allowed: a buy is a dollar amount, not whole shares, so a stock whose single "
+              "share costs more than the whole book can still be bought. Never count a high share price against a stock.")
 
 
 # ---------------------------------------------------------------- small parts
@@ -360,7 +366,7 @@ def recap(check, book, sym):
         out.append("Its other holdings: " + ", ".join(
             f"{s} {pct(val, v)}% ({(W.latest(s) or {}).get('sector') or 'sector unknown'})" for s, val in others))
     out.append(f"Code sizes any trade: a buy adds about {BUY_PCT:g}% of the book, never past {MAX_PCT:g}% in one "
-               "stock; a sell sells half, or all of it when Warren's check says Skip.")
+               "stock; a sell sells half, or all of it when Warren's check says Skip. " + FRACTIONAL)
     return "\n".join(out)
 
 
@@ -606,7 +612,7 @@ def ideas_question(book):
             "this order: strong and growing free cash flow; revenue growing over the last three years; debt under "
             "control and borrowing that pays for growth, not losses; a profit margin earned by the business "
             "itself; a price that is reasonable against its rivals. Any size and any risk level is fine, but "
-            "not a fund, a preferred share or a partnership (MLP).\n\n"
+            "not a fund, a preferred share or a partnership (MLP). " + FRACTIONAL + "\n\n"
             f"Leave out what the book already holds or watches: {have}.\n\n"
             'Answer with JSON only: {"ideas": [{"symbol": "TICKER", "why": "one or two plain sentences, no '
             'numbers"}]}. Warren will check every figure himself; give no figures.')
