@@ -688,7 +688,8 @@ class NewsOnWhatYouOwn(Base):
         spec = importlib.util.spec_from_file_location("att_w", ROOT / "scripts" / "attention.py")
         att = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(att)
-        att._load = lambda name, file: self.w
+        real = att._load
+        att._load = lambda name, file: self.w if file == "warren.py" else real(name, file)
         a = att.warren()
         self.assertEqual((a["n"], a["tone"]), (2, "alert"))
         self.w.cmd_alerts(type("A", (), {"id": "bbbb0001", "symbol": "HIMS"})())
@@ -811,7 +812,8 @@ class EachAlertSaysHowMuchItMatters(Base):
         spec = importlib.util.spec_from_file_location("att_imp", ROOT / "scripts" / "attention.py")
         att = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(att)
-        att._load = lambda name, file: self.w
+        real = att._load
+        att._load = lambda name, file: self.w if file == "warren.py" else real(name, file)
         a = att.warren()
         self.assertEqual(a["tone"], "alert", "a Major headline is an alert even with no sell signal")
         self.assertTrue(a["why"][0].startswith("1 headline rated High or Major"))

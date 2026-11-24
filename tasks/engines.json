@@ -29,7 +29,11 @@
     "warren is scripts/warren.py: the before-you-buy checklist. Code computes every number; one",
     "question on Opus a check (web search only) writes the judgment parts. Never falls back to a bill.",
     "warren-news is warren.py news: new headlines on the owner's holdings, judged against each",
-    "stock's sell rules and buy-more test, one question per run with no tools, capped a day."
+    "stock's sell rules and buy-more test, one question per run with no tools, capped a day.",
+    "warren-book is warren-book.py's panel: a Bull, a Bear and a Risk manager vote buy/hold/sell on",
+    "High or Major news, one question each, two rounds, no tools; paper money only.",
+    "warren-ideas is warren-book.py ideas: once a week Opus searches for new stocks for the paper book;",
+    "each counts as one of Warren's Opus runs, and Warren checks every idea before the panel meets."
   ],
   "agents": {
     "ace": {
@@ -97,6 +101,18 @@
       "engine": "claude",
       "model": "sonnet",
       "max_turns": 1,
+      "fallback": "none"
+    },
+    "warren-book": {
+      "engine": "claude",
+      "model": "sonnet",
+      "max_turns": 1,
+      "fallback": "none"
+    },
+    "warren-ideas": {
+      "engine": "claude",
+      "model": "opus",
+      "max_turns": 8,
       "fallback": "none"
     }
   }

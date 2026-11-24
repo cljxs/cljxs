@@ -1,0 +1,12 @@
+[Unit]
+Description=Search for new stocks for Warren's paper book, Sundays 18:40 ET (owner, 2026-11-23)
+
+[Timer]
+# Sunday evening: the week's news is in, and Warren's Opus runs are rarely
+# used on a Sunday.
+OnCalendar=Sun *-*-* 18:40:00 America/New_York
+Persistent=false
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

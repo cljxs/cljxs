@@ -2142,7 +2142,7 @@ def _ask(q):
 
 
 def runs_today(now=None, bump=False):
-    day = et_time.day(now)
+    day = et_time.day(et_time.to_eastern(now) if now else None)
     d = read_json(RUNS, {}) or {}
     n = int(d.get("n") or 0) if d.get("day") == day else 0
     if bump:
@@ -2473,28 +2473,34 @@ def read_news_answer(text, by_id, rules_of):
     return out
 
 
-def news_asks_today(now=None, bump=False):
-    d = read_json(NEWS_SEEN, {}) or {}
-    day = et_time.day(now)
+def news_asks_today(now=None, bump=False, seen_path=None):
+    seen_path = seen_path or NEWS_SEEN
+    d = read_json(seen_path, {}) or {}
+    day = et_time.day(et_time.to_eastern(now) if now else None)
     n = int(d.get("asks") or 0) if d.get("ask_day") == day else 0
     if bump:
         d.update(ask_day=day, asks=n + 1)
-        write_json(NEWS_SEEN, d)
+        write_json(seen_path, d)
     return n + (1 if bump else 0)
 
 
-def watch_news(now=None, fetch=None, ask=None, search=None):
+def watch_news(now=None, fetch=None, ask=None, search=None, symbols=None, alerts_path=None, seen_path=None):
     """One run: new headlines on what you own -> at most one question ->
     alerts. A headline is marked seen only once it has been judged, so a
-    failed question is asked again next run, never silently skipped."""
+    failed question is asked again next run, never silently skipped.
+    `symbols`, `alerts_path` and `seen_path` let the paper book
+    (warren-book.py) run this same watcher on its own stocks into its own
+    files - one news watcher, not two."""
     now = now or datetime.now(timezone.utc)
-    hs = holdings()
+    alerts_path, seen_path = alerts_path or ALERTS, seen_path or NEWS_SEEN
+    hs = holdings() if symbols is None else [{"symbol": s} for s in symbols]
     status = {"run_utc": now.isoformat(timespec="minutes"), "holdings": len(hs), "new": 0, "alerts": 0, "note": ""}
-    seen_doc = read_json(NEWS_SEEN, {}) or {}
+    seen_doc = read_json(seen_path, {}) or {}
     seen = set(seen_doc.get("ids") or [])
+    done = lambda: _news_done(seen_doc, seen, status, seen_path)
     if not hs:
-        status["note"] = "nothing in What I own"
-        return _news_done(seen_doc, seen, status)
+        status["note"] = "nothing in What I own" if symbols is None else "no stocks to watch"
+        return done()
     heads, where = holding_headlines([h["symbol"] for h in hs], now, fetch)
     status.update(where)
     # The second half of the search: each stock's own rules as search words
@@ -2523,10 +2529,10 @@ def watch_news(now=None, fetch=None, ask=None, search=None):
     status["new"] = len(new)
     if not new:
         status["note"] = "no new headlines"
-        return _news_done(seen_doc, seen, status)
-    if news_asks_today(now) >= NEWS_ASKS_PER_DAY:
+        return done()
+    if news_asks_today(now, seen_path=seen_path) >= NEWS_ASKS_PER_DAY:
         status["note"] = f"{NEWS_ASKS_PER_DAY} news questions already today - the rest wait for tomorrow"
-        return _news_done(seen_doc, seen, status)
+        return done()
     groups, rules_of = [], {}
     for h in hs:
         mine = [x for x in new if x["symbol"] == h["symbol"]]
@@ -2539,13 +2545,13 @@ def watch_news(now=None, fetch=None, ask=None, search=None):
         groups.append({"symbol": h["symbol"], "company": c.get("company") or h["symbol"], "sell_rules": rules,
                        "buy_more": risk.get("buy_more") or (c.get("ai") or {}).get("buy_more"), "headlines": mine})
     ask = ask or (lambda q: _load("wake_warren_news", "wake.py").ask("warren-news", q, NEWS_ASK_TIMEOUT))
-    news_asks_today(now, bump=True)
+    news_asks_today(now, bump=True, seen_path=seen_path)
     ok, text = ask(news_question(groups))
     got = read_news_answer(text, {h["id"]: h for h in new}, rules_of) if ok else None
     if got is None:
         status["note"] = "the news question was not answered - the same headlines are asked again next run" \
             if not ok else "the answer was not readable JSON - asked again next run"
-        return _news_done(seen_doc, seen, status)
+        return done()
     # A headline that strongly uses one rule's words - two of them, or one of
     # its names - is always shown, even when the model left it out.
     answered = {x["id"] for x in got}
@@ -2562,7 +2568,7 @@ def watch_news(now=None, fetch=None, ask=None, search=None):
                         "matched": words, "title": x["title"], "publisher": x.get("publisher"),
                         "link": x.get("link"), "published": x.get("published")})
     found = now.isoformat(timespec="seconds")
-    alerts = (read_json(ALERTS, {}) or {}).get("alerts") or []
+    alerts = (read_json(alerts_path, {}) or {}).get("alerts") or []
     have = {(a["id"], a["symbol"]) for a in alerts}
     added = 0
     for x in got:
@@ -2570,15 +2576,16 @@ def watch_news(now=None, fetch=None, ask=None, search=None):
             have.add((x["id"], x["symbol"]))
             alerts.append(dict(x, found_utc=found, seen=False))
             added += 1
-    write_json(ALERTS, {"alerts": alerts[-ALERTS_KEPT:]})
+    write_json(alerts_path, {"alerts": alerts[-ALERTS_KEPT:]})
     seen |= {h["id"] for h in new}
     status["alerts"] = added
-    return _news_done(seen_doc, seen, status)
+    return done()
 
 
-def _news_done(seen_doc, seen, status):
-    seen_doc = dict(read_json(NEWS_SEEN, {}) or {}, ids=sorted(seen)[-3000:], last=status)
-    write_json(NEWS_SEEN, seen_doc)
+def _news_done(seen_doc, seen, status, seen_path=None):
+    seen_path = seen_path or NEWS_SEEN
+    seen_doc = dict(read_json(seen_path, {}) or {}, ids=sorted(seen)[-3000:], last=status)
+    write_json(seen_path, seen_doc)
     return status
 
 

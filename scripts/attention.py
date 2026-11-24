@@ -112,7 +112,12 @@ def warren():
         why.append(plural(b["watch"], "headline") + " about what your sell or buy-more rules watch for")
     if b.get("important"):
         why.insert(0, plural(b["important"], "headline") + " rated High or Major")
-    return {"n": b["unseen"], "tone": "alert" if b["sell"] or b.get("important") else "todo", "why": why}
+    # Warren's paper book (warren-book.py): a trade the owner has not looked at yet.
+    trades = _load("warren_book_att", "warren-book.py").unseen_trades()
+    if trades:
+        why.append(plural(len(trades), "paper-book trade") + " to look at")
+    return {"n": b["unseen"] + len(trades), "tone": "alert" if b["sell"] or b.get("important") else "todo",
+            "why": why}
 
 
 SOURCES = {"shop": shop, "stan": stan, "agentroom": agentroom, "bolt": bolt, "warren": warren}

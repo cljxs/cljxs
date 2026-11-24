@@ -18,9 +18,9 @@ const JOB_TIMEOUT_MS = 15 * 60 * 1000;
 let job = null;
 let newsJob = null;     // "Check news now": one at a time, like a check
 
-function python(args, timeout = 60000) {
+function python(args, timeout = 60000, script = 'warren.py') {
   return new Promise(resolve => {
-    execFile('python3', [path.join(ROOT, 'scripts', 'warren.py'), ...args], {
+    execFile('python3', [path.join(ROOT, 'scripts', script), ...args], {
       cwd: ROOT, timeout, maxBuffer: 16 * 1024 * 1024,
     }, (err, stdout, stderr) => resolve({
       ok: !err, stdout: String(stdout || ''), stderr: String(stderr || ''),
@@ -112,6 +112,32 @@ function register(app) {
     const r = await python(args);
     if (!r.ok) return res.status(409).json({ ok: false, error: said(r) });
     try { res.json(JSON.parse(r.stdout)); } catch { res.json({ ok: true }); }
+  });
+
+  // Warren's paper book (scripts/warren-book.py, owner 2026-11-23): paper
+  // money only. The page reads the board, keeps the watchlist and marks the
+  // trades seen; the panel and the trades run on their own timer.
+  app.get('/api/warren/book', async (req, res) => {
+    const r = await python(['board'], 60000, 'warren-book.py');
+    if (!r.ok) return res.status(500).json({ ok: false, error: said(r) });
+    try { res.json(JSON.parse(r.stdout)); } catch { res.status(500).json({ ok: false, error: 'unreadable board' }); }
+  });
+
+  app.post('/api/warren/book/watch', async (req, res) => {
+    const b = req.body || {};
+    const s = sym(b.symbol);
+    if (!s) return res.status(400).json({ error: 'a ticker is letters, like KMI' });
+    const action = b.action === 'remove' ? 'remove' : 'add';
+    const args = ['watch', action, s];
+    if (action === 'add' && b.why) args.push(`--why=${String(b.why).replace(/\s+/g, ' ').trim().slice(0, 300)}`);
+    const r = await python(args, 60000, 'warren-book.py');
+    if (!r.ok) return res.status(409).json({ ok: false, error: said(r) });
+    try { res.json(JSON.parse(r.stdout)); } catch { res.json({ ok: true }); }
+  });
+
+  app.post('/api/warren/book/seen', async (req, res) => {
+    const r = await python(['seen'], 60000, 'warren-book.py');
+    res.status(r.ok ? 200 : 500).json({ ok: r.ok });
   });
 
   app.post('/api/warren/news', (req, res) => {

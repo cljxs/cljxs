@@ -63,7 +63,8 @@ NODES = [
      ["ace-cycle", "ace-fetch", "ace-close", "ace-shop", "ace-shop-close"], "/ace", (86, 74)),
     ("aceprops", "Ace Props", "NBA points milestones, plain code", ["ace-props", "ace-props-close"], "/ace-props", (68, 70)),
     ("peter", "Peter", "player props, weather, defense", ["peter-defense"], "/peter", (90, 92)),
-    ("warren", "Warren", "the Before-You-Buy checklist for any US stock, and news on what you own", ["warren-recheck", "warren-news"], "/warren", (90, 10)),
+    ("warren", "Warren", "the Before-You-Buy checklist for any US stock, news on what you own, and a paper book a three-AI panel trades",
+     ["warren-recheck", "warren-news", "warren-book", "warren-book-ideas"], "/warren", (90, 10)),
 ]
 
 # (from, to, what passes, the file and the line in it that does it). The test
