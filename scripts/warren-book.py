@@ -100,15 +100,41 @@ PANEL_TIMEOUT = 300
 DECISIONS_KEPT = 300
 HISTORY_KEPT = 1000
 
+# The owner (2026-11-24), on the first meetings: "the three ai models are
+# basically just repeating the same things." They were: each role was told
+# to give way "when the facts are against" it, so all three drifted to the
+# middle, the Risk manager judged the company instead of the book, and round
+# 2 never answered anyone. Now each role has one job it cannot hand back, and
+# round 2 must answer the others by name before voting.
 ROLES = {
-    "bull": ("Bull", "You make the strongest honest case for buying more of this stock or keeping it. You still "
-             "say hold or sell when the facts are against it - a bull who never changes his mind is no use."),
-    "bear": ("Bear", "You make the strongest honest case for selling or trimming this stock, or for not buying "
-             "it. You still say hold or buy when the facts are against you."),
-    "risk": ("Risk manager", "You judge what this trade would do to the whole book: how much of it would sit in "
-             "one stock or one theme, how much cash is left, how it overlaps with the other holdings, and "
-             "whether the news is real enough to act on. You prefer doing nothing to acting on noise."),
+    "bull": ("Bull", "Your job is the case FOR acting: what this news makes possible - the upside, and which part "
+             "of the buy line it meets. Argue it as strongly as the recap honestly allows. If you vote hold, "
+             "say exactly what is missing before you would buy."),
+    "bear": ("Bear", "Your job is the case AGAINST: give the worst honest reading of this news, tie it to Warren's "
+             "Red and Yellow ratings and the sell lines, and say what it would cost the book if you are right. "
+             "Vote sell (when the book holds the stock) or hold - never buy - unless you can say precisely why the "
+             "danger is not real. \"One report is not enough\" is not by itself such a reason."),
+    "risk": ("Risk manager", "You do not judge whether this is a good company - the other two do that. You judge only "
+             "the book: how much would sit in this one stock and in its theme, how much cash would be left, and "
+             "how it overlaps with the other holdings (the recap lists them with their sectors). Vote on those "
+             "grounds alone, and say which of them decides your vote."),
 }
+NOT_YOURS = ("Code sets the size of any trade and places it: never suggest amounts, steps, timing, limit orders or "
+             "any other kind of order.")
+# A second model on the panel (owner, 2026-11-24): the Bear sits on a model
+# from another family, through OpenRouter, so the panel is not one model
+# arguing with itself. The Agent Room already uses this one on the droplet.
+# Its spend has a cap of its own (tasks/limits.json warren_book_daily_ai) and
+# leaves warren_book_leave_for_others of the shared day; when it cannot be
+# asked - over the cap, no key, a model OpenRouter no longer has - Sonnet
+# takes the seat for that meeting and the debate says so.
+SEAT_MODELS = {"bear": "openai/gpt-5.4-mini"}
+OR_MAX_TOKENS = 2000
+OR_SYSTEM = ("You answer as one member of a three-member investment panel for a beginner's paper trading book. "
+             "Answer with the JSON object asked for and nothing else.")
+MODELS_CACHE = BOOK_DIR / "models.json"
+LIMITS = ROOT / "tasks" / "limits.json"
+SPEND = BOOK_DIR / "spend.json"
 VOTES = ("buy", "hold", "sell")
 # The owner (2026-11-24): "make sure they know they can buy partial stocks.
 # They don't have to buy a whole share." Code buys dollar amounts already;
@@ -376,21 +402,25 @@ def panel_question(role, sym, rc, lines, event, others=None):
     name, brief = ROLES[role]
     sells = "\n".join(f"  sell {i}. I would sell if {r}" for i, r in enumerate(lines["sell"], 1)) or "  (none saved)"
     q = (f"You sit on a three-member panel that runs a PAPER trading book for a beginner investor - practice money, "
-         f"no real trades. Your role: {name}. {brief}\n\n"
+         f"no real trades. Your role: {name}. {brief} {NOT_YOURS}\n\n"
          f"WHAT HAPPENED\n{event}\n\n"
          f"WARREN'S CHECKLIST RECAP (computed by code from SEC filings - these are the only figures you may use)\n{rc}\n\n"
          f"THE STOCK'S OWN LINES, from Warren's check\n  What would make me buy: {lines['buy'] or '(none saved)'}\n"
          f"  What would make me sell:\n{sells}\n\n")
     if others:
+        names = " and ".join(ROLES[r][0] for r in others)
         q += ("ROUND 2. The other two members answered round 1 like this:\n"
               + "\n".join(f"  {ROLES[r][0]}: {v['vote']} - {v['why']}" for r, v in others.items())
-              + "\nRead their points, then give your final vote. Change your mind only if their points are better "
-                "than yours. Only a vote all three agree on is traded.\n\n")
+              + f"\nFirst answer the strongest point each of them made - {names} - by name: say whether you agree "
+                "and why. Then give your final vote, still in your own role. Change your mind only if their points "
+                "are better than yours. Only a vote all three agree on is traded.\n\n")
     else:
         q += "ROUND 1. Answer on your own; you will see the others' answers in round 2.\n\n"
-    q += ('Answer with JSON only: {"vote": "buy", "hold" or "sell", "line": "buy" if the news meets the buy line, '
-          '"sell N" for the sell line it hits, or "none", "confidence": 1 to 5, "why": "two or three plain '
-          'sentences for a beginner"}. Use no number in "why" that is not in the recap or in what happened.')
+    q += ('Answer with JSON only: {' + ('"answers": "one sentence to each of the other two, starting with their '
+                                       'role name", ' if others else '')
+          + '"vote": "buy", "hold" or "sell", "line": "buy" if the news meets the buy line, "sell N" for the sell '
+          'line it hits, or "none", "confidence": 1 to 5, "why": "two or three plain sentences for a beginner"}. '
+          'Use no number that is not in the recap or in what happened.')
     return q
 
 
@@ -398,9 +428,11 @@ def _numbers(text):
     return {x.rstrip(".,") for x in re.findall(r"\d[\d.,]*", text or "")}
 
 
-def read_vote(text, allowed, n_sell):
+def read_vote(text, allowed, n_sell, answer=()):
     """The vote code can stand behind, or None: valid JSON, buy/hold/sell, a
-    line that exists, a reason with no number the recap or the news lacks."""
+    line that exists, a reason with no number the recap or the news lacks -
+    and in round 2 (`answer` = the others' role names) a reply that names
+    each of them."""
     t = (text or "").strip()
     a, b = t.find("{"), t.rfind("}")
     try:
@@ -419,11 +451,19 @@ def read_vote(text, allowed, n_sell):
     # number is allowed on its own, for "sell rule 2" or "3 of the steps".
     if _numbers(why) - _numbers(allowed) - {str(i) for i in range(1, 6)}:
         return None
+    replies = str(d.get("answers") or "").strip()[:700]
+    if answer and not all(name.lower() in replies.lower() for name in answer):
+        return None
+    if _numbers(replies) - _numbers(allowed) - {str(i) for i in range(1, 6)}:
+        return None
     try:
         conf = int(d.get("confidence"))
     except (TypeError, ValueError):
         conf = None
-    return {"vote": vote, "line": line, "confidence": conf if conf in range(1, 6) else None, "why": why}
+    out = {"vote": vote, "line": line, "confidence": conf if conf in range(1, 6) else None, "why": why}
+    if answer:
+        out["answers"] = replies
+    return out
 
 
 def meet(sym, event, check, book, ask):
@@ -435,10 +475,14 @@ def meet(sym, event, check, book, ask):
         got = {}
         for role in ROLES:
             others = {k: v for k, v in rounds[0].items() if k != role} if r == 2 else None
-            ok, text = ask(panel_question(role, sym, rc, lines, event, others))
-            v = read_vote(text, allowed, len(lines["sell"])) if ok else None
+            said = ask(panel_question(role, sym, rc, lines, event, others), role)
+            ok, text, who = (tuple(said) + ("",))[:3]
+            v = read_vote(text, allowed, len(lines["sell"]),
+                          tuple(ROLES[o][0] for o in others) if others else ()) if ok else None
             got[role] = v or {"vote": "hold", "line": "none", "confidence": None, "failed": True,
                               "why": "(no answer code could stand behind - counted as hold)"}
+            if who:
+                got[role]["model"] = who
         rounds.append(got)
     final = [v["vote"] for v in rounds[1].values()]
     if len(set(final)) == 1 and not any(v.get("failed") for v in rounds[1].values()):
@@ -551,8 +595,62 @@ def news_event(alerts):
                      for a in alerts)
 
 
-def panel_ask(q):
-    return _wake().ask("warren-book", q, PANEL_TIMEOUT)
+def panel_ask(q, role=None, now=None, or_call=None, prices=None, key=None, budget_read=None, sonnet=None):
+    """(answered, text, which model). Bull and Risk manager: Sonnet on the
+    plan. A seat in SEAT_MODELS: that model through OpenRouter - or Sonnet
+    standing in, said so, when it cannot be asked."""
+    sonnet = sonnet or (lambda q: _wake().ask("warren-book", q, PANEL_TIMEOUT))
+    model = SEAT_MODELS.get(role)
+    if not model:
+        return tuple(sonnet(q)) + ("Sonnet",)
+    ok, text, why = or_ask(model, q, now, or_call, prices, key, budget_read)
+    if ok:
+        return True, text, model
+    ok, text = sonnet(q)
+    return ok, text, f"Sonnet (standing in: {why})"
+
+
+def or_spent(day):
+    return float((W.read_json(SPEND, {}) or {}).get(day) or 0.0)
+
+
+def or_ask(model, q, now=None, or_call=None, prices=None, key=None, budget_read=None):
+    """(answered, text, why not). One OpenRouter question, its worst case
+    checked first against the book's own day and the shared one."""
+    now = now or datetime.now(timezone.utc)
+    orc = _load("book_or_chat", "or_chat.py")
+    day = now.strftime("%Y-%m-%d")             # OpenRouter counts its day in UTC (budget.py)
+    try:
+        prices = prices if prices is not None else orc.catalogue(MODELS_CACHE)
+    except Exception as e:
+        return False, "", f"OpenRouter's price list could not be read ({str(e)[:80]})"
+    if model not in prices:
+        return False, "", f"{model} is not a model OpenRouter has - change SEAT_MODELS in warren-book.py"
+    worst = orc.worst_case(prices, model, OR_SYSTEM + q, OR_MAX_TOKENS)
+    caps = W.read_json(LIMITS, {}) or {}
+    cap, keep = float(caps.get("warren_book_daily_ai", 0)), float(caps.get("warren_book_leave_for_others", 0.5))
+    if worst is None or or_spent(day) + worst > cap + 1e-9:
+        return False, "", f"the book's ${cap:.2f} a day on OpenRouter is used"
+    try:
+        left = (budget_read or _load("book_budget", "budget.py").read)().get("ai_left_today")
+    except Exception:
+        left = None
+    if not isinstance(left, (int, float)) or left - worst < keep:
+        return False, "", "the shared OpenRouter day is too low (or could not be read)"
+    key = key if key is not None else _load("book_preflight", "preflight.py").openrouter_key()
+    if not key:
+        return False, "", "no OpenRouter key found"
+    try:
+        data = (or_call or (lambda: orc.openrouter_call(key, model, OR_SYSTEM, q, OR_MAX_TOKENS, title="warren-book",
+                                                       max_price=orc.ceiling(prices, model))))()
+    except Exception as e:
+        return False, "", f"OpenRouter: {str(e)[:100]}"
+    text, _, usage = orc.reply_text(data)
+    cost = orc.ea().cost_of(usage)
+    d = W.read_json(SPEND, {}) or {}
+    d[day] = round(float(d.get(day) or 0.0) + (cost if cost is not None else worst), 6)     # unknown counts as the worst
+    W.write_json(SPEND, dict(sorted(d.items())[-60:]))
+    return (True, text, "") if text else (False, "", "an empty reply")
 
 
 def _wake():

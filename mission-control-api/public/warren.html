@@ -593,6 +593,8 @@ function voteHtml(role, v) {
   const p = v.vote === 'buy' ? 'G' : v.vote === 'sell' ? 'R' : 'Y';
   return `<div class="vote"><b>${ROLE[role]}</b> <span class="pill ${p}">${esc(v.vote)}</span>
     ${v.line && v.line !== 'none' ? `<span class="muted">(${esc(v.line)})</span>` : ''}
+    ${v.model ? `<span class="muted">&middot; ${esc(v.model)}</span>` : ''}
+    ${v.answers ? `<div class="why"><b>To the others:</b> ${esc(v.answers)}</div>` : ''}
     <div class="why">${esc(v.why)}</div></div>`;
 }
 function drawBook() {
@@ -630,7 +632,7 @@ function drawBook() {
   const ideas = (B.ideas || []).map(r => `<div class="why">${when(r.utc)}: ${(r.ideas || []).map(i => `<b>${esc(i.symbol)}</b> - ${esc(i.result || '')}`).join('; ') || esc(r.note || 'no new ideas')}</div>`).join('');
   el.innerHTML = `${back}
     <div class="card"><h2>Paper book <span class="pill Y">PAPER MONEY</span></h2>
-      <div class="why">An AI-run practice copy of your portfolio. It started ${when(B.started_utc)} with your holdings and ${usd(B.start_cash)} of paper cash, and trades on its own - never with real money. Before any trade Warren checks the stock; a panel of three AIs (a Bull, a Bear and a Risk manager) argue it out in two rounds, and only a vote all three agree on is traded. Code sets every size: ${B.buy_pct}% of the book a buy, at most ${B.max_pct}% in one stock.</div>
+      <div class="why">An AI-run practice copy of your portfolio. It started ${when(B.started_utc)} with your holdings and ${usd(B.start_cash)} of paper cash, and trades on its own - never with real money. Before any trade Warren checks the stock; a panel of three AIs argue it out in two rounds - a Bull who makes the case for acting, a Bear (on a different AI model) who makes the case against, and a Risk manager who judges only what it does to the book - and only a vote all three agree on is traded. Code sets every size: ${B.buy_pct}% of the book a buy, at most ${B.max_pct}% in one stock.</div>
       <div class="stats">${stat('Worth now', usd(B.value))}${stat('Cash', usd(B.cash))}${stat('If it had done nothing', usd(B.baseline), signed(B.vs_baseline) + ' from its trades')}${stat('Today', `${t.meetings || 0}/${c.meetings} meetings`, `${t.trades || 0}/${c.trades} trades &middot; ${t.checks || 0}/${c.checks} fresh checks`)}</div>
       ${(B.seed_notes || []).map(n => `<div class="why">Note: ${esc(n)}</div>`).join('')}
       ${(B.problems || []).length ? `<div class="why red">The ledger does not balance: ${B.problems.map(esc).join('; ')}</div>` : ''}

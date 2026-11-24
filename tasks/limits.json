@@ -10,5 +10,7 @@
   "stan_daily_ai": 0.05,
   "stan_leave_for_others": 0.5,
   "agentroom_build_max": 2.0,
-  "apps_daily_ai": 0.25
+  "apps_daily_ai": 0.25,
+  "warren_book_daily_ai": 0.15,
+  "warren_book_leave_for_others": 0.5
 }

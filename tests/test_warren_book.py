@@ -24,24 +24,28 @@ import test_warren as tw  # noqa: E402
 NOW = datetime(2026, 11, 24, 15, 0, tzinfo=timezone.utc)
 PRICES = {"KMI": 27.5, "TSLA": 350.0, "HIMS": 40.0, "ASTS": 60.0}
 GOOD = "The pipelines still earn their fees and the business is unchanged."
+REPLIES = "Bull, Bear and Risk manager: fair points, weighed above."
 
 
 def votes(**by_role):
     """A panel that answers by role: {'bull': 'buy', ...}, round 2 the same
-    unless given as 'bull2'. A value may be a whole dict to send."""
-    asked = []
+    unless given as 'bull2'. A value may be a whole dict to send. Round 2
+    answers the other two by name unless the dict says otherwise."""
+    asked, roles = [], []
 
-    def ask(q):
+    def ask(q, role=None):
         asked.append(q)
-        role = next(r for r, name in (("bull", "Bull"), ("bear", "Bear"), ("risk", "Risk manager"))
-                    if f"Your role: {name}." in q)
+        roles.append(role)
+        role = role or next(r for r, name in (("bull", "Bull"), ("bear", "Bear"), ("risk", "Risk manager"))
+                            if f"Your role: {name}." in q)
         r2 = "ROUND 2" in q
         v = by_role.get(role + "2", by_role[role]) if r2 else by_role[role]
-        if isinstance(v, dict):
-            return True, json.dumps(v)
-        line = "buy" if v == "buy" else "none"
-        return True, json.dumps({"vote": v, "line": line, "confidence": 4, "why": GOOD})
-    ask.asked = asked
+        if not isinstance(v, dict):
+            v = {"vote": v, "line": "buy" if v == "buy" else "none", "confidence": 4, "why": GOOD}
+        if r2:
+            v = dict({"answers": REPLIES}, **v)
+        return True, json.dumps(v)
+    ask.asked, ask.roles = asked, roles
     return ask
 
 
@@ -194,6 +198,118 @@ class OnlyAUnanimousVoteTrades(Base):
         self.assertIn("Bear: sell", bull2)
         self.assertIn("Risk manager: hold", bull2)
         self.assertNotIn("Bull: buy", bull2)
+
+
+class EachSeatHasItsOwnJob(Base):
+    """The owner (2026-11-24): "the three ai models are basically just
+    repeating the same things". Sharper roles, round 2 must answer the others
+    by name, and the Bear sits on a model from another family."""
+
+    def meeting(self, ask, aid="abcd1234"):
+        self.check()
+        self.alert(aid=aid)
+        self.tick(ask)
+        return self.decisions()[-1]
+
+    def test_each_role_is_told_its_own_job(self):
+        ask = votes(bull="hold", bear="hold", risk="hold")
+        self.meeting(ask)
+        q = {r: next(x for x in ask.asked if f"Your role: {n}." in x)
+             for r, n in (("bull", "Bull"), ("bear", "Bear"), ("risk", "Risk manager"))}
+        self.assertIn("the case FOR acting", q["bull"])
+        self.assertIn("never buy", q["bear"])
+        self.assertIn('"One report is not enough" is not by itself such a reason', q["bear"])
+        self.assertIn("You judge only the book", q["risk"])
+        self.assertTrue(all("never suggest amounts, steps, timing, limit orders" in x for x in ask.asked))
+
+    def test_round_two_must_answer_the_other_two_by_name(self):
+        ask = votes(bull="hold", bear="hold", risk="hold")
+        self.meeting(ask)
+        bear2 = next(x for x in ask.asked[3:] if "Your role: Bear." in x)
+        self.assertIn("First answer the strongest point each of them made - Bull and Risk manager - by name", bear2)
+        self.assertNotIn('"answers"', ask.asked[0])
+
+    def test_a_round_two_that_ignores_someone_counts_as_hold(self):
+        lazy = {"vote": "buy", "line": "buy", "confidence": 4, "why": GOOD, "answers": "Bear is right."}
+        d = self.meeting(votes(bull="buy", bull2=lazy, bear="buy", risk="buy"))
+        self.assertTrue(d["round2"]["bull"].get("failed"))           # never answered the Risk manager
+        self.assertEqual(d["outcome"], "hold")
+
+    def test_the_replies_are_kept_and_checked_for_numbers(self):
+        d = self.meeting(votes(bull="hold", bear="hold", risk="hold"))
+        self.assertEqual(d["round2"]["bear"]["answers"], REPLIES)
+        made_up = {"vote": "hold", "line": "none", "confidence": 3, "why": GOOD,
+                   "answers": "Bull: it could earn $77 a share. Risk manager: agreed."}
+        d = self.meeting(votes(bull="hold", bear="hold", bear2=made_up, risk="hold"), aid="beef0002")
+        self.assertTrue(d["round2"]["bear"].get("failed"))
+
+    def test_each_seat_is_asked_as_itself(self):
+        ask = votes(bull="hold", bear="hold", risk="hold")
+        self.meeting(ask)
+        self.assertEqual(ask.roles, ["bull", "bear", "risk"] * 2)
+
+
+class TheBearIsAnotherModel(Base):
+    PRICES = None
+
+    def setUp(self):
+        super().setUp()
+        self.orc = self.b._load("t_or_chat", "or_chat.py")
+        self.prices = self.orc.prices_from(json.loads(tw.fx("openrouter-models-agentroom.json")))
+        self.b.LIMITS = ROOT / "tasks" / "limits.json"
+        self.sonnet = []
+
+    def ask(self, role, reply="{}", left=5.0, prices=None, key="k", cost=0.004, fail=None):
+        def call():
+            if fail:
+                raise RuntimeError(fail)
+            return {"choices": [{"message": {"content": reply}, "finish_reason": "stop"}], "usage": {"cost": cost}}
+        return self.b.panel_ask("the question", role, NOW, or_call=call, key=key,
+                                prices=self.prices if prices is None else prices,
+                                budget_read=lambda: {"ai_left_today": left},
+                                sonnet=lambda q: self.sonnet.append(q) or (True, "sonnet says"))
+
+    def test_the_bear_goes_to_openrouter_and_its_cost_is_counted(self):
+        ok, text, who = self.ask("bear", reply='{"vote": "hold"}')
+        self.assertEqual((ok, text, who), (True, '{"vote": "hold"}', "openai/gpt-5.4-mini"))
+        self.assertEqual(self.sonnet, [])
+        self.assertEqual(self.b.or_spent("2026-11-24"), 0.004)
+
+    def test_the_bull_and_the_risk_manager_stay_on_the_plan(self):
+        self.assertEqual(self.ask("bull")[2], "Sonnet")
+        self.assertEqual(self.ask("risk")[2], "Sonnet")
+        self.assertEqual(len(self.sonnet), 2)
+
+    def test_over_its_own_cap_sonnet_stands_in_and_says_so(self):
+        self.W.write_json(self.b.SPEND, {"2026-11-24": 0.149})
+        ok, text, who = self.ask("bear")
+        self.assertEqual((ok, text), (True, "sonnet says"))
+        self.assertIn("Sonnet (standing in: the book's $0.15 a day on OpenRouter is used)", who)
+
+    def test_a_low_shared_day_or_a_missing_model_or_key_stands_in(self):
+        self.assertIn("shared OpenRouter day is too low", self.ask("bear", left=0.4)[2])
+        self.assertIn("is not a model OpenRouter has", self.ask("bear", prices={})[2])
+        self.assertIn("no OpenRouter key", self.ask("bear", key="")[2])
+        self.assertIn("OpenRouter: HTTP 402", self.ask("bear", fail="HTTP 402 no credit")[2])
+        self.assertEqual(len(self.sonnet), 4)
+
+    def test_an_unknown_cost_counts_as_the_worst_case(self):
+        self.ask("bear", cost=None)
+        self.assertGreater(self.b.or_spent("2026-11-24"), 0.004)
+
+    def test_the_seat_is_shown_on_each_vote(self):
+        self.check()
+        self.alert()
+        panel = votes(bull="hold", bear="hold", risk="hold")
+        ask = lambda q, role=None: tuple(panel(q, role)) + ("openai/gpt-5.4-mini" if role == "bear" else "Sonnet",)
+        self.tick(ask)
+        d = self.decisions()[-1]
+        self.assertEqual(d["round1"]["bear"]["model"], "openai/gpt-5.4-mini")
+        self.assertEqual(d["round2"]["bull"]["model"], "Sonnet")
+
+    def test_the_limits_file_carries_the_books_caps(self):
+        caps = json.loads((ROOT / "tasks" / "limits.json").read_text())
+        self.assertEqual((caps["warren_book_daily_ai"], caps["warren_book_leave_for_others"]), (0.15, 0.5))
 
 
 class WarrensChecklistComesFirst(Base):
