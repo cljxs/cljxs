@@ -31,7 +31,7 @@
     "warren-news is warren.py news: new headlines on the owner's holdings, judged against each",
     "stock's sell rules and buy-more test, one question per run with no tools, capped a day.",
     "warren-book is warren-book.py's panel: the Bull and the Risk manager vote buy/hold/sell on",
-    "High or Major news here, one question each, two rounds, no tools; the Bear sits on another",
+    "High or Major news here, three rounds (vote, cross-examine, answer and vote), no tools; the Bear sits on another",
     "model through OpenRouter (SEAT_MODELS in warren-book.py), Sonnet standing in when it cannot.",
     "warren-ideas is warren-book.py ideas: once a week Opus searches for new stocks for the paper book;",
     "each counts as one of Warren's Opus runs, and Warren checks every idea before the panel meets."

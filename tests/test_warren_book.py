@@ -27,26 +27,46 @@ GOOD = "The pipelines still earn their fees and the business is unchanged."
 REPLIES = "Bull, Bear and Risk manager: fair points, weighed above."
 
 
+NAMES = {"bull": "Bull", "bear": "Bear", "risk": "Risk manager"}
+
+
 def votes(**by_role):
-    """A panel that answers by role: {'bull': 'buy', ...}, round 2 the same
-    unless given as 'bull2'. A value may be a whole dict to send. Round 2
-    answers the other two by name unless the dict says otherwise."""
+    """A panel that answers by role: {'bull': 'buy', ...}. Round 2 (the
+    cross-examination) asks the next member a plain question unless
+    'bullq' gives one; round 3 votes as round 1 unless 'bull2' says
+    otherwise, answering the others by name and any question put to it.
+    A value may be a whole dict to send."""
     asked, roles = [], []
 
     def ask(q, role=None):
         asked.append(q)
         roles.append(role)
-        role = role or next(r for r, name in (("bull", "Bull"), ("bear", "Bear"), ("risk", "Risk manager"))
-                            if f"Your role: {name}." in q)
-        r2 = "ROUND 2" in q
-        v = by_role.get(role + "2", by_role[role]) if r2 else by_role[role]
+        role = role or next(r for r, name in NAMES.items() if f"Your role: {name}." in q)
+        if "ROUND 2 - CROSS-EXAMINATION. Do not vote now" in q:
+            nxt = {"bull": "bear", "bear": "risk", "risk": "bull"}[role]
+            v = by_role.get(role + "q", {"to": NAMES[nxt], "question": "What would make you change your vote here?"})
+            return True, json.dumps(v)
+        final = "ROUND 3 - ANSWERS AND THE FINAL VOTE." in q
+        v = by_role.get(role + "2", by_role[role]) if final else by_role[role]
         if not isinstance(v, dict):
             v = {"vote": v, "line": "buy" if v == "buy" else "none", "confidence": 4, "why": GOOD}
-        if r2:
-            v = dict({"answers": REPLIES}, **v)
+        if final:
+            v = dict({"answers": REPLIES, "replies": "Nothing in that question changes my view."}, **v)
         return True, json.dumps(v)
     ask.asked, ask.roles = asked, roles
     return ask
+
+
+def fake_get(url, ua=None, headers=None):
+    """The droplet's fetches, answered from real captured pages."""
+    for part, name in (("chart/KMI", "warren-yahoo-chart-kmi-divs.json"), ("chart/HIMS", "warren-yahoo-chart-hims.json"),
+                       ("chart/ASTS", "warren-yahoo-chart-asts.json"), ("insider-trades", "warren-nasdaq-insider-rklb.json"),
+                       ("short-interest", "warren-nasdaq-short-rklb.json"), ("targetprice", "warren-nasdaq-target-rklb.json"),
+                       ("earnings-date", "warren-nasdaq-earnings-date-rklb.json"),
+                       ("articles/", "warren-article-yahoo-rklb.html")):
+        if part in url:
+            return tw.fx(name).encode()
+    return tw.get(url, ua=ua, headers=headers)
 
 
 class Base(unittest.TestCase):
@@ -97,6 +117,7 @@ class Base(unittest.TestCase):
         kw.setdefault("new_report", lambda c: False)
         kw.setdefault("price_fn", lambda syms: {s: {"price": PRICES[s]} for s in syms if s in PRICES})
         kw.setdefault("build", self.build)
+        kw.setdefault("get", fake_get)
         return self.b.tick(NOW, ask=ask, **kw)
 
     def decisions(self):
@@ -163,7 +184,7 @@ class OnlyAUnanimousVoteTrades(Base):
         made_up = {"vote": "buy", "line": "buy", "confidence": 5, "why": "It will earn $9 a share next year."}
         self.tick(votes(bull=made_up, bear="buy", risk="buy"))
         d = self.decisions()[-1]
-        self.assertTrue(d["round2"]["bull"].get("failed"))
+        self.assertTrue(d["final"]["bull"].get("failed"))
         self.assertEqual(d["outcome"], "hold")
 
     def test_a_number_from_the_recap_is_allowed(self):
@@ -192,12 +213,11 @@ class OnlyAUnanimousVoteTrades(Base):
         self.alert()
         ask = votes(bull="buy", bear="sell", risk="hold")
         self.tick(ask)
-        r1, r2 = ask.asked[:3], ask.asked[3:]
-        self.assertTrue(all("ROUND 1" in q and "answered round 1" not in q for q in r1))
-        bull2 = next(q for q in r2 if "Your role: Bull." in q)
+        r1, r3 = ask.asked[:3], ask.asked[6:]
+        self.assertTrue(all("ROUND 1. Answer on your own" in q and "what each member said" not in q for q in r1))
+        bull2 = next(q for q in r3 if "Your role: Bull." in q)
         self.assertIn("Bear: sell", bull2)
         self.assertIn("Risk manager: hold", bull2)
-        self.assertNotIn("Bull: buy", bull2)
 
 
 class EachSeatHasItsOwnJob(Base):
@@ -225,28 +245,179 @@ class EachSeatHasItsOwnJob(Base):
     def test_round_two_must_answer_the_other_two_by_name(self):
         ask = votes(bull="hold", bear="hold", risk="hold")
         self.meeting(ask)
-        bear2 = next(x for x in ask.asked[3:] if "Your role: Bear." in x)
-        self.assertIn("First answer the strongest point each of them made - Bull and Risk manager - by name", bear2)
+        bear3 = next(x for x in ask.asked[6:] if "Your role: Bear." in x)
+        self.assertIn("Answer the strongest point each of Bull and Risk manager made, by name", bear3)
         self.assertNotIn('"answers"', ask.asked[0])
 
     def test_a_round_two_that_ignores_someone_counts_as_hold(self):
         lazy = {"vote": "buy", "line": "buy", "confidence": 4, "why": GOOD, "answers": "Bear is right."}
         d = self.meeting(votes(bull="buy", bull2=lazy, bear="buy", risk="buy"))
-        self.assertTrue(d["round2"]["bull"].get("failed"))           # never answered the Risk manager
+        self.assertTrue(d["final"]["bull"].get("failed"))           # never answered the Risk manager
         self.assertEqual(d["outcome"], "hold")
 
     def test_the_replies_are_kept_and_checked_for_numbers(self):
         d = self.meeting(votes(bull="hold", bear="hold", risk="hold"))
-        self.assertEqual(d["round2"]["bear"]["answers"], REPLIES)
+        self.assertEqual(d["final"]["bear"]["answers"], REPLIES)
         made_up = {"vote": "hold", "line": "none", "confidence": 3, "why": GOOD,
                    "answers": "Bull: it could earn $77 a share. Risk manager: agreed."}
         d = self.meeting(votes(bull="hold", bear="hold", bear2=made_up, risk="hold"), aid="beef0002")
-        self.assertTrue(d["round2"]["bear"].get("failed"))
+        self.assertTrue(d["final"]["bear"].get("failed"))
 
     def test_each_seat_is_asked_as_itself(self):
         ask = votes(bull="hold", bear="hold", risk="hold")
         self.meeting(ask)
-        self.assertEqual(ask.roles, ["bull", "bear", "risk"] * 2)
+        self.assertEqual(ask.roles, ["bull", "bear", "risk"] * 3)
+
+
+class TheCrossExamination(Base):
+    """The owner (2026-11-25): round 2 used to be three polite agreements.
+    Now round 2 is one pointed question each, round 3 answers and votes."""
+
+    def meeting(self, ask, aid="abcd1234"):
+        self.check()
+        self.alert(aid=aid)
+        self.tick(ask)
+        return self.decisions()[-1]
+
+    def test_round_two_asks_one_question_and_does_not_vote(self):
+        ask = votes(bull="buy", bear="sell", risk="hold")
+        d = self.meeting(ask)
+        q2 = next(x for x in ask.asked[3:6] if "Your role: Bear." in x)
+        self.assertIn("Put ONE pointed question to ONE other member - Bull or Risk manager", q2)
+        self.assertIn("Bull: buy - " + GOOD, q2)                       # it sees round 1
+        self.assertEqual(d["questions"]["bear"], {"to": "risk", "question": "What would make you change your vote here?"})
+        self.assertNotIn("vote", d["questions"]["bear"])
+
+    def test_round_three_sees_the_questions_and_must_answer_its_own(self):
+        ask = votes(bull="hold", bear="hold", risk="hold",
+                    bullq={"to": "Bear", "question": "Which sell line does this news actually hit?"})
+        d = self.meeting(ask)
+        bear3 = next(x for x in ask.asked[6:] if "Your role: Bear." in x)
+        self.assertIn("Bull asked Bear: Which sell line does this news actually hit?", bear3)
+        self.assertIn('"replies"', bear3)
+        self.assertEqual(d["final"]["bear"]["replies"], "Nothing in that question changes my view.")
+
+    def test_a_question_put_to_you_and_left_unanswered_counts_as_hold(self):
+        silent = {"vote": "buy", "line": "buy", "confidence": 4, "why": GOOD, "answers": REPLIES, "replies": ""}
+        d = self.meeting(votes(bull="buy", bear="buy", bear2=silent, risk="buy",
+                               bullq={"to": "Bear", "question": "Why buy a stock Warren rates this way?"}))
+        self.assertTrue(d["final"]["bear"].get("failed"))
+        self.assertEqual(d["outcome"], "hold")
+
+    def test_a_question_to_yourself_or_with_a_made_up_figure_is_dropped(self):
+        d = self.meeting(votes(bull="hold", bear="hold", risk="hold",
+                               bullq={"to": "Bull", "question": "Am I right to be so sure here?"},
+                               bearq={"to": "Bull", "question": "Would you still buy if it fell to $613?"}))
+        self.assertTrue(d["questions"]["bull"].get("failed"))
+        self.assertTrue(d["questions"]["bear"].get("failed"))
+
+    def test_only_round_three_counts(self):
+        d = self.meeting(votes(bull="hold", bull2="buy", bear="hold", bear2="buy", risk="hold", risk2="buy"))
+        self.assertEqual((d["round1"]["bull"]["vote"], d["outcome"]), ("hold", "buy"))
+
+
+class EachSeatHasItsOwnEvidence(Base):
+    """The owner (2026-11-25): "they ... could use access to some more tools
+    for more informed and better debates." Code gathers it, from real
+    captured pages here; each seat has its own share."""
+
+    def meeting(self, link=None):
+        self.check()
+        self.alert()
+        if link:
+            doc = self.W.read_json(self.W.ALERTS)
+            doc["alerts"][-1]["link"] = link
+            self.W.write_json(self.W.ALERTS, doc)
+        ask = votes(bull="hold", bear="hold", risk="hold")
+        self.tick(ask)
+        return ask, self.decisions()[-1]
+
+    def q(self, ask, name, stage=0):
+        return next(x for x in ask.asked[stage * 3:stage * 3 + 3] if f"Your role: {name}." in x)
+
+    def test_the_article_itself_is_read(self):
+        ask, d = self.meeting("https://finance.yahoo.com/markets/stocks/articles/why-rocket-lab-rklb-9-021346011.html")
+        q = self.q(ask, "Bull")
+        self.assertIn("Rocket Lab secured more than US$515 million in Neutron launch contracts", q)
+        self.assertNotIn("broker-dealer", q)                           # the site's own boilerplate is dropped
+        self.assertNotIn("not intended to be financial advice", q)
+
+    def test_a_google_news_link_says_why_there_is_no_text(self):
+        ask, _ = self.meeting("https://news.google.com/rss/articles/ARTICLE01")
+        self.assertIn("a Google News link - the article itself cannot be opened from it", self.q(ask, "Bear"))
+
+    def test_the_bull_gets_the_analysts_and_the_bear_the_insiders_and_short_sellers(self):
+        ask, _ = self.meeting()
+        bull, bear, risk = self.q(ask, "Bull"), self.q(ask, "Bear"), self.q(ask, "Risk manager")
+        self.assertIn("analysts' average price target $92.33 (low $40.00, high $132.00); 15 buy, 3 hold, 0 sell", bull)
+        self.assertNotIn("analysts' average price target", bear)
+        self.assertIn("insiders, last 3 months: 2 open-market buys, 7 sells, net -467,616 shares", bear)
+        self.assertIn("a pre-planned (10b5-1) sale", bear)
+        self.assertIn("short interest 45,460,649 shares on 11/13/2026, 2.1 days to cover", bear)
+        self.assertNotIn("short interest", bull)
+        self.assertIn("risk: ", bear)                                   # Warren's own risk list
+        self.assertNotIn("insiders, last 3 months", risk)
+
+    def test_the_risk_manager_gets_how_the_holdings_move_together(self):
+        self.W.write_json(self.W.HOLDINGS, {"holdings": [{"symbol": "HIMS", "amount": 100, "avg_price": 25.0},
+                                                         {"symbol": "ASTS", "amount": 200, "avg_price": 40.0}]})
+        self.check("HIMS")
+        self.alert("HIMS")
+        ask = votes(bull="hold", bear="hold", risk="hold")
+        self.tick(ask)
+        risk = self.q(ask, "Risk manager")
+        c = self.b.correlation(self.b.closes_of(json.loads(tw.fx("warren-yahoo-chart-hims.json"))),
+                               self.b.closes_of(json.loads(tw.fx("warren-yahoo-chart-asts.json"))))
+        self.assertEqual(c, 0.42)
+        self.assertIn("ASTS: +0.42 - often move together", risk)
+        self.assertIn("THE BOOK BY SECTOR", risk)
+        self.assertEqual(self.b.correlation([("d%03d" % i, 100 + i) for i in range(50)],
+                                            [("d%03d" % i, 100 + i) for i in range(50)]), 1.0)
+
+    def test_the_panels_record_and_the_price_since(self):
+        self.check()
+        self.alert()
+        self.tick(votes(bull="hold", bear="hold", risk="hold"))
+        self.alert(aid="beef0003")
+        ask = votes(bull="hold", bear="hold", risk="hold")
+        self.tick(ask, price_fn=lambda syms: {s: {"price": {"KMI": 30.25}.get(s, PRICES.get(s))} for s in syms})
+        self.assertIn("the price was $27.50 then and is $30.25 now (+10.0%)", self.q(ask, "Bull"))
+
+    def test_the_news_history_shows_the_price_reaction(self):
+        closes = [("2026-11-18", 100.0), ("2026-11-19", 110.0), ("2026-11-20", 121.0)]
+        self.alert(age_h=30)
+        doc = self.W.read_json(self.W.ALERTS)
+        doc["alerts"][-1]["published"] = "Thu, 19 Nov 2026 14:00:00 GMT"
+        self.W.write_json(self.W.ALERTS, doc)
+        lines = self.b.news_history("KMI", NOW, closes)
+        self.assertIn("the stock moved +10.0% that day and +21.0% since", lines[0])
+
+    def test_every_figure_the_evidence_holds_may_be_quoted(self):
+        self.check()
+        self.alert()
+        cite = {"vote": "hold", "line": "none", "confidence": 3,
+                "why": "Short interest is 45,460,649 shares and insiders sold on balance."}
+        self.tick(votes(bull="hold", bear=cite, risk="hold"))
+        self.assertFalse(self.decisions()[-1]["round1"]["bear"].get("failed"))
+
+    def test_a_missing_piece_is_named_and_the_debate_goes_on(self):
+        self.check()
+        self.alert()
+        st = self.tick(votes(bull="hold", bear="hold", risk="hold"),
+                       get=lambda url, ua=None, headers=None: (_ for _ in ()).throw(OSError("offline")))
+        d = self.decisions()[-1]
+        self.assertEqual(st["meetings"], 1)
+        self.assertTrue(any(m.startswith("insider trades (could not reach Nasdaq") for m in d["evidence"]["missing"]))
+
+    def test_the_market_check_is_belforts(self):
+        bt = self.b._load("t_belfort_trade", "belfort-trade.py")
+        hist = [["2026-10-%02d" % (i % 28 + 1), 100 + i * 0.5] for i in range(40)]
+        doc = {"sectors": {"XLE": {"price": 120.0, "sma50": 100.0, "history": hist}}}
+        bt.quotes_doc = lambda: doc
+        self.b._load = lambda name, file: bt if file == "belfort-trade.py" else None
+        lines = self.b.market_mood("Energy")
+        self.assertIn("QQQ: unknown", lines[0])
+        self.assertIn("its sector, energy (XLE): $120.00, 20.0% above its 50-day average", lines[-1])
 
 
 class TheBearIsAnotherModel(Base):
@@ -281,10 +452,10 @@ class TheBearIsAnotherModel(Base):
         self.assertEqual(len(self.sonnet), 2)
 
     def test_over_its_own_cap_sonnet_stands_in_and_says_so(self):
-        self.W.write_json(self.b.SPEND, {"2026-11-24": 0.149})
+        self.W.write_json(self.b.SPEND, {"2026-11-24": 0.249})
         ok, text, who = self.ask("bear")
         self.assertEqual((ok, text), (True, "sonnet says"))
-        self.assertIn("Sonnet (standing in: the book's $0.15 a day on OpenRouter is used)", who)
+        self.assertIn("Sonnet (standing in: the book's $0.25 a day on OpenRouter is used)", who)
 
     def test_a_low_shared_day_or_a_missing_model_or_key_stands_in(self):
         self.assertIn("shared OpenRouter day is too low", self.ask("bear", left=0.4)[2])
@@ -305,11 +476,11 @@ class TheBearIsAnotherModel(Base):
         self.tick(ask)
         d = self.decisions()[-1]
         self.assertEqual(d["round1"]["bear"]["model"], "openai/gpt-5.4-mini")
-        self.assertEqual(d["round2"]["bull"]["model"], "Sonnet")
+        self.assertEqual(d["final"]["bull"]["model"], "Sonnet")
 
     def test_the_limits_file_carries_the_books_caps(self):
         caps = json.loads((ROOT / "tasks" / "limits.json").read_text())
-        self.assertEqual((caps["warren_book_daily_ai"], caps["warren_book_leave_for_others"]), (0.15, 0.5))
+        self.assertEqual((caps["warren_book_daily_ai"], caps["warren_book_leave_for_others"]), (0.25, 0.5))
 
 
 class WarrensChecklistComesFirst(Base):

@@ -52,12 +52,15 @@ Standard library only.
 """
 
 import argparse
+import email.utils
 import importlib.util
 import json
+import math
 import os
 import re
 import sys
 from datetime import datetime, timedelta, timezone
+from html import unescape
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -104,8 +107,11 @@ HISTORY_KEPT = 1000
 # basically just repeating the same things." They were: each role was told
 # to give way "when the facts are against" it, so all three drifted to the
 # middle, the Risk manager judged the company instead of the book, and round
-# 2 never answered anyone. Now each role has one job it cannot hand back, and
-# round 2 must answer the others by name before voting.
+# 2 never answered anyone. Now each role has one job it cannot hand back.
+# The owner (2026-11-25), on the next ones: "too dull with each other". So
+# code now hands each seat its own evidence (`evidence`), round 2 is a
+# cross-examination - one pointed question each - and round 3 answers it,
+# answers the others by name, and casts the vote that counts.
 ROLES = {
     "bull": ("Bull", "Your job is the case FOR acting: what this news makes possible - the upside, and which part "
              "of the buy line it meets. Argue it as strongly as the recap honestly allows. If you vote hold, "
@@ -396,31 +402,415 @@ def recap(check, book, sym):
     return "\n".join(out)
 
 
+# ------------------------------------------------------------ the evidence
+# The owner (2026-11-25), on a debate where all three argued from the same
+# short recap: "they are being too dull with each other and could use access
+# to some more tools for more informed and better debates." Code now gathers
+# what a careful investor would look at - every figure from a source code
+# reads, nothing from a model - and each seat gets its own share:
+#   all three: the article itself, the stock's news of the last two weeks and
+#     how the price moved after each, the book's own record on the stock,
+#     the market's mood (Belfort's market check) and its sector, the chart;
+#   the Bull: what analysts expect (targets, ratings, forecasts), the next
+#     earnings date, and where it beats its rivals;
+#   the Bear: Warren's risks, every Red and Yellow and why, figures the second
+#     source disputed, insider selling, short interest, where it trails rivals;
+#   the Risk manager: how closely it moves with each holding, the book's
+#     sectors, and cash.
+# A piece that cannot be had says so; the debate goes on without it.
+
+INSIDER_URL = "https://api.nasdaq.com/api/company/{sym}/insider-trades?limit=15&type=ALL&sortColumn=lastDate&sortOrder=DESC"
+SHORT_URL = "https://api.nasdaq.com/api/quote/{sym}/short-interest?assetClass=stocks"
+TARGET_URL = "https://api.nasdaq.com/api/analyst/{sym}/targetprice"
+EARNINGS_DATE_URL = "https://api.nasdaq.com/api/analyst/{sym}/earnings-date"
+CHARTS = BOOK_DIR / "charts"
+HISTORY_DAYS = 14
+CORR_DAYS = 120
+ARTICLE_CHARS = 2500
+BOILER = re.compile(r"broker-dealer|financial advice|cookies|subscribe|sign up|newsletter|all rights reserved|"
+                    r"get in touch|terms of (use|service)|privacy policy", re.I)
+SECTOR_NAMES = {"finance": "financials", "healthcare": "health care", "health care": "health care",
+                "telecommunications": "communication services", "basic materials": "materials",
+                "communication services": "communication services", "technology": "technology",
+                "consumer discretionary": "consumer discretionary", "consumer staples": "consumer staples",
+                "energy": "energy", "industrials": "industrials", "utilities": "utilities", "real estate": "real estate",
+                "materials": "materials", "financials": "financials"}
+
+
+def article_text(url, get=None):
+    """(the article's own paragraphs, why not). Scripts, pictures and the
+    site's own boilerplate are dropped; ARTICLE_CHARS at most."""
+    if not url or not str(url).startswith("http"):
+        return "", "no link to the article"
+    if url.split("/")[2].endswith("news.google.com"):
+        return "", "a Google News link - the article itself cannot be opened from it"
+    try:
+        raw = (get or W.http_get)(url)
+    except Exception as e:
+        return "", f"the page could not be opened ({str(e)[:80]})"
+    html = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+    html = re.sub(r"(?is)<(script|style|svg|noscript)\b.*?</\1>", " ", html)
+    paras = []
+    for chunk in re.findall(r"(?is)<p\b[^>]*>(.*?)</p>", html):
+        t = re.sub(r"\s+", " ", unescape(re.sub(r"(?s)<[^>]+>", " ", chunk))).strip()
+        if len(t) >= 60 and not BOILER.search(t) and t not in paras:
+            paras.append(t)
+    text = ""
+    for t in paras:
+        if len(text) + len(t) > ARTICLE_CHARS:
+            break
+        text += t + "\n"
+    return text.strip(), "" if text else "no article text on the page (a paywall, or a page built by script)"
+
+
+def closes_of(payload):
+    """[(YYYY-MM-DD, close)] from a Yahoo chart."""
+    res = payload["chart"]["result"][0]
+    q = (res.get("indicators") or {}).get("quote", [{}])[0]
+    return [(datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d"), float(c))
+            for t, c in zip(res.get("timestamp") or [], q.get("close") or []) if c is not None]
+
+
+def chart(sym, now, get=None):
+    """A year of daily closes, fetched once a day per stock."""
+    path = CHARTS / f"{sym}.json"
+    day = now.strftime("%Y-%m-%d")
+    have = W.read_json(path, {}) or {}
+    if have.get("day") == day and have.get("closes"):
+        return [tuple(x) for x in have["closes"]]
+    closes = closes_of(W.get_json(W.CHART_URL.format(sym=sym), get))
+    W.write_json(path, {"day": day, "closes": closes})
+    return closes
+
+
+def _when(a):
+    for k in ("published", "found_utc"):
+        try:
+            t = email.utils.parsedate_to_datetime(a[k]) if k == "published" else parse(a[k])
+            if t:
+                return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+    return None
+
+
+def news_history(sym, now, closes):
+    """The stock's alerts of the last HISTORY_DAYS, newest first, each with
+    how the price moved on its day and since."""
+    seen, out = set(), []
+    for path in (W.ALERTS, BOOK_ALERTS):
+        for a in (W.read_json(path, {}) or {}).get("alerts") or []:
+            t = _when(a)
+            if a.get("symbol") != sym or not t or now - t > timedelta(days=HISTORY_DAYS) or a["title"] in seen:
+                continue
+            seen.add(a["title"])
+            out.append((t, a))
+    lines = []
+    for t, a in sorted(out, key=lambda x: x[0], reverse=True)[:8]:
+        line = f"{t.strftime('%b %d')} [{W.IMPORTANCE.get(a.get('importance'), '?')}] {a['title']} - marked {a['signal']}"
+        day = t.strftime("%Y-%m-%d")
+        i = next((k for k, (d, _) in enumerate(closes) if d >= day), None)
+        if i is not None and i > 0:
+            before, on, last = closes[i - 1][1], closes[i][1], closes[-1][1]
+            line += (f"; the stock moved {100 * (on / before - 1):+.1f}% that day and "
+                     f"{100 * (last / before - 1):+.1f}% since")
+        lines.append(line)
+    return lines
+
+
+def record_on(sym, book):
+    """The panel's last meetings on this stock and how the price did since."""
+    now_price = (book.get("marks") or {}).get(sym)
+    out = []
+    for d in [d for d in (W.read_json(DECISIONS, {}) or {}).get("decisions") or [] if d["symbol"] == sym][-3:]:
+        line = f"{d['utc'][:10]}: the panel's verdict was {d['outcome']} ({d['note']}); {d['result']}"
+        if d.get("price") and now_price:
+            line += f"; the price was ${d['price']:,.2f} then and is ${now_price:,.2f} now ({100 * (now_price / d['price'] - 1):+.1f}%)"
+        out.append(line)
+    return out
+
+
+def market_mood(sector):
+    """Belfort's market check for both indexes, and the stock's sector fund."""
+    bt = _load("book_belfort_trade", "belfort-trade.py")
+    doc = bt.quotes_doc()
+    out = [f"{i}: {r['state']} - {r['why']}" for i, r in bt.regimes(doc).items()]
+    name = SECTOR_NAMES.get(str(sector or "").strip().lower())
+    fund = next((f for f, n in bt.SECTOR_FUNDS.items() if n == name), None)
+    q = (doc.get("sectors") or {}).get(fund) or {}
+    if fund and q.get("price") and q.get("sma50"):
+        hist = [c for _, c in q.get("history") or []]
+        line = (f"its sector, {name} ({fund}): ${q['price']:,.2f}, "
+                f"{abs(100 * (q['price'] / q['sma50'] - 1)):.1f}% {'above' if q['price'] > q['sma50'] else 'below'} its 50-day average")
+        if len(hist) > 21:
+            line += f", {100 * (hist[-1] / hist[-22] - 1):+.1f}% over the last month"
+        out.append(line)
+    return out
+
+
+def _n(x):
+    try:
+        return float(str(x).replace(",", "").replace("$", "").replace("(", "-").replace(")", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def insiders(payload):
+    """The company's own people buying and selling, from Nasdaq's record of
+    their SEC Form 4 filings."""
+    d = (payload or {}).get("data") or {}
+    trades = {r["insiderTrade"]: r for r in (d.get("numberOfTrades") or {}).get("rows") or []}
+    shares = {r["insiderTrade"]: r for r in (d.get("numberOfSharesTraded") or {}).get("rows") or []}
+    out = []
+    for k, span in (("months3", "last 3 months"), ("months12", "last 12 months")):
+        b = (trades.get("Number of Open Market Buys") or {}).get(k)
+        s_ = (trades.get("Number of Sells") or {}).get(k)
+        net = (shares.get("Net Activity") or {}).get(k)
+        if b is not None and s_ is not None:
+            out.append(f"insiders, {span}: {b} open-market buys, {s_} sells, net {_n(net):+,.0f} shares"
+                       if net is not None else f"insiders, {span}: {b} open-market buys, {s_} sells")
+    rows = ((d.get("transactionTable") or {}).get("table") or {}).get("rows") or []
+    real = [r for r in rows if "Option" not in r["transactionType"] and "Non Open Market" not in r["transactionType"]]
+    for r in real[:4]:
+        planned = " - a pre-planned (10b5-1) sale, a weaker signal than a chosen one" if r["transactionType"] == "Automatic Sell" else ""
+        out.append(f"{r['lastDate']}: {r['insider'].title()} ({r['relation']}) {r['transactionType'].lower()} "
+                   f"{r['sharesTraded']} shares at {r['lastPrice']}{planned}")
+    return out
+
+
+def short_interest(payload, n=None):
+    """How many shares are sold short - investors betting on a fall - and
+    how that has moved."""
+    rows = (((payload or {}).get("data") or {}).get("shortInterestTable") or {}).get("rows") or []
+    if not rows:
+        return []
+    last = rows[0]
+    si = _n(last["interest"])
+    line = f"short interest {last['interest']} shares on {last['settlementDate']}, {float(last['daysToCover']):.1f} days to cover"
+    shares = (n or {}).get("market_cap") / (n or {}).get("price") if (n or {}).get("market_cap") and (n or {}).get("price") else None
+    if shares and si:
+        line += f", about {100 * si / shares:.1f}% of its shares"
+    day = lambda r: datetime.strptime(r["settlementDate"], "%m/%d/%Y")
+    for back, label in ((28, "a month"), (170, "six months")):
+        old = next((r for r in rows if (day(last) - day(r)).days >= back), None)
+        if old and _n(old["interest"]):
+            line += f"; {100 * (si / _n(old['interest']) - 1):+.1f}% vs {label} earlier ({old['settlementDate']})"
+    return [line]
+
+
+def analysts(target, earnings_date=None, price=None):
+    """What the analysts who follow it expect, from Nasdaq."""
+    d = (target or {}).get("data") or {}
+    c = d.get("consensusOverview") or {}
+    out = []
+    if c.get("priceTarget"):
+        line = (f"analysts' average price target ${c['priceTarget']:,.2f} (low ${c['lowPriceTarget']:,.2f}, "
+                f"high ${c['highPriceTarget']:,.2f}); {c.get('buy', 0)} buy, {c.get('hold', 0)} hold, {c.get('sell', 0)} sell")
+        if price:
+            line += f"; the average target is {100 * (c['priceTarget'] / price - 1):+.1f}% from today's price"
+        hist = d.get("historicalConsensus") or []
+        if len(hist) >= 4 and hist[-4].get("y"):
+            line += f"; three months ago the average target was ${hist[-4]['y']:,.2f}"
+        out.append(line)
+    text = str(((earnings_date or {}).get("data") or {}).get("announcement") or "")
+    m = re.search(r"([A-Z][a-z]{2} \d{1,2}, \d{4})", text + " " + str(((earnings_date or {}).get("data") or {}).get("reportText") or ""))
+    out.append(f"next earnings report: {m.group(1)}" if m else "next earnings report: no date given yet")
+    return out
+
+
+def correlation(a, b):
+    """How closely two stocks' daily moves go together, -1 to 1, over the
+    days both traded (the last CORR_DAYS)."""
+    da, db = dict(a), dict(b)
+    days = sorted(set(da) & set(db))[-(CORR_DAYS + 1):]
+    if len(days) < 30:
+        return None
+    ra = [da[days[i]] / da[days[i - 1]] - 1 for i in range(1, len(days))]
+    rb = [db[days[i]] / db[days[i - 1]] - 1 for i in range(1, len(days))]
+    ma, mb = sum(ra) / len(ra), sum(rb) / len(rb)
+    cov = sum((x - ma) * (y - mb) for x, y in zip(ra, rb))
+    va, vb = sum((x - ma) ** 2 for x in ra), sum((y - mb) ** 2 for y in rb)
+    return round(cov / math.sqrt(va * vb), 2) if va and vb else None
+
+
+def together(c):
+    return ("move closely together" if c >= 0.7 else "often move together" if c >= 0.4
+            else "loosely related" if c >= 0.1 else "barely related, or move opposite ways")
+
+
+def rival_lines(check, sym):
+    """(where it leads its rivals, where it trails) from the check's rows."""
+    lead, trail = [], []
+    for st in (check.get("steps") or {}).values():
+        for r in st.get("rows") or []:
+            vs = r.get("vs")
+            if not vs:
+                continue
+            line = (f"{vs['label']}: " + ", ".join(f"{c['symbol']} {c['text']}" for c in vs["cols"])
+                    + (f"; rivals' average {vs['average']}" if vs.get("average") else "") + f". {vs['note']}")
+            spec = next((x for x in W.RIVAL_ROWS if r["check"].startswith(x[0])), None)
+            best, worst = W.BEST.get(spec[0], ("", "")) if spec else ("", "")
+            if worst and f"is the {worst}" in vs["note"]:
+                trail.append(line)
+            elif best and f"is the {best}" in vs["note"]:
+                lead.append(line)
+            else:
+                lead.append(line)
+                trail.append(line)
+    return lead, trail
+
+
+def check_detail(check):
+    """What else Warren's check knows: (for the Bull, for the Bear, for all)."""
+    n, ai = check.get("numbers") or {}, check.get("ai") or {}
+    steps = check.get("steps") or {}
+    bull, bear, both = [], [], []
+    if n.get("eps_ntm") is not None:
+        bull.append(f"analysts' expected earnings per share over the next 12 months: ${n['eps_ntm']}"
+                    + (f"; expected yearly earnings growth {n['eps_growth']:+g}%" if n.get("eps_growth") is not None else ""))
+    for k, label in (("business", "the business"), ("customers", "its customers")):
+        if ai.get(k):
+            both.append(f"{label}: {ai[k]}")
+    for r in ai.get("risks") or []:
+        bear.append(f"risk: {r}")
+    if ai.get("debt_note"):
+        bear.append(f"debt: {ai['debt_note']}")
+    for st in steps.values():
+        for r in st.get("rows") or []:
+            if r.get("rating") in ("Red", "Yellow") and r.get("why"):
+                bear.append(f"{r['check']}: {r['rating']} - {r['why']}")
+    for q, a in (steps.get("price") or {}).get("chart") or []:
+        both.append(f"{q} {a}")
+    ss = n.get("second_source") or {}
+    for f in (ss.get("figures") or {}).values():
+        if f.get("status") in ("disagree", "settled", "explained"):
+            bear.append(f"figure checked against Nasdaq - {f['label']}: " + ((f.get("settled") or {}).get("says")
+                        or f"Warren {W.money(f.get('ours'))}, Nasdaq {W.money(f.get('theirs'))}, not settled"))
+    for a in n.get("alarms") or []:
+        bear.append(f"Warren's alarm: {a}")
+    lead, trail = rival_lines(check, check.get("symbol"))
+    bull += [f"against rivals - {x}" for x in lead]
+    bear += [f"against rivals - {x}" for x in trail]
+    return bull, bear, both
+
+
+def evidence(sym, check, book, alerts, now, get=None):
+    """{"shared", "bull", "bear", "risk", "missing"} - text blocks, all
+    written by code from the sources named in each line."""
+    missing = []
+
+    def piece(name, fn):
+        try:
+            return fn()
+        except Exception as e:
+            missing.append(f"{name} ({str(e)[:80]})")
+            return []
+
+    n = check.get("numbers") or {}
+    price = (book.get("marks") or {}).get(sym) or n.get("price")
+    closes = piece("the price history", lambda: chart(sym, now, get))
+    texts = []
+    for a in alerts[:2]:
+        t, why = article_text(a.get("link"), get)
+        texts.append(f"{a['title']}:\n{t}" if t else f"{a['title']}: (article text not available - {why})")
+    shared = {"THE ARTICLE ITSELF (as the publisher wrote it - not checked by Warren)": texts,
+              f"THE STOCK'S NEWS, LAST {HISTORY_DAYS} DAYS, AND HOW THE PRICE MOVED AFTER EACH":
+                  piece("the news history", lambda: news_history(sym, now, closes)),
+              "THE PANEL'S OWN RECORD ON THIS STOCK": record_on(sym, book) or ["no earlier meetings on this stock"],
+              "THE MARKET'S MOOD (Belfort's market check)": piece("the market's mood", lambda: market_mood(
+                  check.get("sector") or n.get("nasdaq_sector"))),
+              }
+    bull_d, bear_d, both_d = check_detail(check)
+    shared["MORE FROM WARREN'S CHECK"] = both_d
+    bull = {"WHAT ANALYSTS EXPECT": piece("analysts' targets", lambda: analysts(
+                W.get_json(TARGET_URL.format(sym=sym), get),
+                piece("the earnings date", lambda: W.get_json(EARNINGS_DATE_URL.format(sym=sym), get)) or None, price)),
+            "FOR THE CASE TO BUY": bull_d}
+    bear = {"INSIDERS (company officers and directors, from their SEC filings via Nasdaq)":
+                piece("insider trades", lambda: insiders(W.get_json(INSIDER_URL.format(sym=sym), get))),
+            "SHORT SELLERS (investors betting the price falls)":
+                piece("short interest", lambda: short_interest(W.get_json(SHORT_URL.format(sym=sym), get), n)),
+            "FOR THE CASE AGAINST": bear_d}
+    corr = []
+    for p in book["positions"]:
+        if p["symbol"] == sym:
+            continue
+        c = piece(f"{p['symbol']}'s price history", lambda: correlation(closes, chart(p["symbol"], now, get)) if closes else None)
+        if isinstance(c, float):
+            corr.append(f"{p['symbol']}: {c:+.2f} - {together(c)}")
+    v = value(book)
+    sectors = {}
+    for p in book["positions"]:
+        sec = (W.latest(p["symbol"]) or {}).get("sector") or "sector unknown"
+        sectors[sec] = sectors.get(sec, 0) + p["shares"] * (mark_of(book, p["symbol"]) or 0)
+    risk = {f"HOW CLOSELY {sym} MOVES WITH EACH HOLDING (daily moves, last {CORR_DAYS} trading days; 1 = in step, "
+            "0 = unrelated)": corr or ["not available"],
+            "THE BOOK BY SECTOR": [f"{k}: {pct(x, v)}%" for k, x in sorted(sectors.items(), key=lambda t: -t[1])]
+            + [f"cash: {pct(book['cash'], v)}%"]}
+    block = lambda d: "\n".join(f"{k}:\n" + "\n".join(f"  - {x}" for x in (vals or ["nothing found"]))
+                                for k, vals in d.items())
+    return {"shared": block(shared), "bull": block(bull), "bear": block(bear), "risk": block(risk),
+            "missing": missing}
+
+
 # ---------------------------------------------------------------- the panel
 
-def panel_question(role, sym, rc, lines, event, others=None):
+# THE CROSS-EXAMINATION (owner, 2026-11-25): round 2 used to end in "I
+# agree with your strongest point" all round. Now:
+#   round 1 - each argues alone, from the shared evidence and its own;
+#   round 2 - each puts ONE pointed question to ONE other member, about the
+#             weakest part of their case; nobody votes;
+#   round 3 - each answers the questions put to it, answers the others'
+#             strongest points by name, and votes. Only round 3 counts.
+STAGES = {1: "ROUND 1", 2: "ROUND 2 - CROSS-EXAMINATION", 3: "ROUND 3 - ANSWERS AND THE FINAL VOTE"}
+
+
+def panel_question(role, sym, rc, lines, event, ev=None, stage=1, r1=None, qs=None):
     name, brief = ROLES[role]
+    ev = ev or {}
     sells = "\n".join(f"  sell {i}. I would sell if {r}" for i, r in enumerate(lines["sell"], 1)) or "  (none saved)"
     q = (f"You sit on a three-member panel that runs a PAPER trading book for a beginner investor - practice money, "
          f"no real trades. Your role: {name}. {brief} {NOT_YOURS}\n\n"
          f"WHAT HAPPENED\n{event}\n\n"
-         f"WARREN'S CHECKLIST RECAP (computed by code from SEC filings - these are the only figures you may use)\n{rc}\n\n"
+         f"WARREN'S CHECKLIST RECAP (computed by code from SEC filings)\n{rc}\n\n"
          f"THE STOCK'S OWN LINES, from Warren's check\n  What would make me buy: {lines['buy'] or '(none saved)'}\n"
          f"  What would make me sell:\n{sells}\n\n")
-    if others:
-        names = " and ".join(ROLES[r][0] for r in others)
-        q += ("ROUND 2. The other two members answered round 1 like this:\n"
-              + "\n".join(f"  {ROLES[r][0]}: {v['vote']} - {v['why']}" for r, v in others.items())
-              + f"\nFirst answer the strongest point each of them made - {names} - by name: say whether you agree "
-                "and why. Then give your final vote, still in your own role. Change your mind only if their points "
-                "are better than yours. Only a vote all three agree on is traded.\n\n")
-    else:
-        q += "ROUND 1. Answer on your own; you will see the others' answers in round 2.\n\n"
-    q += ('Answer with JSON only: {' + ('"answers": "one sentence to each of the other two, starting with their '
-                                       'role name", ' if others else '')
-          + '"vote": "buy", "hold" or "sell", "line": "buy" if the news meets the buy line, "sell N" for the sell '
-          'line it hits, or "none", "confidence": 1 to 5, "why": "two or three plain sentences for a beginner"}. '
-          'Use no number that is not in the recap or in what happened.')
+    if ev.get("shared"):
+        q += f"EVIDENCE ALL THREE OF YOU HAVE\n{ev['shared']}\n\n"
+    if ev.get(role):
+        q += (f"YOUR OWN EVIDENCE, for your side - the other two were given different evidence for theirs\n"
+              f"{ev[role]}\n\n")
+    q += "Every figure you use must come from what is above. Use the evidence: name the line you rely on.\n\n"
+    if stage == 1:
+        q += f"{STAGES[1]}. Answer on your own; you will see the others' answers next.\n\n"
+        q += ('Answer with JSON only: {"vote": "buy", "hold" or "sell", "line": "buy" if the news meets the buy line, '
+              '"sell N" for the sell line it hits, or "none", "confidence": 1 to 5, "why": "two or three plain '
+              'sentences for a beginner"}.')
+        return q
+    others = [r for r in ROLES if r != role]
+    q += "ROUND 1 - what each member said:\n" + "\n".join(
+        f"  {ROLES[r][0]}: {v['vote']} - {v['why']}" for r, v in (r1 or {}).items()) + "\n\n"
+    if stage == 2:
+        q += (f"{STAGES[2]}. Do not vote now. Put ONE pointed question to ONE other member - "
+              f"{' or '.join(ROLES[r][0] for r in others)} - aimed at the weakest part of their case: the question "
+              "whose honest answer would most change the decision. No speeches; one question.\n\n"
+              'Answer with JSON only: {"to": "' + '" or "'.join(ROLES[r][0] for r in others)
+              + '", "question": "your one question"}.')
+        return q
+    asked = [(r, x) for r, x in (qs or {}).items() if not x.get("failed")]
+    q += "ROUND 2 - the questions:\n" + ("\n".join(f"  {ROLES[r][0]} asked {ROLES[x['to']][0]}: {x['question']}"
+                                                  for r, x in asked) or "  (none)") + "\n\n"
+    mine = [(r, x) for r, x in asked if x["to"] == role]
+    names = " and ".join(ROLES[r][0] for r in others)
+    q += (f"{STAGES[3]}. " + ("Answer the question(s) put to you plainly in \"replies\" - say whether the answer "
+                              "changes your mind. " if mine else "")
+          + f"Answer the strongest point each of {names} made, by name, in \"answers\". Then give your final vote, "
+          "still in your own role. Change your mind only if their points are better than yours. Only a vote all "
+          "three agree on is traded.\n\n")
+    q += ('Answer with JSON only: {' + ('"replies": "your answer to each question put to you", ' if mine else '')
+          + '"answers": "one sentence to each of the other two, starting with their role name", '
+          '"vote": "buy", "hold" or "sell", "line": "buy", "sell N" or "none", "confidence": 1 to 5, '
+          '"why": "two or three plain sentences for a beginner"}.')
     return q
 
 
@@ -428,7 +818,27 @@ def _numbers(text):
     return {x.rstrip(".,") for x in re.findall(r"\d[\d.,]*", text or "")}
 
 
-def read_vote(text, allowed, n_sell, answer=()):
+def read_question(text, allowed, role):
+    """{"to": role key, "question"} code can stand behind, or None."""
+    t = (text or "").strip()
+    a, b = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[a:b + 1])
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(d, dict):
+        return None
+    to = str(d.get("to") or "").strip().lower()
+    key = next((r for r, (nm, _) in ROLES.items() if nm.lower() == to and r != role), None)
+    question = str(d.get("question") or "").strip()
+    if not key or not 10 <= len(question) <= 400:
+        return None
+    if _numbers(question) - _numbers(allowed) - {str(i) for i in range(1, 6)}:
+        return None
+    return {"to": key, "question": question}
+
+
+def read_vote(text, allowed, n_sell, answer=(), replies=False):
     """The vote code can stand behind, or None: valid JSON, buy/hold/sell, a
     line that exists, a reason with no number the recap or the news lacks -
     and in round 2 (`answer` = the others' role names) a reply that names
@@ -451,10 +861,10 @@ def read_vote(text, allowed, n_sell, answer=()):
     # number is allowed on its own, for "sell rule 2" or "3 of the steps".
     if _numbers(why) - _numbers(allowed) - {str(i) for i in range(1, 6)}:
         return None
-    replies = str(d.get("answers") or "").strip()[:700]
-    if answer and not all(name.lower() in replies.lower() for name in answer):
+    said = str(d.get("answers") or "").strip()[:700]
+    if answer and not all(name.lower() in said.lower() for name in answer):
         return None
-    if _numbers(replies) - _numbers(allowed) - {str(i) for i in range(1, 6)}:
+    if _numbers(said) - _numbers(allowed) - {str(i) for i in range(1, 6)}:
         return None
     try:
         conf = int(d.get("confidence"))
@@ -462,34 +872,59 @@ def read_vote(text, allowed, n_sell, answer=()):
         conf = None
     out = {"vote": vote, "line": line, "confidence": conf if conf in range(1, 6) else None, "why": why}
     if answer:
-        out["answers"] = replies
+        out["answers"] = said
+    if replies:
+        r = str(d.get("replies") or "").strip()[:900]
+        if not r or _numbers(r) - _numbers(allowed) - {str(i) for i in range(1, 6)}:
+            return None
+        out["replies"] = r
     return out
 
 
-def meet(sym, event, check, book, ask):
-    """Two rounds, three members. ({round 1}, {round 2}, outcome, note)."""
+def meet(sym, event, check, book, ask, ev=None):
+    """Three rounds, three members: (round 1, the questions, the final
+    votes, outcome, note)."""
     rc, lines = recap(check, book, sym), lines_of(check)
-    allowed = rc + "\n" + event
-    rounds = []
-    for r in (1, 2):
-        got = {}
-        for role in ROLES:
-            others = {k: v for k, v in rounds[0].items() if k != role} if r == 2 else None
-            said = ask(panel_question(role, sym, rc, lines, event, others), role)
-            ok, text, who = (tuple(said) + ("",))[:3]
-            v = read_vote(text, allowed, len(lines["sell"]),
-                          tuple(ROLES[o][0] for o in others) if others else ()) if ok else None
-            got[role] = v or {"vote": "hold", "line": "none", "confidence": None, "failed": True,
-                              "why": "(no answer code could stand behind - counted as hold)"}
-            if who:
-                got[role]["model"] = who
-        rounds.append(got)
-    final = [v["vote"] for v in rounds[1].values()]
-    if len(set(final)) == 1 and not any(v.get("failed") for v in rounds[1].values()):
-        return rounds[0], rounds[1], final[0], "all three agree"
-    tally = {x: final.count(x) for x in VOTES if final.count(x)}
-    return rounds[0], rounds[1], "hold", ("split " + ", ".join(f"{n} {x}" for x, n in tally.items())
-                                          + " - no trade (only a unanimous vote trades)")
+    ev = ev or {}
+    allowed = "\n".join([rc, event] + [ev.get(k) or "" for k in ("shared", "bull", "bear", "risk")])
+    n_sell = len(lines["sell"])
+
+    def put(role, q):
+        said = ask(q, role)
+        ok, text, who = (tuple(said) + ("",))[:3]
+        return (text if ok else None), who
+
+    r1 = {}
+    for role in ROLES:
+        text, who = put(role, panel_question(role, sym, rc, lines, event, ev, 1))
+        r1[role] = (read_vote(text, allowed, n_sell) if text else None) or {
+            "vote": "hold", "line": "none", "confidence": None, "failed": True,
+            "why": "(no answer code could stand behind - counted as hold)"}
+        if who:
+            r1[role]["model"] = who
+    qs = {}
+    for role in ROLES:
+        text, who = put(role, panel_question(role, sym, rc, lines, event, ev, 2, r1))
+        qs[role] = (read_question(text, allowed, role) if text else None) or {
+            "failed": True, "question": "(no question code could stand behind)"}
+        if who:
+            qs[role]["model"] = who
+    final = {}
+    for role in ROLES:
+        others = tuple(ROLES[o][0] for o in ROLES if o != role)
+        put_to = any(x.get("to") == role for x in qs.values() if not x.get("failed"))
+        text, who = put(role, panel_question(role, sym, rc, lines, event, ev, 3, r1, qs))
+        final[role] = (read_vote(text, allowed, n_sell, others, put_to) if text else None) or {
+            "vote": "hold", "line": "none", "confidence": None, "failed": True,
+            "why": "(no answer code could stand behind - counted as hold)"}
+        if who:
+            final[role]["model"] = who
+    votes = [v["vote"] for v in final.values()]
+    if len(set(votes)) == 1 and not any(v.get("failed") for v in final.values()):
+        return r1, qs, final, votes[0], "all three agree"
+    tally = {x: votes.count(x) for x in VOTES if votes.count(x)}
+    return r1, qs, final, "hold", ("split " + ", ".join(f"{n} {x}" for x, n in tally.items())
+                                   + " - no trade (only a unanimous vote trades)")
 
 
 def act(book, sym, outcome, check, now, did):
@@ -527,20 +962,24 @@ def record(decision):
     W.write_json(DECISIONS, {"decisions": d[-DECISIONS_KEPT:]})
 
 
-def decide(sym, kind, event, alerts, book, now, ask, build=None, new_report=None):
-    """Warren's check first, then the panel, then code's trade. The
-    decision, or None when there was no check to be had (tried again)."""
+def decide(sym, kind, event, alerts, book, now, ask, build=None, new_report=None, get=None):
+    """Warren's check first, then the evidence, then the panel, then code's
+    trade. The decision, or None when there was no check to be had (tried
+    again)."""
     check, how = check_for(sym, now, value(book) * BUY_PCT / 100, build, new_report)
     if not check:
         return None, how
     count("meetings", now, bump=True)
-    r1, r2, outcome, note = meet(sym, event, check, book, ask)
+    ev = evidence(sym, check, book, alerts, now, get)
+    r1, qs, final, outcome, note = meet(sym, event, check, book, ask, ev)
     did = f"{now.strftime('%Y%m%d%H%M')}-{sym}"
+    price = (book.get("marks") or {}).get(sym)
     trade, result = act(book, sym, outcome, check, now, did)
-    d = {"id": did, "utc": iso(now), "symbol": sym, "kind": kind, "event": event, "alerts": alerts,
+    d = {"id": did, "utc": iso(now), "symbol": sym, "kind": kind, "event": event,
+         "alerts": [{k: a.get(k) for k in ("id", "title", "importance", "signal", "link", "publisher")} for a in alerts],
          "check": {"when_utc": check.get("when_utc"), "decision": check.get("decision"), "how": how},
-         "lines": lines_of(check), "round1": r1, "round2": r2, "outcome": outcome, "note": note,
-         "result": result, "trade": trade}
+         "lines": lines_of(check), "evidence": ev, "price": price, "round1": r1, "questions": qs, "final": final,
+         "outcome": outcome, "note": note, "result": result, "trade": trade}
     record(d)
     return d, ""
 
@@ -657,7 +1096,7 @@ def _wake():
     return _load("wake_warren_book", "wake.py")
 
 
-def tick(now=None, ask=None, news=None, build=None, new_report=None, price_fn=None):
+def tick(now=None, ask=None, news=None, build=None, new_report=None, price_fn=None, get=None):
     """One run of the timer. Returns what it did, in words and counts."""
     now = now or datetime.now(timezone.utc)
     book = ensure_book(now)
@@ -678,9 +1117,7 @@ def tick(now=None, ask=None, news=None, build=None, new_report=None, price_fn=No
         if count("meetings", now) >= MEETINGS_PER_DAY:
             status["notes"].append(f"{MEETINGS_PER_DAY} meetings already today - {sym} waits for the next run")
             continue
-        d, why = decide(sym, "news", news_event(alerts), [{k: a.get(k) for k in ("id", "title", "importance", "signal",
-                                                                                 "link", "publisher")}
-                                                         for a in alerts], book, now, ask or panel_ask, build, new_report)
+        d, why = decide(sym, "news", news_event(alerts), alerts, book, now, ask or panel_ask, build, new_report, get)
         if not d:
             status["notes"].append(f"{sym}: {why}")
             continue
@@ -759,7 +1196,7 @@ def ideas(now=None, ask=None, panel=None, build=None, new_report=None, get=None,
                 add_watch(x["symbol"], x["why"], "ideas", now)
                 refresh_marks(book, price_fn)
                 d, why = decide(x["symbol"], "idea", f"Opus suggested {x['symbol']} for the book this week: {x['why']}",
-                                [], book, now, panel or panel_ask, build, new_report)
+                                [], book, now, panel or panel_ask, build, new_report, get)
                 run["ideas"].append({"symbol": x["symbol"], "why": x["why"],
                                      "decision": d["id"] if d else None, "result": d["result"] if d else why})
                 W.write_json(BOOK, book)

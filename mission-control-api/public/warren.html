@@ -144,6 +144,7 @@
 .stats{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}.stats .stat{flex:1 1 140px}
 details.debate{border:1px solid var(--line,#2a3350);border-radius:8px;padding:8px 10px;margin:8px 0}
 details.debate summary{cursor:pointer;line-height:1.6}.vote{margin:6px 0 0}.red{color:#f08a8a}.green{color:#7fd6a0}
+pre.evid{white-space:pre-wrap;font:12px/1.45 ui-monospace,monospace;margin:4px 0;max-height:320px;overflow:auto}details.evidence{margin:6px 0}
 .settle{margin:8px 0 0;padding-left:18px}.settle li{margin:6px 0}.who{display:inline-block;font-size:12px;padding:1px 7px;border-radius:9px;margin-left:4px}
 .who.nasdaq,.who.warren{background:#1f4d36;color:#bdf0d0}.who.both{background:#3a3f5c;color:#d5d9f5}.who.opus{background:#4d421f;color:#f3e2a8}.who.open{background:#5c2626;color:#f5c5c5}
 .means{font-size:13.5px;line-height:1.5;margin-top:6px;color:#dfe6f3}
@@ -594,8 +595,29 @@ function voteHtml(role, v) {
   return `<div class="vote"><b>${ROLE[role]}</b> <span class="pill ${p}">${esc(v.vote)}</span>
     ${v.line && v.line !== 'none' ? `<span class="muted">(${esc(v.line)})</span>` : ''}
     ${v.model ? `<span class="muted">&middot; ${esc(v.model)}</span>` : ''}
+    ${v.replies ? `<div class="why"><b>Answering the question put to it:</b> ${esc(v.replies)}</div>` : ''}
     ${v.answers ? `<div class="why"><b>To the others:</b> ${esc(v.answers)}</div>` : ''}
     <div class="why">${esc(v.why)}</div></div>`;
+}
+function questionHtml(role, q) {
+  if (q.failed) return `<div class="vote"><b>${ROLE[role]}</b> <span class="muted">asked nothing usable${q.why ? ' - ' + esc(q.why) : ''}</span></div>`;
+  return `<div class="vote"><b>${ROLE[role]}</b> <span class="muted">asks ${ROLE[q.to] || esc(q.to)}${q.model ? ' &middot; ' + esc(q.model) : ''}</span>
+    <div class="why">${esc(q.question)}</div></div>`;
+}
+function evidenceHtml(ev) {
+  if (!ev) return '';
+  const part = (label, text) => text ? `<div class="why"><b>${label}</b><pre class="evid">${esc(text)}</pre></div>` : '';
+  return `<details class="evidence"><summary class="muted">What the panel was given</summary>
+    ${part('All three:', ev.shared)}${part('The Bull only:', ev.bull)}${part('The Bear only:', ev.bear)}${part('The Risk manager only:', ev.risk)}
+    ${(ev.missing || []).length ? `<div class="why"><b>Could not get:</b> ${ev.missing.map(esc).join('; ')}</div>` : ''}</details>`;
+}
+function roundsHtml(d) {
+  const each = (o, f) => Object.entries(o || {}).map(([r, v]) => f(r, v)).join('');
+  if (!d.final) return `<div class="k" style="margin-top:8px">Round 1 - each on their own</div>${each(d.round1, voteHtml)}
+      <div class="k" style="margin-top:8px">Round 2 - after reading the others</div>${each(d.round2, voteHtml)}`;
+  return `<div class="k" style="margin-top:8px">Round 1 - each on their own</div>${each(d.round1, voteHtml)}
+      <div class="k" style="margin-top:8px">Round 2 - cross-examination: one question each</div>${each(d.questions, questionHtml)}
+      <div class="k" style="margin-top:8px">Round 3 - answers and the final vote</div>${each(d.final, voteHtml)}`;
 }
 function drawBook() {
   const el = $('book');
@@ -625,14 +647,14 @@ function drawBook() {
       <div class="why"><b>What happened:</b> ${esc(d.event)}</div>
       <div class="why"><b>Warren's check:</b> ${esc(d.check.decision || '-')} &middot; ${esc(d.check.how)}</div>
       ${linesHtml(d.lines)}
-      <div class="k" style="margin-top:8px">Round 1 - each on their own</div>${Object.entries(d.round1).map(([r, v]) => voteHtml(r, v)).join('')}
-      <div class="k" style="margin-top:8px">Round 2 - after reading the others</div>${Object.entries(d.round2).map(([r, v]) => voteHtml(r, v)).join('')}
+      ${evidenceHtml(d.evidence)}
+      ${roundsHtml(d)}
       <div class="why"><b>Verdict:</b> ${esc(d.note)} &middot; ${esc(d.result)}</div></details>`).join('')
     || '<div class="muted">No meetings yet. The panel meets when Warren rates a headline High or Major on a stock the book holds or watches.</div>';
   const ideas = (B.ideas || []).map(r => `<div class="why">${when(r.utc)}: ${(r.ideas || []).map(i => `<b>${esc(i.symbol)}</b> - ${esc(i.result || '')}`).join('; ') || esc(r.note || 'no new ideas')}</div>`).join('');
   el.innerHTML = `${back}
     <div class="card"><h2>Paper book <span class="pill Y">PAPER MONEY</span></h2>
-      <div class="why">An AI-run practice copy of your portfolio. It started ${when(B.started_utc)} with your holdings and ${usd(B.start_cash)} of paper cash, and trades on its own - never with real money. Before any trade Warren checks the stock; a panel of three AIs argue it out in two rounds - a Bull who makes the case for acting, a Bear (on a different AI model) who makes the case against, and a Risk manager who judges only what it does to the book - and only a vote all three agree on is traded. Code sets every size: ${B.buy_pct}% of the book a buy, at most ${B.max_pct}% in one stock.</div>
+      <div class="why">An AI-run practice copy of your portfolio. It started ${when(B.started_utc)} with your holdings and ${usd(B.start_cash)} of paper cash, and trades on its own - never with real money. Before any trade Warren checks the stock; a panel of three AIs argue it out - a Bull who makes the case for acting, a Bear (on a different AI model) who makes the case against, and a Risk manager who judges only what it does to the book. Code hands each its own evidence: the article, the stock's recent news and how the price moved, analysts, insiders, short sellers, the market's mood, how your holdings move together. Round 1 they vote alone, round 2 each puts one pointed question to another, round 3 they answer and vote again - and only a final vote all three agree on is traded. Code sets every size: ${B.buy_pct}% of the book a buy, at most ${B.max_pct}% in one stock.</div>
       <div class="stats">${stat('Worth now', usd(B.value))}${stat('Cash', usd(B.cash))}${stat('If it had done nothing', usd(B.baseline), signed(B.vs_baseline) + ' from its trades')}${stat('Today', `${t.meetings || 0}/${c.meetings} meetings`, `${t.trades || 0}/${c.trades} trades &middot; ${t.checks || 0}/${c.checks} fresh checks`)}</div>
       ${(B.seed_notes || []).map(n => `<div class="why">Note: ${esc(n)}</div>`).join('')}
       ${(B.problems || []).length ? `<div class="why red">The ledger does not balance: ${B.problems.map(esc).join('; ')}</div>` : ''}
