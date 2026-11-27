@@ -597,10 +597,16 @@ function voteHtml(role, v) {
     ${v.model ? `<span class="muted">&middot; ${esc(v.model)}</span>` : ''}
     ${v.replies ? `<div class="why"><b>Answering the question put to it:</b> ${esc(v.replies)}</div>` : ''}
     ${v.answers ? `<div class="why"><b>To the others:</b> ${esc(v.answers)}</div>` : ''}
-    <div class="why">${esc(v.why)}</div></div>`;
+    <div class="why">${esc(v.why)}</div>${refusedHtml(v)}</div>`;
+}
+function refusedHtml(v) {
+  if (!v.failed && !v.retried) return '';
+  if (!v.failed) return `<div class="why muted">(its first answer was sent back once and fixed)</div>`;
+  return `<details class="evidence"><summary class="muted">Why code could not use it${v.rejected ? ': ' + esc(v.rejected) : ''}</summary>
+    ${v.said ? `<pre class="evid">${esc(v.said)}</pre>` : '<div class="why muted">Nothing came back.</div>'}</details>`;
 }
 function questionHtml(role, q) {
-  if (q.failed) return `<div class="vote"><b>${ROLE[role]}</b> <span class="muted">asked nothing usable${q.why ? ' - ' + esc(q.why) : ''}</span></div>`;
+  if (q.failed) return `<div class="vote"><b>${ROLE[role]}</b> <span class="muted">asked nothing usable</span>${refusedHtml(q)}</div>`;
   return `<div class="vote"><b>${ROLE[role]}</b> <span class="muted">asks ${ROLE[q.to] || esc(q.to)}${q.model ? ' &middot; ' + esc(q.model) : ''}</span>
     <div class="why">${esc(q.question)}</div></div>`;
 }

@@ -316,6 +316,70 @@ class TheCrossExamination(Base):
         self.assertEqual((d["round1"]["bull"]["vote"], d["outcome"]), ("hold", "buy"))
 
 
+class ARefusedAnswerGetsOneMoreTry(Base):
+    """The owner (2026-11-26) on a TSLA meeting: "What's wrong with the risk
+    manager?" It failed every round - code refused each answer, said
+    nothing about why, and never asked again - so the panel was one voice
+    short. Its job is the book's weights, and the weights it worked out
+    itself were figures code could not find."""
+
+    def meeting(self, ask):
+        self.check()
+        self.alert()
+        self.tick(ask)
+        return self.decisions()[-1]
+
+    def test_the_risk_manager_is_given_what_the_trade_would_do(self):
+        ask = votes(bull="hold", bear="hold", risk="hold")
+        self.meeting(ask)
+        risk = next(x for x in ask.asked[:3] if "Your role: Risk manager." in x)
+        self.assertIn("now: KMI is 14.0% of the book; cash is 63.7%; Energy is 14.0%", risk)
+        self.assertIn("a buy: $47.00, taking KMI to 20.0% of the book, cash to 57.7%, Energy to 20.0%", risk)
+        self.assertIn("a sell: $55.00 (half), taking KMI to 7.0% of the book, cash to 70.7%, Energy to 7.0%", risk)
+        self.assertIn("never work out a percentage yourself", risk)
+
+    def test_quoting_those_figures_is_allowed(self):
+        cite = {"vote": "hold", "line": "none", "confidence": 3,
+                "why": "A buy would take KMI to 20.0% of the book and cash to 57.7%, which is the limit."}
+        d = self.meeting(votes(bull="hold", bear="hold", risk=cite))
+        self.assertFalse(d["round1"]["risk"].get("failed"))
+
+    def test_a_made_up_figure_is_sent_back_once_with_the_reason(self):
+        bad = {"vote": "hold", "line": "none", "confidence": 3, "why": "That would leave KMI at 23.4% of the book."}
+        ok = {"vote": "hold", "line": "none", "confidence": 3, "why": "A buy would take KMI to 20.0% of the book."}
+        said = iter([bad, ok])
+        base = votes(bull="hold", bear="hold", risk="hold")
+
+        def ask(q, role=None):
+            if role == "risk" and "ROUND 1. Answer on your own" in q:
+                base.asked.append(q)
+                return True, json.dumps(next(said))
+            return base(q, role)
+        ask.asked = base.asked
+        d = self.meeting(ask)
+        again = [x for x in ask.asked if "YOUR LAST ANSWER COULD NOT BE USED" in x]
+        self.assertEqual(len(again), 1)
+        self.assertIn('"why" uses 23.4, which nothing you were given holds', again[0])
+        self.assertEqual((d["round1"]["risk"].get("failed"), d["round1"]["risk"].get("retried")), (None, True))
+
+    def test_refused_twice_records_why_and_what_was_said(self):
+        d = self.meeting(votes(bull="hold", bear="hold", risk={"vote": "maybe", "why": GOOD}))
+        r = d["round1"]["risk"]
+        self.assertEqual((r["failed"], r["vote"], r["rejected"]), (True, "hold", '"vote" must be buy, hold or sell, not "maybe"'))
+        self.assertIn('"vote": "maybe"', r["said"])
+
+    def test_each_refusal_names_its_reason(self):
+        b = self.b
+        self.assertEqual(b.vote_or_why("I think hold.", "", 3)[1], "the answer was not JSON")
+        self.assertEqual(b.question_or_why("Bull, why?", "", "bear")[1], "the answer was not JSON")
+        self.assertEqual(b.vote_or_why(json.dumps({"vote": "hold", "why": GOOD, "answers": "Bull: fine."}), "", 3,
+                                       ("Bull", "Bear"))[1], '"answers" must answer Bear by name')
+        self.assertEqual(b.vote_or_why(json.dumps({"vote": "hold", "why": GOOD, "line": "sell 9"}), "", 3)[1],
+                         '"line" must be buy, none or sell 1 to sell 3, not "sell 9"')
+        self.assertEqual(b.question_or_why(json.dumps({"to": "Bull", "question": "Am I right to be so sure?"}), "",
+                                           "bull")[1], '"to" must name one of the other two members, not "Bull"')
+
+
 class EachSeatHasItsOwnEvidence(Base):
     """The owner (2026-11-25): "they ... could use access to some more tools
     for more informed and better debates." Code gathers it, from real

@@ -123,7 +123,8 @@ ROLES = {
     "risk": ("Risk manager", "You do not judge whether this is a good company - the other two do that. You judge only "
              "the book: how much would sit in this one stock and in its theme, how much cash would be left, and "
              "how it overlaps with the other holdings (the recap lists them with their sectors). Vote on those "
-             "grounds alone, and say which of them decides your vote."),
+             "grounds alone, and say which of them decides your vote. Code has worked out what a buy or a "
+             "sell would do to every weight - quote those figures; never work out a percentage yourself."),
 }
 NOT_YOURS = ("Code sets the size of any trade and places it: never suggest amounts, steps, timing, limit orders or "
              "any other kind of order.")
@@ -746,11 +747,46 @@ def evidence(sym, check, book, alerts, now, get=None):
     risk = {f"HOW CLOSELY {sym} MOVES WITH EACH HOLDING (daily moves, last {CORR_DAYS} trading days; 1 = in step, "
             "0 = unrelated)": corr or ["not available"],
             "THE BOOK BY SECTOR": [f"{k}: {pct(x, v)}%" for k, x in sorted(sectors.items(), key=lambda t: -t[1])]
-            + [f"cash: {pct(book['cash'], v)}%"]}
+            + [f"cash: {pct(book['cash'], v)}%"],
+            "WHAT CODE'S TRADE WOULD DO TO THE BOOK (worked out by code - cite these, do not work out your own)":
+                after_trade(book, sym, check)}
     block = lambda d: "\n".join(f"{k}:\n" + "\n".join(f"  - {x}" for x in (vals or ["nothing found"]))
                                 for k, vals in d.items())
     return {"shared": block(shared), "bull": block(bull), "bear": block(bear), "risk": block(risk),
             "missing": missing}
+
+
+def after_trade(book, sym, check):
+    """What code's own sizing would do to the book, both ways - worked out
+    here so the Risk manager can cite it rather than do the sum. The owner
+    (2026-11-26) saw it fail every round: its job is the book's weights,
+    and every weight it worked out itself was a figure code could not find."""
+    v = value(book)
+    if not v:
+        return []
+    price = mark_of(book, sym) or 0
+    p = held(book, sym)
+    now_in = p["shares"] * price if p else 0.0
+    sec = (W.latest(sym) or {}).get("sector")
+    in_sec = sum(q["shares"] * (mark_of(book, q["symbol"]) or 0) for q in book["positions"]
+                 if sec and (W.latest(q["symbol"]) or {}).get("sector") == sec)
+    out = [f"now: {sym} is {pct(now_in, v)}% of the book; cash is {pct(book['cash'], v)}%"
+           + (f"; {sec} is {pct(in_sec, v)}%" if sec else "")]
+    if check.get("decision") == "Skip":
+        out.append(f"a buy: none - Warren's check says Skip")
+    else:
+        spend, why_not = size_buy(book, sym)
+        out.append(f"a buy: none - {why_not}" if not spend else
+                   f"a buy: ${spend:,.2f}, taking {sym} to {pct(now_in + spend, v)}% of the book, cash to "
+                   f"{pct(book['cash'] - spend, v)}%" + (f", {sec} to {pct(in_sec + spend, v)}%" if sec else ""))
+    if p and price:
+        got = size_sell(book, sym, check.get("decision") == "Skip") * price
+        out.append(f"a sell: ${got:,.2f} ({'all of it' if got >= now_in - 0.01 else 'half'}), taking {sym} to "
+                   f"{pct(now_in - got, v)}% of the book, cash to {pct(book['cash'] + got, v)}%"
+                   + (f", {sec} to {pct(in_sec - got, v)}%" if sec else ""))
+    else:
+        out.append("a sell: none - the book does not hold it")
+    return out
 
 
 # ---------------------------------------------------------------- the panel
@@ -818,54 +854,77 @@ def _numbers(text):
     return {x.rstrip(".,") for x in re.findall(r"\d[\d.,]*", text or "")}
 
 
-def read_question(text, allowed, role):
-    """{"to": role key, "question"} code can stand behind, or None."""
+def _json(text):
     t = (text or "").strip()
     a, b = t.find("{"), t.rfind("}")
     try:
         d = json.loads(t[a:b + 1])
     except (ValueError, TypeError):
         return None
-    if not isinstance(d, dict):
-        return None
+    return d if isinstance(d, dict) else None
+
+
+def _new_figures(text, allowed):
+    """Figures in text that nothing the panel was given holds."""
+    return sorted(_numbers(text) - _numbers(allowed) - {str(i) for i in range(1, 6)})
+
+
+def _figures_why(field, extra):
+    return (f'"{field}" uses {", ".join(extra[:4])}, which nothing you were given holds - use only figures '
+            "shown to you, or say it without a number")
+
+
+def question_or_why(text, allowed, role):
+    """({"to", "question"}, "") or (None, why code refused it)."""
+    d = _json(text)
+    if d is None:
+        return None, "the answer was not JSON"
     to = str(d.get("to") or "").strip().lower()
     key = next((r for r, (nm, _) in ROLES.items() if nm.lower() == to and r != role), None)
     question = str(d.get("question") or "").strip()
-    if not key or not 10 <= len(question) <= 400:
-        return None
-    if _numbers(question) - _numbers(allowed) - {str(i) for i in range(1, 6)}:
-        return None
-    return {"to": key, "question": question}
+    if not key:
+        return None, f'"to" must name one of the other two members, not "{d.get("to")}"'
+    if not 10 <= len(question) <= 400:
+        return None, "the question must be 10 to 400 characters"
+    extra = _new_figures(question, allowed)
+    if extra:
+        return None, _figures_why("question", extra)
+    return {"to": key, "question": question}, ""
 
 
-def read_vote(text, allowed, n_sell, answer=(), replies=False):
-    """The vote code can stand behind, or None: valid JSON, buy/hold/sell, a
-    line that exists, a reason with no number the recap or the news lacks -
-    and in round 2 (`answer` = the others' role names) a reply that names
-    each of them."""
-    t = (text or "").strip()
-    a, b = t.find("{"), t.rfind("}")
-    try:
-        d = json.loads(t[a:b + 1])
-    except (ValueError, TypeError):
-        return None
-    if not isinstance(d, dict):
-        return None
+def read_question(text, allowed, role):
+    """{"to": role key, "question"} code can stand behind, or None."""
+    return question_or_why(text, allowed, role)[0]
+
+
+def vote_or_why(text, allowed, n_sell, answer=(), replies=False):
+    """(vote, "") or (None, why code refused it): valid JSON, buy/hold/sell,
+    a line that exists, a reason with no figure the panel was not given -
+    and in round 3 (`answer` = the others' role names) answers that name
+    each of them, and replies when a question was put to this member."""
+    d = _json(text)
+    if d is None:
+        return None, "the answer was not JSON"
     vote, line, why = d.get("vote"), str(d.get("line") or "none").strip().lower(), str(d.get("why") or "").strip()
-    if vote not in VOTES or not why or len(why) > 700:
-        return None
+    if vote not in VOTES:
+        return None, f'"vote" must be buy, hold or sell, not "{vote}"'
+    if not why or len(why) > 700:
+        return None, f'"why" must be 1 to 700 characters (it was {len(why)})'
     m = re.fullmatch(r"sell (\d+)", line)
     if not (line in ("buy", "none") or (m and 1 <= int(m.group(1)) <= n_sell)):
-        return None
-    # Every figure must be the recap's or the headline's; a small whole
-    # number is allowed on its own, for "sell rule 2" or "3 of the steps".
-    if _numbers(why) - _numbers(allowed) - {str(i) for i in range(1, 6)}:
-        return None
+        return None, f'"line" must be buy, none or sell 1 to sell {n_sell}, not "{line}"'
+    # Every figure must be one the panel was given; a small whole number is
+    # allowed on its own, for "sell rule 2" or "3 of the steps".
+    extra = _new_figures(why, allowed)
+    if extra:
+        return None, _figures_why("why", extra)
     said = str(d.get("answers") or "").strip()[:700]
-    if answer and not all(name.lower() in said.lower() for name in answer):
-        return None
-    if _numbers(said) - _numbers(allowed) - {str(i) for i in range(1, 6)}:
-        return None
+    missing = [name for name in answer if name.lower() not in said.lower()]
+    if missing:
+        return None, f'"answers" must answer {" and ".join(missing)} by name'
+    extra = _new_figures(said, allowed)
+    if extra:
+        return None, _figures_why("answers", extra)
     try:
         conf = int(d.get("confidence"))
     except (TypeError, ValueError):
@@ -875,10 +934,18 @@ def read_vote(text, allowed, n_sell, answer=(), replies=False):
         out["answers"] = said
     if replies:
         r = str(d.get("replies") or "").strip()[:900]
-        if not r or _numbers(r) - _numbers(allowed) - {str(i) for i in range(1, 6)}:
-            return None
+        if not r:
+            return None, '"replies" must answer the question put to you'
+        extra = _new_figures(r, allowed)
+        if extra:
+            return None, _figures_why("replies", extra)
         out["replies"] = r
-    return out
+    return out, ""
+
+
+def read_vote(text, allowed, n_sell, answer=(), replies=False):
+    """The vote code can stand behind, or None (see vote_or_why)."""
+    return vote_or_why(text, allowed, n_sell, answer, replies)[0]
 
 
 def meet(sym, event, check, book, ask, ev=None):
@@ -889,36 +956,48 @@ def meet(sym, event, check, book, ask, ev=None):
     allowed = "\n".join([rc, event] + [ev.get(k) or "" for k in ("shared", "bull", "bear", "risk")])
     n_sell = len(lines["sell"])
 
-    def put(role, q):
-        said = ask(q, role)
-        ok, text, who = (tuple(said) + ("",))[:3]
-        return (text if ok else None), who
+    def put(role, q, read, failed):
+        """Ask; when code cannot stand behind the answer, ask once more with
+        the reason (the owner, 2026-11-26: a member that failed silently
+        every round left the panel one voice short). Still refused: the
+        failure is recorded with the reason and what was said."""
+        why, text = "", None
+        for attempt in (1, 2):
+            if attempt == 2:
+                q += (f"\n\nYOUR LAST ANSWER COULD NOT BE USED: {why}. Answer again, in the same JSON, with "
+                      "that fixed.")
+            ok, text, who = (tuple(ask(q, role)) + ("",))[:3]
+            if not ok:
+                why, text = "no answer came back", None
+                break
+            got, why = read(text)
+            if got:
+                if attempt == 2:
+                    got["retried"] = True
+                break
+        else:
+            got = None
+        if not got:
+            got = dict(failed, failed=True, rejected=why)
+            if text:
+                got["said"] = text.strip()[:600]
+        if who:
+            got["model"] = who
+        return got
 
-    r1 = {}
-    for role in ROLES:
-        text, who = put(role, panel_question(role, sym, rc, lines, event, ev, 1))
-        r1[role] = (read_vote(text, allowed, n_sell) if text else None) or {
-            "vote": "hold", "line": "none", "confidence": None, "failed": True,
+    hold = {"vote": "hold", "line": "none", "confidence": None,
             "why": "(no answer code could stand behind - counted as hold)"}
-        if who:
-            r1[role]["model"] = who
-    qs = {}
-    for role in ROLES:
-        text, who = put(role, panel_question(role, sym, rc, lines, event, ev, 2, r1))
-        qs[role] = (read_question(text, allowed, role) if text else None) or {
-            "failed": True, "question": "(no question code could stand behind)"}
-        if who:
-            qs[role]["model"] = who
+    r1 = {role: put(role, panel_question(role, sym, rc, lines, event, ev, 1),
+                    lambda t: vote_or_why(t, allowed, n_sell), hold) for role in ROLES}
+    qs = {role: put(role, panel_question(role, sym, rc, lines, event, ev, 2, r1),
+                    lambda t, role=role: question_or_why(t, allowed, role),
+                    {"question": "(no question code could stand behind)"}) for role in ROLES}
     final = {}
     for role in ROLES:
         others = tuple(ROLES[o][0] for o in ROLES if o != role)
         put_to = any(x.get("to") == role for x in qs.values() if not x.get("failed"))
-        text, who = put(role, panel_question(role, sym, rc, lines, event, ev, 3, r1, qs))
-        final[role] = (read_vote(text, allowed, n_sell, others, put_to) if text else None) or {
-            "vote": "hold", "line": "none", "confidence": None, "failed": True,
-            "why": "(no answer code could stand behind - counted as hold)"}
-        if who:
-            final[role]["model"] = who
+        final[role] = put(role, panel_question(role, sym, rc, lines, event, ev, 3, r1, qs),
+                          lambda t, others=others, put_to=put_to: vote_or_why(t, allowed, n_sell, others, put_to), hold)
     votes = [v["vote"] for v in final.values()]
     if len(set(votes)) == 1 and not any(v.get("failed") for v in final.values()):
         return r1, qs, final, votes[0], "all three agree"
