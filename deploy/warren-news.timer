@@ -1,0 +1,12 @@
+[Unit]
+Description=Read the news on the stocks you own every two hours, 07:20-21:20 ET (owner, 2026-11-19)
+
+[Timer]
+# Belfort refreshes his headlines hourly; every two hours is soon enough to
+# hear about real news, and a run with nothing new asks no model at all.
+OnCalendar=*-*-* 07,09,11,13,15,17,19,21:20:00 America/New_York
+Persistent=false
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

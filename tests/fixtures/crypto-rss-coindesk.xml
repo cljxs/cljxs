@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- coindesk RSS, captured 2026-10-16 from coindesk.xml: the first 12 items, title and pubDate as published; each link cut to the site's home page (article slugs read as tokens to check-secrets.py), no article text. -->
+<rss version="2.0"><channel>
+<title>coindesk</title>
+<item><title>Big Tech's AI auditors will only see what they're shown</title><link>https://www.coindesk.com/</link><pubDate>Fri, 16 Oct 2026 14:58:22 +0000</pubDate></item>
+<item><title>Traders will soon be able to bet on whether Coinbase, Robinhood and Marathon will hit their targets</title><link>https://www.coindesk.com/</link><pubDate>Fri, 16 Oct 2026 11:15:00 +0000</pubDate></item>
+<item><title>Circle targets 40 new markets as stablecoin demand grows globally</title><link>https://www.coindesk.com/</link><pubDate>Fri, 16 Oct 2026 10:54:35 +0000</pubDate></item>
+<item><title>Quantum Alliance forms amid warnings 6.4 million bitcoin face future quantum threat</title><link>https://www.coindesk.com/</link><pubDate>Fri, 16 Oct 2026 10:52:26 +0000</pubDate></item>
+<item><title>Tokenized Tesla surges as Elon Musk unveils SpaceX-powered flying Roadster prototype</title><link>https://www.coindesk.com/</link><pubDate>Fri, 16 Oct 2026 10:48:49 +0000</pubDate></item>
+<item><title>Altcoins outpace bitcoin as celestia jumps 16%, Warsh silent on interest-rate plans</title><link>https://www.coindesk.com/</link><pubDate>Fri, 16 Oct 2026 10:41:03 +0000</pubDate></item>
+<item><title>Scammer gets scammed in Ledger spy-chip exploit, loses almost $5 million in bitcoin</title><link>https://www.coindesk.com/</link><pubDate>Fri, 16 Oct 2026 10:24:30 +0000</pubDate></item>
+<item><title>Live updates: Crypto gives up some ground as AI selloff picks up steam</title><link>https://www.coindesk.com/</link><pubDate>Fri, 16 Oct 2026 09:48:14 +0000</pubDate></item>
+<item><title>U.S. judge rejects Gemini’s appeal to void $5 million settlement despite CFTC backing</title><link>https://www.coindesk.com/</link><pubDate>Fri, 16 Oct 2026 09:36:21 +0000</pubDate></item>
+<item><title>MSCI approves rules that could eject Strategy, Metaplanet from equity indexes</title><link>https://www.coindesk.com/</link><pubDate>Fri, 16 Oct 2026 08:34:48 +0000</pubDate></item>
+<item><title>XRP has failed to make holders rich like bitcoin and ether. Here’s why</title><link>https://www.coindesk.com/</link><pubDate>Fri, 16 Oct 2026 05:53:58 +0000</pubDate></item>
+<item><title>An OpenAI agent ran out of Ethereum funds, and took from a wallet it did not own</title><link>https://www.coindesk.com/</link><pubDate>Fri, 16 Oct 2026 04:29:19 +0000</pubDate></item>
+</channel></rss>

@@ -1,0 +1,13 @@
+[Unit]
+Description=Three coaches (Belfort, Bolt, Ace): yesterday's journal and daily analysis (no AI, costs nothing; changes no rule)
+Documentation=https://github.com/cljxs/cljxs
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+WorkingDirectory=/root/ecosystem
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/coach.py daily
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal

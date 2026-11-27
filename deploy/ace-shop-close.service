@@ -1,0 +1,13 @@
+[Unit]
+Description=Line Shopper: settle finished bets and take Pinnacle's closing price for bets about to start (no AI)
+Documentation=https://github.com/cljxs/cljxs
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+WorkingDirectory=/root/ecosystem
+ExecStart=/usr/bin/flock /run/ace-shop.lock /usr/bin/python3 /root/ecosystem/scripts/ace-shop.py close
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal

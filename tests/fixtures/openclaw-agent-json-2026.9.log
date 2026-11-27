@@ -1,0 +1,234 @@
+== dry cycle: built locally only, nothing deployed or recorded as contacted
+{
+  "runId": "c114ed2e-e6cd-4c45-ab5a-364c38ae9f2c",
+  "status": "ok",
+  "summary": "",
+  "result": {
+    "payloads": [
+      {
+        "text": "CHECK PASSED\nTARGET: Example Bakery (bakery) - 1 problem(s), every fact sourced\n  . problem dead-domain: confirmed - no working answer ([Errno -2] Name or service not known)\nSITE: 1 page(s), 1107 KB, 2 photo(s), all local\nDRAFT: email to owner@example.com, 85 words\nSHOT: work/shots/mobile.png\nSHOT: work/shots/desktop.png\n      read them to see the site the way a visitor will\nMEMORY: 2026-10-05 | built: Example Bakery (bakery, dead-domain) - email draft\n\nAll deliverables present. Paste the lines above as your sign-off.",
+        "mediaUrl": null
+      }
+    ],
+    "meta": {
+      "durationMs": 368928,
+      "agentMeta": {
+        "sessionId": "wake-paul-1791224393",
+        "sessionFile": "agent:paul:explicit:wake-paul-1791224393",
+        "provider": "openrouter",
+        "model": "xiaomi/mimo-v2.6-pro",
+        "contextTokens": 1048576,
+        "contextTokensSource": "resolved",
+        "agentHarnessId": "openclaw",
+        "credentialSource": {
+          "kind": "profile"
+        },
+        "usage": {
+          "input": 155712,
+          "output": 12573,
+          "cacheRead": 1914752,
+          "reasoningTokens": 3430,
+          "total": 2083037,
+          "cost": {
+            "total": 0.08567365240000001
+          }
+        },
+        "lastCallUsage": {
+          "input": 315,
+          "output": 173,
+          "cacheRead": 94208,
+          "cacheWrite": 0,
+          "cost": {
+            "total": 0.0006266838,
+            "totalOrigin": "provider-billed"
+          },
+          "reasoningTokens": 11,
+          "total": 94696
+        },
+        "promptTokens": 94523,
+        "contextBudgetStatus": {
+          "schemaVersion": 1,
+          "source": "pre-prompt-estimate",
+          "updatedAt": 1791224416058,
+          "provider": "openrouter",
+          "model": "xiaomi/mimo-v2.6-pro",
+          "route": "fits",
+          "shouldCompact": false,
+          "estimatedPromptTokens": 11379,
+          "contextTokenBudget": 1048576,
+          "promptBudgetBeforeReserve": 1028576,
+          "reserveTokens": 20000,
+          "effectiveReserveTokens": 20000,
+          "remainingPromptBudgetTokens": 1017197,
+          "overflowTokens": 0,
+          "toolResultReducibleChars": 0,
+          "messageCount": 0,
+          "unwindowedMessageCount": 0
+        },
+        "codeModeEngaged": false,
+        "assistantTurns": 28,
+        "costUsd": 0.08567365240000001,
+        "terminalReceipt": {
+          "runId": "c114ed2e-e6cd-4c45-ab5a-364c38ae9f2c",
+          "sessionId": "wake-paul-1791224393",
+          "turnId": "c114ed2e-e6cd-4c45-ab5a-364c38ae9f2c",
+          "requested": {
+            "provider": "openrouter",
+            "model": "xiaomi/mimo-v2.6-pro"
+          },
+          "effective": {
+            "provider": "openrouter",
+            "model": "xiaomi/mimo-v2.6-pro",
+            "responseModel": "xiaomi/mimo-v2.6-pro"
+          },
+          "successfulToolNames": [
+            "progress_card",
+            "web_search",
+            "web_fetch",
+            "exec",
+            "write",
+            "view_image"
+          ],
+          "rerouted": false
+        }
+      },
+      "aborted": false,
+      "systemPromptReport": {
+        "source": "run",
+        "generatedAt": 1791224415241,
+        "sessionId": "wake-paul-1791224393",
+        "provider": "openrouter",
+        "model": "xiaomi/mimo-v2.6-pro",
+        "workspaceDir": "/root/ecosystem/agents/paul",
+        "systemPrompt": {
+          "chars": 36783,
+          "projectContextChars": 18578,
+          "nonProjectContextChars": 18205
+        },
+        "injectedWorkspaceFiles": [
+          {
+            "name": "AGENTS.md",
+            "path": "/root/ecosystem/agents/paul/AGENTS.md",
+            "missing": false,
+            "rawChars": 14701,
+            "injectedChars": 14701,
+            "truncated": false
+          },
+          {
+            "name": "USER.md",
+            "path": "/root/ecosystem/agents/paul/USER.md",
+            "missing": false,
+            "rawChars": 308,
+            "injectedChars": 308,
+            "truncated": false
+          }
+        ],
+        "skills": {
+          "promptChars": 5327,
+          "entries": [
+            {
+              "name": "browser-automation",
+              "blockChars": 324
+            },
+            {
+              "name": "canvas",
+              "blockChars": 243
+            },
+            {
+              "name": "weather",
+              "blockChars": 280
+            }
+          ]
+        },
+        "tools": {
+          "listChars": 0,
+          "schemaChars": 40788,
+          "entries": [
+            {
+              "name": "read",
+              "summaryChars": 164,
+              "schemaChars": 481,
+              "propertiesCount": 5
+            },
+            {
+              "name": "exec",
+              "summaryChars": 424,
+              "schemaChars": 1240,
+              "propertiesCount": 12
+            },
+            {
+              "name": "progress_card",
+              "summaryChars": 1249,
+              "schemaChars": 401,
+              "propertiesCount": 2
+            },
+            {
+              "name": "sessions_spawn",
+              "summaryChars": 1962,
+              "schemaChars": 3476,
+              "propertiesCount": 26
+            },
+            {
+              "name": "web_search",
+              "summaryChars": 164,
+              "schemaChars": 991,
+              "propertiesCount": 12
+            },
+            {
+              "name": "web_fetch",
+              "summaryChars": 78,
+              "schemaChars": 317,
+              "propertiesCount": 3
+            }
+          ]
+        }
+      },
+      "finalAssistantVisibleText": "CHECK PASSED\nTARGET: Example Bakery (bakery) - 1 problem(s), every fact sourced\nAll deliverables present. Paste the lines above as your sign-off.",
+      "finalAssistantRawText": "CHECK PASSED\nTARGET: Example Bakery (bakery) - 1 problem(s), every fact sourced\nAll deliverables present. Paste the lines above as your sign-off.",
+      "replayInvalid": true,
+      "livenessState": "working",
+      "stopReason": "stop",
+      "executionTrace": {
+        "winnerProvider": "openrouter",
+        "winnerModel": "xiaomi/mimo-v2.6-pro",
+        "attempts": [
+          {
+            "provider": "openrouter",
+            "model": "xiaomi/mimo-v2.6-pro",
+            "result": "success",
+            "stage": "assistant"
+          }
+        ],
+        "fallbackUsed": false,
+        "runner": "embedded"
+      },
+      "requestShaping": {
+        "authMode": "auth-profile",
+        "thinking": "medium"
+      },
+      "completion": {
+        "stopReason": "stop",
+        "finishReason": "stop"
+      },
+      "toolSummary": {
+        "calls": 47,
+        "tools": [
+          "progress_card",
+          "web_search",
+          "web_fetch",
+          "exec",
+          "write",
+          "view_image"
+        ],
+        "failures": 4
+      }
+    }
+  }
+}
+dry cycle: Example Bakery built locally at agents/paul/sites/example-bakery-concept-abc123
+paul-cycle.service: Deactivated successfully.
+Finished paul-cycle.service - Paul website run (costs fuel - once a day).
+paul-cycle.service: Consumed 16.286s CPU time.
+Starting paul-cycle.service - Paul website run (costs fuel - once a day)...
+live cycles start after you have seen a dry cycle - python3 scripts/paul.py go-live
+paul-cycle.service: Deactivated successfully.

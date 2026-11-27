@@ -1,0 +1,15 @@
+[Unit]
+Description=Line Shopper: settle, then bet any US price worth +2% over Pinnacle's true odds (no AI; the second Odds API account)
+Documentation=https://github.com/cljxs/cljxs
+
+[Service]
+# Added 2026-11-11 (owner, from WinnerOdds' True Odds Calculator). Its own
+# paper $10,000 under agents/ace/state/shop/ - never Ace's book.
+Type=oneshot
+User=root
+Environment=HOME=/root
+WorkingDirectory=/root/ecosystem
+ExecStart=/usr/bin/flock /run/ace-shop.lock /usr/bin/python3 /root/ecosystem/scripts/ace-shop.py run
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal

@@ -1,0 +1,22 @@
+[Unit]
+Description=Warren's paper book - the three-AI panel on High or Major news, and any paper trade (paper money only)
+Documentation=https://github.com/cljxs/cljxs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=ECOSYSTEM_ROOT=/root/ecosystem
+WorkingDirectory=/root/ecosystem
+# Reads the alerts warren-news wrote twenty minutes earlier (and runs the
+# same watcher on the book's own stocks). Only a High or Major headline on a
+# stock the book holds or watches calls the panel: six Sonnet questions on
+# the plan, at most warren-book.py MEETINGS_PER_DAY a day. A stock without a
+# recent Warren check is checked first (one of Warren's Opus runs).
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/warren-book.py tick
+TimeoutStartSec=3600
+StandardOutput=journal
+StandardError=journal

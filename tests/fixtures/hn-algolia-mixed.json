@@ -1,0 +1,169 @@
+{
+ "exhaustive": {
+  "nbHits": true,
+  "typo": true
+ },
+ "exhaustiveNbHits": true,
+ "exhaustiveTypo": true,
+ "hits": [
+  {
+   "_highlightResult": {
+    "author": {
+     "matchLevel": "none",
+     "matchedWords": [],
+     "value": "nathanpankon"
+    },
+    "comment_text": {
+     "fullyHighlighted": false,
+     "matchLevel": "full",
+     "matchedWords": [
+      "looking",
+      "for",
+      "a",
+      "tool"
+     ],
+     "value": "There are some attempts at this (semanticdiff, etc) and they seem very good. But I was <em>looking for a tool</em> that could actively edit a set portion of code, maintaining a small diff above a moving target<p>In that case merging from &quot;main&quot; starts to be extremely difficult"
+    },
+    "story_title": {
+     "matchLevel": "none",
+     "matchedWords": [],
+     "value": "How big is a Git commit?"
+    },
+    "story_url": {
+     "matchLevel": "none",
+     "matchedWords": [],
+     "value": "https://ratfactor.com/cards/git-commit-size"
+    }
+   },
+   "_tags": [
+    "comment",
+    "author_nathanpankon",
+    "story_50017548"
+   ],
+   "author": "nathanpankon",
+   "comment_text": "There are some attempts at this (semanticdiff, etc) and they seem very good. But I was looking for a tool that could actively edit a set portion of code, maintaining a small diff above a moving target<p>In that case merging from &quot;main&quot; starts to be extremely difficult",
+   "created_at": "2026-10-11T12:42:04Z",
+   "created_at_i": 1791722524,
+   "objectID": "50042698",
+   "parent_id": 50041809,
+   "story_id": 50017548,
+   "story_title": "How big is a Git commit?",
+   "story_url": "https://ratfactor.com/cards/git-commit-size",
+   "updated_at": "2026-10-13T21:35:58Z"
+  },
+  {
+   "_highlightResult": {
+    "author": {
+     "matchLevel": "none",
+     "matchedWords": [],
+     "value": "torudev"
+    },
+    "story_text": {
+     "fullyHighlighted": false,
+     "matchLevel": "full",
+     "matchedWords": [
+      "looking",
+      "for",
+      "a",
+      "tool"
+     ],
+     "value": "I implemented a task runner called Lask. Let me introduce it to you.<p>Lask is a lightweight task runner with a statically typed DSL. It runs by calling Docker from Lask on the host.<p>Makefiles or shell scripts I wrote often failed to run on my colleagues' machines, and I lost count of how many times I had to debug them.\nYAML-based CI/CD pipelines often fail after waiting for a lot of minutes, which make me angry.<p>When I was <em>looking for a tool</em> to solve this problem, I found Dagger. Dagger seemed to good for me.\nDagger runs pipelines on Docker, so it is highly portable and can use the type system of general-purpose languages.<p>However, Dagger was too much for me. Dagger does not run on its own, and requires to set up a general-purpose language ecosystem.\nI feel like I was using heavy machinery to move a potted plant. I want to call a tool with only a single binary and one file.<p>So I decided to create Lask. I want to call simple function with simple command. I want to fix the type and environment of the function.<p>command { &quot;node&quot;, &quot;npm&quot;, &quot;npx&quot; } on #node:20.20.2-alpine3.23\ntest() = $ npm test<p>$ lask run test<p>I made a tool that can extract errors immediately by type, run the same way on local and CI, and call simply.\nYou can use Lask with a single binary of the lask command and Docker installed.\nLask has LSP, so you can use completion and syntax highlighting. You can complete not only the lask command, but also the functions that lask calls.\nI considered practical use, so it can be called declared commands, such as `lask cmd psql ...` to check data manually, or `lask cmd kubectl get pods`.<p>However, Lask does not have as many as Dagger's features, cannot use the advanced ecosystem of general-purpose languages.\nAlso, Lask is not a build system, so it does not optimize builds by detecting differences. Lask is just a tool to call builder tools.<p>Lask is licensed under MIT, currently at version 0.7.0 before official release. The implementation is in Haskell. It distributes binaries for Linux/Windows/MacOS.<p>Any feedback is welcome. I would be happy to receive comments.\nMore detailed specifications and more practical examples are described in the README. Please take a look.\nThank you for reading to the end. Please forgive my poor English."
+    },
+    "title": {
+     "matchLevel": "none",
+     "matchedWords": [],
+     "value": "Show HN: Lask \u2013 A task runner with a type system and pinned Docker environments"
+    },
+    "url": {
+     "matchLevel": "none",
+     "matchedWords": [],
+     "value": "https://github.com/lask-task-runner/lask"
+    }
+   },
+   "_tags": [
+    "story",
+    "author_torudev",
+    "story_49977602",
+    "show_hn"
+   ],
+   "author": "torudev",
+   "children": [
+    49995464
+   ],
+   "created_at": "2026-10-06T12:46:52Z",
+   "created_at_i": 1791290812,
+   "num_comments": 0,
+   "objectID": "49977602",
+   "points": 2,
+   "story_id": 49977602,
+   "story_text": "I implemented a task runner called Lask. Let me introduce it to you.<p>Lask is a lightweight task runner with a statically typed DSL. It runs by calling Docker from Lask on the host.<p>Makefiles or shell scripts I wrote often failed to run on my colleagues&#x27; machines, and I lost count of how many times I had to debug them.\nYAML-based CI&#x2F;CD pipelines often fail after waiting for a lot of minutes, which make me angry.<p>When I was looking for a tool to solve this problem, I found Dagger. Dagger seemed to good for me.\nDagger runs pipelines on Docker, so it is highly portable and can use the type system of general-purpose languages.<p>However, Dagger was too much for me. Dagger does not run on its own, and requires to set up a general-purpose language ecosystem.\nI feel like I was using heavy machinery to move a potted plant. I want to call a tool with only a single binary and one file.<p>So I decided to create Lask. I want to call simple function with simple command. I want to fix the type and environment of the function.<p>command { &quot;node&quot;, &quot;npm&quot;, &quot;npx&quot; } on #node:20.20.2-alpine3.23\ntest() = $ npm test<p>$ lask run test<p>I made a tool that can extract errors immediately by type, run the same way on local and CI, and call simply.\nYou can use Lask with a single binary of the lask command and Docker installed.\nLask has LSP, so you can use completion and syntax highlighting. You can complete not only the lask command, but also the functions that lask calls.\nI considered practical use, so it can be called declared commands, such as `lask cmd psql ...` to check data manually, or `lask cmd kubectl get pods`.<p>However, Lask does not have as many as Dagger&#x27;s features, cannot use the advanced ecosystem of general-purpose languages.\nAlso, Lask is not a build system, so it does not optimize builds by detecting differences. Lask is just a tool to call builder tools.<p>Lask is licensed under MIT, currently at version 0.7.0 before official release. The implementation is in Haskell. It distributes binaries for Linux&#x2F;Windows&#x2F;MacOS.<p>Any feedback is welcome. I would be happy to receive comments.\nMore detailed specifications and more practical examples are described in the README. Please take a look.\nThank you for reading to the end. Please forgive my poor English.",
+   "title": "Show HN: Lask \u2013 A task runner with a type system and pinned Docker environments",
+   "updated_at": "2026-10-07T16:55:23Z",
+   "url": "https://github.com/lask-task-runner/lask"
+  },
+  {
+   "_highlightResult": {
+    "author": {
+     "matchLevel": "none",
+     "matchedWords": [],
+     "value": "Fh_"
+    },
+    "story_text": {
+     "fullyHighlighted": false,
+     "matchLevel": "full",
+     "matchedWords": [
+      "looking",
+      "for",
+      "a",
+      "tool"
+     ],
+     "value": "I am <em>looking for a tool</em> which would allow me to take photos of my garden and then generate a 3D editable garden where I can drag and move things. Something like Blender or CAD but with the photos as inputs."
+    },
+    "title": {
+     "matchLevel": "none",
+     "matchedWords": [],
+     "value": "Is there a lanscaping tool which can take photos of my garden and make 3D model?"
+    }
+   },
+   "_tags": [
+    "story",
+    "author_Fh_",
+    "story_49896742",
+    "ask_hn"
+   ],
+   "author": "Fh_",
+   "children": [
+    49897920,
+    49898567
+   ],
+   "created_at": "2026-09-29T17:14:46Z",
+   "created_at_i": 1790702086,
+   "num_comments": 3,
+   "objectID": "49896742",
+   "points": 3,
+   "story_id": 49896742,
+   "story_text": "I am looking for a tool which would allow me to take photos of my garden and then generate a 3D editable garden where I can drag and move things. Something like Blender or CAD but with the photos as inputs.",
+   "title": "Is there a lanscaping tool which can take photos of my garden and make 3D model?",
+   "updated_at": "2026-09-30T08:20:10Z"
+  }
+ ],
+ "hitsPerPage": 50,
+ "nbHits": 3,
+ "nbPages": 1,
+ "page": 0,
+ "params": "query=%22looking+for+a+tool%22&tags=%28story%2Ccomment%29&numericFilters=created_at_i%3E1789411585&hitsPerPage=50&advancedSyntax=true&analyticsTags=backend",
+ "processingTimeMS": 1,
+ "processingTimingsMS": {
+  "_request": {
+   "queue": 19,
+   "roundTrip": 24
+  },
+  "fetch": {
+   "query": 1,
+   "scanning": 1
+  },
+  "total": 1
+ },
+ "query": "\"looking for a tool\"",
+ "serverTimeMS": 21
+}

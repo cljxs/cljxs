@@ -1,0 +1,20 @@
+[Unit]
+Description=Warren's paper book - the weekly search for new stocks (paper money only)
+Documentation=https://github.com/cljxs/cljxs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=ECOSYSTEM_ROOT=/root/ecosystem
+WorkingDirectory=/root/ecosystem
+# One Opus question with web search for up to three new stocks; Warren
+# checks each (one Opus run apiece, inside his daily cap) and the panel
+# meets on it. Ideas go on the book's watchlist either way.
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/warren-book.py ideas
+TimeoutStartSec=5400
+StandardOutput=journal
+StandardError=journal

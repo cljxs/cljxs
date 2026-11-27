@@ -1,0 +1,856 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<title>Warren</title>
+<!-- Warren, the stock analyst (owner, 2026-11-19): the Before-You-Buy
+     Checklist, filled in. The owner types the ticker, amount, months and
+     goal; scripts/warren.py does every number and the green / yellow / red
+     ratings, through /api/warren. Nothing is worked out on this page.
+     Opened from Warren's house in the village (?embed=1). -->
+<style>
+  :root{
+    --bg:#0b1020; --panel:#10172a; --card:#131b31; --card2:#172140; --line:rgba(148,163,184,.16);
+    --ink:#e6e9f2; --mute:#94a0b8; --dim:#5f6b85;
+    --green:#22c55e; --green2:#4ade80; --amber:#f59e0b; --amber2:#fbbf24; --red:#f43f5e; --red2:#fb7185;
+    --gold:#e8c26a; --blue:#38bdf8;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+    --serif:Georgia,"Times New Roman",serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink)}
+  body{font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased;padding:16px}
+  body.embed{padding:10px;background:rgba(5,8,16,.94)}
+  a{color:var(--blue)}
+  .frame{max-width:1120px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    box-shadow:0 20px 70px rgba(0,0,0,.5);overflow:hidden}
+  .head{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:18px 22px;
+    background:linear-gradient(135deg,rgba(232,194,106,.14),rgba(16,23,42,0) 60%);border-bottom:1px solid var(--line)}
+  .badge{width:52px;height:52px;border-radius:12px;display:grid;place-items:center;font-size:28px;
+    background:#1c2647;border:1px solid rgba(232,194,106,.45)}
+  .head h1{margin:0;font:700 25px var(--serif);letter-spacing:.2px}
+  .head .sub{color:var(--mute)}
+  .sp{flex:1}
+  .btn{font:600 13px var(--sans);color:var(--ink);background:transparent;border:1px solid var(--line);
+    border-radius:8px;padding:9px 14px;cursor:pointer;white-space:nowrap}
+  .btn:hover{border-color:var(--mute)}
+  .btn.go{color:#1a1405;border-color:var(--gold);background:var(--gold)}
+  .btn.go:hover{filter:brightness(1.08)}
+  .btn.sm{padding:5px 9px;font-size:12px}
+  .btn:disabled{opacity:.5;cursor:default}
+  .pill{font-size:12px;padding:3px 9px;border-radius:7px;border:1px solid var(--line);color:var(--mute);white-space:nowrap;display:inline-block}
+  .G{color:var(--green2);border-color:rgba(34,197,94,.45);background:rgba(34,197,94,.1)}
+  .Y{color:var(--amber2);border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.1)}
+  .R{color:var(--red2);border-color:rgba(244,63,94,.45);background:rgba(244,63,94,.1)}
+  .grid{display:grid;grid-template-columns:340px minmax(0,1fr);gap:16px;padding:16px 22px 22px}
+  @media (max-width:900px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px}
+  .k{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute);font-weight:700;margin-bottom:8px}
+  label{display:block;font-size:12.5px;color:var(--mute);margin:10px 0 4px}
+  input,select,textarea{width:100%;font:14px var(--sans);color:var(--ink);background:#0d1428;border:1px solid var(--line);
+    border-radius:8px;padding:9px 10px}
+  textarea{min-height:58px;resize:vertical}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .muted{color:var(--mute);font-size:13px}
+  .err{color:var(--red2)}
+  .list button{display:flex;width:100%;justify-content:space-between;align-items:center;gap:8px;text-align:left;
+    background:none;border:0;border-top:1px solid var(--line);color:var(--ink);padding:9px 2px;cursor:pointer;font:14px var(--sans)}
+  .list button:first-child{border-top:0}
+  .list button.on{color:var(--gold)}
+  .hold{display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--line);padding:7px 0}
+  .hold:first-child{border-top:0}
+  .own{border-top:1px solid var(--line)}
+  .own:first-child{border-top:0}
+  .own-row{display:block;width:100%;text-align:left;background:none;border:0;color:var(--ink);padding:9px 2px;cursor:pointer;font:14px var(--sans)}
+  .own-row .top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+  .own-row .top .num{white-space:nowrap}
+  .warn{color:#ff5f5f;font-size:18px;font-weight:700;margin-right:6px;line-height:1}
+  .warn.big{font-size:26px;margin-right:8px}
+  .own-row .chev{color:var(--mute);margin-left:6px}
+  .own.open .own-row{color:var(--gold)}
+  .ed{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:12px;margin:2px 0 10px}
+  .ed .tabs{display:flex;gap:6px;margin-bottom:10px}
+  .ed .tabs .btn.on{border-color:var(--gold);color:var(--gold)}
+  .ed label{display:block;font-size:12px;color:var(--mute);margin:8px 0 4px}
+  .ed .acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .bell{font-size:12px;font-weight:700;padding:1px 6px;border-radius:7px;margin-right:6px}
+  .bell.sell{background:rgba(240,163,163,.18);color:#f0a3a3}
+  .imp{display:inline-block;font-size:12px;font-weight:700;letter-spacing:.5px;margin-right:8px;padding:2px 7px;border-radius:7px}
+  .imp.i5{background:rgba(240,120,120,.22);color:#ff9b9b}
+  .imp.i4{background:rgba(245,170,100,.2);color:#f5b26b}
+  .imp.i3{background:rgba(245,194,107,.14);color:#f5c26b}
+  .imp.i2,.imp.i1,.imp.i0{background:rgba(160,170,190,.12);color:var(--mute)}
+  .note{border-top:1px solid var(--line);padding:10px 0;margin-top:6px}
+  .note-text{white-space:pre-wrap;margin:4px 0;font-size:14px;line-height:1.5}
+  .bell.watch{background:rgba(245,194,107,.18);color:#f5c26b}
+  .amber{color:#f5c26b}
+  .bell.buy{background:rgba(95,211,154,.18);color:#5fd39a}
+  .news-sum{font-size:13px;margin:4px 0 10px}
+  .news-sum .btn{margin-left:6px}
+  .alert{border-left:3px solid var(--line);padding:6px 0 8px 10px;margin-bottom:10px;font-size:13px}
+  .alert.sell{border-color:#f0a3a3}
+  .alert.buy{border-color:#5fd39a}
+  .alert.seen{opacity:.6}
+  .ed .tabs{flex-wrap:wrap}
+  .btn.del{color:#f0a3a3;border-color:rgba(240,163,163,.4)}
+  .btn.del.arm{background:#f0a3a3;color:#2a0b0b}
+  #h-msg{margin-top:8px}
+  [hidden]{display:none !important}
+  .stockpage{padding:16px 22px 22px}
+  .stockpage .ed{background:none;border:0;padding:0;margin:0}
+  .stock-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+  .stock-head{display:flex;gap:14px;align-items:center;margin-bottom:12px}
+  .stock-head .sym{font:700 30px/1 var(--serif, Georgia, serif);color:var(--gold)}
+  .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:14px}
+  @media (max-width:700px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px}
+  .stat .n{font-size:11px;color:var(--mute)}
+  .stat .v{font-size:17px;font-weight:700;margin-top:3px}
+  .verdict{display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:18px;border-radius:12px;margin-bottom:14px;border:1px solid}
+  .verdict.Buy{background:rgba(34,197,94,.1);border-color:rgba(34,197,94,.5)}
+  .verdict.Wait{background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.5)}
+  .verdict.Skip{background:rgba(244,63,94,.1);border-color:rgba(244,63,94,.5)}
+  .verdict .big{font:700 30px var(--serif)}
+  .verdict.Buy .big{color:var(--green2)} .verdict.Wait .big{color:var(--amber2)} .verdict.Skip .big{color:var(--red2)}
+  .tiles{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-bottom:14px}
+  @media (max-width:700px){.tiles{grid-template-columns:repeat(3,minmax(0,1fr))}}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;text-align:center;cursor:pointer}
+  .tile .n{font-size:11px;color:var(--mute)}
+  .tile .t{font-size:12.5px;font-weight:600;margin:3px 0 6px;min-height:34px}
+  .dot{width:12px;height:12px;border-radius:50%;display:inline-block;vertical-align:middle}
+  .dot.G{background:var(--green)} .dot.Y{background:var(--amber)} .dot.R{background:var(--red)}
+  h2{font:700 19px var(--serif);margin:0 0 10px;display:flex;align-items:center;gap:10px}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{text-align:left;padding:8px 9px;border-top:1px solid var(--line);vertical-align:top}
+  th{color:var(--mute);font-weight:600;font-size:12px;border-top:0}
+  td.r{white-space:nowrap}
+  .why{color:var(--mute);font-size:12.5px}
+  .why.red{color:#f0a3a3}
+  .chk{font-size:12px;margin-top:4px}
+  .chk.ok{color:#5fd39a}
+  .chk.bad{color:#f5c26b}
+  .src{font-size:11.5px;margin-top:3px;color:var(--mute)}
+  .src a{color:var(--blue)}
+  .caution{margin-top:8px;padding:8px 10px;border-radius:8px;background:rgba(245,194,107,.12);color:#f5c26b;font-size:13px}
+  .vs{margin-top:10px;padding:8px 10px;border:1px solid #2a3350;border-radius:8px;background:#121a2e}
+.vsk{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#9aa6c4;margin-bottom:4px}
+.cells{display:flex;flex-wrap:wrap;gap:6px 18px}.cell{font-size:14px;max-width:170px}.cell .sym{font-size:12px;color:#9aa6c4;font-weight:600}
+.cell.mine{font-weight:700;color:#fff}.cell.mine .sym{color:#f3d36b}.cell.avg{color:#c9d2ea;border-left:1px solid #2a3350;padding-left:12px}.vsnote{font-size:13px;color:#c9d2ea;margin-top:4px;line-height:1.45}
+.story{margin:6px 0 0;padding-left:18px}.story li{margin:6px 0;line-height:1.45}
+.bookrow{padding:10px 0;border-bottom:1px solid var(--line,#2a3350)}.bookrow:last-child{border-bottom:0}
+.bookrow .top{display:flex;justify-content:space-between;gap:10px;align-items:center}
+.stats{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}.stats .stat{flex:1 1 140px}
+details.debate{border:1px solid var(--line,#2a3350);border-radius:8px;padding:8px 10px;margin:8px 0}
+details.debate summary{cursor:pointer;line-height:1.6}.vote{margin:6px 0 0}.red{color:#f08a8a}.green{color:#7fd6a0}
+pre.evid{white-space:pre-wrap;font:12px/1.45 ui-monospace,monospace;margin:4px 0;max-height:320px;overflow:auto}details.evidence{margin:6px 0}
+.settle{margin:8px 0 0;padding-left:18px}.settle li{margin:6px 0}.who{display:inline-block;font-size:12px;padding:1px 7px;border-radius:9px;margin-left:4px}
+.who.nasdaq,.who.warren{background:#1f4d36;color:#bdf0d0}.who.both{background:#3a3f5c;color:#d5d9f5}.who.opus{background:#4d421f;color:#f3e2a8}.who.open{background:#5c2626;color:#f5c5c5}
+.means{font-size:13.5px;line-height:1.5;margin-top:6px;color:#dfe6f3}
+  .means b{color:var(--gold)}
+  .scale{font-size:12px;color:var(--mute);margin-top:3px;line-height:1.45}
+  .formula{font:11.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;color:#c9b27a;margin-top:4px}
+  .formula .worked{display:block;color:var(--mute)}
+  .up{color:#5fd39a;font-weight:600}
+  .down{color:#f0a3a3;font-weight:600}
+  .reasons{margin:8px 0 0;padding-left:18px;color:#f0a3a3;font-size:13.5px;line-height:1.5}
+  .num{font-variant-numeric:tabular-nums}
+  ul{margin:6px 0 0 18px;padding:0}
+  .status{padding:12px 14px;border:1px solid rgba(232,194,106,.4);border-radius:10px;background:rgba(232,194,106,.08);margin-bottom:14px}
+  .empty{text-align:center;padding:50px 20px;color:var(--mute)}
+  .empty .e{font-size:44px}
+  .foot{color:var(--dim);font-size:12px;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="head">
+    <div class="badge">🎩</div>
+    <div>
+      <h1>Warren</h1>
+      <div class="sub">Before-You-Buy Checklist &middot; you give the basics, Warren does the research</div>
+    </div>
+    <div class="sp"></div>
+    <span class="pill" id="runs"></span>
+    <a class="btn" id="back" href="/">Deck</a>
+    <button class="btn" id="close" style="display:none">Close</button>
+  </div>
+
+  <div class="grid">
+    <div>
+      <div class="card">
+        <div class="k">Step 0 &middot; The basics</div>
+        <label for="f-sym">Ticker</label>
+        <input id="f-sym" placeholder="KMI" autocapitalize="characters" autocomplete="off" maxlength="10">
+        <div class="row2">
+          <div><label for="f-amt">Amount ($)</label><input id="f-amt" type="number" min="1" step="1" placeholder="125"></div>
+          <div><label for="f-mon">Hold (months)</label><input id="f-mon" type="number" min="1" step="1" placeholder="12"></div>
+        </div>
+        <label for="f-goal">Buying mainly for</label>
+        <select id="f-goal"><option value="both">Both growth and dividends</option><option value="dividends">Dividends</option><option value="growth">Growth</option></select>
+        <label for="f-why">Why I'm interested (one sentence)</label>
+        <textarea id="f-why" maxlength="300" placeholder="Steady pipeline income with little oil exposure"></textarea>
+        <label for="f-hold">If it dropped 30%, could I hold without panicking?</label>
+        <select id="f-hold"><option value="unsure">Not sure</option><option value="yes">Yes</option><option value="no">No</option></select>
+        <div style="margin-top:14px"><button class="btn go" id="run" style="width:100%" data-busy="Warren is researching - a minute or two">Run the checklist</button></div>
+        <div class="foot">Every number comes from SEC filings, Yahoo and Nasdaq, computed by code. Opus writes only the business, rivals, risks and sell rules.</div>
+      </div>
+
+      <div class="card">
+        <div class="k">Saved checks</div>
+        <div class="list" id="checks"></div>
+      </div>
+
+      <div class="card">
+        <div class="k">What I own - tap one to edit, buy, sell or read its news</div>
+        <div id="news-sum" class="news-sum"></div>
+        <div id="holdings"></div>
+        <div id="h-msg" class="why"></div>
+        <div class="k" style="margin-top:14px">Add a stock</div>
+        <div class="row2" style="margin-top:10px">
+          <input id="h-sym" placeholder="Ticker" maxlength="10" autocapitalize="characters">
+          <input id="h-amt" type="number" min="0" step="1" placeholder="$ in it">
+        </div>
+        <input id="h-avg" type="number" min="0" step="0.01" placeholder="Average price paid per share" style="margin-top:8px">
+        <select id="h-sec" style="margin-top:8px"><option value="">Sector (from its last check)</option></select>
+        <button class="btn sm" id="h-add" style="margin-top:8px">Add or update</button>
+      </div>
+
+      <div class="card" id="book-card">
+        <div class="k">Paper book - an AI runs a practice copy of your portfolio</div>
+        <div id="book-sum" class="why">Loading...</div>
+        <button class="btn sm" id="book-open" style="margin-top:8px">Open the paper book</button>
+      </div>
+
+      <div class="card" id="recheck-card" style="display:none">
+        <div class="k">After-earnings re-checks</div>
+        <div id="rechecks"></div>
+      </div>
+    </div>
+
+    <div>
+      <div id="job"></div>
+      <div id="report">
+      <div class="empty"><div class="e">🎩</div><div>Fill in the basics and press <b>Run the checklist</b>.<br>Warren fills in Steps 1&ndash;6 and the decision.</div></div>
+      </div>
+    </div>
+  </div>
+  <!-- One stock you own, as its own page (owner, 2026-11-19): Back returns to the checklist screen -->
+  <div id="stock" class="stockpage" hidden></div>
+  <!-- Warren's paper book (owner, 2026-11-23): its own page, Back returns -->
+  <div id="book" class="stockpage" hidden></div>
+</div>
+
+<script src="/shared/busy.js"></script>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const C = r => ({ Green: 'G', Yellow: 'Y', Red: 'R' })[r] || '';
+const pill = r => `<span class="pill ${C(r)}">${esc(r || '-')}</span>`;
+const dpill = d => `<span class="pill ${d === 'Buy' ? 'G' : d === 'Wait' ? 'Y' : 'R'}">${esc(d)}</span>`;
+const when = u => { const d = new Date(u); return isNaN(d) ? '' : d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
+const STEPS = [['business', 'Know the business'], ['growth', 'Growing and profitable?'], ['cash', 'Cash and dividend safety'],
+  ['debt', 'Debt and what it pays for'], ['price', 'Fair price vs. its sector'], ['risk', 'Risks and exit plan']];
+// Only the four kinds of link warren.py writes.
+const safe = u => /^https:\/\/(data\.sec\.gov|query1\.finance\.yahoo\.com|api\.nasdaq\.com)\//.test(u || '') ? u : null;
+
+if (new URLSearchParams(location.search).get('embed') === '1') {
+  document.body.classList.add('embed');
+  $('back').style.display = 'none';
+  $('close').style.display = '';
+  const close = () => parent.postMessage({ type: 'warren-close' }, '*');
+  $('close').onclick = close;
+  addEventListener('keydown', e => { if (e.key === 'Escape' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) close(); });
+}
+
+let D = null, shown = null, poll = null, B = null, bookOpen = false;
+
+async function load() {
+  loadBook();             // the book does not wait on the holdings' prices
+  try {
+    D = await (await fetch('/api/warren')).json();
+  } catch (e) { D = { ok: false, error: String(e) }; }
+  draw();
+  const running = D && ((D.job && D.job.state === 'running') || (D.newsJob && D.newsJob.state === 'running'));
+  clearTimeout(poll);
+  if (running) poll = setTimeout(load, 4000);
+  else if (D && D.job && D.job.state === 'done' && shown !== D.job.symbol && D.job.symbol) open(D.job.symbol, true);
+  else if (!shown && D && (D.checks || []).length) open(D.checks[0].symbol);
+}
+
+function draw() {
+  if (!D || !D.ok) { $('report').innerHTML = `<div class="card err">${esc((D || {}).error || 'Could not reach Warren')}</div>`; return; }
+  $('runs').textContent = `${D.runs_per_day - D.runs_today} of ${D.runs_per_day} checks left today`;
+  $('checks').innerHTML = (D.checks || []).map(c => `<button data-s="${esc(c.symbol)}" class="${c.symbol === shown ? 'on' : ''}">
+      <span><b>${esc(c.symbol)}</b> <span class="muted">${esc(c.company || '')}</span><br><span class="muted">${when(c.when_utc)}${c.changes && c.changes.length ? ' &middot; changed' : ''}</span></span>
+      ${dpill(c.decision)}</button>`).join('')
+    || '<div class="muted">None yet.</div>';
+  document.querySelectorAll('#checks button').forEach(b => b.onclick = () => open(b.dataset.s));
+  drawHoldings();
+  // Redraw an open stock page with fresh numbers - but never under your
+  // fingers while you are typing in it.
+  const typing = document.activeElement && $('stock').contains(document.activeElement)
+    && /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
+  if (openHold && !typing) drawStock();
+  if ($('h-sec').options.length === 1) (D.sectors || []).forEach(s => $('h-sec').add(new Option(s, s)));
+  const rc = D.rechecks || [];
+  $('recheck-card').style.display = rc.length ? '' : 'none';
+  $('rechecks').innerHTML = rc.slice().reverse().slice(0, 8).map(r => `<div class="hold"><span><b>${esc(r.symbol)}</b> <span class="muted">${when(r.when_utc)}</span><br>
+      <span class="muted">${esc((r.changes || []).join(', ') || 'no rating changed')}</span></span>${dpill(r.decision)}</div>`).join('');
+  const j = D.job;
+  $('job').innerHTML = j && j.state === 'running'
+    ? `<div class="status">Warren is checking <b>${esc(j.symbol)}</b>: reading its SEC filings, prices and analysts' forecasts, then writing up the business and risks. This takes a minute or two.</div>`
+    : j && j.state === 'failed' ? `<div class="card err">The check of ${esc(j.symbol)} stopped: ${esc(j.error || '')}</div>` : '';
+}
+
+async function open(symbol, fromJob) {
+  shown = symbol;
+  const r = await fetch('/api/warren/check/' + encodeURIComponent(symbol));
+  if (!r.ok) { $('report').innerHTML = `<div class="card err">No check of ${esc(symbol)} yet.</div>`; return; }
+  report(await r.json());
+  draw();
+}
+
+function watchWords(c) {
+  const w = c.watch_terms;
+  if (!w || !((w.sell || []).some(x => x.length) || (w.buy || []).length)) return '';
+  const line = (label, t) => t.length ? `<li><b>${label}:</b> ${t.map(esc).join(', ')}</li>` : '';
+  return `<div class="k" style="margin-top:14px">Words Warren watches the news for</div>
+    <div class="why">If you own this stock, Warren searches the news for these and tells you when a headline uses them.</div>
+    <ul>${(w.sell || []).map((t, i) => line(`Sell rule ${i + 1}`, t)).join('')}${line('Buy more', w.buy || [])}</ul>`;
+}
+// What the number means for this stock, and the scale it is judged on (owner, 2026-11-20)
+function meansLine(r) {
+  if (!r.means) return '';
+  return `<div class="means"><b>What it means:</b> ${esc(r.means)}</div>${r.scale ? `<div class="scale">${esc(r.scale)}</div>` : ''}`;
+}
+function checkedLine(r) {
+  const c = r.checked;
+  if (!c) return '';
+  if (c.status === 'match') return `<div class="chk ok" title="${esc(c.items.map(x => `${x.label}: ${x.ours}`).join(' · '))}">&#10003; Nasdaq's figures agree</div>`;
+  if (c.status === 'settled') return `<div class="chk ok">&#10003; Settled from the company's filing: ${c.items.filter(x => x.says).map(x => esc(x.says)).join(' ')}</div>`;
+  return `<div class="chk bad">&#9888; Nasdaq disagrees: ${c.items.filter(x => x.status === 'disagree').map(x => `${esc(x.label)} - Warren ${esc(x.ours)}, Nasdaq ${esc(x.theirs)}${x.says ? ` (${esc(x.says)})` : ''}`).join('; ')}</div>`;
+}
+function sourceLine(r) {
+  return (r.sources || []).length ? `<div class="src">Source: ${r.sources.map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}</a>`).join(' &middot; ')}</div>` : '';
+}
+function secondCard(c) {
+  const ss = (c.numbers || {}).second_source;
+  if (!ss) return '';
+  const alarms = (c.numbers || {}).alarms || [];
+  let body;
+  if (ss.status === 'not checked') body = `<span class="muted">Not checked: ${esc(ss.why || '')}</span>`;
+  else {
+    const odd = Object.values(ss.figures).filter(f => ['disagree', 'settled', 'explained'].includes(f.status));
+    const open = odd.filter(f => f.status === 'disagree').length;
+    body = `Nasdaq's statements for the quarter ending ${esc(ss.period_end)}: <b>${ss.matched} of ${ss.compared}</b> key figures match Warren's.`
+      + (odd.length ? ` Where they differ, Warren went to the company's own filing to see who is right${open ? ` - ${open} it could not settle` : ''}:`
+        + `<ul class="settle">${odd.map(f => settleItem(f)).join('')}</ul>` : '');
+  }
+  const al = alarms.length ? `<div class="k" style="margin-top:10px">Warren's own alarms</div><ul class="reasons">${alarms.map(a => `<li>${esc(a)}</li>`).join('')}</ul>` : '<div class="why">No impossible combinations found.</div>';
+  return `<div class="card"><h2>Checked against a second source</h2>${body}${al}</div>`;
+}
+function vsLine(r) {
+  const v = r.vs;
+  if (!v) return '';
+  const cells = v.cols.map(c => `<div class="cell${c.mine ? ' mine' : ''}"><div class="sym">${esc(c.symbol)}</div>${esc(c.text)}</div>`).join('')
+    + (v.average ? `<div class="cell avg"><div class="sym">Rivals' avg</div>${esc(v.average)}</div>` : '');
+  return `<div class="vs"><div class="vsk">Vs its rivals: ${esc(v.label)}</div><div class="cells">${cells}</div><div class="vsnote">${esc(v.note)}</div></div>`;
+}
+function settleItem(f) {
+  const st = f.settled, v = st ? st.verdict : null;
+  const tag = !st ? '<span class="who open">Not settled</span>'
+    : st.by === 'opus' ? `<span class="who opus">Opus's reading: ${v === 'warren' ? 'Warren' : v === 'nasdaq' ? 'Nasdaq' : 'neither'}</span>`
+    : `<span class="who ${v}">${v === 'nasdaq' ? 'Nasdaq was right - fixed' : v === 'warren' ? 'Warren is right' : 'Both, counted differently'}</span>`;
+  const link = st && st.link ? ` <a href="${esc(st.link.url)}" target="_blank" rel="noopener">${esc(st.link.label)}</a>` : '';
+  return `<li><b>${esc(f.label)}</b>: Warren ${esc(money(f.ours))}, Nasdaq ${esc(money(f.theirs))} ${tag}`
+    + `<div class="why">${st ? esc(st.says) + link : "Neither number is on a standard line of the filing, and Opus could not look today. Treat this figure with care."}</div></li>`;
+}
+function money(v) {
+  if (v == null) return '-';
+  const a = Math.abs(v), sgn = v < 0 ? '-' : '';
+  return a >= 1e9 ? `${sgn}$${(a / 1e9).toFixed(2)}B` : a >= 1e6 ? `${sgn}$${Math.round(a / 1e6)}M` : `${sgn}$${Math.round(a).toLocaleString()}`;
+}
+
+function rowsTable(rows) {
+  return `<table><tr><th>Check</th><th>Answer</th><th>Rating</th></tr>${rows.map(r => `<tr><td>${esc(r.check)}${r.formula ? `<div class="formula">${esc(r.formula)}${r.math ? `<span class="worked">= ${esc(r.math)}</span>` : ''}</div>` : ''}${checkedLine(r)}${sourceLine(r)}</td>
+    <td>${esc(r.answer)}${r.why ? `<div class="why${r.rating === 'Red' ? ' red' : ''}">${r.rating === 'Red' ? '<b>Why Red:</b> ' : ''}${esc(r.why)}</div>` : ''}${meansLine(r)}${vsLine(r)}</td><td class="r">${pill(r.rating)}</td></tr>`).join('')}</table>`;
+}
+
+function report(c) {
+  const s = c.steps, n = c.numbers || {}, i = c.inputs || {};
+  const tiles = STEPS.map(([k, t], ix) => `<div class="tile" data-go="st-${k}"><div class="n">Step ${ix + 1}</div><div class="t">${t}</div><span class="dot ${C(s[k].rating)}"></span> <span class="muted">${esc(s[k].rating)}</span></div>`).join('');
+  const sec = (k, ix, title, body) => `<div class="card" id="st-${k}"><h2>Step ${ix}: ${title} ${pill(s[k].rating)}</h2>${body}</div>`;
+  const p = s.price, d = s.debt, rk = s.risk;
+  const html = `
+  <div class="verdict ${esc(c.decision)}"><div class="big">${esc(c.decision)}<button class="btn sm" id="rerun" style="display:block;margin-top:8px" data-busy="Warren is re-checking - a minute or two">Re-run</button></div>
+    <div style="flex:1;min-width:220px"><b>${esc(c.company)} (${esc(c.symbol)})</b> &middot; ${esc(c.sector)} &middot; $${esc(n.price)}<br>
+    <span>${esc(c.decision_why)}</span>${(c.caution || []).length ? `<div class="caution">&#9888; Check before acting: ${esc(c.caution.join(' '))}</div>` : ''}${(c.decision_reasons || []).length ? `<ul class="reasons">${c.decision_reasons.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}${(c.changes || []).length ? `<div class="why">Since the last check: ${esc(c.changes.join(', '))}</div>` : ''}</div></div>
+  <div class="tiles">${tiles}</div>
+  ${c.ai_note ? `<div class="status">${esc(c.ai_note)}</div>` : ''}
+  ${secondCard(c)}
+  <div class="card"><h2>Step 0: The basics</h2><table>
+    <tr><td>Company and ticker</td><td>${esc(c.company)} (${esc(c.symbol)})</td></tr>
+    <tr><td>Price and date</td><td>$${esc(n.price)} (${esc(n.as_of)})</td></tr>
+    <tr><td>How much</td><td>$${Number(i.amount).toLocaleString()}</td></tr>
+    <tr><td>How long</td><td>${esc(i.months)} months</td></tr>
+    <tr><td>Buying for</td><td>${esc(i.goal)}</td></tr>
+    <tr><td>Why</td><td>${esc(i.why || '-')}</td></tr>
+    <tr><td>Could I hold through a 30% drop?</td><td>${esc(i.hold_drop)}</td></tr>
+    ${c.position ? ownedRows(c.position, i.amount) : ''}</table></div>
+  ${sec('business', 1, 'Know the business', rowsTable(s.business.rows))}
+  ${sec('growth', 2, 'Is it growing and profitable?', rowsTable(s.growth.rows))}
+  ${sec('cash', 3, 'Does it make cash, and is the dividend safe?', rowsTable(s.cash.rows))}
+  ${sec('debt', 4, 'Debt &mdash; how much, and what is it paying for?', `
+    <div class="k">Part A: how much</div>${rowsTable(d.rows)}
+    <div class="k" style="margin-top:14px">${esc(d.part_b_title || `Part B: the ${(d.year_end || '').slice(0, 4)} cash flow, line by line`)}</div>
+    <table>${(d.part_b || []).map(([l, v]) => `<tr><td>${esc(l)}</td><td class="num">${esc(v)}</td></tr>`).join('')}</table>
+    ${d.part_b_src ? `<div class="src">Source: ${d.part_b_src.map(x => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>`).join(' · ')}</div>` : ''}
+    ${(d.story || []).length ? `<div class="k" style="margin-top:14px">Why the debt rose - what the filing and news say</div>
+      <ul class="story">${d.story.map(x => `<li>${x.amount ? `<b>${esc(x.line)}, ${esc(x.amount)}:</b> ` : `<b>${esc(x.line)}:</b> `}${esc(x.what)} <a href="${esc(x.source.url)}" target="_blank" rel="noopener">${esc(x.source.label)}</a></li>`).join('')}</ul>
+      <div class="foot">The words are Opus's reading of the filing and news; each dollar figure is the cash flow statement's own.</div>` : ''}
+    <p><b>Quick test:</b> ${d.pays_dividend === false ? 'it paid no dividend that year, so no dividend can be paid on a loan.' : `operating cash &minus; dividends paid = <b>${esc(d.quick_test)}</b>. ${d.quick_test_ok ? 'Positive, so the dividend is <b>not</b> paid on a loan.' : '<span class="err">Negative: the dividend is being paid on a loan.</span>'}`}</p>
+    ${rk.debt_note ? `<p class="muted">Warren: ${esc(rk.debt_note)}</p>` : ''}<div class="foot">${esc(d.note || '')}</div>`)}
+  ${sec('price', 5, 'Is the price fair? Compare with its sector', `
+    <table><tr><th>Metric</th>${p.table.columns.map(x => `<th>${esc(x)}</th>`).join('')}</tr>
+    ${p.table.rows.map((r, k) => `<tr>${r.map((v, j) => `<td class="${j ? 'num' : ''}">${esc(v || (j ? '-' : ''))}${!j && (p.table.notes || [])[k] ? `<div class="means">${esc(p.table.notes[k])}</div>` : ''}${!j && (p.table.means || [])[k] ? meansLine({means: p.table.means[k].says, scale: p.table.means[k].scale}) : ''}${!j && (p.table.formulas || [])[k] ? `<div class="formula">${esc(p.table.formulas[k])}</div>` : ''}</td>`).join('')}</tr>`).join('')}</table>
+    <div style="margin-top:12px">${rowsTable(p.rows)}</div>
+    <div class="k" style="margin-top:14px">Chart check</div>
+    <table>${p.chart.map(([q, a]) => `<tr><td>${esc(q)}</td><td>${esc(a)}</td></tr>`).join('')}</table>
+    <p class="muted">${esc(p.chart_note)}</p>`)}
+  ${sec('risk', 6, 'Risks and your exit plan', `
+    ${rowsTable(rk.rows)}
+    ${(c.ai && c.ai.sell_rules || []).length ? `<div class="k" style="margin-top:14px">3 things that would make me sell</div><ul>${c.ai.sell_rules.map(x => `<li>I would sell if ${esc((y => y.charAt(0).toLowerCase() + y.slice(1))(x.replace(/^I would sell if\s*/i, '')))}</li>`).join('')}</ul>` : ''}
+    ${(rk.risks || []).length ? `<div class="k" style="margin-top:14px">Risks from the latest news and filings</div><ul>${rk.risks.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+    ${rk.buy_more ? `<p><b>What would make me buy more:</b> ${esc(rk.buy_more)}</p>` : ''}
+    ${watchWords(c)}
+    <p class="muted">Warren re-checks this stock automatically after its next quarterly report.</p>`)}
+  <div class="card"><div class="k">Sources</div>
+    ${Object.entries(c.sources || {}).map(([k, u]) => safe(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(k)}</a>` : '').join(' &middot; ')}
+    <div class="foot">Checked ${when(c.when_utc)}. Educational only, not personalized financial advice.</div></div>`;
+  $('report').innerHTML = html;
+  $('rerun').onclick = () => rerun(c);
+  document.querySelectorAll('[data-go]').forEach(t => t.onclick = () => $(t.dataset.go).scrollIntoView({ behavior: 'smooth' }));
+}
+
+const usd = v => '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const dollars = v => Number.isInteger(Number(v)) ? '$' + Number(v).toLocaleString() : usd(v);
+const shares = v => { const n = Number(v); return `${n.toLocaleString(undefined, { maximumFractionDigits: 4 })} share${n === 1 ? '' : 's'}`; };
+const signed = v => (v >= 0 ? '+' : '-') + usd(Math.abs(v));
+function gainText(p) {
+  if (p.gain == null) return '';
+  return `<span class="${p.gain >= 0 ? 'up' : 'down'}">${signed(p.gain)} (${p.gain_pct >= 0 ? '+' : ''}${p.gain_pct}%)</span>`;
+}
+function ownedRows(p, amount) {
+  if (!p.breakeven) return `<tr><td>Already own</td><td>$${Number(p.amount).toLocaleString()} - add your average price paid under What I own to see your breakeven</td></tr>`;
+  let t = `<tr><td>Already own</td><td>${Number(p.shares).toLocaleString(undefined, { maximumFractionDigits: 4 })} shares for $${Number(p.amount).toLocaleString()}</td></tr>
+    <tr><td>Breakeven (average price paid)</td><td><b>${usd(p.breakeven)}</b><div class="why">before any trading fees</div></td></tr>`;
+  if (p.price) t += `<tr><td>At today's price</td><td>${usd(p.value)}: ${gainText(p)}</td></tr>`;
+  if (p.after) t += `<tr><td>After buying $${Number(amount).toLocaleString()} more</td><td>breakeven <b>${usd(p.after.breakeven)}</b> on ${Number(p.after.shares).toLocaleString(undefined, { maximumFractionDigits: 4 })} shares</td></tr>`;
+  return t;
+}
+function breakeven(h) {
+  const p = h.position || {};
+  if (!p.breakeven) return 'Add your average price paid to see your breakeven.';
+  let t = `Breakeven <b>${usd(p.breakeven)}</b> &middot; ${shares(p.shares)}`;
+  if (p.price) t += ` &middot; ${usd(p.price)} ${h.live ? `now (${new Date(h.price_as_of).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})` : `at its last check${h.price_as_of ? ` (${esc(h.price_as_of)})` : ''}`}: ${gainText(p)}`;
+  return t;
+}
+
+let openHold = null, holdTab = 'edit';
+const alertsFor = sym => ((D.news || {}).alerts || []).filter(a => a.symbol === sym);
+// A red warning on a stock with High or Major news not yet dismissed (owner, 2026-11-20)
+function warning(sym, big) {
+  const top = alertsFor(sym).filter(a => !a.seen && (a.importance || 0) >= 4);
+  if (!top.length) return '';
+  const major = top.some(a => a.importance === 5);
+  return `<span class="warn${big ? ' big' : ''}" title="${top.length} ${major ? 'Major' : 'High'}-importance headline${top.length === 1 ? '' : 's'} - open its News tab">&#9888;&#xFE0E;</span>`;
+}
+function bell(sym) {
+  const un = alertsFor(sym).filter(a => !a.seen);
+  if (!un.length) return '';
+  const sell = un.some(a => a.signal === 'sell'), buy = un.some(a => a.signal === 'buy');
+  return `<span class="bell ${sell ? 'sell' : buy ? 'buy' : 'watch'}" title="${un.length} news alert${un.length === 1 ? '' : 's'}">&#128276; ${un.length}</span>`;
+}
+function drawNewsSummary() {
+  const n = D.news || {}, last = n.last || {};
+  const parts = [];
+  if (n.unseen) parts.push(`<b>${n.unseen} news alert${n.unseen === 1 ? '' : 's'}</b>`
+    + (n.important ? ` &middot; <span class="down"><b>${n.important} rated High or Major</b></span>` : '')
+    + (n.sell ? ` &middot; <span class="down">${n.sell} to consider selling</span>` : '')
+    + (n.buy ? ` &middot; <span class="up">${n.buy} to consider buying more</span>` : '')
+    + (n.watch ? ` &middot; <span class="amber">${n.watch} about your rules</span>` : '') + ' - tap the stock with the bell');
+  else parts.push('No news alerts.');
+  const running = D.newsJob && D.newsJob.state === 'running';
+  parts.push(`<div class="why">${last.run_utc ? `Last read ${when(last.run_utc)}${last.note ? ` - ${esc(last.note)}` : `: ${last.new} new headline${last.new === 1 ? '' : 's'}, ${last.alerts} alert${last.alerts === 1 ? '' : 's'}`}.` : 'Warren reads the news on what you own every two hours, 7:20 am to 9:20 pm ET.'}
+    <button class="btn sm" id="news-now" ${running ? 'disabled' : ''}>${running ? 'Reading the news...' : 'Check news now'}</button></div>`);
+  $('news-sum').innerHTML = parts.join('');
+  $('news-now').onclick = async () => {
+    const r = await fetch('/api/warren/news', { method: 'POST' });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); msg(`<span class="err">${esc(j.error || 'Could not start')}</span>`); }
+    load();
+  };
+}
+const IMP = { 5: 'Major', 4: 'High', 3: 'Medium', 2: 'Low', 1: 'Minor' };
+function importance(a) {
+  const n = a.importance;
+  if (!n) return '<span class="imp i0" title="This alert came before Warren rated news">Not rated</span>';
+  return `<span class="imp i${n}" title="How much this matters, 1 to 5${a.by === 'words' ? ' - your rules\' words only, not yet judged' : ''}">`
+    + `${'&#9679;'.repeat(n)}${'&#9675;'.repeat(5 - n)} ${IMP[n]}</span>`;
+}
+// ---- your own notes on a stock (owner, 2026-11-20)
+let editingNote = null;
+const notesFor = sym => ((D.notes || {})[sym] || []).slice().reverse();     // newest first
+function notesBody(h) {
+  const list = notesFor(h.symbol).map(n => editingNote === n.id
+    ? `<div class="note"><textarea id="ne-${esc(n.id)}" rows="4">${esc(n.text)}</textarea>
+        <div class="acts"><button class="btn go sm" data-nsave="${esc(n.id)}">Save</button><button class="btn sm" data-ncancel="1">Cancel</button></div></div>`
+    : `<div class="note"><div class="muted" style="font-size:12px">${when(n.when_utc)}${n.edited_utc ? ' &middot; edited ' + when(n.edited_utc) : ''}</div>
+        <div class="note-text">${esc(n.text)}</div>
+        <div class="acts"><button class="btn sm" data-nedit="${esc(n.id)}">Edit</button><button class="btn sm del" data-ndel="${esc(n.id)}">Delete</button></div></div>`).join('');
+  return `<label>A note for yourself on ${esc(h.symbol)} - why you bought it, what you are waiting for, anything</label>
+    <textarea id="n-text" rows="4" maxlength="4000" placeholder="like: Bought for the peptides market. Re-check after Q4 earnings in February."></textarea>
+    <div class="acts"><button class="btn go sm" id="n-save">Save note</button></div>
+    ${list || '<div class="why" style="margin-top:10px">No notes yet. Only you see them - Warren does not read them.</div>'}`;
+}
+async function saveNote(body) {
+  if (body.action !== 'remove' && !String(body.text || '').trim()) return msg('<span class="err">The note is empty.</span>');
+  const r = await fetch('/api/warren/notes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const out = await r.json().catch(() => ({}));
+  if (!r.ok) return msg(`<span class="err">${esc(out.error || 'That did not save')}</span>`);
+  editingNote = null;
+  if (body.action === 'add') $('n-text').value = '';
+  await load();
+  drawStock();
+  msg(body.action === 'remove' ? 'Note deleted.' : 'Note saved.');
+}
+
+function newsBody(h) {
+  const al = alertsFor(h.symbol);
+  if (!al.length) return '<div class="why">No news alerts for this stock yet. Warren flags headlines that touch its sell rules or its buy-more test from the last check.</div>';
+  return al.map(a => `<div class="alert ${a.signal}${a.seen ? ' seen' : ''}">
+      <div>${importance(a)}<span class="pill ${a.signal === 'sell' ? 'R' : a.signal === 'buy' ? 'G' : 'Y'}">${a.signal === 'sell' ? 'Consider selling' : a.signal === 'buy' ? 'Consider buying more' : 'Worth a look'}</span>
+        <span class="muted">${esc(a.publisher || '')}${a.published ? ' &middot; ' + esc(a.published.replace(/ [+-]\d{4}$/, '').replace(/:\d\d$/, '')) : ''}</span></div>
+      <div style="margin:4px 0">${/^https:\/\/[^\s"'<>]+$/.test(a.link || '') ? `<a href="${esc(a.link)}" target="_blank" rel="noopener">${esc(a.title)}</a>` : esc(a.title)}</div>
+      <div>${esc(a.why)}</div>
+      ${a.rule ? `<div class="why">Touches your sell rule: ${esc(a.rule)}</div>` : a.signal === 'buy' ? '<div class="why">Touches your buy-more test.</div>' : ''}
+      ${(a.matched || []).length ? `<div class="why">Words from your rules in it: ${esc(a.matched.join(', '))}</div>` : ''}
+      ${a.seen ? '' : `<button class="btn sm" data-seen="${esc(a.id)}" style="margin-top:6px">Dismiss</button>`}</div>`).join('');
+}
+function drawHoldings() {
+  const hs = D.holdings || [];
+  drawNewsSummary();
+  $('holdings').innerHTML = hs.map(h => `<div class="own">
+      <button class="own-row" data-own="${esc(h.symbol)}"><div class="top"><span>${warning(h.symbol)}<b>${esc(h.symbol)}</b> <span class="muted">${esc(h.sector)}</span></span>
+        <span class="num">${bell(h.symbol)}${dollars(h.amount)}<span class="chev">&#9656;</span></span></div>
+        <div class="why">${breakeven(h)}</div></button></div>`).join('')
+    || '<div class="muted">Nothing yet. Add what you own so Step 6 can check how much is in one sector.</div>';
+  document.querySelectorAll('[data-own]').forEach(b => b.onclick = () => openStock(b.dataset.own));
+}
+
+// ---- Warren's paper book: practice money, run by a three-AI panel
+const ROLE = { bull: 'Bull', bear: 'Bear', risk: 'Risk manager' };
+async function loadBook() {
+  try { B = await (await fetch('/api/warren/book')).json(); } catch (e) { B = { error: String(e) }; }
+  drawBookCard();
+  if (bookOpen) drawBook();
+}
+function drawBookCard() {
+  if (!B || B.error) { $('book-sum').textContent = B && B.error ? `Could not read the paper book: ${B.error}` : 'Loading...'; return; }
+  if (!B.started) {
+    $('book-sum').innerHTML = `Not started yet. Its first run copies What I own (shares and average prices) and adds ${usd(B.start_cash)} of paper cash, then a three-AI panel trades it on the news.`;
+    return;
+  }
+  const new_ = B.unseen ? ` &middot; <b class="red">${B.unseen} new trade${B.unseen > 1 ? 's' : ''}</b>` : '';
+  $('book-sum').innerHTML = `Worth <b>${usd(B.value)}</b> &middot; ${signed(B.vs_baseline)} against doing nothing${new_}`;
+}
+function openBook() {
+  bookOpen = true;
+  document.querySelector('.grid').hidden = true;
+  $('book').hidden = false;
+  try { history.pushState({ book: 1 }, ''); } catch { /* fine without history */ }
+  drawBook();
+  window.scrollTo({ top: 0 });
+  if (B && B.unseen) fetch('/api/warren/book/seen', { method: 'POST' }).then(() => loadBook());
+}
+function closeBook(fromHistory) {
+  if (!bookOpen) return;
+  bookOpen = false;
+  $('book').hidden = true;
+  $('book').innerHTML = '';
+  document.querySelector('.grid').hidden = false;
+  if (!fromHistory) { try { if (history.state && history.state.book) history.back(); } catch { /* ignore */ } }
+  window.scrollTo({ top: 0 });
+}
+window.addEventListener('popstate', () => closeBook(true));
+function linesHtml(l) {
+  if (!l || (!l.buy && !(l.sell || []).length)) return '<div class="why">No check yet - Warren checks it before any trade.</div>';
+  return `<div class="why"><b>What would make me buy:</b> ${esc(l.buy || '-')}</div>
+    <div class="why"><b>What would make me sell:</b> ${(l.sell || []).map((r, i) => `${i + 1}. ${esc(r)}`).join(' &middot; ') || '-'}</div>`;
+}
+function voteHtml(role, v) {
+  const p = v.vote === 'buy' ? 'G' : v.vote === 'sell' ? 'R' : 'Y';
+  return `<div class="vote"><b>${ROLE[role]}</b> <span class="pill ${p}">${esc(v.vote)}</span>
+    ${v.line && v.line !== 'none' ? `<span class="muted">(${esc(v.line)})</span>` : ''}
+    ${v.model ? `<span class="muted">&middot; ${esc(v.model)}</span>` : ''}
+    ${v.replies ? `<div class="why"><b>Answering the question put to it:</b> ${esc(v.replies)}</div>` : ''}
+    ${v.answers ? `<div class="why"><b>To the others:</b> ${esc(v.answers)}</div>` : ''}
+    <div class="why">${esc(v.why)}</div>${refusedHtml(v)}</div>`;
+}
+function refusedHtml(v) {
+  if (!v.failed && !v.retried) return '';
+  if (!v.failed) return `<div class="why muted">(its first answer was sent back once and fixed)</div>`;
+  return `<details class="evidence"><summary class="muted">Why code could not use it${v.rejected ? ': ' + esc(v.rejected) : ''}</summary>
+    ${v.said ? `<pre class="evid">${esc(v.said)}</pre>` : '<div class="why muted">Nothing came back.</div>'}</details>`;
+}
+function questionHtml(role, q) {
+  if (q.failed) return `<div class="vote"><b>${ROLE[role]}</b> <span class="muted">asked nothing usable</span>${refusedHtml(q)}</div>`;
+  return `<div class="vote"><b>${ROLE[role]}</b> <span class="muted">asks ${ROLE[q.to] || esc(q.to)}${q.model ? ' &middot; ' + esc(q.model) : ''}</span>
+    <div class="why">${esc(q.question)}</div></div>`;
+}
+function evidenceHtml(ev) {
+  if (!ev) return '';
+  const part = (label, text) => text ? `<div class="why"><b>${label}</b><pre class="evid">${esc(text)}</pre></div>` : '';
+  return `<details class="evidence"><summary class="muted">What the panel was given</summary>
+    ${part('All three:', ev.shared)}${part('The Bull only:', ev.bull)}${part('The Bear only:', ev.bear)}${part('The Risk manager only:', ev.risk)}
+    ${(ev.missing || []).length ? `<div class="why"><b>Could not get:</b> ${ev.missing.map(esc).join('; ')}</div>` : ''}</details>`;
+}
+function roundsHtml(d) {
+  const each = (o, f) => Object.entries(o || {}).map(([r, v]) => f(r, v)).join('');
+  if (!d.final) return `<div class="k" style="margin-top:8px">Round 1 - each on their own</div>${each(d.round1, voteHtml)}
+      <div class="k" style="margin-top:8px">Round 2 - after reading the others</div>${each(d.round2, voteHtml)}`;
+  return `<div class="k" style="margin-top:8px">Round 1 - each on their own</div>${each(d.round1, voteHtml)}
+      <div class="k" style="margin-top:8px">Round 2 - cross-examination: one question each</div>${each(d.questions, questionHtml)}
+      <div class="k" style="margin-top:8px">Round 3 - answers and the final vote</div>${each(d.final, voteHtml)}`;
+}
+function drawBook() {
+  const el = $('book');
+  const back = '<button class="btn sm" id="book-back">&larr; Back to Warren</button>';
+  if (!B || !B.started) {
+    el.innerHTML = `${back}<div class="card"><h2>Paper book</h2><div class="why">${B && B.started === false ? 'Not started yet - it starts on its first timer run.' : 'Loading...'}</div></div>`;
+    $('book-back').onclick = () => closeBook();
+    return;
+  }
+  const stat = (label, val, sub) => `<div class="stat"><div class="n">${label}</div><div class="v">${val}</div>${sub ? `<div class="why">${sub}</div>` : ''}</div>`;
+  const t = B.today || {}, c = B.caps || {};
+  const pos = (B.positions || []).map(p => `<div class="bookrow">
+      <div class="top"><span><b>${esc(p.symbol)}</b> ${p.decision ? dpill(p.decision) : ''} <span class="muted">${p.weight}% of the book${p.over_limit ? ' - over the 20% limit, not added to' : ''}</span></span>
+      <span class="num">${usd(p.value)} <span class="${p.gain < 0 ? 'red' : 'green'}">${signed(p.gain)} (${p.gain_pct}%)</span></span></div>
+      <div class="why">${Number(p.shares).toFixed(4)} shares at ${p.price ? usd(p.price) : '-'} &middot; cost ${usd(p.cost)} &middot; ${esc(p.from || '')}${p.checked ? ` &middot; Warren checked ${esc(p.checked)}` : ''}</div>
+      ${linesHtml(p.lines)}</div>`).join('') || '<div class="muted">No stocks - all cash.</div>';
+  const watch = (B.watchlist || []).map(w => `<div class="bookrow">
+      <div class="top"><span><b>${esc(w.symbol)}</b> ${w.decision ? dpill(w.decision) : ''} <span class="muted">${w.by === 'ideas' ? 'found by its weekly search' : 'added by you'}${w.held ? ' &middot; held' : ''}</span></span>
+      <button class="btn sm" data-unwatch="${esc(w.symbol)}">Remove</button></div>
+      ${w.why ? `<div class="why">${esc(w.why)}</div>` : ''}${linesHtml(w.lines)}</div>`).join('') || '<div class="muted">Nothing on the watchlist yet.</div>';
+  const trades = (B.trades || []).map(x => `<tr><td>${when(x.utc)}</td><td><b>${esc(x.symbol)}</b></td>
+      <td><span class="pill ${x.side === 'buy' ? 'G' : 'R'}">${x.side}</span></td><td class="num">${Number(x.shares).toFixed(4)} @ ${usd(x.price)}</td>
+      <td class="num">${usd(x.notional)}${x.gain !== undefined ? `<div class="${x.gain < 0 ? 'red' : 'green'}">${signed(x.gain)}</div>` : ''}</td></tr>`).join('');
+  const debates = (B.decisions || []).map(d => `<details class="debate"><summary><b>${esc(d.symbol)}</b>
+      <span class="pill ${d.outcome === 'buy' ? 'G' : d.outcome === 'sell' ? 'R' : 'Y'}">${esc(d.outcome)}</span>
+      <span class="muted">${when(d.utc)} &middot; ${d.kind === 'idea' ? 'new idea' : 'news'} &middot; ${esc(d.result)}</span></summary>
+      <div class="why"><b>What happened:</b> ${esc(d.event)}</div>
+      <div class="why"><b>Warren's check:</b> ${esc(d.check.decision || '-')} &middot; ${esc(d.check.how)}</div>
+      ${linesHtml(d.lines)}
+      ${evidenceHtml(d.evidence)}
+      ${roundsHtml(d)}
+      <div class="why"><b>Verdict:</b> ${esc(d.note)} &middot; ${esc(d.result)}</div></details>`).join('')
+    || '<div class="muted">No meetings yet. The panel meets when Warren rates a headline High or Major on a stock the book holds or watches.</div>';
+  const ideas = (B.ideas || []).map(r => `<div class="why">${when(r.utc)}: ${(r.ideas || []).map(i => `<b>${esc(i.symbol)}</b> - ${esc(i.result || '')}`).join('; ') || esc(r.note || 'no new ideas')}</div>`).join('');
+  el.innerHTML = `${back}
+    <div class="card"><h2>Paper book <span class="pill Y">PAPER MONEY</span></h2>
+      <div class="why">An AI-run practice copy of your portfolio. It started ${when(B.started_utc)} with your holdings and ${usd(B.start_cash)} of paper cash, and trades on its own - never with real money. Before any trade Warren checks the stock; a panel of three AIs argue it out - a Bull who makes the case for acting, a Bear (on a different AI model) who makes the case against, and a Risk manager who judges only what it does to the book. Code hands each its own evidence: the article, the stock's recent news and how the price moved, analysts, insiders, short sellers, the market's mood, how your holdings move together. Round 1 they vote alone, round 2 each puts one pointed question to another, round 3 they answer and vote again - and only a final vote all three agree on is traded. Code sets every size: ${B.buy_pct}% of the book a buy, at most ${B.max_pct}% in one stock.</div>
+      <div class="stats">${stat('Worth now', usd(B.value))}${stat('Cash', usd(B.cash))}${stat('If it had done nothing', usd(B.baseline), signed(B.vs_baseline) + ' from its trades')}${stat('Today', `${t.meetings || 0}/${c.meetings} meetings`, `${t.trades || 0}/${c.trades} trades &middot; ${t.checks || 0}/${c.checks} fresh checks`)}</div>
+      ${(B.seed_notes || []).map(n => `<div class="why">Note: ${esc(n)}</div>`).join('')}
+      ${(B.problems || []).length ? `<div class="why red">The ledger does not balance: ${B.problems.map(esc).join('; ')}</div>` : ''}
+      ${B.last ? `<div class="foot">Last run ${when(B.last.run_utc)}: ${B.last.meetings} meeting(s), ${B.last.trades} trade(s)${(B.last.notes || []).length ? ' &middot; ' + B.last.notes.map(esc).join(' &middot; ') : ''}</div>` : ''}
+    </div>
+    <div class="card"><h2>What it holds</h2>${pos}</div>
+    <div class="card"><h2>Watchlist</h2><div class="why">Stocks it may buy. You add them here; its weekly search adds its own. Warren checks each before any buy.</div>
+      <div class="row2" style="margin-top:8px"><input id="w-sym" placeholder="Ticker" maxlength="10" autocapitalize="characters"><input id="w-why" placeholder="Why (optional)" maxlength="300"></div>
+      <button class="btn sm" id="w-add" style="margin-top:8px">Add to watchlist</button><div id="w-msg" class="why"></div>
+      <div style="margin-top:10px">${watch}</div></div>
+    <div class="card"><h2>Panel meetings</h2>${debates}</div>
+    <div class="card"><h2>Trades</h2>${trades ? `<table><tr><th>When</th><th>Stock</th><th></th><th>Shares</th><th>Amount</th></tr>${trades}</table>` : '<div class="muted">No trades yet.</div>'}</div>
+    <div class="card"><h2>Weekly idea search</h2>${ideas || '<div class="muted">Not run yet - Sundays.</div>'}</div>`;
+  $('book-back').onclick = () => closeBook();
+  $('w-add').onclick = () => watchBook('add', $('w-sym').value, $('w-why').value);
+  document.querySelectorAll('[data-unwatch]').forEach(b => b.onclick = () => watchBook('remove', b.dataset.unwatch));
+}
+async function watchBook(action, symbol, why) {
+  const r = await fetch('/api/warren/book/watch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, symbol, why }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const m = $('w-msg'); if (m) m.textContent = j.error || 'could not change the watchlist'; return; }
+  loadBook();
+}
+$('book-open').onclick = openBook;
+
+// ---- one stock you own, as the main page
+function msg(html) { $(openHold ? 's-msg' : 'h-msg').innerHTML = html; }
+function openStock(sym) {
+  openHold = sym;
+  holdTab = alertsFor(sym).some(a => !a.seen) ? 'news' : 'edit';
+  document.querySelector('.grid').hidden = true;
+  $('stock').hidden = false;
+  try { history.pushState({ stock: sym }, ''); } catch { /* the page still works without history */ }
+  drawStock();
+  window.scrollTo({ top: 0 });
+}
+function closeStock(fromHistory) {
+  if (!openHold) return;
+  openHold = null;
+  $('stock').hidden = true;
+  $('stock').innerHTML = '';
+  document.querySelector('.grid').hidden = false;
+  if (!fromHistory) { try { if (history.state && history.state.stock) history.back(); } catch { /* ignore */ } }
+  draw();
+  window.scrollTo({ top: 0 });
+}
+window.addEventListener('popstate', () => closeStock(true));
+function drawStock() {
+  const h = (D.holdings || []).find(x => x.symbol === openHold);
+  if (!h) { closeStock(); return; }
+  const p = h.position || {}, chk = (D.checks || []).find(c => c.symbol === h.symbol);
+  const stat = (label, val, sub) => `<div class="stat"><div class="n">${label}</div><div class="v">${val}</div>${sub ? `<div class="why">${sub}</div>` : ''}</div>`;
+  const now = p.price ? `${h.live ? 'now, ' + new Date(h.price_as_of).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'at its last check'}` : '';
+  const checkCard = chk
+    ? `<div class="card"><div class="k">Warren's checklist</div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${dpill(chk.decision)}
+          <span class="muted">checked ${when(chk.when_utc)}</span>
+          <button class="btn sm" id="s-open">Open the full check</button>
+          <button class="btn sm" id="s-rerun" data-busy="Warren is re-checking - a minute or two">Re-run</button></div></div>`
+    : `<div class="card"><div class="k">Warren's checklist</div><div class="why">No check of ${esc(h.symbol)} yet - run one to get its sell rules,
+        the words Warren watches the news for, and its numbers.</div>
+        <button class="btn sm go" id="s-run" style="margin-top:8px">Run the checklist on ${esc(h.symbol)}</button></div>`;
+  $('stock').innerHTML = `
+    <div class="stock-top"><button class="btn" id="s-back">&larr; Back to Warren</button>${bell(h.symbol)}</div>
+    <div class="stock-head"><div class="sym">${warning(h.symbol, true)}${esc(h.symbol)}</div>
+      <div><div><b>${esc((chk && chk.company) || h.symbol)}</b></div><div class="muted">${esc(h.sector)}</div></div></div>
+    <div class="stats">
+      ${stat('Value', p.value != null ? usd(p.value) : dollars(h.amount), p.price ? `${usd(p.price)} a share, ${now}` : '')}
+      ${stat('Gain or loss', p.gain != null ? gainText(p) : '-', '')}
+      ${stat('Breakeven', p.breakeven ? usd(p.breakeven) : '-', 'your average price paid')}
+      ${stat('Shares', p.shares != null ? Number(p.shares).toLocaleString(undefined, { maximumFractionDigits: 4 }) : '-', `${dollars(h.amount)} paid`)}
+    </div>
+    ${checkCard}
+    <div class="card">${editor(h)}<div id="s-msg" class="why" style="margin-top:8px"></div></div>`;
+  $('s-back').onclick = () => closeStock();
+  if ($('s-open')) $('s-open').onclick = () => { const s = h.symbol; closeStock(); open(s); };
+  if ($('s-rerun')) $('s-rerun').onclick = async () => {
+    const r = await fetch('/api/warren/check/' + encodeURIComponent(h.symbol));
+    if (!r.ok) return msg('<span class="err">Could not read the last check</span>');
+    const c = await r.json();
+    closeStock(); rerun(c);
+  };
+  if ($('s-run')) $('s-run').onclick = () => {
+    const s = h.symbol; closeStock();
+    $('f-sym').value = s; $('f-amt').focus(); $('f-sym').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+  document.querySelectorAll('#stock [data-tab]').forEach(b => b.onclick = () => { holdTab = b.dataset.tab; drawStock(); });
+  const v = id => $(id) ? $(id).value : '';
+  if (holdTab === 'edit') {
+    $('e-save').onclick = () => holdings({ action: 'add', symbol: h.symbol, amount: v('e-amt'), avg_price: v('e-avg'), sector: v('e-sec') });
+    $('e-del').onclick = e => {
+      if (!e.target.classList.contains('arm')) { e.target.classList.add('arm'); e.target.textContent = `Tap again to delete ${h.symbol}`; return; }
+      holdings({ action: 'remove', symbol: h.symbol });
+    };
+  } else if (holdTab === 'notes') {
+    $('n-save').onclick = () => saveNote({ action: 'add', symbol: h.symbol, text: $('n-text').value });
+    document.querySelectorAll('[data-nedit]').forEach(b => b.onclick = () => { editingNote = b.dataset.nedit; drawStock(); });
+    document.querySelectorAll('[data-ncancel]').forEach(b => b.onclick = () => { editingNote = null; drawStock(); });
+    document.querySelectorAll('[data-nsave]').forEach(b => b.onclick = () =>
+      saveNote({ action: 'edit', symbol: h.symbol, id: b.dataset.nsave, text: $('ne-' + b.dataset.nsave).value }));
+    document.querySelectorAll('[data-ndel]').forEach(b => b.onclick = () => {
+      if (!b.classList.contains('arm')) { b.classList.add('arm'); b.textContent = 'Tap again to delete'; return; }
+      saveNote({ action: 'remove', symbol: h.symbol, id: b.dataset.ndel });
+    });
+  } else if (holdTab === 'news') {
+    document.querySelectorAll('[data-seen]').forEach(b => b.onclick = async () => {
+      await fetch('/api/warren/alerts', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: b.dataset.seen, symbol: h.symbol }) });
+      load();
+    });
+  } else if (holdTab === 'buy') {
+    $('e-buy').onclick = () => holdings({ action: 'buy', symbol: h.symbol, amount: v('b-amt'), price: v('b-price') });
+  } else {
+    $('s-all').onchange = () => { $('s-shares').disabled = $('s-all').checked; };
+    $('e-sell').onclick = () => holdings({ action: 'sell', symbol: h.symbol, price: v('s-price'),
+      all: $('s-all').checked, shares: v('s-shares') });
+  }
+}
+function editor(h) {
+  const p = h.position || {};
+  const tab = (k, t) => `<button class="btn sm${holdTab === k ? ' on' : ''}" data-tab="${k}">${t}</button>`;
+  const now = p.price ? `value="${p.price}"` : '';
+  let body;
+  if (holdTab === 'news') {
+    body = newsBody(h);
+  } else if (holdTab === 'notes') {
+    body = notesBody(h);
+  } else if (holdTab === 'edit') {
+    body = `<label>$ in it (what you paid in total)</label><input id="e-amt" type="number" min="0" step="0.01" value="${h.amount}">
+      <label>Average price paid per share</label><input id="e-avg" type="number" min="0" step="0.01" value="${h.avg_price ?? ''}">
+      <label>Sector</label><select id="e-sec">${(D.sectors || []).map(s => `<option${s === h.sector ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select>
+      <div class="acts"><button class="btn go sm" id="e-save">Save</button><button class="btn sm del" id="e-del">Delete</button></div>`;
+  } else if (holdTab === 'buy') {
+    body = `<label>Dollars you spent</label><input id="b-amt" type="number" min="0" step="0.01" placeholder="like 100">
+      <label>Price per share you paid</label><input id="b-price" type="number" min="0" step="0.01" ${now}>
+      <div class="acts"><button class="btn go sm" id="e-buy">Save the buy</button></div>
+      <div class="why">Warren works out your new average price and breakeven.</div>`;
+  } else {
+    body = `<label>Shares you sold${p.shares ? ` (you hold ${Number(p.shares).toLocaleString(undefined, { maximumFractionDigits: 4 })})` : ''}</label>
+      <input id="s-shares" type="number" min="0" step="any" placeholder="like 2.5">
+      <label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input id="s-all" type="checkbox" style="width:auto"> I sold all of it</label>
+      <label>Price per share you sold at</label><input id="s-price" type="number" min="0" step="0.01" ${now}>
+      <div class="acts"><button class="btn go sm" id="e-sell">Save the sale</button></div>
+      <div class="why">Your breakeven stays the same; Warren shows what you made or lost on the shares sold.</div>`;
+  }
+  const un = alertsFor(h.symbol).filter(a => !a.seen).length;
+  const nn = notesFor(h.symbol).length;
+  return `<div class="ed"><div class="tabs">${tab('news', 'News' + (un ? ` (${un})` : ''))}${tab('notes', 'Notes' + (nn ? ` (${nn})` : ''))}${tab('edit', 'Edit')}${tab('buy', 'Bought more')}${tab('sell', 'Sold')}</div>${body}</div>`;
+}
+
+async function holdings(body) {
+  const r = await fetch('/api/warren/holdings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const out = await r.json().catch(() => ({}));
+  if (!r.ok) { msg(`<span class="err">${esc(out.error || 'That did not save')}</span>`); return; }
+  const sale = out.sale;
+  const said = sale ? `Sold ${sale.shares} ${esc(sale.symbol)} at ${usd(sale.price)} for ${usd(sale.proceeds)}: ${gainText(sale)} against your breakeven of ${usd(sale.avg_price)}.`
+    : body.action === 'remove' ? `${esc(body.symbol)} deleted.` : `${esc(body.symbol)} saved.`;
+  await load();
+  msg(said);
+}
+
+$('h-add').onclick = () => holdings({ action: 'add', symbol: $('h-sym').value.trim().toUpperCase(), amount: $('h-amt').value,
+  avg_price: $('h-avg').value, sector: $('h-sec').value });
+
+$('run').onclick = async () => {
+  const body = { symbol: $('f-sym').value.trim().toUpperCase(), amount: $('f-amt').value, months: $('f-mon').value,
+    goal: $('f-goal').value, why: $('f-why').value, hold_drop: $('f-hold').value };
+  if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(body.symbol) || !(body.amount > 0) || !(body.months > 0)) {
+    alert('Fill in the ticker, the amount and how many months.'); return;
+  }
+  startCheck(body);
+};
+
+async function startCheck(body) {
+  const r = await fetch('/api/warren/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { alert(j.error || 'Warren could not start'); return; }
+  shown = null;
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  load();
+}
+
+// Re-run a saved check with the same basics (owner, 2026-11-19)
+function rerun(c) {
+  const i = c.inputs || {};
+  startCheck({ symbol: c.symbol, amount: i.amount, months: i.months, goal: i.goal, why: i.why || '', hold_drop: i.hold_drop });
+}
+
+load();
+</script>
+</body>
+</html>

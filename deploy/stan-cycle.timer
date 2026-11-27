@@ -1,0 +1,14 @@
+[Unit]
+Description=Run Stan's cycle once a day (owner, 2026-10-14)
+
+[Timer]
+# Once a day, after the fetch, before Fury's 06:30 briefing. Every wake that
+# finds new posts costs about a fifth of a cent (gemini-2.5-flash-lite,
+# measured prices 2026-10-14), so running it more often buys little: the
+# posts arrive at about five a day.
+OnCalendar=*-*-* 06:22 America/Chicago
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

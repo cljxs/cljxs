@@ -1,0 +1,16 @@
+[Unit]
+Description=Peter: what each NFL defense allows by position, from finished box scores (no AI, costs nothing)
+Documentation=https://github.com/cljxs/cljxs
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+WorkingDirectory=/root/ecosystem
+# Only games not read before: a few scoreboard requests on a quiet day, about
+# 15 box scores after a Sunday. The first run reads the season so far (~1 min).
+ExecStart=/usr/bin/python3 /root/ecosystem/scripts/nfl-defense.py update
+TimeoutStartSec=900
+StandardOutput=journal
+StandardError=journal

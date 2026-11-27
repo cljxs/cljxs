@@ -1,0 +1,12 @@
+[Unit]
+Description=Re-check Warren's saved stocks after each earnings report (owner, 2026-11-19)
+
+[Timer]
+# Weekday evenings, after most companies have filed for the day. A stock
+# with no new filing costs one small SEC request and nothing else.
+OnCalendar=Mon..Fri 19:15 America/New_York
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

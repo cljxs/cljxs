@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Warren's paper book after each news watch, 07:40-21:40 ET (owner, 2026-11-23)
+
+[Timer]
+# warren-news runs at :20 on these hours; twenty minutes later its alerts
+# are written and the panel can meet on them.
+OnCalendar=*-*-* 07,09,11,13,15,17,19,21:40:00 America/New_York
+Persistent=false
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

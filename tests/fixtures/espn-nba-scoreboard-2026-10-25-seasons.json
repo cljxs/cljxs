@@ -1,0 +1,236 @@
+{
+ "_captured": "ESPN NBA scoreboard ?dates=20261025, fetched 2026-10-26, trimmed to what ace-props.py reads",
+ "events": [
+  {
+   "id": "401909861",
+   "date": "2026-10-25T21:00Z",
+   "shortName": "LAL @ UTAH",
+   "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "name": "STATUS_FINAL"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "abbreviation": "UTAH"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "abbreviation": "LAL"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401909862",
+   "date": "2026-10-25T22:00Z",
+   "shortName": "IND @ BKN",
+   "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "name": "STATUS_FINAL"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "abbreviation": "BKN"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "abbreviation": "IND"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401909863",
+   "date": "2026-10-25T23:00Z",
+   "shortName": "ORL @ NY",
+   "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "name": "STATUS_FINAL"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "abbreviation": "NY"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "abbreviation": "ORL"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401909864",
+   "date": "2026-10-25T23:00Z",
+   "shortName": "TOR @ MIN",
+   "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "name": "STATUS_FINAL"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "abbreviation": "MIN"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "abbreviation": "TOR"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401909865",
+   "date": "2026-10-25T23:00Z",
+   "shortName": "LAC @ OKC",
+   "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "name": "STATUS_FINAL"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "abbreviation": "OKC"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "abbreviation": "LAC"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401909866",
+   "date": "2026-10-25T23:30Z",
+   "shortName": "DET @ PHI",
+   "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "name": "STATUS_FINAL"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "abbreviation": "PHI"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "abbreviation": "DET"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401909867",
+   "date": "2026-10-26T01:00Z",
+   "shortName": "MEM @ SAC",
+   "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "competitions": [
+    {
+     "status": {
+      "type": {
+       "name": "STATUS_FINAL"
+      }
+     },
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "abbreviation": "SAC"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "abbreviation": "MEM"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

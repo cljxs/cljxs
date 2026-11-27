@@ -1,0 +1,60 @@
+{
+ "results": [
+  {
+   "id": 5129951,
+   "name": "Orchard Park",
+   "latitude": 42.76756,
+   "longitude": -78.74392,
+   "elevation": 263.0,
+   "feature_code": "PPL",
+   "country_code": "US",
+   "admin1_id": 5128638,
+   "admin2_id": 5116642,
+   "admin3_id": 5129940,
+   "timezone": "America/New_York",
+   "population": 3206,
+   "postcodes": [
+    "14127"
+   ],
+   "country_id": 6252001,
+   "country": "United States",
+   "admin1": "New York",
+   "admin2": "Erie",
+   "admin3": "Town of Orchard Park"
+  },
+  {
+   "id": 4214370,
+   "name": "Orchard Park",
+   "latitude": 33.67094,
+   "longitude": -84.77271,
+   "elevation": 294.0,
+   "feature_code": "PPL",
+   "country_code": "US",
+   "admin1_id": 4197000,
+   "admin2_id": 4191928,
+   "timezone": "America/New_York",
+   "country_id": 6252001,
+   "country": "United States",
+   "admin1": "Georgia",
+   "admin2": "Douglas"
+  },
+  {
+   "id": 4262606,
+   "name": "Orchard Park",
+   "latitude": 39.93754,
+   "longitude": -86.12999,
+   "elevation": 250.0,
+   "feature_code": "PPL",
+   "country_code": "US",
+   "admin1_id": 4921868,
+   "admin2_id": 4921085,
+   "admin3_id": 4255854,
+   "timezone": "America/Indiana/Indianapolis",
+   "country_id": 6252001,
+   "country": "United States",
+   "admin1": "Indiana",
+   "admin2": "Hamilton",
+   "admin3": "Clay Township"
+  }
+ ]
+}

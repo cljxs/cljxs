@@ -1,0 +1,9 @@
+[Unit]
+Description=Every Sunday evening, review the week (Monday to Sunday, Eastern)
+
+[Timer]
+OnCalendar=Sun *-*-* 20:10 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target
